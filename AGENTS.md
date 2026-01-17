@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Core simulator types and event plumbing live in `simulator/core.py`, while `simulator/behavior.py`, `simulator/cost.py`, `simulator/models/`, and `simulator/schedulers/` host pluggable user, workload, environment, and scheduler implementations. CLI entry points include `demo.py` for baseline runs and `simulate.py` for Matplotlib dashboards that write JSON logs into `logs/`. Tests reside in `tests/` (e.g., `tests/test_priority.py`) and import production modules directly.
+Core simulator types and event plumbing live in `simulator/core.py`, while `simulator/behavior.py`, `simulator/cost.py`, `simulator/models/`, and `simulator/schedulers/` host pluggable user, workload, environment, and scheduler implementations. The CLI entry point is `simulate.py` for Matplotlib dashboards that write JSON logs into `logs/`.
 
 ## Build, Test, and Development Commands
 - `python simulate.py --priority new-first --days 90 --no-log` plots workload, retention, and projected retrievability without touching disk.
