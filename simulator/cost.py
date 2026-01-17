@@ -25,7 +25,7 @@ class StatefulCostModel(CostModel):
 
     def __init__(
         self,
-        base_seconds: float = 8.0,
+        base_seconds: float = 0.0,
         penalty: float = 0.0,
         state_costs: Optional[StateRatingCosts] = None,
     ) -> None:

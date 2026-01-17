@@ -5,16 +5,43 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from .core import Action, BehaviorModel, CardView, review_first_priority
 
+DEFAULT_FIRST_RATING_PROB = (0.24, 0.094, 0.495, 0.171)
+DEFAULT_REVIEW_RATING_PROB = (0.224, 0.631, 0.145)
+
 
 @dataclass
 class RatingDistribution:
-    success_weights: List[float] = field(default_factory=lambda: [0.2, 0.6, 0.2])
+    success_weights: List[float] = field(
+        default_factory=lambda: list(DEFAULT_REVIEW_RATING_PROB)
+    )
 
     def __post_init__(self) -> None:
-        total = sum(self.success_weights)
-        if not total:
-            raise ValueError("success_weights must sum to > 0")
-        self.success_weights = [w / total for w in self.success_weights]
+        self.success_weights = _normalize_weights(
+            self.success_weights, expected_len=3, name="success_weights"
+        )
+
+
+def _normalize_weights(
+    weights: Sequence[float], *, expected_len: int, name: str
+) -> List[float]:
+    if len(weights) != expected_len:
+        raise ValueError(f"{name} must have length {expected_len}")
+    total = float(sum(weights))
+    if total <= 0.0:
+        raise ValueError(f"{name} must sum to > 0")
+    return [float(w) / total for w in weights]
+
+
+def _sample_weighted(
+    rng: Callable[[], float], weights: Sequence[float], *, offset: int
+) -> int:
+    p = rng()
+    cumulative = 0.0
+    for idx, weight in enumerate(weights):
+        cumulative += weight
+        if p < cumulative:
+            return idx + offset
+    return len(weights) + offset - 1
 
 
 class StochasticBehavior(BehaviorModel):
@@ -22,17 +49,26 @@ class StochasticBehavior(BehaviorModel):
 
     def __init__(
         self,
-        attendance_prob: float = 0.95,
+        attendance_prob: float = 1.0,
         lazy_good_bias: float = 0.0,
         success_distribution: Optional[RatingDistribution] = None,
         max_new_per_day: Optional[int] = None,
         max_reviews_per_day: Optional[int] = None,
         max_cost_per_day: Optional[float] = None,
         priority_fn: Optional[Callable[[CardView], Sequence[float]]] = None,
+        first_rating_prob: Optional[Sequence[float]] = None,
+        review_rating_prob: Optional[Sequence[float]] = None,
     ) -> None:
         self.attendance_prob = attendance_prob
         self.lazy_good_bias = lazy_good_bias
+        if review_rating_prob is not None:
+            success_distribution = RatingDistribution(list(review_rating_prob))
         self.success_dist = success_distribution or RatingDistribution()
+        self.first_rating_prob = _normalize_weights(
+            first_rating_prob or DEFAULT_FIRST_RATING_PROB,
+            expected_len=4,
+            name="first_rating_prob",
+        )
         self.max_new_per_day = max_new_per_day
         self.max_reviews_per_day = max_reviews_per_day
         self.max_cost_per_day = max_cost_per_day
@@ -107,7 +143,7 @@ class StochasticBehavior(BehaviorModel):
         self._check_cost_limit()
 
     def initial_rating(self, rng: Callable[[], float]) -> int:
-        return self._sample_success_rating(rng)
+        return _sample_weighted(rng, self.first_rating_prob, offset=1)
 
     def review_rating(
         self,
@@ -143,10 +179,4 @@ class StochasticBehavior(BehaviorModel):
             self._stop_for_day = True
 
     def _sample_success_rating(self, rng: Callable[[], float]) -> int:
-        p = rng()
-        thresholds = self.success_dist.success_weights
-        if p < thresholds[0]:
-            return 2
-        if p < thresholds[0] + thresholds[1]:
-            return 3
-        return 4
+        return _sample_weighted(rng, self.success_dist.success_weights, offset=2)

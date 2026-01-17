@@ -7,8 +7,8 @@ from typing import Sequence, Tuple
 
 @dataclasses.dataclass(frozen=True)
 class Bounds:
-    s_min: float = 0.001
-    s_max: float = 36500.0
+    s_min: float = 0.1
+    s_max: float = 365.0 * 25.0
     d_min: float = 1.0
     d_max: float = 10.0
 

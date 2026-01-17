@@ -78,25 +78,25 @@ def main() -> None:
         help="Disable the simulation progress bar.",
     )
     parser.add_argument(
-        "--days", type=int, default=120, help="Number of simulated days."
+        "--days", type=int, default=365 * 5, help="Number of simulated days."
     )
-    parser.add_argument("--deck", type=int, default=1000, help="Deck size.")
+    parser.add_argument("--deck", type=int, default=10000, help="Deck size.")
     parser.add_argument(
         "--learn-limit",
         type=int,
-        default=20,
+        default=10,
         help="Max new cards per day (behavior limit).",
     )
     parser.add_argument(
         "--review-limit",
         type=int,
-        default=None,
+        default=9999,
         help="Max reviews per day (behavior limit).",
     )
     parser.add_argument(
         "--cost-limit-minutes",
         type=float,
-        default=None,
+        default=720,
         help="Daily study time limit in minutes (behavior limit).",
     )
     parser.add_argument(
@@ -108,7 +108,7 @@ def main() -> None:
     parser.add_argument(
         "--environment",
         choices=sorted(ENVIRONMENT_FACTORIES),
-        default="lstm",
+        default="fsrs6",
         help="Memory model to simulate.",
     )
     parser.add_argument(
