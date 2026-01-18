@@ -307,7 +307,9 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             else 0.0
         )
         avg_accum_memorized_per_hour = (
-            memorized_average / accum_time_average if accum_time_average > 0 else None
+            round(memorized_average / accum_time_average, 2)
+            if accum_time_average > 0
+            else None
         )
         reviews_average = (
             sum(stats.daily_reviews) / len(stats.daily_reviews)
@@ -315,7 +317,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             else 0.0
         )
         totals = {
-            "avg_accum_memorized_per_hour": round(avg_accum_memorized_per_hour, 2),
+            "avg_accum_memorized_per_hour": avg_accum_memorized_per_hour,
             "memorized_average": round(memorized_average),
             "reviews_average": round(reviews_average, 2),
             "time_average": round(time_average, 2),
