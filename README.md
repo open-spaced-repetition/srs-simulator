@@ -11,6 +11,7 @@ uv run simulate.py --priority new-first --days 90 --no-log
 ```
 
 Simulating SSP-MMC-FSRS policies requires precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS/README.md`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
+Using the LSTM environment also requires pretrained weights. Train them in [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark) and pass the resulting weights file to the simulator (`uv run script.py --algo LSTM --weights`).
 
 More parameter combinations:
 
