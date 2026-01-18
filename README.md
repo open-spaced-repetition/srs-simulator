@@ -1,6 +1,6 @@
 # Extensible Spaced-Repetition Simulator
 
-This project is a small, dependency-light simulator that mirrors the Rust FSRS simulator’s ideas in Python. It now separates the simulator into four modules so you can stress-test schedulers against richer “real world” assumptions.
+This project is a small, dependency-light simulator inspired by [*What will a general simulator of spaced repetition consist of?*](https://l-m-sherlock.notion.site/What-will-a-general-simulator-of-spaced-repetition-consist-of-2c7c250163a1809684f3fe8cf8011a00) and mirrors the [Rust FSRS simulator](https://github.com/open-spaced-repetition/fsrs-rs/blob/main/src/simulation.rs) ideas in Python. It now separates the simulator into four modules so you can stress-test schedulers against richer “real world” assumptions.
 
 ## Usage
 Install dependencies with uv, then run a quick simulation (no logs, just plots):
@@ -11,6 +11,7 @@ uv run simulate.py --priority new-first --days 90 --no-log
 ```
 
 Simulating SSP-MMC-FSRS policies requires precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS/README.md`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
+
 Using the LSTM environment also requires pretrained weights. Train them in [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark) and pass the resulting weights file to the simulator (`uv run script.py --algo LSTM --weights`).
 
 More parameter combinations:
