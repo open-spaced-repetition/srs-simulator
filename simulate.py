@@ -315,19 +315,21 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             else 0.0
         )
         totals = {
+            "avg_accum_memorized_per_hour": round(avg_accum_memorized_per_hour, 2),
+            "memorized_average": round(memorized_average),
+            "reviews_average": round(reviews_average, 2),
+            "time_average": round(time_average, 2),
             "total_reviews": stats.total_reviews,
             "total_lapses": stats.total_lapses,
-            "total_cost": stats.total_cost,
-            "mean_daily_reviews": reviews_average,
-            "total_projected_retrievability": stats.total_projected_retrievability,
-            "reviews_average": reviews_average,
-            "time_average": time_average,
-            "memorized_average": memorized_average,
-            "avg_accum_memorized_per_hour": avg_accum_memorized_per_hour,
+            "total_cost": round(stats.total_cost),
+            "mean_daily_reviews": round(reviews_average, 2),
+            "total_projected_retrievability": round(
+                stats.total_projected_retrievability
+            ),
         }
         if stats.total_projected_retrievability > 0:
-            totals["cost_per_projected_retrievability"] = (
-                stats.total_cost / stats.total_projected_retrievability
+            totals["cost_per_projected_retrievability"] = round(
+                stats.total_cost / stats.total_projected_retrievability, 2
             )
         else:
             totals["cost_per_projected_retrievability"] = None
