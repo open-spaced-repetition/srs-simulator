@@ -2,6 +2,30 @@
 
 This project is a small, dependency-light simulator that mirrors the Rust FSRS simulator’s ideas in Python. It now separates the simulator into four modules so you can stress-test schedulers against richer “real world” assumptions.
 
+## Usage
+Install dependencies with uv, then run a quick simulation (no logs, just plots):
+
+```bash
+uv sync
+uv run simulate.py --priority new-first --days 90 --no-log
+```
+
+Simulating SSP-MMC-FSRS policies requires precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS/README.md`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
+
+More parameter combinations:
+
+```bash
+uv run simulate.py --days 30 --deck 500 --learn-limit 20 --review-limit 200 --cost-limit-minutes 60 --seed 7 --no-progress --no-log
+uv run simulate.py --environment fsrs3 --scheduler fsrs3 --desired-retention 0.85 --no-log
+uv run simulate.py --environment fsrs6 --scheduler hlr --desired-retention 0.8 --no-log
+uv run simulate.py --scheduler fsrs6 --scheduler-priority high_difficulty --no-log
+uv run simulate.py --scheduler fixed --priority review-first --no-log
+uv run simulate.py --log-dir logs/runs --days 180 --seed 123
+uv run simulate.py --scheduler sspmmc --sspmmc-policy ../SSP-MMC-FSRS/outputs/policies/<policy>.json --no-log
+```
+
+FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficulty`, `high_difficulty`.
+
 ## Key Concepts
 - **MemoryModel / Environment**: (`simulator.core.MemoryModel`) governs how recall probability and memory state evolve. Implementations live under `simulator/models`.
 - **BehaviorModel / User**: (`simulator.core.BehaviorModel`) turns hidden retrievability into observed ratings, can skip days, and sets the first rating.
