@@ -254,24 +254,31 @@ def main() -> None:
 
 def _write_log(args: argparse.Namespace, stats) -> None:
     args.log_dir.mkdir(parents=True, exist_ok=True)
-    cost_limit = (
-        f"{args.cost_limit_minutes:.2f}"
-        if args.cost_limit_minutes is not None
-        else "none"
-    )
+
+    def _fmt_float(value: float | None) -> str:
+        if value is None:
+            return "none"
+        text = f"{value:.2f}"
+        return text.rstrip("0").rstrip(".")
+
+    cost_limit = _fmt_float(args.cost_limit_minutes)
     review_limit = args.review_limit if args.review_limit is not None else "none"
     parts = [
-        f"env{args.environment}",
-        f"sched{args.scheduler}",
-        f"days{args.days}",
-        f"deck{args.deck}",
-        f"learn{args.learn_limit}",
-        f"review{review_limit}",
-        f"cost{cost_limit}",
-        f"priority{args.priority}",
-        f"seed{args.seed}",
+        f"env={args.environment}",
+        f"sched={args.scheduler}",
+        f"days={args.days}",
+        f"deck={args.deck}",
+        f"learn={args.learn_limit}",
+        f"review={review_limit}",
+        f"costm={cost_limit}",
+        f"prio={args.priority}",
+        f"ret={_fmt_float(args.desired_retention)}",
+        f"sprio={args.scheduler_priority}",
+        f"seed={args.seed}",
     ]
-    filename = args.log_dir / f"log_{'_'.join(map(str, parts))}.jsonl"
+    if args.sspmmc_policy:
+        parts.insert(2, f"policy={args.sspmmc_policy.stem}")
+    filename = args.log_dir / f"log_{'_'.join(parts)}.jsonl"
     meta = {
         "days": args.days,
         "deck_size": args.deck,
