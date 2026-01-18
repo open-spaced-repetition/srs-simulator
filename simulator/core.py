@@ -83,6 +83,7 @@ class SimulationStats:
     daily_new: List[int]
     daily_retention: List[float]
     daily_cost: List[float]
+    daily_memorized: List[float]
     total_reviews: int
     total_lapses: int
     total_cost: float
@@ -261,6 +262,7 @@ class SimulationEngine:
         self.daily_new = [0 for _ in range(days)]
         self.daily_retention = [0.0 for _ in range(days)]
         self.daily_cost = [0.0 for _ in range(days)]
+        self.daily_memorized = [0.0 for _ in range(days)]
         self.daily_lapses = [0 for _ in range(days)]
         self.total_reviews = 0
         self.total_lapses = 0
@@ -271,6 +273,7 @@ class SimulationEngine:
         self._update_progress(0)
         for day in range(self.days):
             self._start_day(day)
+            self._compute_memorized(day)
             self._process_day(day)
             self._defer_remaining(day)
             self._update_progress(day + 1)
@@ -282,6 +285,7 @@ class SimulationEngine:
             daily_new=self.daily_new,
             daily_retention=self.daily_retention,
             daily_cost=self.daily_cost,
+            daily_memorized=self.daily_memorized,
             total_reviews=self.total_reviews,
             total_lapses=self.total_lapses,
             total_cost=self.total_cost,
@@ -317,6 +321,15 @@ class SimulationEngine:
         while self.future_queue and self.future_queue[0][0] <= day:
             _, _, cid = heapq.heappop(self.future_queue)
             self._push_ready(cid, day)
+
+    def _compute_memorized(self, day: int) -> None:
+        memorized = 0.0
+        for card in self.cards:
+            if card.reps <= 0:
+                continue
+            elapsed = max(0.0, float(day - card.last_review))
+            memorized += self.environment.predict_retention(card, elapsed)
+        self.daily_memorized[day] = memorized
 
     def _process_day(self, day: int) -> None:
         while True:

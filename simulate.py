@@ -288,12 +288,42 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     }
     with filename.open("w", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "meta", "data": meta}) + "\n")
+        accum_cost = []
+        running = 0.0
+        for daily in stats.daily_cost:
+            running += daily
+            accum_cost.append(running)
+        time_average = (
+            sum(stats.daily_cost) / len(stats.daily_cost) / 60.0
+            if stats.daily_cost
+            else 0.0
+        )
+        accum_time_average = (
+            sum(accum_cost) / len(accum_cost) / 3600.0 if accum_cost else 0.0
+        )
+        memorized_average = (
+            sum(stats.daily_memorized) / len(stats.daily_memorized)
+            if stats.daily_memorized
+            else 0.0
+        )
+        avg_accum_memorized_per_hour = (
+            memorized_average / accum_time_average if accum_time_average > 0 else None
+        )
+        reviews_average = (
+            sum(stats.daily_reviews) / len(stats.daily_reviews)
+            if stats.daily_reviews
+            else 0.0
+        )
         totals = {
             "total_reviews": stats.total_reviews,
             "total_lapses": stats.total_lapses,
             "total_cost": stats.total_cost,
-            "mean_daily_reviews": sum(stats.daily_reviews) / len(stats.daily_reviews),
+            "mean_daily_reviews": reviews_average,
             "total_projected_retrievability": stats.total_projected_retrievability,
+            "reviews_average": reviews_average,
+            "time_average": time_average,
+            "memorized_average": memorized_average,
+            "avg_accum_memorized_per_hour": avg_accum_memorized_per_hour,
         }
         if stats.total_projected_retrievability > 0:
             totals["cost_per_projected_retrievability"] = (
