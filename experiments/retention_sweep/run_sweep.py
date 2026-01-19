@@ -101,7 +101,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Directory with SSP-MMC policy metadata JSON files "
-            "(defaults to ../SSP-MMC-FSRS/outputs/policies)."
+            "(defaults to ../SSP-MMC-FSRS/outputs/policies/user_<id>)."
         ),
     )
     parser.add_argument(
@@ -168,7 +168,14 @@ def _resolve_policy_paths(
 
     policy_dir = args.sspmmc_policy_dir
     if policy_dir is None and run_sspmmc:
-        candidate = repo_root.parent / "SSP-MMC-FSRS" / "outputs" / "policies"
+        user_id = args.user_id or 1
+        candidate = (
+            repo_root.parent
+            / "SSP-MMC-FSRS"
+            / "outputs"
+            / "policies"
+            / f"user_{user_id}"
+        )
         if candidate.exists():
             policy_dir = candidate
 
