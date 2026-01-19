@@ -244,7 +244,10 @@ def main() -> None:
     from simulator.cost import StatefulCostModel
     from simulator.core import new_first_priority, review_first_priority
 
-    log_dir = args.log_dir or (repo_root / "logs" / "retention_sweep")
+    user_id = args.user_id or 1
+    log_dir = args.log_dir or (
+        repo_root / "logs" / "retention_sweep" / f"user_{user_id}"
+    )
     envs = _parse_csv(args.environments) or [args.environment]
     schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
     dr_schedulers = [scheduler for scheduler in schedulers if scheduler != "sspmmc"]
