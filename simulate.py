@@ -337,6 +337,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     parts = [
         f"env={args.environment}",
         f"sched={args.scheduler}",
+        f"user={args.user_id or 1}",
         f"days={args.days}",
         f"deck={args.deck}",
         f"learn={args.learn_limit}",
@@ -359,6 +360,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "priority": args.priority,
         "environment": args.environment,
         "scheduler": args.scheduler,
+        "user_id": args.user_id or 1,
         "desired_retention": args.desired_retention,
         "scheduler_priority": args.scheduler_priority,
         "sspmmc_policy": str(args.sspmmc_policy) if args.sspmmc_policy else None,

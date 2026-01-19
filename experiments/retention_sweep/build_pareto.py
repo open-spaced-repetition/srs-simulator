@@ -159,6 +159,13 @@ def _iter_log_entries(
         else:
             title = f"DR={desired:.2f}"
 
+        user_id = meta.get("user_id")
+        if user_id is not None:
+            try:
+                user_id = int(user_id)
+            except (TypeError, ValueError):
+                user_id = None
+
         entry = {
             "title": title,
             "reviews_average": float(totals.get("reviews_average", 0.0)),
@@ -166,6 +173,7 @@ def _iter_log_entries(
             "memorized_average": float(totals.get("memorized_average", 0.0)),
             "avg_accum_memorized_per_hour": float(avg_per_hour),
             "scheduler": scheduler,
+            "user_id": user_id,
         }
         yield desired if scheduler != "sspmmc" else None, entry
 
@@ -252,7 +260,19 @@ def _plot_compare_frontier(
     )
     plt.xticks(fontsize=16, color="black")
     plt.yticks(fontsize=16, color="black")
-    plt.title("Pareto frontier comparison", fontsize=22)
+    user_ids = sorted(
+        {entry["user_id"] for entry in all_entries if entry.get("user_id") is not None}
+    )
+    if user_ids:
+        if len(user_ids) == 1:
+            title = f"Pareto frontier comparison (user {user_ids[0]})"
+        else:
+            title = "Pareto frontier comparison (users {})".format(
+                ", ".join(str(uid) for uid in user_ids)
+            )
+    else:
+        title = "Pareto frontier comparison"
+    plt.title(title, fontsize=22)
     plt.grid(True, ls="--")
     plt.legend(fontsize=16, loc="lower left", facecolor="white")
     plt.tight_layout()
