@@ -28,15 +28,9 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of environments to sweep.",
     )
     parser.add_argument(
-        "--scheduler",
+        "--schedulers",
         default="fsrs6",
-        help="Scheduler name passed to simulate.py.",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["dr", "sspmmc", "both"],
-        default="dr",
-        help="Run DR sweep, SSP-MMC policies, or both.",
+        help="Comma-separated list of schedulers to sweep (include sspmmc to run policies).",
     )
     parser.add_argument("--days", type=int, default=1825, help="Simulation days.")
     parser.add_argument("--deck", type=int, default=10000, help="Deck size.")
@@ -74,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         "--sspmmc-policy",
         type=Path,
         default=None,
-        help="Path to an SSP-MMC policy metadata JSON when using --scheduler sspmmc.",
+        help="Path to an SSP-MMC policy metadata JSON when using sspmmc.",
     )
     parser.add_argument(
         "--sspmmc-policy-dir",
@@ -227,13 +221,13 @@ def main() -> None:
 
     log_dir = args.log_dir or (repo_root / "logs" / "retention_sweep")
     envs = _parse_csv(args.environments) or [args.environment]
-    mode = args.mode
-    run_dr = mode in {"dr", "both"}
-    run_sspmmc = mode in {"sspmmc", "both"}
-    if run_dr and args.scheduler == "sspmmc":
-        raise SystemExit("DR sweep requires a non-SSP-MMC scheduler.")
-    if mode == "sspmmc" and args.scheduler:
-        print("Note: --scheduler is ignored when --mode sspmmc.")
+    schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
+    dr_schedulers = [scheduler for scheduler in schedulers if scheduler != "sspmmc"]
+    has_sspmmc = "sspmmc" in schedulers
+    run_dr = bool(dr_schedulers)
+    run_sspmmc = has_sspmmc
+    if not run_dr and not run_sspmmc:
+        raise SystemExit("No schedulers specified. Use --schedulers to select runs.")
 
     sspmmc_policies = _resolve_policy_paths(args, repo_root, run_sspmmc)
     if run_sspmmc and not sspmmc_policies:
@@ -245,21 +239,26 @@ def main() -> None:
 
     for environment in envs:
         if run_dr:
-            for i in range(args.start, args.end + 1, args.step):
-                dr = i / 100.0
-                run_args = argparse.Namespace(**vars(args))
-                run_args.environment = environment
-                run_args.desired_retention = dr
-                run_args.log_dir = log_dir
-                print(f"Running env={environment} desired_retention={dr:.2f}")
-                _run_once(
-                    run_args,
-                    priority_fn,
-                    run_simulation,
-                    simulate_cli,
-                    StochasticBehavior,
-                    StatefulCostModel,
-                )
+            for scheduler in dr_schedulers:
+                for i in range(args.start, args.end + 1, args.step):
+                    dr = i / 100.0
+                    run_args = argparse.Namespace(**vars(args))
+                    run_args.environment = environment
+                    run_args.scheduler = scheduler
+                    run_args.desired_retention = dr
+                    run_args.log_dir = log_dir
+                    print(
+                        f"Running env={environment} scheduler={scheduler} "
+                        f"desired_retention={dr:.2f}"
+                    )
+                    _run_once(
+                        run_args,
+                        priority_fn,
+                        run_simulation,
+                        simulate_cli,
+                        StochasticBehavior,
+                        StatefulCostModel,
+                    )
 
         if run_sspmmc:
             for policy_path in sspmmc_policies:

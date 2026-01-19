@@ -20,25 +20,14 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing simulate.py JSONL logs.",
     )
     parser.add_argument(
-        "--environment",
-        default="lstm",
-        help="Filter logs by environment.",
-    )
-    parser.add_argument(
         "--environments",
-        default=None,
+        default="lstm",
         help="Comma-separated list of environments to compare.",
     )
     parser.add_argument(
-        "--scheduler",
+        "--schedulers",
         default="fsrs6",
-        help="Filter logs by scheduler.",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["dr", "sspmmc", "both"],
-        default="dr",
-        help="Plot DR sweep, SSP-MMC policies, or both.",
+        help="Comma-separated list of schedulers to plot (include sspmmc for policies).",
     )
     parser.add_argument(
         "--min-retention",
@@ -210,19 +199,12 @@ def _build_results(
 
 
 def _plot_compare_frontier(
-    results_by_env: Dict[str, List[Dict[str, Any]]],
-    env_order: List[str],
+    series: List[Dict[str, Any]],
     output_path: Path,
-    extra_by_env: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-    extra_label: str = "SSP-MMC",
 ) -> None:
     import matplotlib.pyplot as plt
 
-    all_entries = []
-    for env in env_order:
-        all_entries.extend(results_by_env.get(env, []))
-        if extra_by_env:
-            all_entries.extend(extra_by_env.get(env, []))
+    all_entries = [entry for item in series for entry in item["entries"]]
     if not all_entries:
         raise ValueError("No entries available to plot.")
 
@@ -239,37 +221,28 @@ def _plot_compare_frontier(
     markers = ["o", "s", "D", "^"]
 
     plt.figure(figsize=(12, 9))
-    for idx, env in enumerate(env_order):
-        entries = results_by_env.get(env, [])
-        extra_entries = extra_by_env.get(env, []) if extra_by_env else []
-        if not entries and not extra_entries:
+    for idx, item in enumerate(series):
+        entries = item["entries"]
+        if not entries:
             continue
         color = colors[idx % len(colors)]
-        marker = markers[idx % len(markers)]
-        if entries:
-            x_vals = [entry["memorized_average"] for entry in entries]
-            y_vals = [entry["avg_accum_memorized_per_hour"] for entry in entries]
-            plt.plot(
-                x_vals,
-                y_vals,
-                label=f"env={env}",
-                linewidth=2,
-                color=color,
-                marker=marker,
-            )
-        if extra_entries:
-            x_vals = [entry["memorized_average"] for entry in extra_entries]
-            y_vals = [entry["avg_accum_memorized_per_hour"] for entry in extra_entries]
-            plt.plot(
-                x_vals,
-                y_vals,
-                label=f"{extra_label} env={env}",
-                linestyle="--",
-                marker="X",
-                color=color,
-                linewidth=1.8,
-                markersize=8,
-            )
+        style = item["style"]
+        marker = "X" if style == "sspmmc" else markers[idx % len(markers)]
+        linestyle = "--" if style == "sspmmc" else "-"
+        linewidth = 1.8 if style == "sspmmc" else 2
+        markersize = 8 if style == "sspmmc" else 6
+        x_vals = [entry["memorized_average"] for entry in entries]
+        y_vals = [entry["avg_accum_memorized_per_hour"] for entry in entries]
+        plt.plot(
+            x_vals,
+            y_vals,
+            label=item["label"],
+            linestyle=linestyle,
+            marker=marker,
+            color=color,
+            linewidth=linewidth,
+            markersize=markersize,
+        )
 
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
@@ -279,7 +252,7 @@ def _plot_compare_frontier(
     )
     plt.xticks(fontsize=16, color="black")
     plt.yticks(fontsize=16, color="black")
-    plt.title(f"Pareto frontier comparison (envs={', '.join(env_order)})", fontsize=22)
+    plt.title("Pareto frontier comparison", fontsize=22)
     plt.grid(True, ls="--")
     plt.legend(fontsize=16, loc="lower left", facecolor="white")
     plt.tight_layout()
@@ -295,7 +268,7 @@ def main() -> None:
     if not log_dir.exists():
         raise SystemExit(f"Log directory not found: {log_dir}")
 
-    envs = _parse_csv(args.environments) or [args.environment]
+    envs = _parse_csv(args.environments)
 
     ssp_root = args.sspmmc_root or (repo_root.parent / "SSP-MMC-FSRS")
     plot_dir = args.plot_dir or (
@@ -312,27 +285,41 @@ def main() -> None:
     )
 
     base_dirs = [repo_root, ssp_root, log_dir]
-    results_by_env: Dict[str, List[Dict[str, Any]]] = {}
-    sspmmc_by_env: Dict[str, List[Dict[str, Any]]] = {}
     combined_results: List[Dict[str, Any]] = []
-    mode = args.mode
-    run_dr = mode in {"dr", "both"}
-    run_sspmmc = mode in {"sspmmc", "both"}
-    if mode == "sspmmc" and args.scheduler:
-        print("Note: --scheduler is ignored when --mode sspmmc.")
+    series: List[Dict[str, Any]] = []
+    schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
+    dr_schedulers = [scheduler for scheduler in schedulers if scheduler != "sspmmc"]
+    has_sspmmc = "sspmmc" in schedulers
+    run_dr = bool(dr_schedulers)
+    run_sspmmc = has_sspmmc
+    if not run_dr and not run_sspmmc:
+        raise SystemExit("No schedulers specified. Use --schedulers to select plots.")
     for env in envs:
         if run_dr:
-            results = _build_results(
-                log_dir,
-                env,
-                {args.scheduler},
-                args.min_retention,
-                args.max_retention,
-                base_dirs,
-                title_prefix=f"env={env}" if len(envs) > 1 else None,
-            )
-            results_by_env[env] = results
-            combined_results.extend(results)
+            for scheduler in dr_schedulers:
+                results = _build_results(
+                    log_dir,
+                    env,
+                    {scheduler},
+                    args.min_retention,
+                    args.max_retention,
+                    base_dirs,
+                    title_prefix=None,
+                )
+                label_parts = []
+                if len(dr_schedulers) > 1:
+                    label_parts.append(f"sched={scheduler}")
+                if len(envs) > 1:
+                    label_parts.append(f"env={env}")
+                label = " ".join(label_parts) or scheduler
+                series.append(
+                    {
+                        "label": label,
+                        "entries": results,
+                        "style": "dr",
+                    }
+                )
+                combined_results.extend(results)
         if run_sspmmc:
             sspmmc_results = _build_results(
                 log_dir,
@@ -341,11 +328,21 @@ def main() -> None:
                 args.min_retention,
                 args.max_retention,
                 base_dirs,
-                title_prefix=f"env={env}" if len(envs) > 1 else None,
+                title_prefix=None,
                 dedupe=False,
             )
             sspmmc_results.sort(key=lambda entry: entry["memorized_average"])
-            sspmmc_by_env[env] = sspmmc_results
+            ssp_label_parts = ["sched=sspmmc"]
+            if len(envs) > 1:
+                ssp_label_parts.append(f"env={env}")
+            ssp_label = " ".join(ssp_label_parts)
+            series.append(
+                {
+                    "label": ssp_label,
+                    "entries": sspmmc_results,
+                    "style": "sspmmc",
+                }
+            )
             combined_results.extend(sspmmc_results)
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with results_path.open("w", encoding="utf-8") as fh:
@@ -366,14 +363,10 @@ def main() -> None:
 
     plot_dir.mkdir(parents=True, exist_ok=True)
     ssp_lib.setup_environment(args.seed)
-    if len(envs) > 1:
+    use_compare = run_sspmmc or len(series) != 1
+    if use_compare:
         output_path = plot_dir / "Pareto frontier env compare.png"
-        _plot_compare_frontier(
-            results_by_env,
-            envs,
-            output_path,
-            extra_by_env=sspmmc_by_env if run_sspmmc else None,
-        )
+        _plot_compare_frontier(series, output_path)
     else:
         ssp_lib.PLOTS_DIR = plot_dir
         ssp_lib.plot_pareto_frontier(results_path, [])
