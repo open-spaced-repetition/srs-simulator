@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from typing import Sequence
+
 from simulator.core import Card, MemoryModel
-from simulator.config_loader import load_weights_config
 from simulator.math.fsrs import (
     Bounds,
     FSRS3Params,
@@ -23,18 +24,18 @@ from simulator.math.fsrs import (
     _clamp_s,
 )
 
-# Default FSRS weights come from config/*.json
-FSRS6_INIT = load_weights_config("fsrs6.json", expected_len=21)
-FSRS3_INIT = load_weights_config("fsrs3.json", expected_len=13)
-
 
 class FSRS6Model(MemoryModel):
     """
     FSRS v6 scalar memory model adapted from the torch reference.
     """
 
-    def __init__(self, weights=None, bounds: Bounds = Bounds()):
-        self.params = FSRS6Params(tuple(weights or FSRS6_INIT), bounds)
+    def __init__(self, weights: Sequence[float] | None, bounds: Bounds = Bounds()):
+        if weights is None:
+            raise ValueError("FSRS6Model requires weights from srs-benchmark.")
+        if len(weights) != 21:
+            raise ValueError("FSRS6Model expects 21 weights.")
+        self.params = FSRS6Params(tuple(float(x) for x in weights), bounds)
 
     def init_card(self, card: Card, rating: int) -> None:
         s, d = fsrs6_init_state(self.params, rating)
@@ -75,8 +76,12 @@ class FSRS3Model(MemoryModel):
     FSRS v3 scalar memory model (13 parameters) with simple forgetting curve.
     """
 
-    def __init__(self, weights=None, bounds: Bounds = Bounds()):
-        self.params = FSRS3Params(tuple(weights or FSRS3_INIT), bounds)
+    def __init__(self, weights: Sequence[float] | None, bounds: Bounds = Bounds()):
+        if weights is None:
+            raise ValueError("FSRS3Model requires weights from srs-benchmark.")
+        if len(weights) != 13:
+            raise ValueError("FSRS3Model expects 13 weights.")
+        self.params = FSRS3Params(tuple(float(x) for x in weights), bounds)
 
     def init_card(self, card: Card, rating: int) -> None:
         s, d = fsrs3_init_state(self.params, rating)

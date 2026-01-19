@@ -4,10 +4,7 @@ import math
 from typing import Sequence
 
 from simulator.core import CardView, Scheduler
-from simulator.config_loader import load_weights_config
 from simulator.math.dash import dash_time_window_features
-
-_DEFAULT_WEIGHTS = load_weights_config("dash.json", expected_len=9)
 
 
 class DASHScheduler(Scheduler):
@@ -28,10 +25,11 @@ class DASHScheduler(Scheduler):
         max_interval: float = 3650.0,
         search_steps: int = 24,
     ) -> None:
-        coeffs = tuple(float(w) for w in (weights or _DEFAULT_WEIGHTS))
-        if len(coeffs) != 9:
+        if weights is None:
+            raise ValueError("DASHScheduler requires weights from srs-benchmark.")
+        if len(weights) != 9:
             raise ValueError("DASHScheduler expects 9 weights.")
-        self.w = coeffs
+        self.w = tuple(float(w) for w in weights)
         self.desired_retention = float(desired_retention)
         self.min_interval = float(min_interval)
         self.max_interval = float(max_interval)

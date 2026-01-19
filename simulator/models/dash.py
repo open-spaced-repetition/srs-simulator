@@ -5,9 +5,6 @@ from typing import Sequence
 
 from simulator.core import Card, MemoryModel
 from simulator.math.dash import dash_time_window_features
-from simulator.config_loader import load_weights_config
-
-_DEFAULT_WEIGHTS = load_weights_config("dash.json", expected_len=9)
 
 
 class DASHModel(MemoryModel):
@@ -18,11 +15,12 @@ class DASHModel(MemoryModel):
     same interface and can be swapped out for a full implementation later.
     """
 
-    def __init__(self, weights: Sequence[float] | None = None):
-        coeffs = list(weights) if weights is not None else list(_DEFAULT_WEIGHTS)
-        if len(coeffs) != 9:
+    def __init__(self, weights: Sequence[float] | None):
+        if weights is None:
+            raise ValueError("DASHModel requires weights from srs-benchmark.")
+        if len(weights) != 9:
             raise ValueError("DASHModel expects 9 weights.")
-        self.w = tuple(float(x) for x in coeffs)
+        self.w = tuple(float(x) for x in weights)
 
     def init_card(self, card: Card, rating: int) -> None:
         # stateless: no per-card memory_state needed

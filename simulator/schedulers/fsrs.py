@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Sequence
 
 from simulator.core import CardView, Scheduler
 from simulator.math.fsrs import (
@@ -23,7 +23,6 @@ from simulator.math.fsrs import (
     _clamp_d,
     _clamp_s,
 )
-from simulator.models.fsrs import FSRS3_INIT, FSRS6_INIT
 
 
 class FSRS6Scheduler(Scheduler):
@@ -40,14 +39,18 @@ class FSRS6Scheduler(Scheduler):
 
     def __init__(
         self,
-        weights: Optional[Sequence[float]] = None,
+        weights: Sequence[float] | None = None,
         desired_retention: float = 0.9,
         bounds: Bounds = Bounds(),
         priority_mode: str = "low_retrievability",
     ):
         if priority_mode not in self.PRIORITY_MODES:
             raise ValueError(f"Unknown priority_mode '{priority_mode}'")
-        self.params = FSRS6Params(tuple(weights or FSRS6_INIT), bounds)
+        if weights is None:
+            raise ValueError("FSRS6Scheduler requires weights from srs-benchmark.")
+        if len(weights) != 21:
+            raise ValueError("FSRS6Scheduler expects 21 weights.")
+        self.params = FSRS6Params(tuple(float(w) for w in weights), bounds)
         self.desired_retention = desired_retention
         self.priority_mode = priority_mode
 
@@ -109,11 +112,15 @@ class FSRS3Scheduler(Scheduler):
 
     def __init__(
         self,
-        weights: Optional[Sequence[float]] = None,
+        weights: Sequence[float] | None = None,
         desired_retention: float = 0.9,
         bounds: Bounds = Bounds(),
     ):
-        self.params = FSRS3Params(tuple(weights or FSRS3_INIT), bounds)
+        if weights is None:
+            raise ValueError("FSRS3Scheduler requires weights from srs-benchmark.")
+        if len(weights) != 13:
+            raise ValueError("FSRS3Scheduler expects 13 weights.")
+        self.params = FSRS3Params(tuple(float(w) for w in weights), bounds)
         self.desired_retention = desired_retention
 
     def init_card(self, card_view: CardView, rating: int, day: float):
