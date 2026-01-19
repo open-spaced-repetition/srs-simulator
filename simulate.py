@@ -78,6 +78,11 @@ def main() -> None:
         help="Disable the simulation progress bar.",
     )
     parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Disable plotting the dashboard.",
+    )
+    parser.add_argument(
         "--days", type=int, default=365 * 5, help="Number of simulated days."
     )
     parser.add_argument("--deck", type=int, default=10000, help="Deck size.")
@@ -170,7 +175,14 @@ def main() -> None:
     if not args.no_log:
         _write_log(args, stats)
 
-    days = list(range(args.days))
+    if args.no_plot:
+        return
+
+    plot_simulation(stats)
+
+
+def plot_simulation(stats) -> None:
+    days = list(range(len(stats.daily_reviews)))
 
     fig, ax = plt.subplots(4, 1, figsize=(12, 11), sharex=True)
 
