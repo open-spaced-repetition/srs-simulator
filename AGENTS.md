@@ -5,6 +5,7 @@ Core simulator types and event plumbing live in `simulator/core.py`, while `simu
 
 ## Build, Test, and Development Commands
 - `python simulate.py --priority new-first --days 90 --no-log` plots workload, retention, and projected retrievability without touching disk.
+- After modifying code, run `uv run ruff format` to format the codebase.
 
 ## Coding Style & Naming Conventions
 Target Python 3.10+, keep modules dependency-light, and favor dataclasses with `slots=True` plus explicit type hints (see `simulator/core.py`). Use four-space indentation, Black/PEP 8 defaults for formatting, and concise docstrings describing expectations between environment, behavior, and scheduler layers. Modules and functions stay `snake_case`, classes use `PascalCase`, and tests mirror the production filename (`schedulers/fsrs6_scheduler.py` → `tests/test_fsrs6_scheduler.py`). Prefer pure functions, pass deterministic RNG callables, and route logging through `SimulationStats` rather than ad-hoc prints.

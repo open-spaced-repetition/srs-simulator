@@ -26,6 +26,17 @@ uv run simulate.py --log-dir logs/runs --days 180 --seed 123
 uv run simulate.py --scheduler sspmmc --sspmmc-policy ../SSP-MMC-FSRS/outputs/policies/<policy>.json --no-log
 ```
 
+Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
+
+```bash
+uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --mode dr
+uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --mode sspmmc
+uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --mode both
+uv run experiments/retention_sweep/build_pareto.py --environments fsrs6,lstm --mode both --sspmmc-root ../SSP-MMC-FSRS
+```
+
+By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Pareto plots are saved under `experiments/retention_sweep/plots`.
+
 FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficulty`, `high_difficulty`.
 
 ## Key Concepts
