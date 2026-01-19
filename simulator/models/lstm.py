@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -16,21 +15,30 @@ except ImportError as exc:  # pragma: no cover
     ) from exc
 
 EPS = 1e-7
-_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "lstm.json"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _read_default_weights() -> Path | None:
-    try:
-        with _CONFIG_PATH.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except FileNotFoundError:
+def _default_benchmark_root() -> Path:
+    return _REPO_ROOT.parent / "srs-benchmark"
+
+
+def _resolve_benchmark_weights(user_id: int, benchmark_root: Path) -> Path | None:
+    weights_dir = benchmark_root / "weights"
+    if not weights_dir.exists():
         return None
-    if not isinstance(data, dict):
-        return None
-    weights_path = data.get("weights_path")
-    if not isinstance(weights_path, str) or not weights_path.strip():
-        return None
-    return Path(weights_path).expanduser()
+    preferred_dir = weights_dir / "LSTM"
+    candidate = preferred_dir / f"{user_id}.pth"
+    if candidate.exists():
+        return candidate
+    for sub_dir in sorted(weights_dir.iterdir()):
+        if not sub_dir.is_dir():
+            continue
+        if not sub_dir.name.startswith("LSTM"):
+            continue
+        fallback_candidate = sub_dir / f"{user_id}.pth"
+        if fallback_candidate.exists():
+            return fallback_candidate
+    return None
 
 
 def _resolve_weight_file(path: Path) -> Path:
@@ -229,6 +237,8 @@ class LSTMModel(MemoryModel):
         self,
         *,
         weights_path: str | Path | None = None,
+        user_id: int | None = None,
+        benchmark_root: str | Path | None = None,
         use_duration_feature: bool = False,
         default_duration_ms: float = 2500.0,
         interval_scale: float = 1.0,
@@ -257,11 +267,25 @@ class LSTMModel(MemoryModel):
         ).to(self.device)
         self.network.eval()
 
-        resolved_path: Path | None
+        resolved_path: Path | None = None
         if weights_path is not None:
             resolved_path = Path(weights_path)
+        elif user_id is not None:
+            root = (
+                Path(benchmark_root)
+                if benchmark_root is not None
+                else _default_benchmark_root()
+            )
+            resolved_path = _resolve_benchmark_weights(int(user_id), root)
+            if resolved_path is None:
+                weights_dir = root / "weights"
+                raise FileNotFoundError(
+                    f"LSTM weights for user {user_id} not found under {weights_dir}"
+                )
         else:
-            resolved_path = _read_default_weights()
+            raise ValueError(
+                "LSTM weights require --user-id or an explicit weights_path."
+            )
         if resolved_path is not None:
             self._load_weights(resolved_path)
 

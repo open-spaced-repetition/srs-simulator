@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from simulator.core import Card, MemoryModel
-from simulator.config_loader import load_weights_config
-
-_DEFAULT_WEIGHTS = load_weights_config("hlr.json", expected_len=3)
 
 
 class HLRModel(MemoryModel):
@@ -17,8 +14,9 @@ class HLRModel(MemoryModel):
     Retention follows 0.5 ** (t / half_life).
     """
 
-    def __init__(self, weights: Sequence[float] | None = None):
-        weights = weights or _DEFAULT_WEIGHTS
+    def __init__(self, weights: Sequence[float] | None):
+        if weights is None:
+            raise ValueError("HLRModel requires weights from srs-benchmark.")
         if len(weights) != 3:
             raise ValueError("HLRModel expects exactly 3 weights.")
         self.w = tuple(float(x) for x in weights)

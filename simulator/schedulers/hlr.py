@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional, Sequence
+from typing import Sequence
 
 from simulator.core import CardView, Scheduler
 
@@ -13,9 +13,11 @@ class HLRScheduler(Scheduler):
     """
 
     def __init__(
-        self, weights: Optional[Sequence[float]] = None, desired_retention: float = 0.9
+        self, weights: Sequence[float] | None = None, desired_retention: float = 0.9
     ):
-        self.w = [float(x) for x in (weights or (2.5819, -0.8674, 2.7245))]
+        if weights is None:
+            raise ValueError("HLRScheduler requires weights from srs-benchmark.")
+        self.w = [float(x) for x in weights]
         if len(self.w) != 3:
             raise ValueError("HLRScheduler expects 3 weights.")
         self.desired_retention = desired_retention

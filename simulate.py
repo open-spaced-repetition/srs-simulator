@@ -11,11 +11,8 @@ from matplotlib.lines import Line2D
 from simulator import simulate
 from simulator.behavior import StochasticBehavior
 from simulator.cost import StatefulCostModel
-from simulator.models import (
-    FSRS3Model,
-    FSRS6Model,
-    LSTMModel,
-)
+from simulator.benchmark_loader import load_benchmark_weights, parse_result_overrides
+from simulator.models import FSRS3Model, FSRS6Model, LSTMModel
 from simulator.schedulers import (
     FSRS3Scheduler,
     FSRS6Scheduler,
@@ -26,10 +23,37 @@ from simulator.schedulers import (
 )
 from simulator.core import Action, Event, new_first_priority, review_first_priority
 
+
+def _resolve_benchmark_weights(
+    args, environment: str, expected_len: int
+) -> tuple[float, ...] | None:
+    overrides = parse_result_overrides(args.benchmark_result)
+    weights = load_benchmark_weights(
+        repo_root=Path(__file__).resolve().parent,
+        benchmark_root=args.srs_benchmark_root,
+        environment=environment,
+        user_id=args.user_id or 1,
+        partition_key=args.benchmark_partition,
+        overrides=overrides,
+    )
+    if len(weights) != expected_len:
+        raise ValueError(
+            f"{environment} expects {expected_len} weights, got {len(weights)}."
+        )
+    return tuple(float(x) for x in weights)
+
+
 ENVIRONMENT_FACTORIES = {
-    "lstm": lambda args: LSTMModel(),
-    "fsrs6": lambda args: FSRS6Model(),
-    "fsrs3": lambda args: FSRS3Model(),
+    "lstm": lambda args: LSTMModel(
+        user_id=args.user_id or 1,
+        benchmark_root=args.srs_benchmark_root,
+    ),
+    "fsrs6": lambda args: FSRS6Model(
+        weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21)
+    ),
+    "fsrs3": lambda args: FSRS3Model(
+        weights=_resolve_benchmark_weights(args, "fsrs3", expected_len=13)
+    ),
 }
 
 
@@ -43,12 +67,22 @@ def _require_policy(path: Path | None) -> Path:
 
 SCHEDULER_FACTORIES = {
     "fsrs6": lambda args: FSRS6Scheduler(
+        weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
         desired_retention=args.desired_retention,
         priority_mode=args.scheduler_priority,
     ),
-    "fsrs3": lambda args: FSRS3Scheduler(desired_retention=args.desired_retention),
-    "hlr": lambda args: HLRScheduler(desired_retention=args.desired_retention),
-    "dash": lambda args: DASHScheduler(desired_retention=args.desired_retention),
+    "fsrs3": lambda args: FSRS3Scheduler(
+        weights=_resolve_benchmark_weights(args, "fsrs3", expected_len=13),
+        desired_retention=args.desired_retention,
+    ),
+    "hlr": lambda args: HLRScheduler(
+        weights=_resolve_benchmark_weights(args, "hlr", expected_len=3),
+        desired_retention=args.desired_retention,
+    ),
+    "dash": lambda args: DASHScheduler(
+        weights=_resolve_benchmark_weights(args, "dash", expected_len=9),
+        desired_retention=args.desired_retention,
+    ),
     "fixed": lambda args: FixedIntervalScheduler(),
     "sspmmc": lambda args: SSPMMCScheduler(
         policy_json=_require_policy(args.sspmmc_policy),
@@ -115,6 +149,31 @@ def main() -> None:
         choices=sorted(ENVIRONMENT_FACTORIES),
         default="fsrs6",
         help="Memory model to simulate.",
+    )
+    parser.add_argument(
+        "--user-id",
+        type=int,
+        default=None,
+        help="Load benchmark weights for this user ID.",
+    )
+    parser.add_argument(
+        "--benchmark-partition",
+        default="0",
+        help="Partition key inside benchmark result parameters.",
+    )
+    parser.add_argument(
+        "--benchmark-result",
+        default=None,
+        help=(
+            "Override benchmark result base names, e.g. "
+            "fsrs6=FSRS-6-short,fsrs3=FSRSv3."
+        ),
+    )
+    parser.add_argument(
+        "--srs-benchmark-root",
+        type=Path,
+        default=None,
+        help="Path to the srs-benchmark repo (used for LSTM weights).",
     )
     parser.add_argument(
         "--scheduler",

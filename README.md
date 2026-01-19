@@ -12,7 +12,7 @@ uv run simulate.py --priority new-first --days 90 --no-log
 
 Simulating SSP-MMC-FSRS policies requires precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS/README.md`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
 
-Using the LSTM environment also requires pretrained weights. Train them in [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark) and pass the resulting weights file to the simulator (`uv run script.py --algo LSTM --weights`).
+All model/scheduler weights come from [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark). The LSTM environment loads `weights/LSTM/<user_id>.pth`. FSRS/HLR/DASH weights are read from `result/*.jsonl`. Pass `--user-id` (defaults to 1) and optionally `--benchmark-result`/`--benchmark-partition` to select entries; override the repo path with `--srs-benchmark-root` if needed.
 
 More parameter combinations:
 
@@ -84,17 +84,17 @@ The simulator follows an environment-agent loop where each module owns a distinc
 This separation lets you benchmark schedulers against arbitrary memory models and user behaviors while keeping transparency about where each decision is made.
 
 ## Provided Models
-- `FSRS6Model`: FSRS v6-style environment (21 params; defaults loaded from `config/fsrs6.json`).
-- `FSRS3Model`: FSRS v3-style environment (13 params; defaults loaded from `config/fsrs3.json`).
-- `HLRModel`: half-life regression with three weights (defaults in `config/hlr.json`).
-- `DASHModel`: stateless logistic model with placeholder features (drop in your own feature builder to align with the full DASH paper); weights live in `config/dash.json`.
-- `LSTMModel`: neural forgetting-curve predictor inspired by the srs-benchmark LSTM (requires PyTorch and optional pretrained weights; defaults read from `config/lstm.json` and expects day-based intervals like the original `delta_t_secs` feature).
+- `FSRS6Model`: FSRS v6-style environment (21 params loaded from `srs-benchmark` for the selected user).
+- `FSRS3Model`: FSRS v3-style environment (13 params loaded from `srs-benchmark`).
+- `HLRModel`: half-life regression with three weights loaded from `srs-benchmark`.
+- `DASHModel`: stateless logistic model with placeholder features and nine weights loaded from `srs-benchmark`.
+- `LSTMModel`: neural forgetting-curve predictor inspired by the srs-benchmark LSTM (requires PyTorch and `--user-id` weights; expects day-based intervals like the original `delta_t_secs` feature).
 
 ## Provided Schedulers
-- `FSRS6Scheduler` / `FSRSScheduler`: FSRS v6-style state; pass different weights to study model mismatch.
-- `FSRS3Scheduler`: FSRS v3-style scheduler.
-- `HLRScheduler`: schedules using half-life regression.
-- `DASHScheduler`: logistic retention solver that mirrors the DASH model and searches for intervals hitting a target retention.
+- `FSRS6Scheduler` / `FSRSScheduler`: FSRS v6-style state; loads weights from `srs-benchmark` for the selected user.
+- `FSRS3Scheduler`: FSRS v3-style scheduler with weights from `srs-benchmark`.
+- `HLRScheduler`: schedules using half-life regression weights from `srs-benchmark`.
+- `DASHScheduler`: logistic retention solver that mirrors the DASH model and uses weights from `srs-benchmark`.
 - `SSPMMCScheduler`: loads precomputed SSP-MMC-FSRS policies (JSON + `.npz`) and maintains its own FSRS6 state so it can target optimal retention under any environment.
 - `FixedIntervalScheduler`: baseline that doubles intervals on success and resets on failure.
 

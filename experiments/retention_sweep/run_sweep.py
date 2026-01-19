@@ -54,6 +54,31 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
+        "--user-id",
+        type=int,
+        default=None,
+        help="Load benchmark weights for this user ID.",
+    )
+    parser.add_argument(
+        "--benchmark-partition",
+        default="0",
+        help="Partition key inside benchmark result parameters.",
+    )
+    parser.add_argument(
+        "--benchmark-result",
+        default=None,
+        help=(
+            "Override benchmark result base names, e.g. "
+            "fsrs6=FSRS-6-short,fsrs3=FSRSv3."
+        ),
+    )
+    parser.add_argument(
+        "--srs-benchmark-root",
+        type=Path,
+        default=None,
+        help="Path to the srs-benchmark repo (used for LSTM weights).",
+    )
+    parser.add_argument(
         "--priority",
         choices=["review-first", "new-first"],
         default="review-first",
