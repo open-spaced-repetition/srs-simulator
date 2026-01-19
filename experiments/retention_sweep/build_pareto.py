@@ -103,6 +103,8 @@ def _load_meta_totals(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
                 meta = payload.get("data")
             elif payload.get("type") == "totals":
                 totals = payload.get("data")
+            if meta is not None and totals is not None:
+                break
     if meta is None or totals is None:
         raise ValueError(f"Missing meta or totals in {path}")
     return meta, totals
@@ -258,15 +260,15 @@ def _plot_compare_frontier(
         if extra_entries:
             x_vals = [entry["memorized_average"] for entry in extra_entries]
             y_vals = [entry["avg_accum_memorized_per_hour"] for entry in extra_entries]
-            plt.scatter(
+            plt.plot(
                 x_vals,
                 y_vals,
                 label=f"{extra_label} env={env}",
+                linestyle="--",
                 marker="X",
                 color=color,
-                edgecolors="black",
-                linewidths=0.6,
-                s=80,
+                linewidth=1.8,
+                markersize=8,
             )
 
     plt.xlim([x_min, x_max])
@@ -342,6 +344,7 @@ def main() -> None:
                 title_prefix=f"env={env}" if len(envs) > 1 else None,
                 dedupe=False,
             )
+            sspmmc_results.sort(key=lambda entry: entry["memorized_average"])
             sspmmc_by_env[env] = sspmmc_results
             combined_results.extend(sspmmc_results)
     results_path.parent.mkdir(parents=True, exist_ok=True)

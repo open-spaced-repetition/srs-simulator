@@ -217,3 +217,11 @@ __marimo__/
 
 # Log files
 logs/
+
+# Generated images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.webp
