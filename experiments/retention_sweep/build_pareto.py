@@ -6,6 +6,17 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import math
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.scheduler_spec import (
+    format_float,
+    normalize_fixed_interval,
+    parse_scheduler_spec,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,7 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schedulers",
         default="fsrs6",
-        help="Comma-separated list of schedulers to plot (include sspmmc for policies).",
+        help=(
+            "Comma-separated list of schedulers to plot "
+            "(include sspmmc for policies; use fixed@<days> for fixed intervals)."
+        ),
     )
     parser.add_argument(
         "--user-id",
@@ -125,6 +139,7 @@ def _iter_log_entries(
     min_retention: float,
     max_retention: float,
     base_dirs: Sequence[Path],
+    fixed_interval_filter: Optional[Sequence[float]] = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
     for path in sorted(log_dir.glob("*.jsonl")):
         try:
@@ -138,10 +153,26 @@ def _iter_log_entries(
         if scheduler_filter and scheduler not in scheduler_filter:
             continue
 
-        desired = float(meta.get("desired_retention", 0.0))
-        if scheduler != "sspmmc":
-            if desired < min_retention or desired > max_retention:
+        fixed_interval = None
+        if scheduler == "fixed":
+            raw_interval = meta.get("fixed_interval")
+            fixed_interval = normalize_fixed_interval(
+                float(raw_interval) if raw_interval is not None else None
+            )
+            if fixed_interval_filter:
+                if not any(
+                    math.isclose(fixed_interval, value, rel_tol=0.0, abs_tol=1e-6)
+                    for value in fixed_interval_filter
+                ):
+                    continue
+
+        desired = meta.get("desired_retention")
+        if scheduler not in {"sspmmc", "fixed"}:
+            desired_value = float(desired or 0.0)
+            if desired_value < min_retention or desired_value > max_retention:
                 continue
+        else:
+            desired_value = None
 
         avg_per_hour = totals.get("avg_accum_memorized_per_hour")
         if avg_per_hour is None:
@@ -149,8 +180,10 @@ def _iter_log_entries(
 
         if scheduler == "sspmmc":
             title = _resolve_policy_title(meta, base_dirs) or "SSP-MMC"
+        elif scheduler == "fixed":
+            title = f"IVL={format_float(fixed_interval)}"
         else:
-            title = f"DR={desired:.2f}"
+            title = f"DR={float(desired_value):.2f}"
 
         user_id = meta.get("user_id")
         if user_id is not None:
@@ -167,8 +200,9 @@ def _iter_log_entries(
             "avg_accum_memorized_per_hour": float(avg_per_hour),
             "scheduler": scheduler,
             "user_id": user_id,
+            "fixed_interval": fixed_interval,
         }
-        yield desired if scheduler != "sspmmc" else None, entry
+        yield desired_value, entry
 
 
 def _build_results(
@@ -178,13 +212,20 @@ def _build_results(
     min_retention: float,
     max_retention: float,
     base_dirs: Sequence[Path],
+    fixed_interval_filter: Optional[Sequence[float]] = None,
     title_prefix: str | None = None,
     dedupe: bool = True,
 ) -> List[Dict[str, Any]]:
     by_retention: Dict[float, Dict[str, Any]] = {}
     results: List[Dict[str, Any]] = []
     for desired, entry in _iter_log_entries(
-        log_dir, environment, scheduler_filter, min_retention, max_retention, base_dirs
+        log_dir,
+        environment,
+        scheduler_filter,
+        min_retention,
+        max_retention,
+        base_dirs,
+        fixed_interval_filter,
     ):
         if title_prefix:
             entry["title"] = f"{title_prefix} {entry['title']}"
@@ -195,7 +236,8 @@ def _build_results(
             results.append(entry)
 
     if dedupe:
-        return [by_retention[ret] for ret in sorted(by_retention)]
+        deduped = [by_retention[ret] for ret in sorted(by_retention)]
+        return deduped + results
     return results
 
 
@@ -284,7 +326,7 @@ def _plot_compare_frontier(
 def main() -> None:
     args = parse_args()
 
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = REPO_ROOT
     user_id = args.user_id or 1
     log_dir = args.log_dir or (
         repo_root / "logs" / "retention_sweep" / f"user_{user_id}"
@@ -309,11 +351,30 @@ def main() -> None:
     combined_results: List[Dict[str, Any]] = []
     series: List[Dict[str, Any]] = []
     schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
-    dr_schedulers = [scheduler for scheduler in schedulers if scheduler != "sspmmc"]
-    has_sspmmc = "sspmmc" in schedulers
+    try:
+        scheduler_specs = [parse_scheduler_spec(item) for item in schedulers]
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    dr_schedulers: List[str] = []
+    fixed_intervals: List[float] = []
+    include_all_fixed = False
+    has_sspmmc = False
+    for name, interval, _ in scheduler_specs:
+        if name == "sspmmc":
+            has_sspmmc = True
+            continue
+        if name == "fixed":
+            if interval is None:
+                include_all_fixed = True
+            else:
+                fixed_intervals.append(interval)
+            continue
+        if name not in dr_schedulers:
+            dr_schedulers.append(name)
     run_dr = bool(dr_schedulers)
     run_sspmmc = has_sspmmc
-    if not run_dr and not run_sspmmc:
+    run_fixed = include_all_fixed or bool(fixed_intervals)
+    if not run_dr and not run_sspmmc and not run_fixed:
         raise SystemExit("No schedulers specified. Use --schedulers to select plots.")
     for env in envs:
         if run_dr:
@@ -341,6 +402,37 @@ def main() -> None:
                     }
                 )
                 combined_results.extend(results)
+        if run_fixed:
+            interval_filter = None if include_all_fixed else fixed_intervals
+            fixed_results = _build_results(
+                log_dir,
+                env,
+                {"fixed"},
+                args.min_retention,
+                args.max_retention,
+                base_dirs,
+                fixed_interval_filter=interval_filter,
+                title_prefix=None,
+            )
+            fixed_results.sort(
+                key=lambda entry: entry.get("fixed_interval")
+                if entry.get("fixed_interval") is not None
+                else 0.0
+            )
+            fixed_label_parts = []
+            if run_dr or run_sspmmc or len(envs) > 1:
+                fixed_label_parts.append("sched=fixed")
+            if len(envs) > 1:
+                fixed_label_parts.append(f"env={env}")
+            fixed_label = " ".join(fixed_label_parts) or "fixed"
+            series.append(
+                {
+                    "label": fixed_label,
+                    "entries": fixed_results,
+                    "style": "dr",
+                }
+            )
+            combined_results.extend(fixed_results)
         if run_sspmmc:
             sspmmc_results = _build_results(
                 log_dir,

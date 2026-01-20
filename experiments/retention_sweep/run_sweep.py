@@ -8,6 +8,16 @@ import sys
 from typing import Callable, List, Optional
 from tqdm import tqdm
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.scheduler_spec import (
+    format_float,
+    normalize_fixed_interval,
+    parse_scheduler_spec,
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -31,7 +41,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--schedulers",
         default="fsrs6",
-        help="Comma-separated list of schedulers to sweep (include sspmmc to run policies).",
+        help=(
+            "Comma-separated list of schedulers to sweep "
+            "(include sspmmc to run policies; use fixed@<days> for fixed intervals)."
+        ),
     )
     parser.add_argument("--days", type=int, default=1825, help="Simulation days.")
     parser.add_argument("--deck", type=int, default=10000, help="Deck size.")
@@ -164,6 +177,11 @@ def _parse_csv(value: Optional[str]) -> List[str]:
 
 def _progress_label(args: argparse.Namespace) -> str:
     label = f"{args.environment}/{args.scheduler}"
+    if args.scheduler == "fixed":
+        interval = getattr(args, "fixed_interval", None)
+        if interval is not None:
+            label = f"{label} ivl={format_float(interval)}"
+        return label
     if args.scheduler == "sspmmc":
         if args.sspmmc_policy:
             label = f"{label}:{args.sspmmc_policy.stem}"
@@ -287,9 +305,7 @@ def main() -> None:
     if not args.plot:
         os.environ.setdefault("MPLBACKEND", "Agg")
 
-    repo_root = Path(__file__).resolve().parents[2]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
+    repo_root = REPO_ROOT
 
     import simulate as simulate_cli
     from simulator import simulate as run_simulation
@@ -303,11 +319,22 @@ def main() -> None:
     )
     envs = _parse_csv(args.environments) or [args.environment]
     schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
-    dr_schedulers = [scheduler for scheduler in schedulers if scheduler != "sspmmc"]
-    has_sspmmc = "sspmmc" in schedulers
+    try:
+        scheduler_specs = [parse_scheduler_spec(item) for item in schedulers]
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    for name, _, _ in scheduler_specs:
+        if name not in simulate_cli.SCHEDULER_FACTORIES:
+            raise SystemExit(f"Unknown scheduler '{name}'.")
+    dr_schedulers = [
+        spec for spec in scheduler_specs if spec[0] not in {"sspmmc", "fixed"}
+    ]
+    fixed_schedulers = [spec for spec in scheduler_specs if spec[0] == "fixed"]
+    has_sspmmc = any(spec[0] == "sspmmc" for spec in scheduler_specs)
     run_dr = bool(dr_schedulers)
     run_sspmmc = has_sspmmc
-    if not run_dr and not run_sspmmc:
+    run_fixed = bool(fixed_schedulers)
+    if not run_dr and not run_sspmmc and not run_fixed:
         raise SystemExit("No schedulers specified. Use --schedulers to select runs.")
 
     sspmmc_policies = _resolve_policy_paths(args, repo_root, run_sspmmc)
@@ -320,13 +347,15 @@ def main() -> None:
 
     for environment in envs:
         if run_dr:
-            for scheduler in dr_schedulers:
+            for scheduler, _, _ in dr_schedulers:
                 for i in range(args.start, args.end + 1, args.step):
                     dr = i / 100.0
                     run_args = argparse.Namespace(**vars(args))
                     run_args.environment = environment
                     run_args.scheduler = scheduler
+                    run_args.fixed_interval = None
                     run_args.desired_retention = dr
+                    run_args.scheduler_spec = scheduler
                     run_args.log_dir = log_dir
                     tqdm.write(
                         f"Running env={environment} scheduler={scheduler} "
@@ -341,6 +370,28 @@ def main() -> None:
                         StatefulCostModel,
                     )
 
+        if run_fixed:
+            for scheduler, fixed_interval, raw in fixed_schedulers:
+                fixed_interval = normalize_fixed_interval(fixed_interval)
+                run_args = argparse.Namespace(**vars(args))
+                run_args.environment = environment
+                run_args.scheduler = scheduler
+                run_args.fixed_interval = fixed_interval
+                run_args.desired_retention = None
+                run_args.scheduler_spec = raw
+                run_args.log_dir = log_dir
+                tqdm.write(
+                    f"Running env={environment} scheduler={raw} interval={format_float(fixed_interval)}"
+                )
+                _run_once(
+                    run_args,
+                    priority_fn,
+                    run_simulation,
+                    simulate_cli,
+                    StochasticBehavior,
+                    StatefulCostModel,
+                )
+
         if run_sspmmc:
             for policy_path in sspmmc_policies:
                 run_args = argparse.Namespace(**vars(args))
@@ -348,6 +399,7 @@ def main() -> None:
                 run_args.scheduler = "sspmmc"
                 run_args.sspmmc_policy = policy_path
                 run_args.desired_retention = args.sspmmc_desired_retention
+                run_args.scheduler_spec = "sspmmc"
                 run_args.log_dir = log_dir
                 tqdm.write(f"Running env={environment} sspmmc_policy={policy_path}")
                 _run_once(

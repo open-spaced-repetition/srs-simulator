@@ -22,6 +22,12 @@ from simulator.schedulers import (
     SSPMMCScheduler,
 )
 from simulator.core import Action, Event, new_first_priority, review_first_priority
+from simulator.scheduler_spec import (
+    format_float,
+    normalize_fixed_interval,
+    parse_scheduler_spec,
+    scheduler_uses_desired_retention,
+)
 
 
 def _resolve_benchmark_weights(
@@ -84,7 +90,9 @@ SCHEDULER_FACTORIES = {
         weights=_resolve_benchmark_weights(args, "dash", expected_len=9),
         desired_retention=args.desired_retention,
     ),
-    "fixed": lambda args: FixedIntervalScheduler(),
+    "fixed": lambda args: FixedIntervalScheduler(
+        interval=normalize_fixed_interval(getattr(args, "fixed_interval", None))
+    ),
     "sspmmc": lambda args: SSPMMCScheduler(
         policy_json=_require_policy(args.sspmmc_policy),
         fsrs_weights=None,
@@ -188,9 +196,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--scheduler",
-        choices=sorted(SCHEDULER_FACTORIES),
         default="fsrs6",
-        help="Scheduler under evaluation.",
+        help=(
+            "Scheduler under evaluation "
+            f"({', '.join(sorted(SCHEDULER_FACTORIES))}); "
+            "use fixed@<days> for fixed intervals."
+        ),
     )
     parser.add_argument(
         "--desired-retention",
@@ -212,6 +223,16 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     args = parser.parse_args()
+
+    try:
+        scheduler_name, fixed_interval, _ = parse_scheduler_spec(args.scheduler)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if scheduler_name not in SCHEDULER_FACTORIES:
+        raise SystemExit(f"Unknown scheduler '{scheduler_name}'.")
+    args.scheduler_spec = args.scheduler
+    args.scheduler = scheduler_name
+    args.fixed_interval = fixed_interval
 
     priority_fn = (
         review_first_priority if args.priority == "review-first" else new_first_priority
@@ -337,30 +358,37 @@ def plot_simulation(stats) -> None:
 def _write_log(args: argparse.Namespace, stats) -> None:
     args.log_dir.mkdir(parents=True, exist_ok=True)
 
-    def _fmt_float(value: float | None) -> str:
-        if value is None:
-            return "none"
-        text = f"{value:.2f}"
-        return text.rstrip("0").rstrip(".")
-
-    cost_limit = _fmt_float(args.cost_limit_minutes)
+    desired_retention = (
+        args.desired_retention
+        if scheduler_uses_desired_retention(args.scheduler)
+        else None
+    )
+    fixed_interval = (
+        normalize_fixed_interval(getattr(args, "fixed_interval", None))
+        if args.scheduler == "fixed"
+        else None
+    )
+    cost_limit = format_float(args.cost_limit_minutes)
     review_limit = args.review_limit if args.review_limit is not None else "none"
-    parts = [
-        f"env={args.environment}",
-        f"sched={args.scheduler}",
-        f"user={args.user_id or 1}",
-        f"days={args.days}",
-        f"deck={args.deck}",
-        f"learn={args.learn_limit}",
-        f"review={review_limit}",
-        f"costm={cost_limit}",
-        f"prio={args.priority}",
-        f"ret={_fmt_float(args.desired_retention)}",
-        f"sprio={args.scheduler_priority}",
-        f"seed={args.seed}",
-    ]
+    parts = [f"env={args.environment}", f"sched={args.scheduler}"]
+    if fixed_interval is not None:
+        parts.append(f"ivl={format_float(fixed_interval)}")
     if args.sspmmc_policy:
-        parts.insert(2, f"policy={args.sspmmc_policy.stem}")
+        parts.append(f"policy={args.sspmmc_policy.stem}")
+    parts.extend(
+        [
+            f"user={args.user_id or 1}",
+            f"days={args.days}",
+            f"deck={args.deck}",
+            f"learn={args.learn_limit}",
+            f"review={review_limit}",
+            f"costm={cost_limit}",
+            f"prio={args.priority}",
+            f"ret={format_float(desired_retention)}",
+            f"sprio={args.scheduler_priority}",
+            f"seed={args.seed}",
+        ]
+    )
     filename = args.log_dir / f"log_{'_'.join(parts)}.jsonl"
     meta = {
         "days": args.days,
@@ -371,10 +399,12 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "priority": args.priority,
         "environment": args.environment,
         "scheduler": args.scheduler,
+        "scheduler_spec": getattr(args, "scheduler_spec", args.scheduler),
         "user_id": args.user_id or 1,
-        "desired_retention": args.desired_retention,
+        "desired_retention": desired_retention,
         "scheduler_priority": args.scheduler_priority,
         "sspmmc_policy": str(args.sspmmc_policy) if args.sspmmc_policy else None,
+        "fixed_interval": fixed_interval,
         "seed": args.seed,
     }
     with filename.open("w", encoding="utf-8") as fh:
