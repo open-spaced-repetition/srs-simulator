@@ -34,7 +34,7 @@ Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
 uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --schedulers fsrs6
 uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --schedulers sspmmc
 uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --schedulers fsrs6,sspmmc
-uv run experiments/retention_sweep/build_pareto.py --environments fsrs6,lstm --schedulers fsrs6,sspmmc --sspmmc-root ../SSP-MMC-FSRS
+uv run experiments/retention_sweep/build_pareto.py --environments fsrs6,lstm --schedulers fsrs6,sspmmc
 ```
 
 By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--schedulers` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`.

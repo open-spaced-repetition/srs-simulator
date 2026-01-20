@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sys
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import math
 
@@ -48,22 +47,10 @@ def parse_args() -> argparse.Namespace:
         help="Maximum desired retention to include.",
     )
     parser.add_argument(
-        "--sspmmc-root",
-        type=Path,
-        default=None,
-        help="Path to the SSP-MMC-FSRS repo root.",
-    )
-    parser.add_argument(
         "--results-path",
         type=Path,
         default=None,
         help="Where to write simulation_results.json.",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Seed for the plot styling setup.",
     )
     parser.add_argument(
         "--plot-dir",
@@ -212,9 +199,26 @@ def _build_results(
     return results
 
 
+def _format_title(title_base: str, user_ids: Sequence[int]) -> str:
+    if user_ids:
+        if len(user_ids) == 1:
+            return f"{title_base} (user {user_ids[0]})"
+        return "{} (users {})".format(
+            title_base, ", ".join(str(uid) for uid in user_ids)
+        )
+    return title_base
+
+
+def _setup_plot_style() -> None:
+    import matplotlib.pyplot as plt
+
+    plt.style.use("ggplot")
+
+
 def _plot_compare_frontier(
     series: List[Dict[str, Any]],
     output_path: Path,
+    title_base: str = "Pareto frontier comparison",
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -269,16 +273,7 @@ def _plot_compare_frontier(
     user_ids = sorted(
         {entry["user_id"] for entry in all_entries if entry.get("user_id") is not None}
     )
-    if user_ids:
-        if len(user_ids) == 1:
-            title = f"Pareto frontier comparison (user {user_ids[0]})"
-        else:
-            title = "Pareto frontier comparison (users {})".format(
-                ", ".join(str(uid) for uid in user_ids)
-            )
-    else:
-        title = "Pareto frontier comparison"
-    plt.title(title, fontsize=22)
+    plt.title(_format_title(title_base, user_ids), fontsize=22)
     plt.grid(True, ls="--")
     plt.legend(fontsize=16, loc="lower left", facecolor="white")
     plt.tight_layout()
@@ -299,7 +294,6 @@ def main() -> None:
 
     envs = _parse_csv(args.environments)
 
-    ssp_root = args.sspmmc_root or (repo_root.parent / "SSP-MMC-FSRS")
     plot_dir = args.plot_dir or (
         repo_root / "experiments" / "retention_sweep" / "plots" / f"user_{user_id}"
     )
@@ -311,7 +305,7 @@ def main() -> None:
     )
     results_path = args.results_path or (log_dir / default_results)
 
-    base_dirs = [repo_root, ssp_root, log_dir]
+    base_dirs = [repo_root, log_dir]
     combined_results: List[Dict[str, Any]] = []
     series: List[Dict[str, Any]] = []
     schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
@@ -380,23 +374,15 @@ def main() -> None:
         return
 
     os.environ.setdefault("MPLBACKEND", "Agg")
-    os.chdir(ssp_root)
-
-    for path in (ssp_root, ssp_root / "src"):
-        if str(path) not in sys.path:
-            sys.path.insert(0, str(path))
-
-    from experiments import lib as ssp_lib  # noqa: E402
 
     plot_dir.mkdir(parents=True, exist_ok=True)
-    ssp_lib.setup_environment(args.seed)
+    _setup_plot_style()
     use_compare = run_sspmmc or len(series) != 1
-    if use_compare:
-        output_path = plot_dir / "Pareto frontier env compare.png"
-        _plot_compare_frontier(series, output_path)
-    else:
-        ssp_lib.PLOTS_DIR = plot_dir
-        ssp_lib.plot_pareto_frontier(results_path, [], plot_dir)
+    output_name = (
+        "Pareto frontier env compare.png" if use_compare else "Pareto frontier.png"
+    )
+    title_base = "Pareto frontier comparison" if use_compare else "Pareto frontier"
+    _plot_compare_frontier(series, plot_dir / output_name, title_base=title_base)
     print(f"Wrote {len(combined_results)} entries to {results_path}")
 
 
