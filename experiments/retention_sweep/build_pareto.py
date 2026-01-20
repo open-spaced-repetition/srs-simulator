@@ -421,20 +421,8 @@ def _plot_compare_frontier(
             linewidth=linewidth,
             markersize=markersize,
         )
-        if show_labels:
-            if scheduler == "sspmmc":
-                seen_labels = set()
-                label_indices = []
-                for idx, entry in enumerate(entries):
-                    title = entry.get("title")
-                    if not title or title in seen_labels:
-                        continue
-                    seen_labels.add(title)
-                    label_indices.append(idx)
-            else:
-                label_indices = _select_label_indices(
-                    len(entries), max_labels_per_series
-                )
+        if show_labels and scheduler != "sspmmc":
+            label_indices = _select_label_indices(len(entries), max_labels_per_series)
             for entry_idx in label_indices:
                 entry = entries[entry_idx]
                 title = entry.get("title")
@@ -468,8 +456,12 @@ def _plot_compare_frontier(
             arrowprops={"arrowstyle": "-", "color": "gray", "lw": 0.5},
             lim=200,
         )
-    plt.xlabel("Memorized cards (average, all days)\n(higher=better)", fontsize=18)
-    plt.ylabel("Average minutes/day\n(lower=better)", fontsize=18)
+    plt.xlabel(
+        "Memorized cards (average, all days)\n(higher=better)",
+        fontsize=18,
+        color="black",
+    )
+    plt.ylabel("Average minutes/day\n(lower=better)", fontsize=18, color="black")
     plt.xticks(fontsize=16, color="black")
     plt.yticks(fontsize=16, color="black")
     user_ids = sorted(
@@ -509,7 +501,7 @@ def _plot_compare_frontier(
         fontweight="semibold",
     )
     plt.grid(True, ls="--")
-    plt.legend(fontsize=16, loc="lower left", facecolor="white")
+    plt.legend(fontsize=16, loc="center left", facecolor="white")
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
