@@ -19,6 +19,8 @@ from simulator.schedulers import (
     HLRScheduler,
     DASHScheduler,
     FixedIntervalScheduler,
+    AnkiSM2Scheduler,
+    MemriseScheduler,
     SSPMMCScheduler,
 )
 from simulator.core import Action, Event, new_first_priority, review_first_priority
@@ -93,6 +95,8 @@ SCHEDULER_FACTORIES = {
     "fixed": lambda args: FixedIntervalScheduler(
         interval=normalize_fixed_interval(getattr(args, "fixed_interval", None))
     ),
+    "anki_sm2": lambda args: AnkiSM2Scheduler(),
+    "memrise": lambda args: MemriseScheduler(),
     "sspmmc": lambda args: SSPMMCScheduler(
         policy_json=_require_policy(args.sspmmc_policy),
         fsrs_weights=None,

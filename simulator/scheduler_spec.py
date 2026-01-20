@@ -39,4 +39,4 @@ def format_float(value: float | None) -> str:
 
 
 def scheduler_uses_desired_retention(scheduler: str) -> bool:
-    return scheduler not in {"fixed"}
+    return scheduler not in {"fixed", "anki_sm2", "memrise"}
