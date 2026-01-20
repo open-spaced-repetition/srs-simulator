@@ -30,6 +30,12 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated list of schedulers to plot (include sspmmc for policies).",
     )
     parser.add_argument(
+        "--user-id",
+        type=int,
+        default=None,
+        help="User ID used for default log directory resolution.",
+    )
+    parser.add_argument(
         "--min-retention",
         type=float,
         default=0.70,
@@ -284,7 +290,10 @@ def main() -> None:
     args = parse_args()
 
     repo_root = Path(__file__).resolve().parents[2]
-    log_dir = args.log_dir or (repo_root / "logs" / "retention_sweep")
+    user_id = args.user_id or 1
+    log_dir = args.log_dir or (
+        repo_root / "logs" / "retention_sweep" / f"user_{user_id}"
+    )
     if not log_dir.exists():
         raise SystemExit(f"Log directory not found: {log_dir}")
 
@@ -292,7 +301,7 @@ def main() -> None:
 
     ssp_root = args.sspmmc_root or (repo_root.parent / "SSP-MMC-FSRS")
     plot_dir = args.plot_dir or (
-        repo_root / "experiments" / "retention_sweep" / "plots"
+        repo_root / "experiments" / "retention_sweep" / "plots" / f"user_{user_id}"
     )
 
     default_results = (
@@ -300,9 +309,7 @@ def main() -> None:
         if len(envs) > 1
         else "simulation_results_retention_sweep.json"
     )
-    results_path = args.results_path or (
-        ssp_root / "outputs" / "checkpoints" / default_results
-    )
+    results_path = args.results_path or (log_dir / default_results)
 
     base_dirs = [repo_root, ssp_root, log_dir]
     combined_results: List[Dict[str, Any]] = []
@@ -389,7 +396,7 @@ def main() -> None:
         _plot_compare_frontier(series, output_path)
     else:
         ssp_lib.PLOTS_DIR = plot_dir
-        ssp_lib.plot_pareto_frontier(results_path, [])
+        ssp_lib.plot_pareto_frontier(results_path, [], plot_dir)
     print(f"Wrote {len(combined_results)} entries to {results_path}")
 
 
