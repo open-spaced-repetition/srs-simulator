@@ -39,7 +39,8 @@ def parse_args() -> argparse.Namespace:
         default="fsrs6",
         help=(
             "Comma-separated list of schedulers to plot "
-            "(include sspmmc for policies; use fixed@<days> for fixed intervals)."
+            "(include sspmmc for policies; use fixed@<days> for fixed intervals "
+            "or fixed to include all fixed intervals)."
         ),
     )
     parser.add_argument(
@@ -359,18 +360,20 @@ def main() -> None:
     fixed_intervals: List[float] = []
     include_all_fixed = False
     has_sspmmc = False
-    for name, interval, _ in scheduler_specs:
+    for name, interval, raw in scheduler_specs:
         if name == "sspmmc":
             has_sspmmc = True
             continue
         if name == "fixed":
-            if interval is None:
+            if interval is None or raw == "fixed":
                 include_all_fixed = True
             else:
                 fixed_intervals.append(interval)
             continue
         if name not in dr_schedulers:
             dr_schedulers.append(name)
+    if include_all_fixed:
+        fixed_intervals = []
     run_dr = bool(dr_schedulers)
     run_sspmmc = has_sspmmc
     run_fixed = include_all_fixed or bool(fixed_intervals)
