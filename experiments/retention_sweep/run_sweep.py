@@ -148,6 +148,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable writing logs to disk.",
     )
+    parser.add_argument(
+        "--log-reviews",
+        action="store_true",
+        help="Include per-event logs (learn/review) in the JSONL output (can be large).",
+    )
     return parser.parse_args()
 
 
