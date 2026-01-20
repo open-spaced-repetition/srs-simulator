@@ -279,19 +279,36 @@ def _plot_compare_frontier(
     y_max = max_y * 1.03 if max_y else 1
 
     colors = ["#5b9bd5", "#ed7d31", "#70ad47", "#264478"]
-    markers = ["o", "s", "D", "^"]
+    linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
+    scheduler_order: List[str] = []
+    environment_order: List[str] = []
+    for item in series:
+        scheduler = item.get("scheduler")
+        environment = item.get("environment")
+        if scheduler and scheduler not in scheduler_order:
+            scheduler_order.append(scheduler)
+        if environment and environment not in environment_order:
+            environment_order.append(environment)
+    scheduler_colors = {
+        scheduler: colors[idx % len(colors)]
+        for idx, scheduler in enumerate(scheduler_order)
+    }
+    environment_linestyles = {
+        environment: linestyles[idx % len(linestyles)]
+        for idx, environment in enumerate(environment_order)
+    }
 
     plt.figure(figsize=(12, 9))
-    for idx, item in enumerate(series):
+    for item in series:
         entries = item["entries"]
         if not entries:
             continue
-        color = colors[idx % len(colors)]
-        style = item["style"]
-        marker = "X" if style == "sspmmc" else markers[idx % len(markers)]
-        linestyle = "--" if style == "sspmmc" else "-"
-        linewidth = 1.8 if style == "sspmmc" else 2
-        markersize = 8 if style == "sspmmc" else 6
+        scheduler = item.get("scheduler")
+        environment = item.get("environment")
+        color = scheduler_colors.get(scheduler, colors[0])
+        linestyle = environment_linestyles.get(environment, linestyles[0])
+        linewidth = 2
+        markersize = 6
         x_vals = [entry["memorized_average"] for entry in entries]
         y_vals = [entry["avg_accum_memorized_per_hour"] for entry in entries]
         plt.plot(
@@ -299,7 +316,7 @@ def _plot_compare_frontier(
             y_vals,
             label=item["label"],
             linestyle=linestyle,
-            marker=marker,
+            marker="o",
             color=color,
             linewidth=linewidth,
             markersize=markersize,
@@ -392,16 +409,18 @@ def main() -> None:
                     title_prefix=None,
                 )
                 label_parts = []
-                if len(dr_schedulers) > 1:
-                    label_parts.append(f"sched={scheduler}")
                 if len(envs) > 1:
                     label_parts.append(f"env={env}")
+                if len(dr_schedulers) > 1:
+                    label_parts.append(f"sched={scheduler}")
                 label = " ".join(label_parts) or scheduler
                 series.append(
                     {
                         "label": label,
                         "entries": results,
                         "style": "dr",
+                        "scheduler": scheduler,
+                        "environment": env,
                     }
                 )
                 combined_results.extend(results)
@@ -423,16 +442,18 @@ def main() -> None:
                 else 0.0
             )
             fixed_label_parts = []
-            if run_dr or run_sspmmc or len(envs) > 1:
-                fixed_label_parts.append("sched=fixed")
             if len(envs) > 1:
                 fixed_label_parts.append(f"env={env}")
+            if run_dr or run_sspmmc or len(envs) > 1:
+                fixed_label_parts.append("sched=fixed")
             fixed_label = " ".join(fixed_label_parts) or "fixed"
             series.append(
                 {
                     "label": fixed_label,
                     "entries": fixed_results,
                     "style": "dr",
+                    "scheduler": "fixed",
+                    "environment": env,
                 }
             )
             combined_results.extend(fixed_results)
@@ -450,13 +471,15 @@ def main() -> None:
             sspmmc_results.sort(key=lambda entry: entry["memorized_average"])
             ssp_label_parts = ["sched=sspmmc"]
             if len(envs) > 1:
-                ssp_label_parts.append(f"env={env}")
+                ssp_label_parts.insert(0, f"env={env}")
             ssp_label = " ".join(ssp_label_parts)
             series.append(
                 {
                     "label": ssp_label,
                     "entries": sspmmc_results,
                     "style": "sspmmc",
+                    "scheduler": "sspmmc",
+                    "environment": env,
                 }
             )
             combined_results.extend(sspmmc_results)
