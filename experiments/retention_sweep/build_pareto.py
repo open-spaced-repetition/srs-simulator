@@ -78,6 +78,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip plotting and only write the results JSON.",
     )
+    parser.add_argument(
+        "--show-labels",
+        action="store_true",
+        help="Annotate points with scheduler configuration labels.",
+    )
     return parser.parse_args()
 
 
@@ -281,6 +286,7 @@ def _plot_compare_frontier(
     series: List[Dict[str, Any]],
     output_path: Path,
     title_base: str = "Pareto frontier comparison",
+    show_labels: bool = False,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -317,22 +323,24 @@ def _plot_compare_frontier(
         for idx, environment in enumerate(environment_order)
     }
 
-    def _select_label_indices(count: int, max_labels: int) -> List[int]:
-        if count <= 0:
-            return []
-        if count <= max_labels:
-            return list(range(count))
-        step = max(1, math.ceil(count / max_labels))
-        indices = list(range(0, count, step))
-        if indices[-1] != count - 1:
-            indices.append(count - 1)
-        return indices
-
     plt.figure(figsize=(12, 9))
     non_empty_series = [item for item in series if item["entries"]]
     max_labels_total = 40
     max_labels_per_series = max(2, max_labels_total // max(1, len(non_empty_series)))
     label_offsets = [(6, 6), (6, -8), (-6, 6), (-6, -8)]
+    if show_labels:
+
+        def _select_label_indices(count: int, max_labels: int) -> List[int]:
+            if count <= 0:
+                return []
+            if count <= max_labels:
+                return list(range(count))
+            step = max(1, math.ceil(count / max_labels))
+            indices = list(range(0, count, step))
+            if indices[-1] != count - 1:
+                indices.append(count - 1)
+            return indices
+
     for item in series:
         entries = item["entries"]
         if not entries:
@@ -355,31 +363,34 @@ def _plot_compare_frontier(
             linewidth=linewidth,
             markersize=markersize,
         )
-        if scheduler == "sspmmc":
-            seen_labels = set()
-            label_indices = []
-            for idx, entry in enumerate(entries):
+        if show_labels:
+            if scheduler == "sspmmc":
+                seen_labels = set()
+                label_indices = []
+                for idx, entry in enumerate(entries):
+                    title = entry.get("title")
+                    if not title or title in seen_labels:
+                        continue
+                    seen_labels.add(title)
+                    label_indices.append(idx)
+            else:
+                label_indices = _select_label_indices(
+                    len(entries), max_labels_per_series
+                )
+            for offset_idx, entry_idx in enumerate(label_indices):
+                entry = entries[entry_idx]
                 title = entry.get("title")
-                if not title or title in seen_labels:
+                if not title:
                     continue
-                seen_labels.add(title)
-                label_indices.append(idx)
-        else:
-            label_indices = _select_label_indices(len(entries), max_labels_per_series)
-        for offset_idx, entry_idx in enumerate(label_indices):
-            entry = entries[entry_idx]
-            title = entry.get("title")
-            if not title:
-                continue
-            plt.annotate(
-                title,
-                (x_vals[entry_idx], y_vals[entry_idx]),
-                textcoords="offset points",
-                xytext=label_offsets[offset_idx % len(label_offsets)],
-                fontsize=9,
-                color="black",
-                alpha=0.85,
-            )
+                plt.annotate(
+                    title,
+                    (x_vals[entry_idx], y_vals[entry_idx]),
+                    textcoords="offset points",
+                    xytext=label_offsets[offset_idx % len(label_offsets)],
+                    fontsize=9,
+                    color="black",
+                    alpha=0.85,
+                )
 
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
@@ -559,7 +570,12 @@ def main() -> None:
         "Pareto frontier env compare.png" if use_compare else "Pareto frontier.png"
     )
     title_base = "Pareto frontier comparison" if use_compare else "Pareto frontier"
-    _plot_compare_frontier(series, plot_dir / output_name, title_base=title_base)
+    _plot_compare_frontier(
+        series,
+        plot_dir / output_name,
+        title_base=title_base,
+        show_labels=args.show_labels,
+    )
     print(f"Wrote {len(combined_results)} entries to {results_path}")
 
 
