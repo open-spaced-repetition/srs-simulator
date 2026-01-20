@@ -105,7 +105,12 @@ def main() -> None:
     parser.add_argument(
         "--no-log",
         action="store_true",
-        help="Disable writing simulation logs to disk.",
+        help="Disable writing simulation logs (meta + totals) to disk.",
+    )
+    parser.add_argument(
+        "--log-reviews",
+        action="store_true",
+        help="Include per-event logs (learn/review) in the JSONL output (can be large).",
     )
     parser.add_argument(
         "--no-progress",
@@ -422,8 +427,9 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         else:
             totals["cost_per_projected_retrievability"] = None
         fh.write(json.dumps({"type": "totals", "data": totals}) + "\n")
-        for event in stats.events:
-            fh.write(json.dumps({"type": "event", "data": event.to_dict()}) + "\n")
+        if args.log_reviews:
+            for event in stats.events:
+                fh.write(json.dumps({"type": "event", "data": event.to_dict()}) + "\n")
 
 
 if __name__ == "__main__":
