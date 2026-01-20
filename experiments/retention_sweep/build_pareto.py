@@ -208,8 +208,8 @@ def _iter_log_entries(
         else:
             desired_value = None
 
-        avg_per_hour = totals.get("avg_accum_memorized_per_hour")
-        if avg_per_hour is None:
+        time_average = totals.get("time_average")
+        if time_average is None:
             continue
 
         if scheduler == "sspmmc":
@@ -231,9 +231,11 @@ def _iter_log_entries(
         entry = {
             "title": title,
             "reviews_average": float(totals.get("reviews_average", 0.0)),
-            "time_average": float(totals.get("time_average", 0.0)),
+            "time_average": float(time_average),
             "memorized_average": float(totals.get("memorized_average", 0.0)),
-            "avg_accum_memorized_per_hour": float(avg_per_hour),
+            "avg_accum_memorized_per_hour": float(
+                totals.get("avg_accum_memorized_per_hour", 0.0)
+            ),
             "scheduler": scheduler,
             "user_id": user_id,
             "fixed_interval": fixed_interval,
@@ -316,7 +318,7 @@ def _plot_compare_frontier(
 
     min_x = min(entry["memorized_average"] for entry in all_entries)
     max_x = max(entry["memorized_average"] for entry in all_entries)
-    max_y = max(entry["avg_accum_memorized_per_hour"] for entry in all_entries)
+    max_y = max(entry["time_average"] for entry in all_entries)
 
     x_min = 200 * math.floor(min_x / 200) if min_x else 0
     x_max = 200 * math.ceil(max_x / 200) if max_x else 1
@@ -400,7 +402,7 @@ def _plot_compare_frontier(
             linewidth = 2
             markersize = 6
         x_vals = [entry["memorized_average"] for entry in entries]
-        y_vals = [entry["avg_accum_memorized_per_hour"] for entry in entries]
+        y_vals = [entry["time_average"] for entry in entries]
         avoid_x.extend(x_vals)
         avoid_y.extend(y_vals)
         if len(x_vals) > 1:
@@ -467,9 +469,7 @@ def _plot_compare_frontier(
             lim=200,
         )
     plt.xlabel("Memorized cards (average, all days)\n(higher=better)", fontsize=18)
-    plt.ylabel(
-        "Memorized/hours spent (average, all days)\n(higher=better)", fontsize=18
-    )
+    plt.ylabel("Average minutes/day\n(lower=better)", fontsize=18)
     plt.xticks(fontsize=16, color="black")
     plt.yticks(fontsize=16, color="black")
     user_ids = sorted(
@@ -486,6 +486,28 @@ def _plot_compare_frontier(
     if len(envs) == 1:
         title = f"{title} (env {envs[0]})"
     plt.title(title, fontsize=22)
+    plt.text(
+        0.98,
+        0.02,
+        "bottom right is better",
+        transform=plt.gca().transAxes,
+        ha="right",
+        va="bottom",
+        fontsize=12,
+        color="#333333",
+        fontweight="semibold",
+    )
+    plt.text(
+        0.02,
+        0.98,
+        "top left is worse",
+        transform=plt.gca().transAxes,
+        ha="left",
+        va="top",
+        fontsize=12,
+        color="#333333",
+        fontweight="semibold",
+    )
     plt.grid(True, ls="--")
     plt.legend(fontsize=16, loc="lower left", facecolor="white")
     plt.tight_layout()
