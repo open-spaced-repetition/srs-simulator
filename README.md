@@ -10,6 +10,8 @@ uv sync
 uv run simulate.py --priority new-first --days 90 --no-log
 ```
 
+Simulation logs now store metadata + totals by default; add `--log-reviews` to include per-event logs (can be large).
+
 Simulating SSP-MMC-FSRS policies requires precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS/README.md`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
 
 All model/scheduler weights come from [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark). The LSTM environment loads `weights/LSTM/<user_id>.pth`. FSRS/HLR/DASH weights are read from `result/*.jsonl`. Pass `--user-id` (defaults to 1) and optionally `--benchmark-result`/`--benchmark-partition` to select entries; override the repo path with `--srs-benchmark-root` if needed.
