@@ -99,6 +99,8 @@ This separation lets you benchmark schedulers against arbitrary memory models an
 - `DASHScheduler`: logistic retention solver that mirrors the DASH model and uses weights from `srs-benchmark`.
 - `SSPMMCScheduler`: loads precomputed SSP-MMC-FSRS policies (JSON + `.npz`) and maintains its own FSRS6 state so it can target optimal retention under any environment.
 - `FixedIntervalScheduler`: stateless fixed-interval baseline (`--scheduler fixed@<days>`).
+- `AnkiSM2Scheduler`: Anki SM-2-style ease scheduler (`--scheduler anki_sm2`).
+- `MemriseScheduler`: Memrise sequence scheduler (`--scheduler memrise`).
 
 ## Provided Behavior & Cost Models
 - `StochasticBehavior`: configurable attendance probability, lazy-good bias, and daily limits (max new/reviews/cost).

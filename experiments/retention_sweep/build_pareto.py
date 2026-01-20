@@ -16,6 +16,7 @@ from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
     parse_scheduler_spec,
+    scheduler_uses_desired_retention,
 )
 
 
@@ -157,6 +158,14 @@ def _resolve_sspmmc_label(title: Optional[str], fallback: str) -> Optional[str]:
     return None
 
 
+def _format_scheduler_title(scheduler: str) -> str:
+    labels = {
+        "anki_sm2": "Anki-SM-2",
+        "memrise": "Memrise",
+    }
+    return labels.get(scheduler, scheduler)
+
+
 def _iter_log_entries(
     log_dir: Path,
     environment: str,
@@ -192,7 +201,7 @@ def _iter_log_entries(
                     continue
 
         desired = meta.get("desired_retention")
-        if scheduler not in {"sspmmc", "fixed"}:
+        if scheduler_uses_desired_retention(scheduler):
             desired_value = float(desired or 0.0)
             if desired_value < min_retention or desired_value > max_retention:
                 continue
@@ -207,8 +216,10 @@ def _iter_log_entries(
             title = _resolve_policy_title(meta, base_dirs)
         elif scheduler == "fixed":
             title = f"Ivl={format_float(fixed_interval)}"
-        else:
+        elif scheduler_uses_desired_retention(scheduler):
             title = f"DR={format_float(float(desired_value) * 100)}%"
+        else:
+            title = _format_scheduler_title(scheduler)
 
         user_id = meta.get("user_id")
         if user_id is not None:

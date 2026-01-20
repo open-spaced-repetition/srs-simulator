@@ -16,6 +16,7 @@ from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
     parse_scheduler_spec,
+    scheduler_uses_desired_retention,
 )
 
 
@@ -185,7 +186,7 @@ def _progress_label(args: argparse.Namespace) -> str:
     if args.scheduler == "sspmmc":
         if args.sspmmc_policy:
             label = f"{label}:{args.sspmmc_policy.stem}"
-    else:
+    elif scheduler_uses_desired_retention(args.scheduler):
         label = f"{label} dr={args.desired_retention:.2f}"
     return label
 
@@ -326,15 +327,24 @@ def main() -> None:
     for name, _, _ in scheduler_specs:
         if name not in simulate_cli.SCHEDULER_FACTORIES:
             raise SystemExit(f"Unknown scheduler '{name}'.")
-    dr_schedulers = [
-        spec for spec in scheduler_specs if spec[0] not in {"sspmmc", "fixed"}
-    ]
+    dr_schedulers: List[str] = []
+    non_dr_schedulers: List[str] = []
     fixed_schedulers = [spec for spec in scheduler_specs if spec[0] == "fixed"]
     has_sspmmc = any(spec[0] == "sspmmc" for spec in scheduler_specs)
+    for name, _, _ in scheduler_specs:
+        if name in {"sspmmc", "fixed"}:
+            continue
+        if scheduler_uses_desired_retention(name):
+            if name not in dr_schedulers:
+                dr_schedulers.append(name)
+        else:
+            if name not in non_dr_schedulers:
+                non_dr_schedulers.append(name)
     run_dr = bool(dr_schedulers)
     run_sspmmc = has_sspmmc
     run_fixed = bool(fixed_schedulers)
-    if not run_dr and not run_sspmmc and not run_fixed:
+    run_non_dr = bool(non_dr_schedulers)
+    if not run_dr and not run_sspmmc and not run_fixed and not run_non_dr:
         raise SystemExit("No schedulers specified. Use --schedulers to select runs.")
 
     sspmmc_policies = _resolve_policy_paths(args, repo_root, run_sspmmc)
@@ -347,7 +357,7 @@ def main() -> None:
 
     for environment in envs:
         if run_dr:
-            for scheduler, _, _ in dr_schedulers:
+            for scheduler in dr_schedulers:
                 for i in range(args.start, args.end + 1, args.step):
                     dr = i / 100.0
                     run_args = argparse.Namespace(**vars(args))
@@ -369,6 +379,25 @@ def main() -> None:
                         StochasticBehavior,
                         StatefulCostModel,
                     )
+
+        if run_non_dr:
+            for scheduler in non_dr_schedulers:
+                run_args = argparse.Namespace(**vars(args))
+                run_args.environment = environment
+                run_args.scheduler = scheduler
+                run_args.fixed_interval = None
+                run_args.desired_retention = None
+                run_args.scheduler_spec = scheduler
+                run_args.log_dir = log_dir
+                tqdm.write(f"Running env={environment} scheduler={scheduler}")
+                _run_once(
+                    run_args,
+                    priority_fn,
+                    run_simulation,
+                    simulate_cli,
+                    StochasticBehavior,
+                    StatefulCostModel,
+                )
 
         if run_fixed:
             for scheduler, fixed_interval, raw in fixed_schedulers:
