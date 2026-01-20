@@ -345,7 +345,10 @@ def _plot_compare_frontier(
         for idx, environment in enumerate(environment_order)
     }
 
-    single_point_schedulers = {"anki_sm2", "memrise"}
+    single_point_markers = {
+        "anki_sm2": "^",
+        "memrise": "s",
+    }
     plt.figure(figsize=(12, 9))
     non_empty_series = [item for item in series if item["entries"]]
     max_labels_total = 40
@@ -370,11 +373,11 @@ def _plot_compare_frontier(
             continue
         scheduler = item.get("scheduler")
         environment = item.get("environment")
-        is_single_point = scheduler in single_point_schedulers and len(entries) == 1
+        is_single_point = scheduler in single_point_markers and len(entries) == 1
         if is_single_point:
             color = "red"
             linestyle = ""
-            marker = "^"
+            marker = single_point_markers.get(scheduler, "^")
             linewidth = 2
             markersize = 7.5
         else:
@@ -435,7 +438,17 @@ def _plot_compare_frontier(
     user_ids = sorted(
         {entry["user_id"] for entry in all_entries if entry.get("user_id") is not None}
     )
-    plt.title(_format_title(title_base, user_ids), fontsize=22)
+    envs = sorted(
+        {
+            item.get("environment")
+            for item in series
+            if item.get("entries") and item.get("environment")
+        }
+    )
+    title = _format_title(title_base, user_ids)
+    if len(envs) == 1:
+        title = f"{title} (env {envs[0]})"
+    plt.title(title, fontsize=22)
     plt.grid(True, ls="--")
     plt.legend(fontsize=16, loc="lower left", facecolor="white")
     plt.tight_layout()
