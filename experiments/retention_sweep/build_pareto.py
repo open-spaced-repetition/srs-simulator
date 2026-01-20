@@ -301,6 +301,15 @@ def _plot_compare_frontier(
 ) -> None:
     import matplotlib.pyplot as plt
 
+    if show_labels:
+        try:
+            from adjustText import adjust_text
+        except ImportError as exc:
+            raise SystemExit(
+                "adjustText is required for --show-labels. "
+                "Install it with `uv add adjustText`."
+            ) from exc
+
     all_entries = [entry for item in series for entry in item["entries"]]
     if not all_entries:
         raise ValueError("No entries available to plot.")
@@ -349,23 +358,27 @@ def _plot_compare_frontier(
         "anki_sm2": "^",
         "memrise": "s",
     }
+
+    def _select_label_indices(count: int, max_labels: int) -> List[int]:
+        if count <= 0:
+            return []
+        if count <= max_labels:
+            return list(range(count))
+        step = max(1, math.ceil(count / max_labels))
+        indices = list(range(0, count, step))
+        if indices[-1] != count - 1:
+            indices.append(count - 1)
+        return indices
+
     plt.figure(figsize=(12, 9))
     non_empty_series = [item for item in series if item["entries"]]
     max_labels_total = 40
     max_labels_per_series = max(2, max_labels_total // max(1, len(non_empty_series)))
-    label_offsets = [(6, 6), (6, -8), (-6, 6), (-6, -8)]
-    if show_labels:
-
-        def _select_label_indices(count: int, max_labels: int) -> List[int]:
-            if count <= 0:
-                return []
-            if count <= max_labels:
-                return list(range(count))
-            step = max(1, math.ceil(count / max_labels))
-            indices = list(range(0, count, step))
-            if indices[-1] != count - 1:
-                indices.append(count - 1)
-            return indices
+    texts = []
+    label_points_x = []
+    label_points_y = []
+    avoid_x = []
+    avoid_y = []
 
     for item in series:
         entries = item["entries"]
@@ -388,6 +401,14 @@ def _plot_compare_frontier(
             markersize = 6
         x_vals = [entry["memorized_average"] for entry in entries]
         y_vals = [entry["avg_accum_memorized_per_hour"] for entry in entries]
+        avoid_x.extend(x_vals)
+        avoid_y.extend(y_vals)
+        if len(x_vals) > 1:
+            for x0, y0, x1, y1 in zip(x_vals[:-1], y_vals[:-1], x_vals[1:], y_vals[1:]):
+                avoid_x.append(x0 + (x1 - x0) * 0.33)
+                avoid_y.append(y0 + (y1 - y0) * 0.33)
+                avoid_x.append(x0 + (x1 - x0) * 0.66)
+                avoid_y.append(y0 + (y1 - y0) * 0.66)
         plt.plot(
             x_vals,
             y_vals,
@@ -412,23 +433,39 @@ def _plot_compare_frontier(
                 label_indices = _select_label_indices(
                     len(entries), max_labels_per_series
                 )
-            for offset_idx, entry_idx in enumerate(label_indices):
+            for entry_idx in label_indices:
                 entry = entries[entry_idx]
                 title = entry.get("title")
                 if not title:
                     continue
-                plt.annotate(
-                    title,
-                    (x_vals[entry_idx], y_vals[entry_idx]),
-                    textcoords="offset points",
-                    xytext=label_offsets[offset_idx % len(label_offsets)],
-                    fontsize=9,
-                    color="black",
-                    alpha=0.85,
+                texts.append(
+                    plt.text(
+                        x_vals[entry_idx],
+                        y_vals[entry_idx],
+                        title,
+                        fontsize=9,
+                        color="black",
+                    )
                 )
+                label_points_x.append(x_vals[entry_idx])
+                label_points_y.append(y_vals[entry_idx])
 
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
+    if show_labels and texts:
+        adjust_text(
+            texts,
+            x=avoid_x,
+            y=avoid_y,
+            target_x=label_points_x,
+            target_y=label_points_y,
+            expand=(1.05, 1.05),
+            force_static=(0.2, 0.2),
+            force_text=(0.2, 0.2),
+            force_pull=(0.02, 0.02),
+            arrowprops={"arrowstyle": "-", "color": "gray", "lw": 0.5},
+            lim=200,
+        )
     plt.xlabel("Memorized cards (average, all days)\n(higher=better)", fontsize=18)
     plt.ylabel(
         "Memorized/hours spent (average, all days)\n(higher=better)", fontsize=18
