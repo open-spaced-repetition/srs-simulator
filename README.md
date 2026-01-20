@@ -88,7 +88,7 @@ This separation lets you benchmark schedulers against arbitrary memory models an
 - `FSRS3Model`: FSRS v3-style environment (13 params loaded from `srs-benchmark`).
 - `HLRModel`: half-life regression with three weights loaded from `srs-benchmark`.
 - `DASHModel`: stateless logistic model with placeholder features and nine weights loaded from `srs-benchmark`.
-- `LSTMModel`: neural forgetting-curve predictor inspired by the srs-benchmark LSTM (requires PyTorch and `--user-id` weights; expects day-based intervals like the original `delta_t_secs` feature).
+- `LSTMModel`: neural forgetting-curve predictor inspired by the srs-benchmark LSTM (requires PyTorch and `--user-id` weights; runs on CPU by default; use `--lstm-device` to force `cuda`/`cpu`; expects day-based intervals like the original `delta_t` feature).
 
 ## Provided Schedulers
 - `FSRS6Scheduler` / `FSRSScheduler`: FSRS v6-style state; loads weights from `srs-benchmark` for the selected user.

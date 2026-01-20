@@ -6,13 +6,8 @@ from typing import Any, Iterable, Sequence
 
 from simulator.core import Card, MemoryModel
 
-try:  # pragma: no cover - optional heavy dependency
-    import torch
-    from torch import Tensor, nn
-except ImportError as exc:  # pragma: no cover
-    raise ImportError(
-        "LSTMModel requires PyTorch. Install torch to enable this model."
-    ) from exc
+import torch
+from torch import Tensor, nn
 
 EPS = 1e-7
 _REPO_ROOT = Path(__file__).resolve().parents[2]

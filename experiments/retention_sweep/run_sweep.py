@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 import random
 import sys
-from typing import List, Optional
+from typing import Callable, List, Optional
+from tqdm import tqdm
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,6 +59,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Load benchmark weights for this user ID.",
+    )
+    parser.add_argument(
+        "--lstm-device",
+        default=None,
+        help="Override LSTM device (e.g. cpu, cuda, cuda:0).",
     )
     parser.add_argument(
         "--benchmark-partition",
@@ -133,11 +139,6 @@ def parse_args() -> argparse.Namespace:
         help="Directory to store logs (defaults to logs/retention_sweep).",
     )
     parser.add_argument(
-        "--progress",
-        action="store_true",
-        help="Enable the simulate.py progress bar.",
-    )
-    parser.add_argument(
         "--plot",
         action="store_true",
         help="Show plots during the sweep (slower, opens windows).",
@@ -154,6 +155,41 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _progress_label(args: argparse.Namespace) -> str:
+    label = f"{args.environment}/{args.scheduler}"
+    if args.scheduler == "sspmmc":
+        if args.sspmmc_policy:
+            label = f"{label}:{args.sspmmc_policy.stem}"
+    else:
+        label = f"{label} dr={args.desired_retention:.2f}"
+    return label
+
+
+def _make_progress_callback(
+    args: argparse.Namespace,
+) -> tuple[Callable[[int, int], None], Callable[[], None]]:
+    bar = tqdm(
+        total=args.days,
+        desc=_progress_label(args),
+        unit="day",
+        file=sys.stderr,
+        ascii=True,
+        leave=False,
+    )
+
+    def _update_progress(completed: int, total: int) -> None:
+        if total > 0 and bar.total != total:
+            bar.total = total
+        delta = completed - bar.n
+        if delta > 0:
+            bar.update(delta)
+        elif delta < 0:
+            bar.n = completed
+            bar.refresh()
+
+    return _update_progress, bar.close
 
 
 def _resolve_policy_paths(
@@ -197,6 +233,7 @@ def _run_once(
     behavior_cls,
     cost_model_cls,
 ) -> None:
+    progress_callback, progress_close = _make_progress_callback(run_args)
     rng = random.Random(run_args.seed)
     env = simulate_cli.ENVIRONMENT_FACTORIES[run_args.environment](run_args)
     agent = simulate_cli.SCHEDULER_FACTORIES[run_args.scheduler](run_args)
@@ -214,16 +251,20 @@ def _run_once(
         priority_fn=priority_fn,
     )
     cost_model = cost_model_cls()
-    stats = run_simulation(
-        days=run_args.days,
-        deck_size=run_args.deck,
-        environment=env,
-        scheduler=agent,
-        behavior=behavior,
-        cost_model=cost_model,
-        seed_fn=rng.random,
-        progress=run_args.progress,
-    )
+    try:
+        stats = run_simulation(
+            days=run_args.days,
+            deck_size=run_args.deck,
+            environment=env,
+            scheduler=agent,
+            behavior=behavior,
+            cost_model=cost_model,
+            seed_fn=rng.random,
+            progress=False,
+            progress_callback=progress_callback,
+        )
+    finally:
+        progress_close()
     if not run_args.no_log:
         simulate_cli._write_log(run_args, stats)
     if run_args.plot:
@@ -282,7 +323,7 @@ def main() -> None:
                     run_args.scheduler = scheduler
                     run_args.desired_retention = dr
                     run_args.log_dir = log_dir
-                    print(
+                    tqdm.write(
                         f"Running env={environment} scheduler={scheduler} "
                         f"desired_retention={dr:.2f}"
                     )
@@ -303,7 +344,7 @@ def main() -> None:
                 run_args.sspmmc_policy = policy_path
                 run_args.desired_retention = args.sspmmc_desired_retention
                 run_args.log_dir = log_dir
-                print(f"Running env={environment} sspmmc_policy={policy_path}")
+                tqdm.write(f"Running env={environment} sspmmc_policy={policy_path}")
                 _run_once(
                     run_args,
                     priority_fn,
