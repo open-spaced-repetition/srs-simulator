@@ -241,6 +241,7 @@ class SimulationEngine:
         cost_model: CostModel,
         seed_fn: Optional[Callable[[], float]],
         progress: bool = False,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> None:
         self.days = days
         self.deck_size = deck_size
@@ -250,6 +251,7 @@ class SimulationEngine:
         self.cost_model = cost_model
         self.rng = seed_fn or (lambda: __import__("random").random())
         self.progress = progress
+        self.progress_callback = progress_callback
         self._progress_last = -1
 
         self.cards = [Card(id=i) for i in range(deck_size)]
@@ -294,11 +296,15 @@ class SimulationEngine:
         )
 
     def _update_progress(self, completed: int) -> None:
-        if not self.progress or self.days <= 0:
+        if self.days <= 0:
             return
         if completed == self._progress_last:
             return
         self._progress_last = completed
+        if self.progress_callback is not None:
+            self.progress_callback(completed, self.days)
+        if not self.progress:
+            return
         ratio = min(1.0, max(0.0, completed / self.days))
         width = 30
         filled = int(width * ratio)
@@ -493,6 +499,7 @@ def simulate(
     cost_model: CostModel,
     seed_fn: Optional[Callable[[], float]] = None,
     progress: bool = False,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> SimulationStats:
     """Run an event-driven simulation with explicit environment/behavior separation."""
 
@@ -505,6 +512,7 @@ def simulate(
         cost_model=cost_model,
         seed_fn=seed_fn,
         progress=progress,
+        progress_callback=progress_callback,
     )
     return engine.run()
 
