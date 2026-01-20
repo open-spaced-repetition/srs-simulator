@@ -127,10 +127,29 @@ def _resolve_policy_title(
                 payload = json.load(fh)
             title = payload.get("title")
             if isinstance(title, str) and title.strip():
-                return title.strip()
+                return _resolve_sspmmc_label(title.strip(), path.stem)
         except (OSError, json.JSONDecodeError):
-            return path.stem
-    return path.stem
+            return _resolve_sspmmc_label(None, path.stem)
+    return _resolve_sspmmc_label(None, path.stem)
+
+
+def _resolve_sspmmc_label(title: Optional[str], fallback: str) -> Optional[str]:
+    label_map = {
+        "balanced": "Balanced",
+        "maximum efficiency": "Efficiency",
+        "maximum_efficiency": "Efficiency",
+        "max efficiency": "Efficiency",
+        "max_efficiency": "Efficiency",
+        "maximum knowledge": "Knowledge",
+        "maximum_knowledge": "Knowledge",
+        "max knowledge": "Knowledge",
+        "max_knowledge": "Knowledge",
+    }
+    combined = " ".join(part for part in [title or "", fallback] if part).lower()
+    for key, label in label_map.items():
+        if key in combined:
+            return label
+    return None
 
 
 def _iter_log_entries(
@@ -180,11 +199,11 @@ def _iter_log_entries(
             continue
 
         if scheduler == "sspmmc":
-            title = _resolve_policy_title(meta, base_dirs) or "SSP-MMC"
+            title = _resolve_policy_title(meta, base_dirs)
         elif scheduler == "fixed":
-            title = f"IVL={format_float(fixed_interval)}"
+            title = f"Ivl={format_float(fixed_interval)}"
         else:
-            title = f"DR={float(desired_value):.2f}"
+            title = f"DR={format_float(float(desired_value) * 100)}%"
 
         user_id = meta.get("user_id")
         if user_id is not None:
@@ -298,7 +317,22 @@ def _plot_compare_frontier(
         for idx, environment in enumerate(environment_order)
     }
 
+    def _select_label_indices(count: int, max_labels: int) -> List[int]:
+        if count <= 0:
+            return []
+        if count <= max_labels:
+            return list(range(count))
+        step = max(1, math.ceil(count / max_labels))
+        indices = list(range(0, count, step))
+        if indices[-1] != count - 1:
+            indices.append(count - 1)
+        return indices
+
     plt.figure(figsize=(12, 9))
+    non_empty_series = [item for item in series if item["entries"]]
+    max_labels_total = 40
+    max_labels_per_series = max(2, max_labels_total // max(1, len(non_empty_series)))
+    label_offsets = [(6, 6), (6, -8), (-6, 6), (-6, -8)]
     for item in series:
         entries = item["entries"]
         if not entries:
@@ -321,6 +355,31 @@ def _plot_compare_frontier(
             linewidth=linewidth,
             markersize=markersize,
         )
+        if scheduler == "sspmmc":
+            seen_labels = set()
+            label_indices = []
+            for idx, entry in enumerate(entries):
+                title = entry.get("title")
+                if not title or title in seen_labels:
+                    continue
+                seen_labels.add(title)
+                label_indices.append(idx)
+        else:
+            label_indices = _select_label_indices(len(entries), max_labels_per_series)
+        for offset_idx, entry_idx in enumerate(label_indices):
+            entry = entries[entry_idx]
+            title = entry.get("title")
+            if not title:
+                continue
+            plt.annotate(
+                title,
+                (x_vals[entry_idx], y_vals[entry_idx]),
+                textcoords="offset points",
+                xytext=label_offsets[offset_idx % len(label_offsets)],
+                fontsize=9,
+                color="black",
+                alpha=0.85,
+            )
 
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
