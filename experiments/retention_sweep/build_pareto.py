@@ -314,7 +314,18 @@ def _plot_compare_frontier(
     y_min = 0
     y_max = max_y * 1.03 if max_y else 1
 
-    colors = ["#5b9bd5", "#ed7d31", "#70ad47", "#264478"]
+    colors = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
     linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
     scheduler_order: List[str] = []
     environment_order: List[str] = []
@@ -334,6 +345,7 @@ def _plot_compare_frontier(
         for idx, environment in enumerate(environment_order)
     }
 
+    single_point_schedulers = {"anki_sm2", "memrise"}
     plt.figure(figsize=(12, 9))
     non_empty_series = [item for item in series if item["entries"]]
     max_labels_total = 40
@@ -358,10 +370,19 @@ def _plot_compare_frontier(
             continue
         scheduler = item.get("scheduler")
         environment = item.get("environment")
-        color = scheduler_colors.get(scheduler, colors[0])
-        linestyle = environment_linestyles.get(environment, linestyles[0])
-        linewidth = 2
-        markersize = 6
+        is_single_point = scheduler in single_point_schedulers and len(entries) == 1
+        if is_single_point:
+            color = "red"
+            linestyle = ""
+            marker = "^"
+            linewidth = 2
+            markersize = 7.5
+        else:
+            color = scheduler_colors.get(scheduler, colors[0])
+            linestyle = environment_linestyles.get(environment, linestyles[0])
+            marker = "o"
+            linewidth = 2
+            markersize = 6
         x_vals = [entry["memorized_average"] for entry in entries]
         y_vals = [entry["avg_accum_memorized_per_hour"] for entry in entries]
         plt.plot(
@@ -369,7 +390,7 @@ def _plot_compare_frontier(
             y_vals,
             label=item["label"],
             linestyle=linestyle,
-            marker="o",
+            marker=marker,
             color=color,
             linewidth=linewidth,
             markersize=markersize,
