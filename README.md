@@ -37,7 +37,7 @@ uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --sche
 uv run experiments/retention_sweep/build_pareto.py --environments fsrs6,lstm --schedulers fsrs6,sspmmc
 ```
 
-By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--schedulers` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--schedulers`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. Add `--show-labels` to annotate Pareto points with scheduler configurations.
+By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--schedulers` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--schedulers`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. Add `--show-labels` to annotate Pareto points with scheduler configurations (requires `adjustText`).
 
 FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficulty`, `high_difficulty`.
 
