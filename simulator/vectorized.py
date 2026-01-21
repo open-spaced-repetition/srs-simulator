@@ -1629,23 +1629,108 @@ def simulate_lstm_vectorized(
                 exec_rating = ratings[:count]
                 exec_cost = learn_cost[:count]
 
-                sched_s_init, sched_d_init = _init_state(
-                    sched_w, exec_rating, sched_bounds.d_min, sched_bounds.d_max
-                )
-                sched_s[exec_idx] = _clamp(
-                    sched_s_init, sched_bounds.s_min, sched_bounds.s_max
-                )
-                sched_d[exec_idx] = _clamp(
-                    sched_d_init, sched_bounds.d_min, sched_bounds.d_max
-                )
+                interval_days = None
+                if scheduler_kind in {"fsrs6", "sspmmc"}:
+                    sched_s_init, sched_d_init = _init_state(
+                        sched_w, exec_rating, sched_bounds.d_min, sched_bounds.d_max
+                    )
+                    sched_s[exec_idx] = _clamp(
+                        sched_s_init, sched_bounds.s_min, sched_bounds.s_max
+                    )
+                    sched_d[exec_idx] = _clamp(
+                        sched_d_init, sched_bounds.d_min, sched_bounds.d_max
+                    )
+                    if scheduler_kind == "fsrs6":
+                        intervals_next = torch.clamp(
+                            sched_s[exec_idx] / sched_factor * sched_retention_factor,
+                            min=1.0,
+                        )
+                    else:
+                        s_idx = _sspmmc_s2i(
+                            sched_s[exec_idx],
+                            policy_s_min,
+                            policy_s_mid,
+                            policy_s_state_small_len,
+                            policy_log_s_min,
+                            policy_short_step,
+                            policy_long_step,
+                            policy_s_last,
+                            policy_s_grid_size,
+                        )
+                        d_idx = _sspmmc_d2i(
+                            sched_d[exec_idx], policy_d_min, policy_d_max, policy_d_size
+                        )
+                        retention = policy_retention[d_idx, s_idx]
+                        graduated = (s_idx >= policy_s_grid_size - 1) | (
+                            sched_s[exec_idx] >= policy_s_max
+                        )
+                        retire_val = torch.tensor(
+                            policy_retire_interval,
+                            device=torch_device,
+                            dtype=env_dtype,
+                        )
+                        intervals_next = torch.where(
+                            graduated,
+                            retire_val,
+                            sched_s[exec_idx]
+                            / sched_factor
+                            * (torch.pow(retention, 1.0 / sched_decay) - 1.0),
+                        )
+                elif scheduler_kind == "fsrs3":
+                    sched_s_init, sched_d_init = _fsrs3_init_state(
+                        sched_w,
+                        exec_rating,
+                        sched_bounds.s_min,
+                        sched_bounds.s_max,
+                        sched_bounds.d_min,
+                        sched_bounds.d_max,
+                    )
+                    sched_s[exec_idx] = _clamp(
+                        sched_s_init, sched_bounds.s_min, sched_bounds.s_max
+                    )
+                    sched_d[exec_idx] = _clamp(
+                        sched_d_init, sched_bounds.d_min, sched_bounds.d_max
+                    )
+                    intervals_next = sched_s[exec_idx] * (fsrs3_log_desired / fsrs3_ln)
+                elif scheduler_kind == "hlr":
+                    success = exec_rating > 1
+                    right = success.to(env_dtype)
+                    wrong = (~success).to(env_dtype)
+                    hlr_right[exec_idx] = right
+                    hlr_wrong[exec_idx] = wrong
+                    half = torch.pow(
+                        torch.tensor(2.0, device=torch_device, dtype=env_dtype),
+                        hlr_w[0] * right + hlr_w[1] * wrong + hlr_w[2],
+                    )
+                    intervals_next = half * hlr_log_factor
+                elif scheduler_kind == "fixed":
+                    interval_days = torch.full(
+                        (count,),
+                        fixed_interval_days,
+                        dtype=torch.int64,
+                        device=torch_device,
+                    )
+                elif scheduler_kind == "memrise":
+                    intervals_next = torch.ones(
+                        count, device=torch_device, dtype=env_dtype
+                    )
+                elif scheduler_kind == "anki_sm2":
+                    prev_interval = torch.zeros(
+                        count, device=torch_device, dtype=env_dtype
+                    )
+                    intervals_next, new_ease = _anki_next_interval(
+                        prev_interval, exec_rating, anki_ease[exec_idx], **anki_params
+                    )
+                    anki_ease[exec_idx] = new_ease
+                else:
+                    raise RuntimeError(
+                        f"Vectorized LSTM engine unsupported scheduler: {scheduler_kind}"
+                    )
 
-                intervals_next = torch.clamp(
-                    sched_s[exec_idx] / sched_factor * sched_retention_factor,
-                    min=1.0,
-                )
-                interval_days = torch.clamp(torch.round(intervals_next), min=1.0).to(
-                    torch.int64
-                )
+                if interval_days is None:
+                    interval_days = torch.clamp(
+                        torch.round(intervals_next), min=1.0
+                    ).to(torch.int64)
                 intervals[exec_idx] = interval_days
                 last_review[exec_idx] = day
                 due[exec_idx] = day + interval_days
