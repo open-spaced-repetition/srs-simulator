@@ -442,19 +442,41 @@ def _plot_compare_frontier(
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
     if show_labels and texts:
-        adjust_text(
-            texts,
-            x=avoid_x,
-            y=avoid_y,
-            target_x=label_points_x,
-            target_y=label_points_y,
-            expand=(1.05, 1.05),
-            force_static=(0.2, 0.2),
-            force_text=(0.2, 0.2),
-            force_pull=(0.02, 0.02),
-            arrowprops={"arrowstyle": "-", "color": "gray", "lw": 0.5},
-            lim=200,
-        )
+        import logging
+        from matplotlib.patches import FancyArrowPatch
+
+        adjust_logger = logging.getLogger("adjustText")
+        previous_level = adjust_logger.level
+        adjust_logger.setLevel(logging.ERROR)
+        try:
+            adjust_text(
+                texts,
+                x=avoid_x,
+                y=avoid_y,
+                target_x=label_points_x,
+                target_y=label_points_y,
+                expand=(1.05, 1.05),
+                force_static=(0.2, 0.2),
+                force_text=(0.2, 0.2),
+                force_pull=(0.02, 0.02),
+                lim=200,
+            )
+        finally:
+            adjust_logger.setLevel(previous_level)
+        ax = plt.gca()
+        for text, target_x, target_y in zip(texts, label_points_x, label_points_y):
+            arrow = FancyArrowPatch(
+                posA=text.get_position(),
+                posB=(target_x, target_y),
+                patchA=text,
+                transform=ax.transData,
+                arrowstyle="-",
+                color="gray",
+                lw=0.5,
+                shrinkA=8,
+                shrinkB=4,
+            )
+            ax.add_patch(arrow)
     plt.xlabel(
         "Memorized cards (average, all days)\n(higher=better)",
         fontsize=18,
