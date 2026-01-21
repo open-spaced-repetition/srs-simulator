@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import random
 import sys
+import time
 from typing import Callable, List, Optional
 from tqdm import tqdm
 
@@ -363,6 +364,7 @@ def _run_vectorized(
 
 
 def main() -> None:
+    start_time = time.perf_counter()
     args = parse_args()
 
     if args.step == 0:
@@ -422,21 +424,63 @@ def main() -> None:
         review_first_priority if args.priority == "review-first" else new_first_priority
     )
 
-    for environment in envs:
-        if run_dr:
-            for scheduler in dr_schedulers:
-                for i in range(args.start, args.end + 1, args.step):
-                    dr = i / 100.0
+    try:
+        for environment in envs:
+            if run_dr:
+                for scheduler in dr_schedulers:
+                    for i in range(args.start, args.end + 1, args.step):
+                        dr = i / 100.0
+                        run_args = argparse.Namespace(**vars(args))
+                        run_args.environment = environment
+                        run_args.scheduler = scheduler
+                        run_args.fixed_interval = None
+                        run_args.desired_retention = dr
+                        run_args.scheduler_spec = scheduler
+                        run_args.log_dir = log_dir
+                        tqdm.write(
+                            f"Running env={environment} scheduler={scheduler} "
+                            f"desired_retention={dr:.2f}"
+                        )
+                        _run_once(
+                            run_args,
+                            priority_fn,
+                            run_simulation,
+                            simulate_cli,
+                            StochasticBehavior,
+                            StatefulCostModel,
+                        )
+
+            if run_non_dr:
+                for scheduler in non_dr_schedulers:
                     run_args = argparse.Namespace(**vars(args))
                     run_args.environment = environment
                     run_args.scheduler = scheduler
                     run_args.fixed_interval = None
-                    run_args.desired_retention = dr
+                    run_args.desired_retention = None
                     run_args.scheduler_spec = scheduler
                     run_args.log_dir = log_dir
+                    tqdm.write(f"Running env={environment} scheduler={scheduler}")
+                    _run_once(
+                        run_args,
+                        priority_fn,
+                        run_simulation,
+                        simulate_cli,
+                        StochasticBehavior,
+                        StatefulCostModel,
+                    )
+
+            if run_fixed:
+                for scheduler, fixed_interval, raw in fixed_schedulers:
+                    fixed_interval = normalize_fixed_interval(fixed_interval)
+                    run_args = argparse.Namespace(**vars(args))
+                    run_args.environment = environment
+                    run_args.scheduler = scheduler
+                    run_args.fixed_interval = fixed_interval
+                    run_args.desired_retention = None
+                    run_args.scheduler_spec = raw
+                    run_args.log_dir = log_dir
                     tqdm.write(
-                        f"Running env={environment} scheduler={scheduler} "
-                        f"desired_retention={dr:.2f}"
+                        f"Running env={environment} scheduler={raw} interval={format_float(fixed_interval)}"
                     )
                     _run_once(
                         run_args,
@@ -447,65 +491,27 @@ def main() -> None:
                         StatefulCostModel,
                     )
 
-        if run_non_dr:
-            for scheduler in non_dr_schedulers:
-                run_args = argparse.Namespace(**vars(args))
-                run_args.environment = environment
-                run_args.scheduler = scheduler
-                run_args.fixed_interval = None
-                run_args.desired_retention = None
-                run_args.scheduler_spec = scheduler
-                run_args.log_dir = log_dir
-                tqdm.write(f"Running env={environment} scheduler={scheduler}")
-                _run_once(
-                    run_args,
-                    priority_fn,
-                    run_simulation,
-                    simulate_cli,
-                    StochasticBehavior,
-                    StatefulCostModel,
-                )
-
-        if run_fixed:
-            for scheduler, fixed_interval, raw in fixed_schedulers:
-                fixed_interval = normalize_fixed_interval(fixed_interval)
-                run_args = argparse.Namespace(**vars(args))
-                run_args.environment = environment
-                run_args.scheduler = scheduler
-                run_args.fixed_interval = fixed_interval
-                run_args.desired_retention = None
-                run_args.scheduler_spec = raw
-                run_args.log_dir = log_dir
-                tqdm.write(
-                    f"Running env={environment} scheduler={raw} interval={format_float(fixed_interval)}"
-                )
-                _run_once(
-                    run_args,
-                    priority_fn,
-                    run_simulation,
-                    simulate_cli,
-                    StochasticBehavior,
-                    StatefulCostModel,
-                )
-
-        if run_sspmmc:
-            for policy_path in sspmmc_policies:
-                run_args = argparse.Namespace(**vars(args))
-                run_args.environment = environment
-                run_args.scheduler = "sspmmc"
-                run_args.sspmmc_policy = policy_path
-                run_args.desired_retention = args.sspmmc_desired_retention
-                run_args.scheduler_spec = "sspmmc"
-                run_args.log_dir = log_dir
-                tqdm.write(f"Running env={environment} sspmmc_policy={policy_path}")
-                _run_once(
-                    run_args,
-                    priority_fn,
-                    run_simulation,
-                    simulate_cli,
-                    StochasticBehavior,
-                    StatefulCostModel,
-                )
+            if run_sspmmc:
+                for policy_path in sspmmc_policies:
+                    run_args = argparse.Namespace(**vars(args))
+                    run_args.environment = environment
+                    run_args.scheduler = "sspmmc"
+                    run_args.sspmmc_policy = policy_path
+                    run_args.desired_retention = args.sspmmc_desired_retention
+                    run_args.scheduler_spec = "sspmmc"
+                    run_args.log_dir = log_dir
+                    tqdm.write(f"Running env={environment} sspmmc_policy={policy_path}")
+                    _run_once(
+                        run_args,
+                        priority_fn,
+                        run_simulation,
+                        simulate_cli,
+                        StochasticBehavior,
+                        StatefulCostModel,
+                    )
+    finally:
+        elapsed = time.perf_counter() - start_time
+        print(f"Total sweep time: {elapsed:.2f}s", file=sys.stderr)
 
 
 if __name__ == "__main__":
