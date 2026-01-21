@@ -339,9 +339,7 @@ def simulate_fsrs6_vectorized(
         raise ValueError("Vectorized engine requires StatefulCostModel.")
 
     priority_mode = _resolve_priority_mode(behavior)
-    torch_device = torch.device(
-        device or ("cuda" if torch.cuda.is_available() else "cpu")
-    )
+    torch_device = torch.device(device or "cpu")
     dtype = torch.float64
     gen = torch.Generator(device=torch_device)
     gen.manual_seed(seed)
