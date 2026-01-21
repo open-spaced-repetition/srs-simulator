@@ -325,14 +325,9 @@ def _run_vectorized(
     progress_callback,
 ):
     from simulator.models import FSRS6Model, LSTMModel
-    from simulator.schedulers import FSRS6Scheduler
     from simulator.vectorized import simulate_fsrs6_vectorized, simulate_lstm_vectorized
 
     if isinstance(env, FSRS6Model):
-        if not isinstance(agent, FSRS6Scheduler):
-            raise SystemExit(
-                "Vectorized engine with FSRS6 environment requires FSRS6 scheduler."
-            )
         return simulate_fsrs6_vectorized(
             days=run_args.days,
             deck_size=run_args.deck,
