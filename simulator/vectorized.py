@@ -4,6 +4,7 @@ import math
 from typing import Callable, Optional
 
 import torch
+from torch.nn.utils.rnn import pack_padded_sequence
 from tqdm import tqdm
 
 from simulator.behavior import StochasticBehavior
@@ -1255,14 +1256,26 @@ def simulate_lstm_vectorized(
             event_counts[part_idx] = positions + 1
 
         lengths = event_counts[idx]
-        unique_lengths = torch.unique(lengths)
-        for length in unique_lengths.tolist():
-            if length <= 0:
+        if lengths.numel() == 0:
+            return
+        max_len = int(lengths.max().item())
+        if max_len <= 0:
+            return
+        order = torch.argsort(lengths, descending=True)
+        idx_sorted = idx[order]
+        lengths_sorted = lengths[order]
+        pack_batch = 2048
+        for start in range(0, idx_sorted.numel(), pack_batch):
+            end = min(start + pack_batch, idx_sorted.numel())
+            batch_idx = idx_sorted[start:end]
+            batch_lengths = lengths_sorted[start:end]
+            if batch_lengths.numel() == 0:
                 continue
-            length_mask = lengths == length
-            group_idx = idx[length_mask]
-            delays_group = event_delays[group_idx, :length]
-            ratings_group = event_ratings[group_idx, :length]
+            batch_max = int(batch_lengths.max().item())
+            if batch_max <= 0:
+                continue
+            delays_group = event_delays[batch_idx, :batch_max]
+            ratings_group = event_ratings[batch_idx, :batch_max]
             delay_scaled = torch.clamp(delays_group, min=0.0) * interval_scale
             seq_delay = delay_scaled.transpose(0, 1).unsqueeze(-1)
             rating_seq = ratings_group.transpose(0, 1).unsqueeze(-1).to(env_dtype)
@@ -1271,11 +1284,16 @@ def simulate_lstm_vectorized(
                 sequence = torch.cat([seq_delay, duration_seq, rating_seq], dim=-1)
             else:
                 sequence = torch.cat([seq_delay, rating_seq], dim=-1)
-            w_lnh, s_lnh, d_lnh = environment.network(sequence)
-            mem_w[group_idx] = w_lnh[-1]
-            mem_s[group_idx] = s_lnh[-1]
-            mem_d[group_idx] = d_lnh[-1]
-            has_curves[group_idx] = True
+            packed = pack_padded_sequence(
+                sequence, batch_lengths.to("cpu"), enforce_sorted=True
+            )
+            w_last, s_last, d_last = environment.network.forward_packed_last(
+                packed, batch_lengths
+            )
+            mem_w[batch_idx] = w_last
+            mem_s[batch_idx] = s_last
+            mem_d[batch_idx] = d_last
+            has_curves[batch_idx] = True
 
     if progress_callback is not None:
         progress_callback(0, days)
