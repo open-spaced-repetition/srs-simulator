@@ -119,6 +119,7 @@ class _SequenceLSTM(nn.Module):
         self.use_duration_feature = use_duration_feature
         self.dtype = dtype
         self.device = device
+        self.forward_calls = 0
         num_main_inputs = 1 + (1 if use_duration_feature else 0)
         self.n_main_inputs = num_main_inputs
         self.n_input = num_main_inputs + 4  # rating expands to 4 dims
@@ -194,6 +195,7 @@ class _SequenceLSTM(nn.Module):
         self.d_fc = nn.Linear(self.n_hidden, self.n_curves)
 
     def forward(self, x_lni: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        self.forward_calls += 1
         x_rating = x_lni[..., -1:]
         x_features = x_lni[..., :-1]
 
@@ -307,6 +309,13 @@ class LSTMModel(MemoryModel):
     def init_card(self, card: Card, rating: int) -> None:
         card.memory_state = {"events": []}
         self._append_event(card, float(0.0), rating)
+
+    def reset_forward_calls(self) -> None:
+        self.network.forward_calls = 0
+
+    @property
+    def forward_calls(self) -> int:
+        return int(getattr(self.network, "forward_calls", 0))
 
     def predict_retention(self, card: Card, elapsed: float) -> float:
         state = self._ensure_state(card)
