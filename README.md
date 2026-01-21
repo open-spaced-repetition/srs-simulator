@@ -12,6 +12,15 @@ uv run simulate.py --priority new-first --days 90 --no-log
 
 Simulation logs now store metadata + totals by default; add `--log-reviews` to include per-event logs (can be large).
 
+For faster GPU runs, use the vectorized engine:
+
+```bash
+uv run simulate.py --engine vectorized --torch-device cuda --no-log
+uv run simulate.py --engine vectorized --environment lstm --scheduler fsrs6 --lstm-device cuda --no-log
+```
+
+The vectorized engine supports the FSRS6 environment + FSRS6 scheduler and the LSTM environment + FSRS6 scheduler with `StochasticBehavior` and `StatefulCostModel`. It returns aggregate stats without per-event logs, and results may differ slightly from the event-driven engine due to RNG ordering and float precision.
+
 Simulating SSP-MMC-FSRS policies requires precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS/README.md`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
 
 All model/scheduler weights come from [`srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark). The LSTM environment loads `weights/LSTM/<user_id>.pth`. FSRS/HLR/DASH weights are read from `result/*.jsonl`. Pass `--user-id` (defaults to 1) and optionally `--benchmark-result`/`--benchmark-partition` to select entries; override the repo path with `--srs-benchmark-root` if needed.
@@ -47,6 +56,8 @@ FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficul
 - **CostModel / Workload**: (`simulator.core.CostModel`) converts each review into a dynamic time cost (e.g. longer latency when R is low).
 - **Scheduler** (`simulator.core.Scheduler`): the agent under test. It only receives a `CardView` projection (history, due date, prior intervals) and returns the next interval plus its internal state.
 - **simulate** (`simulator.core.simulate`): a day-stepped loop that wires all four components together.
+- **simulate_fsrs6_vectorized** (`simulator.vectorized.simulate_fsrs6_vectorized`): a torch/GPU vectorized FSRS6 engine that returns aggregate stats without per-event logs.
+- **simulate_lstm_vectorized** (`simulator.vectorized.simulate_lstm_vectorized`): a torch/GPU vectorized LSTM environment engine (FSRS6 scheduler only) that returns aggregate stats without per-event logs.
 
 ## Architecture & Control Flow
 The simulator follows an environment-agent loop where each module owns a distinct responsibility and communicates through lightweight data structures.
