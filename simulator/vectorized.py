@@ -1026,6 +1026,7 @@ def simulate_lstm_vectorized(
     memrise_seq = None
     memrise_len = None
     anki_params = None
+    anki_ease_start = None
     policy_retention = None
     policy_s_grid = None
     policy_s_grid_size = None
@@ -1131,10 +1132,10 @@ def simulate_lstm_vectorized(
             "easy_interval": float(scheduler.easy_interval),
             "easy_bonus": float(scheduler.easy_bonus),
             "hard_interval_factor": float(scheduler.hard_interval_factor),
-            "ease_start": float(scheduler.ease_start),
             "ease_min": float(scheduler.ease_min),
             "ease_max": float(scheduler.ease_max),
         }
+        anki_ease_start = float(scheduler.ease_start)
 
     max_events = int(environment.max_events)
     n_curves = int(environment.network.n_curves)
@@ -1183,9 +1184,11 @@ def simulate_lstm_vectorized(
         hlr_right = torch.zeros(deck_size, dtype=env_dtype, device=torch_device)
         hlr_wrong = torch.zeros(deck_size, dtype=env_dtype, device=torch_device)
     if scheduler_kind == "anki_sm2" and anki_params is not None:
+        if anki_ease_start is None:
+            anki_ease_start = 2.5
         anki_ease = torch.full(
             (deck_size,),
-            anki_params["ease_start"],
+            anki_ease_start,
             dtype=env_dtype,
             device=torch_device,
         )
