@@ -167,6 +167,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Include per-event logs (learn/review) in the JSONL output (can be large).",
     )
+    parser.add_argument(
+        "--engine",
+        choices=["event", "vectorized"],
+        default="event",
+        help=(
+            "Simulation engine: event (default) or vectorized "
+            "(FSRS6 environment + FSRS6 scheduler, or LSTM environment + "
+            "FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers)."
+        ),
+    )
+    parser.add_argument(
+        "--torch-device",
+        default=None,
+        help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
+    )
     return parser.parse_args()
 
 
@@ -276,23 +291,75 @@ def _run_once(
     )
     cost_model = cost_model_cls()
     try:
-        stats = run_simulation(
-            days=run_args.days,
-            deck_size=run_args.deck,
-            environment=env,
-            scheduler=agent,
-            behavior=behavior,
-            cost_model=cost_model,
-            seed_fn=rng.random,
-            progress=False,
-            progress_callback=progress_callback,
-        )
+        if run_args.engine == "vectorized":
+            stats = _run_vectorized(
+                run_args, env, agent, behavior, cost_model, progress_callback
+            )
+        else:
+            stats = run_simulation(
+                days=run_args.days,
+                deck_size=run_args.deck,
+                environment=env,
+                scheduler=agent,
+                behavior=behavior,
+                cost_model=cost_model,
+                seed_fn=rng.random,
+                progress=False,
+                progress_callback=progress_callback,
+            )
     finally:
         progress_close()
     if not run_args.no_log:
         simulate_cli._write_log(run_args, stats)
     if run_args.plot:
         simulate_cli.plot_simulation(stats)
+
+
+def _run_vectorized(
+    run_args: argparse.Namespace,
+    env,
+    agent,
+    behavior,
+    cost_model,
+    progress_callback,
+):
+    from simulator.models import FSRS6Model, LSTMModel
+    from simulator.schedulers import FSRS6Scheduler
+    from simulator.vectorized import simulate_fsrs6_vectorized, simulate_lstm_vectorized
+
+    if isinstance(env, FSRS6Model):
+        if not isinstance(agent, FSRS6Scheduler):
+            raise SystemExit(
+                "Vectorized engine with FSRS6 environment requires FSRS6 scheduler."
+            )
+        return simulate_fsrs6_vectorized(
+            days=run_args.days,
+            deck_size=run_args.deck,
+            environment=env,
+            scheduler=agent,
+            behavior=behavior,
+            cost_model=cost_model,
+            seed=run_args.seed,
+            device=run_args.torch_device,
+            progress=False,
+            progress_callback=progress_callback,
+        )
+    if isinstance(env, LSTMModel):
+        return simulate_lstm_vectorized(
+            days=run_args.days,
+            deck_size=run_args.deck,
+            environment=env,
+            scheduler=agent,
+            behavior=behavior,
+            cost_model=cost_model,
+            seed=run_args.seed,
+            device=run_args.torch_device,
+            progress=False,
+            progress_callback=progress_callback,
+        )
+    raise SystemExit(
+        "Vectorized engine only supports FSRS6 or LSTM environments for sweeps."
+    )
 
 
 def main() -> None:
