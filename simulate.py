@@ -32,6 +32,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.schedulers.lstm import LSTMScheduler
 from simulator.vectorized import simulate_fsrs6_vectorized, simulate_lstm_vectorized
 
 
@@ -103,6 +104,7 @@ SCHEDULER_FACTORIES = {
         policy_json=_require_policy(args.sspmmc_policy),
         fsrs_weights=None,
     ),
+    "LSTM": lambda args: LSTMScheduler(args)
 }
 
 

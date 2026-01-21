@@ -432,5 +432,25 @@ class LSTMModel(MemoryModel):
             total += w * (1.0 + elapsed_scaled / denom) ** (-d)
         return (1.0 - EPS) * max(0.0, min(1.0, total))
 
+    def get_interval_from_history(
+        self, history: Sequence[tuple[float, int]], desired_retention: float
+    ) -> float:
+        curves = self._compute_curves(history)
+        if not curves:
+            return 1.0
+
+        low = 0.0
+        high = 36500.0
+        for _ in range(100):
+            mid = (low + high) / 2.0
+            if mid == low or mid == high:
+                break
+            retention = self._forgetting_curve(mid * self.interval_scale, curves)
+            if retention > desired_retention:
+                low = mid
+            else:
+                high = mid
+        return high
+
 
 __all__ = ["LSTMModel"]
