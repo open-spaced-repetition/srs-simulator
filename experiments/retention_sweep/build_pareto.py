@@ -455,10 +455,11 @@ def _plot_compare_frontier(
                 y=avoid_y,
                 target_x=label_points_x,
                 target_y=label_points_y,
-                expand=(1.05, 1.05),
-                force_static=(0.2, 0.2),
-                force_text=(0.2, 0.2),
-                force_pull=(0.02, 0.02),
+                expand=(1.02, 1.02),
+                force_static=(0.05, 0.05),
+                force_text=(0.1, 0.1),
+                force_pull=(0.06, 0.06),
+                max_move=(5, 5),
                 lim=200,
             )
         finally:
