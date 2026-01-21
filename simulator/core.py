@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import abc
 import heapq
-import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from tqdm import tqdm
 
 
 @dataclass(slots=True)
@@ -253,6 +254,7 @@ class SimulationEngine:
         self.progress = progress
         self.progress_callback = progress_callback
         self._progress_last = -1
+        self._progress_bar: Optional[tqdm] = None
 
         self.cards = [Card(id=i) for i in range(deck_size)]
         self.future_queue: List[tuple[float, int, int]] = []
@@ -272,15 +274,17 @@ class SimulationEngine:
         self.events: List[Event] = []
 
     def run(self) -> SimulationStats:
-        self._update_progress(0)
-        for day in range(self.days):
-            self._start_day(day)
-            self._compute_memorized(day)
-            self._process_day(day)
-            self._defer_remaining(day)
-            self._update_progress(day + 1)
-        if self.progress:
-            sys.stderr.write("\n")
+        self._start_progress()
+        try:
+            self._update_progress(0)
+            for day in range(self.days):
+                self._start_day(day)
+                self._compute_memorized(day)
+                self._process_day(day)
+                self._defer_remaining(day)
+                self._update_progress(day + 1)
+        finally:
+            self._finish_progress()
         self._compute_retention()
         return SimulationStats(
             daily_reviews=self.daily_reviews,
@@ -295,6 +299,19 @@ class SimulationEngine:
             total_projected_retrievability=self._projected_retrievability_sum(),
         )
 
+    def _start_progress(self) -> None:
+        if not self.progress or self._progress_bar is not None:
+            return
+        self._progress_bar = tqdm(
+            total=self.days, desc="Simulating", unit="day", leave=False
+        )
+
+    def _finish_progress(self) -> None:
+        if self._progress_bar is None:
+            return
+        self._progress_bar.close()
+        self._progress_bar = None
+
     def _update_progress(self, completed: int) -> None:
         if self.days <= 0:
             return
@@ -303,15 +320,11 @@ class SimulationEngine:
         self._progress_last = completed
         if self.progress_callback is not None:
             self.progress_callback(completed, self.days)
-        if not self.progress:
+        if self._progress_bar is None:
             return
-        ratio = min(1.0, max(0.0, completed / self.days))
-        width = 30
-        filled = int(width * ratio)
-        bar = "=" * filled + "-" * (width - filled)
-        percent = int(ratio * 100)
-        sys.stderr.write(f"\rSimulating [{bar}] {completed}/{self.days} ({percent}%)")
-        sys.stderr.flush()
+        delta = completed - self._progress_bar.n
+        if delta > 0:
+            self._progress_bar.update(delta)
 
     def _projected_retrievability_sum(self) -> float:
         total = 0.0

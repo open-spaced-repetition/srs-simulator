@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
+import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -30,6 +32,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.vectorized import simulate_fsrs6_vectorized, simulate_lstm_vectorized
 
 
 def _resolve_benchmark_weights(
@@ -133,6 +136,20 @@ def main() -> None:
         "--no-plot",
         action="store_true",
         help="Disable plotting the dashboard.",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["event", "vectorized"],
+        default="event",
+        help=(
+            "Simulation engine: event (default) or vectorized "
+            "(FSRS6 or LSTM environment with FSRS6 scheduler)."
+        ),
+    )
+    parser.add_argument(
+        "--torch-device",
+        default=None,
+        help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
     )
     parser.add_argument(
         "--days", type=int, default=365 * 5, help="Number of simulated days."
@@ -257,16 +274,53 @@ def main() -> None:
         priority_fn=priority_fn,
     )
     cost_model = StatefulCostModel()
-    stats = simulate(
-        days=args.days,
-        deck_size=args.deck,
-        environment=env,
-        scheduler=agent,
-        behavior=behavior,
-        cost_model=cost_model,
-        seed_fn=rng.random,
-        progress=not args.no_progress,
-    )
+    start_time = time.perf_counter()
+    if args.engine == "vectorized":
+        if args.log_reviews:
+            sys.stderr.write(
+                "Vectorized engine does not emit per-event logs; "
+                "--log-reviews ignored.\n"
+            )
+        try:
+            if isinstance(env, LSTMModel):
+                stats = simulate_lstm_vectorized(
+                    days=args.days,
+                    deck_size=args.deck,
+                    environment=env,
+                    scheduler=agent,
+                    behavior=behavior,
+                    cost_model=cost_model,
+                    seed=args.seed,
+                    device=args.torch_device,
+                    progress=not args.no_progress,
+                )
+            else:
+                stats = simulate_fsrs6_vectorized(
+                    days=args.days,
+                    deck_size=args.deck,
+                    environment=env,
+                    scheduler=agent,
+                    behavior=behavior,
+                    cost_model=cost_model,
+                    seed=args.seed,
+                    device=args.torch_device,
+                    progress=not args.no_progress,
+                )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+    else:
+        stats = simulate(
+            days=args.days,
+            deck_size=args.deck,
+            environment=env,
+            scheduler=agent,
+            behavior=behavior,
+            cost_model=cost_model,
+            seed_fn=rng.random,
+            progress=not args.no_progress,
+        )
+    elapsed = time.perf_counter() - start_time
+    sys.stderr.write(f"Simulation time: {elapsed:.2f}s\n")
     if not args.no_log:
         _write_log(args, stats)
 
@@ -395,6 +449,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     )
     filename = args.log_dir / f"log_{'_'.join(parts)}.jsonl"
     meta = {
+        "engine": args.engine,
         "days": args.days,
         "deck_size": args.deck,
         "learn_limit": args.learn_limit,
