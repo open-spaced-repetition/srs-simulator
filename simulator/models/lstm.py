@@ -8,6 +8,7 @@ from simulator.core import Card, MemoryModel
 
 import torch
 from torch import Tensor, nn
+from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
 
 EPS = 1e-7
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -194,8 +195,7 @@ class _SequenceLSTM(nn.Module):
         self.s_fc = nn.Linear(self.n_hidden, self.n_curves)
         self.d_fc = nn.Linear(self.n_hidden, self.n_curves)
 
-    def forward(self, x_lni: Tensor) -> tuple[Tensor, Tensor, Tensor]:
-        self.forward_calls += 1
+    def _build_features(self, x_lni: Tensor) -> Tensor:
         x_rating = x_lni[..., -1:]
         x_features = x_lni[..., :-1]
 
@@ -212,13 +212,57 @@ class _SequenceLSTM(nn.Module):
         x_rating = torch.nn.functional.one_hot(
             x_rating.squeeze(-1).long() - 1, num_classes=4
         ).float()
-        x = torch.cat([x_main, x_rating], dim=-1)
+        return torch.cat([x_main, x_rating], dim=-1)
+
+    def _pack_like(self, packed: PackedSequence, data: Tensor) -> PackedSequence:
+        return PackedSequence(
+            data,
+            packed.batch_sizes,
+            packed.sorted_indices,
+            packed.unsorted_indices,
+        )
+
+    def _apply_packed(
+        self, module: nn.Module, packed: PackedSequence
+    ) -> PackedSequence:
+        if isinstance(module, nn.Sequential):
+            out = packed
+            for sub in module:
+                out = self._apply_packed(sub, out)
+            return out
+        if isinstance(module, _ResBlock):
+            inner = self._apply_packed(module.module, packed)
+            return self._pack_like(packed, packed.data + inner.data)
+        if isinstance(module, _RNNWrapper):
+            return module(packed)
+        return self._pack_like(packed, module(packed.data))
+
+    def forward(self, x_lni: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        self.forward_calls += 1
+        x = self._build_features(x_lni)
         x_lnh = self.process(x)
 
         w_lnh = torch.nn.functional.softmax(self.w_fc(x_lnh), dim=-1)
         s_lnh = torch.exp(torch.clamp(self.s_fc(x_lnh), min=-25, max=25))
         d_lnh = torch.exp(torch.clamp(self.d_fc(x_lnh), min=-25, max=25))
         return w_lnh, s_lnh, d_lnh
+
+    def forward_packed_last(
+        self, x_lni: PackedSequence, lengths: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        self.forward_calls += 1
+        x = self._build_features(x_lni.data)
+        packed = self._pack_like(x_lni, x)
+        packed_hidden = self._apply_packed(self.process, packed)
+        hidden_padded, _ = pad_packed_sequence(packed_hidden)
+        lengths_device = lengths.to(hidden_padded.device)
+        idx = torch.clamp(lengths_device - 1, min=0)
+        batch_idx = torch.arange(lengths_device.shape[0], device=hidden_padded.device)
+        hidden_last = hidden_padded[idx, batch_idx]
+        w_last = torch.nn.functional.softmax(self.w_fc(hidden_last), dim=-1)
+        s_last = torch.exp(torch.clamp(self.s_fc(hidden_last), min=-25, max=25))
+        d_last = torch.exp(torch.clamp(self.d_fc(hidden_last), min=-25, max=25))
+        return w_last, s_last, d_last
 
 
 class LSTMModel(MemoryModel):
