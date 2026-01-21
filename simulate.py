@@ -143,8 +143,9 @@ def main() -> None:
         default="event",
         help=(
             "Simulation engine: event (default) or vectorized "
-            "(FSRS6 environment + FSRS6 scheduler, or LSTM environment + "
-            "FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers)."
+            "(FSRS6 environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC "
+            "schedulers, or LSTM environment + FSRS6/FSRS3/HLR/fixed/Memrise/"
+            "Anki SM-2/SSPMMC schedulers)."
         ),
     )
     parser.add_argument(

@@ -19,7 +19,7 @@ uv run simulate.py --engine vectorized --torch-device cuda --no-log
 uv run simulate.py --engine vectorized --environment lstm --scheduler fsrs6 --lstm-device cuda --no-log
 ```
 
-The vectorized engine supports the FSRS6 environment + FSRS6 scheduler and the LSTM environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers with `StochasticBehavior` and `StatefulCostModel`. It returns aggregate stats without per-event logs, and results may differ slightly from the event-driven engine due to RNG ordering and float precision.
+The vectorized engine supports the FSRS6 environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers and the LSTM environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers with `StochasticBehavior` and `StatefulCostModel`. It returns aggregate stats without per-event logs, and results may differ slightly from the event-driven engine due to RNG ordering and float precision.
 
 Sanity checks: `tests/sanity_lstm_forward_calls.py` runs a quick vectorized LSTM simulation and prints the number of LSTM forward calls to confirm it scales with days, not reviews.
 
@@ -58,7 +58,7 @@ FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficul
 - **CostModel / Workload**: (`simulator.core.CostModel`) converts each review into a dynamic time cost (e.g. longer latency when R is low).
 - **Scheduler** (`simulator.core.Scheduler`): the agent under test. It only receives a `CardView` projection (history, due date, prior intervals) and returns the next interval plus its internal state.
 - **simulate** (`simulator.core.simulate`): a day-stepped loop that wires all four components together.
-- **simulate_fsrs6_vectorized** (`simulator.vectorized.simulate_fsrs6_vectorized`): a torch/GPU vectorized FSRS6 engine that returns aggregate stats without per-event logs.
+- **simulate_fsrs6_vectorized** (`simulator.vectorized.simulate_fsrs6_vectorized`): a torch/GPU vectorized FSRS6 environment engine (FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers) that returns aggregate stats without per-event logs.
 - **simulate_lstm_vectorized** (`simulator.vectorized.simulate_lstm_vectorized`): a torch/GPU vectorized LSTM environment engine (FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers) that returns aggregate stats without per-event logs.
 
 ## Architecture & Control Flow
