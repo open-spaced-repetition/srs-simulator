@@ -289,9 +289,11 @@ class LSTMModel(MemoryModel):
         device: str | torch.device | None = None,
         dtype: torch.dtype = torch.float32,
     ) -> None:
-        self.device = (
-            torch.device(device) if device is not None else torch.device("cpu")
-        )
+        if device is None:
+            default_device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = torch.device(default_device)
+        else:
+            self.device = torch.device(device)
         self.dtype = dtype
         self.use_duration_feature = use_duration_feature
         self.default_duration_ms = float(default_duration_ms)

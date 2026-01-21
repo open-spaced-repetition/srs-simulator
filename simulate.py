@@ -58,7 +58,6 @@ ENVIRONMENT_FACTORIES = {
     "lstm": lambda args: LSTMModel(
         user_id=args.user_id or 1,
         benchmark_root=args.srs_benchmark_root,
-        device=args.lstm_device,
     ),
     "fsrs6": lambda args: FSRS6Model(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21)
@@ -192,11 +191,6 @@ def main() -> None:
         type=int,
         default=None,
         help="Load benchmark weights for this user ID.",
-    )
-    parser.add_argument(
-        "--lstm-device",
-        default=None,
-        help="Override LSTM device (e.g. cpu, cuda, cuda:0).",
     )
     parser.add_argument(
         "--benchmark-partition",

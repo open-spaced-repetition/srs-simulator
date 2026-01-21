@@ -16,7 +16,7 @@ For faster GPU runs, use the vectorized engine:
 
 ```bash
 uv run simulate.py --engine vectorized --torch-device cuda --no-log
-uv run simulate.py --engine vectorized --environment lstm --scheduler fsrs6 --lstm-device cuda --no-log
+uv run simulate.py --engine vectorized --environment lstm --scheduler fsrs6 --no-log
 ```
 
 The vectorized engine supports the FSRS6 environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers and the LSTM environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers with `StochasticBehavior` and `StatefulCostModel`. It returns aggregate stats without per-event logs, and results may differ slightly from the event-driven engine due to RNG ordering and float precision.
@@ -103,7 +103,7 @@ This separation lets you benchmark schedulers against arbitrary memory models an
 - `FSRS3Model`: FSRS v3-style environment (13 params loaded from `srs-benchmark`).
 - `HLRModel`: half-life regression with three weights loaded from `srs-benchmark`.
 - `DASHModel`: stateless logistic model with placeholder features and nine weights loaded from `srs-benchmark`.
-- `LSTMModel`: neural forgetting-curve predictor inspired by the srs-benchmark LSTM (requires PyTorch and `--user-id` weights; runs on CPU by default; use `--lstm-device` to force `cuda`/`cpu`; expects day-based intervals like the original `delta_t` feature).
+- `LSTMModel`: neural forgetting-curve predictor inspired by the srs-benchmark LSTM (requires PyTorch and `--user-id` weights; runs on CUDA when available, otherwise CPU; expects day-based intervals like the original `delta_t` feature).
 
 ## Provided Schedulers
 - `FSRS6Scheduler` / `FSRSScheduler`: FSRS v6-style state; loads weights from `srs-benchmark` for the selected user.

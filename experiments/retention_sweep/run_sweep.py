@@ -76,11 +76,6 @@ def parse_args() -> argparse.Namespace:
         help="Load benchmark weights for this user ID.",
     )
     parser.add_argument(
-        "--lstm-device",
-        default=None,
-        help="Override LSTM device (e.g. cpu, cuda, cuda:0).",
-    )
-    parser.add_argument(
         "--benchmark-partition",
         default="0",
         help="Partition key inside benchmark result parameters.",
