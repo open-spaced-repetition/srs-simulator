@@ -385,6 +385,28 @@ class LSTMModel(MemoryModel):
         elapsed_scaled = max(0.0, float(elapsed)) * self.interval_scale
         return self._forgetting_curve(elapsed_scaled, curves)
 
+    def predict_retention_from_curves(
+        self, curves: dict[str, list[float]], elapsed: float
+    ) -> float:
+        if not curves:
+            return self.default_retention
+        elapsed_scaled = max(0.0, float(elapsed)) * self.interval_scale
+        return self._forgetting_curve(elapsed_scaled, curves)
+
+    def curves_from_events(
+        self, events: Sequence[tuple[float, int]]
+    ) -> dict[str, list[float]]:
+        sequence = self._build_sequence(events)
+        if sequence is None:
+            return {}
+        with torch.no_grad():
+            w_lnh, s_lnh, d_lnh = self.network(sequence)
+        idx = sequence.size(0) - 1
+        w = w_lnh[idx, 0].detach().cpu().tolist()
+        s = s_lnh[idx, 0].detach().cpu().tolist()
+        d = d_lnh[idx, 0].detach().cpu().tolist()
+        return {"w": w, "s": s, "d": d}
+
     def update_card(self, card: Card, rating: int, elapsed: float) -> None:
         self._update_state(card, float(max(elapsed, 0.0)), rating)
 
@@ -426,6 +448,20 @@ class LSTMModel(MemoryModel):
             features.append(self.default_duration_ms)
         features.append(float(rating_clamped))
         return torch.as_tensor([features], dtype=self.dtype, device=self.device)
+
+    def _build_sequence(self, events: Sequence[tuple[float, int]]) -> Tensor | None:
+        if not events:
+            return None
+        rows: list[list[float]] = []
+        for elapsed, rating in events:
+            delay = max(float(elapsed), 0.0) * self.interval_scale
+            features = [delay]
+            if self.use_duration_feature:
+                features.append(self.default_duration_ms)
+            features.append(float(max(1, min(4, int(rating)))))
+            rows.append(features)
+        tensor = torch.as_tensor(rows, dtype=self.dtype, device=self.device)
+        return tensor.unsqueeze(1)  # sequence, batch, features
 
     def _update_state(self, card: Card, elapsed: float, rating: int) -> None:
         state = self._ensure_state(card)

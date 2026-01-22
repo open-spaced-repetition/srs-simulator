@@ -114,6 +114,7 @@ This separation lets you benchmark schedulers against arbitrary memory models an
 - `FixedIntervalScheduler`: stateless fixed-interval baseline (`--scheduler fixed@<days>`).
 - `AnkiSM2Scheduler`: Anki SM-2-style ease scheduler (`--scheduler anki_sm2`).
 - `MemriseScheduler`: Memrise sequence scheduler (`--scheduler memrise`).
+- `LSTMScheduler`: LSTM curve-fit scheduler that targets a desired retention from review history (event engine only).
 
 ## Provided Behavior & Cost Models
 - `StochasticBehavior`: configurable attendance probability, lazy-good bias, and daily limits (max new/reviews/cost).
