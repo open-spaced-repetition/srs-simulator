@@ -104,7 +104,7 @@ SCHEDULER_FACTORIES = {
         policy_json=_require_policy(args.sspmmc_policy),
         fsrs_weights=None,
     ),
-    "LSTM": lambda args: LSTMScheduler(args)
+    "LSTM": lambda args: LSTMScheduler(args),
 }
 
 

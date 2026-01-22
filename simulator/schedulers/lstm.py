@@ -19,9 +19,7 @@ class LSTMScheduler(Scheduler):
         self, card_view: CardView, rating: int, day: float
     ) -> Tuple[float, Any]:
         history: List[Tuple[float, int]] = [(0.0, rating)]
-        interval = self.model.get_interval_from_history(
-            history, self.desired_retention
-        )
+        interval = self.model.get_interval_from_history(history, self.desired_retention)
         return interval, history
 
     def schedule(
@@ -33,9 +31,7 @@ class LSTMScheduler(Scheduler):
         if len(history) > self.model.max_events:
             del history[: len(history) - self.model.max_events]
 
-        interval = self.model.get_interval_from_history(
-            history, self.desired_retention
-        )
+        interval = self.model.get_interval_from_history(history, self.desired_retention)
         return interval, history
 
 
