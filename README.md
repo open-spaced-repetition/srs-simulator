@@ -19,7 +19,7 @@ uv run simulate.py --engine vectorized --torch-device cuda --no-log
 uv run simulate.py --engine vectorized --environment lstm --scheduler fsrs6 --no-log
 ```
 
-The vectorized engine supports the FSRS6 environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers and the LSTM environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers with `StochasticBehavior` and `StatefulCostModel`. It returns aggregate stats without per-event logs, and results may differ slightly from the event-driven engine due to RNG ordering and float precision.
+The vectorized engine supports the FSRS6 environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC/LSTM schedulers and the LSTM environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC/LSTM schedulers with `StochasticBehavior` and `StatefulCostModel`. It returns aggregate stats without per-event logs, and results may differ slightly from the event-driven engine due to RNG ordering and float precision.
 
 Sanity checks: `tests/sanity_lstm_forward_calls.py` runs a quick vectorized LSTM simulation and prints the number of LSTM forward calls to confirm it scales with days, not reviews.
 
@@ -114,7 +114,7 @@ This separation lets you benchmark schedulers against arbitrary memory models an
 - `FixedIntervalScheduler`: stateless fixed-interval baseline (`--scheduler fixed@<days>`).
 - `AnkiSM2Scheduler`: Anki SM-2-style ease scheduler (`--scheduler anki_sm2`).
 - `MemriseScheduler`: Memrise sequence scheduler (`--scheduler memrise`).
-- `LSTMScheduler`: LSTM curve-fit scheduler that targets a desired retention from review history (event engine only).
+- `LSTMScheduler`: LSTM curve-fit scheduler that targets a desired retention from review history.
 
 ## Provided Behavior & Cost Models
 - `StochasticBehavior`: configurable attendance probability, lazy-good bias, and daily limits (max new/reviews/cost).

@@ -170,7 +170,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Simulation engine: vectorized (default) or event "
             "(FSRS6 environment + FSRS6 scheduler, or LSTM environment + "
-            "FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers)."
+            "FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC/LSTM schedulers)."
         ),
     )
     parser.add_argument(
