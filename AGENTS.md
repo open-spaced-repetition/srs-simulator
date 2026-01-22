@@ -6,6 +6,7 @@ Project rules:
 2. When code changes affect README examples, update `README.md`.
 3. Before each commit, run `uv run ruff format`.
 4. Commit messages must follow Conventional Commits.
+5. Do not push code to remotes.
 
 ## Conventional Commits
 
