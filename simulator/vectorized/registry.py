@@ -25,6 +25,7 @@ from simulator.schedulers.fsrs import (
     FSRS6VectorizedSchedulerOps,
 )
 from simulator.schedulers.hlr import HLRVectorizedSchedulerOps
+from simulator.schedulers.lstm import LSTMVectorizedSchedulerOps
 from simulator.schedulers.memrise import MemriseVectorizedSchedulerOps
 from simulator.schedulers.sspmmc import SSPMMCVectorizedSchedulerOps
 from simulator.vectorized.types import (
@@ -80,10 +81,7 @@ def resolve_scheduler_ops(
             "use the event-driven engine instead."
         )
     if isinstance(scheduler, LSTMScheduler):
-        raise ValueError(
-            "Vectorized engine does not support LSTMScheduler; "
-            "use the event-driven engine instead."
-        )
+        return LSTMVectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
     raise ValueError(
         "Vectorized engine requires a supported scheduler "
         "(FSRS6, FSRS3, HLR, fixed, Memrise, Anki SM-2, or SSPMMC)."
