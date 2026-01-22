@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import math
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from simulator.core import CardView, Scheduler
+
+if TYPE_CHECKING:
+    import torch
 
 
 class HLRScheduler(Scheduler):
@@ -46,3 +50,72 @@ class HLRScheduler(Scheduler):
         half = self._half_life(right, wrong)
         ln_half = math.log(0.5)
         return max(1.0, half * math.log(self.desired_retention) / ln_half)
+
+
+@dataclass
+class HLRVectorizedState:
+    right: "torch.Tensor"
+    wrong: "torch.Tensor"
+
+
+class HLRVectorizedSchedulerOps:
+    def __init__(
+        self,
+        scheduler: HLRScheduler,
+        *,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+
+        self._torch = torch
+        self.device = device
+        self.dtype = dtype
+        self._w = torch.tensor(scheduler.w, device=device, dtype=dtype)
+        self._log_factor = math.log(scheduler.desired_retention) / math.log(0.5)
+
+    def init_state(self, deck_size: int) -> HLRVectorizedState:
+        right = self._torch.zeros(deck_size, dtype=self.dtype, device=self.device)
+        wrong = self._torch.zeros(deck_size, dtype=self.dtype, device=self.device)
+        return HLRVectorizedState(right=right, wrong=wrong)
+
+    def review_priority(
+        self, state: HLRVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        return self._torch.zeros(idx.numel(), device=self.device, dtype=self.dtype)
+
+    def update_review(
+        self,
+        state: HLRVectorizedState,
+        idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        success = (rating > 1).to(self.dtype)
+        state.right[idx] = state.right[idx] + success
+        state.wrong[idx] = state.wrong[idx] + (1.0 - success)
+        half = self._torch.pow(
+            self._torch.tensor(2.0, device=self.device, dtype=self.dtype),
+            self._w[0] * state.right[idx] + self._w[1] * state.wrong[idx] + self._w[2],
+        )
+        return half * self._log_factor
+
+    def update_learn(
+        self,
+        state: HLRVectorizedState,
+        idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        success = (rating > 1).to(self.dtype)
+        state.right[idx] = success
+        state.wrong[idx] = 1.0 - success
+        half = self._torch.pow(
+            self._torch.tensor(2.0, device=self.device, dtype=self.dtype),
+            self._w[0] * state.right[idx] + self._w[1] * state.wrong[idx] + self._w[2],
+        )
+        return half * self._log_factor

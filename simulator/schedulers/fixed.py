@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 from simulator.core import CardView, Scheduler
+
+if TYPE_CHECKING:
+    import torch
 
 
 class FixedIntervalScheduler(Scheduler):
@@ -14,3 +20,61 @@ class FixedIntervalScheduler(Scheduler):
 
     def schedule(self, card_view: CardView, rating: int, elapsed: float, day: float):
         return self.interval, None
+
+
+@dataclass
+class FixedVectorizedState:
+    interval: float
+
+
+class FixedVectorizedSchedulerOps:
+    def __init__(
+        self,
+        scheduler: FixedIntervalScheduler,
+        *,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+
+        self._torch = torch
+        self.device = device
+        self.dtype = dtype
+        self._interval = float(scheduler.interval)
+        self._interval_days = max(1, int(round(self._interval)))
+
+    def init_state(self, deck_size: int) -> FixedVectorizedState:
+        return FixedVectorizedState(interval=self._interval)
+
+    def review_priority(
+        self, state: FixedVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        return self._torch.zeros(idx.numel(), device=self.device, dtype=self.dtype)
+
+    def update_review(
+        self,
+        state: FixedVectorizedState,
+        idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        return self._torch.full(
+            (idx.numel(),),
+            float(self._interval_days),
+            device=self.device,
+            dtype=self.dtype,
+        )
+
+    def update_learn(
+        self,
+        state: FixedVectorizedState,
+        idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        return self._torch.full(
+            (idx.numel(),),
+            float(self._interval_days),
+            device=self.device,
+            dtype=self.dtype,
+        )

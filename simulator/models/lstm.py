@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -8,7 +9,7 @@ from simulator.core import Card, MemoryModel
 
 import torch
 from torch import Tensor, nn
-from torch.nn.utils.rnn import PackedSequence, pad_packed_sequence
+from torch.nn.utils.rnn import PackedSequence, pack_padded_sequence, pad_packed_sequence
 
 EPS = 1e-7
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -431,6 +432,195 @@ class LSTMModel(MemoryModel):
             denom = s + EPS
             total += w * (1.0 + elapsed_scaled / denom) ** (-d)
         return (1.0 - EPS) * max(0.0, min(1.0, total))
+
+
+@dataclass
+class LSTMVectorizedEnvState:
+    event_delays: Tensor
+    event_ratings: Tensor
+    event_counts: Tensor
+    mem_w: Tensor
+    mem_s: Tensor
+    mem_d: Tensor
+    has_curves: Tensor
+
+
+class LSTMVectorizedEnvOps:
+    def __init__(
+        self,
+        environment: LSTMModel,
+        *,
+        device: torch.device | None,
+        lstm_batch_size: int,
+    ) -> None:
+        if device is None:
+            self.device = environment.device
+        else:
+            self.device = torch.device(device)
+            if self.device != environment.device:
+                environment.network.to(self.device)
+                environment.device = self.device
+
+        env_dtype = next(environment.network.parameters()).dtype
+        environment.dtype = env_dtype
+        self.dtype = env_dtype
+        self.environment = environment
+        self.batch_size = max(1, int(lstm_batch_size))
+        self.max_events = int(environment.max_events)
+        self.n_curves = int(environment.network.n_curves)
+        self.interval_scale = float(environment.interval_scale)
+        self.use_duration_feature = environment.use_duration_feature
+        self.default_retention = float(environment.default_retention)
+        self.duration_value = None
+        if self.use_duration_feature:
+            self.duration_value = torch.tensor(
+                environment.default_duration_ms, device=self.device, dtype=self.dtype
+            )
+
+    def init_state(self, deck_size: int) -> LSTMVectorizedEnvState:
+        event_delays = torch.zeros(
+            (deck_size, self.max_events), dtype=self.dtype, device=self.device
+        )
+        event_ratings = torch.zeros(
+            (deck_size, self.max_events), dtype=torch.int64, device=self.device
+        )
+        event_counts = torch.zeros(deck_size, dtype=torch.int64, device=self.device)
+        mem_w = torch.zeros(
+            (deck_size, self.n_curves), dtype=self.dtype, device=self.device
+        )
+        mem_s = torch.zeros(
+            (deck_size, self.n_curves), dtype=self.dtype, device=self.device
+        )
+        mem_d = torch.zeros(
+            (deck_size, self.n_curves), dtype=self.dtype, device=self.device
+        )
+        has_curves = torch.zeros(deck_size, dtype=torch.bool, device=self.device)
+        return LSTMVectorizedEnvState(
+            event_delays=event_delays,
+            event_ratings=event_ratings,
+            event_counts=event_counts,
+            mem_w=mem_w,
+            mem_s=mem_s,
+            mem_d=mem_d,
+            has_curves=has_curves,
+        )
+
+    def retrievability(
+        self, state: LSTMVectorizedEnvState, idx: Tensor, elapsed: Tensor
+    ) -> Tensor:
+        elapsed_scaled = torch.clamp(elapsed, min=0.0) * self.interval_scale
+        memorized = torch.full(
+            elapsed_scaled.shape,
+            self.default_retention,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        curves_mask = state.has_curves[idx]
+        if curves_mask.any():
+            curves_idx = idx[curves_mask]
+            memorized[curves_mask] = self._lstm_retention(
+                elapsed_scaled[curves_mask],
+                state.mem_w[curves_idx],
+                state.mem_s[curves_idx],
+                state.mem_d[curves_idx],
+            )
+        return memorized
+
+    def update_review(
+        self,
+        state: LSTMVectorizedEnvState,
+        idx: Tensor,
+        elapsed: Tensor,
+        rating: Tensor,
+        retrievability: Tensor,
+    ) -> None:
+        if idx.numel() == 0:
+            return
+        self._update_curves(state, idx, elapsed, rating)
+
+    def update_learn(
+        self, state: LSTMVectorizedEnvState, idx: Tensor, rating: Tensor
+    ) -> None:
+        if idx.numel() == 0:
+            return
+        elapsed = torch.zeros(idx.shape[0], device=self.device, dtype=self.dtype)
+        self._update_curves(state, idx, elapsed, rating)
+
+    def _update_curves(
+        self,
+        state: LSTMVectorizedEnvState,
+        idx: Tensor,
+        delays: Tensor,
+        ratings: Tensor,
+    ) -> None:
+        counts = state.event_counts[idx]
+        full_mask = counts >= self.max_events
+        if full_mask.any():
+            full_idx = idx[full_mask]
+            state.event_delays[full_idx, :-1] = state.event_delays[full_idx, 1:]
+            state.event_ratings[full_idx, :-1] = state.event_ratings[full_idx, 1:]
+            state.event_delays[full_idx, -1] = delays[full_mask]
+            state.event_ratings[full_idx, -1] = ratings[full_mask]
+            state.event_counts[full_idx] = self.max_events
+        partial_mask = ~full_mask
+        if partial_mask.any():
+            part_idx = idx[partial_mask]
+            positions = counts[partial_mask]
+            state.event_delays[part_idx, positions] = delays[partial_mask]
+            state.event_ratings[part_idx, positions] = ratings[partial_mask]
+            state.event_counts[part_idx] = positions + 1
+
+        lengths = state.event_counts[idx]
+        if lengths.numel() == 0:
+            return
+        max_len = int(lengths.max().item())
+        if max_len <= 0:
+            return
+        order = torch.argsort(lengths, descending=True)
+        idx_sorted = idx[order]
+        lengths_sorted = lengths[order]
+
+        for start in range(0, idx_sorted.numel(), self.batch_size):
+            end = min(start + self.batch_size, idx_sorted.numel())
+            batch_idx = idx_sorted[start:end]
+            batch_lengths = lengths_sorted[start:end]
+            if batch_lengths.numel() == 0:
+                continue
+            batch_max = int(batch_lengths.max().item())
+            if batch_max <= 0:
+                continue
+            delays_group = state.event_delays[batch_idx, :batch_max]
+            ratings_group = state.event_ratings[batch_idx, :batch_max]
+            delay_scaled = torch.clamp(delays_group, min=0.0) * self.interval_scale
+            seq_delay = delay_scaled.transpose(0, 1).unsqueeze(-1)
+            rating_seq = ratings_group.transpose(0, 1).unsqueeze(-1).to(self.dtype)
+            if self.use_duration_feature:
+                duration_seq = self.duration_value.expand(seq_delay.shape)
+                sequence = torch.cat([seq_delay, duration_seq, rating_seq], dim=-1)
+            else:
+                sequence = torch.cat([seq_delay, rating_seq], dim=-1)
+            packed = pack_padded_sequence(
+                sequence, batch_lengths.to("cpu"), enforce_sorted=True
+            )
+            w_last, s_last, d_last = self.environment.network.forward_packed_last(
+                packed, batch_lengths
+            )
+            state.mem_w[batch_idx] = w_last
+            state.mem_s[batch_idx] = s_last
+            state.mem_d[batch_idx] = d_last
+            state.has_curves[batch_idx] = True
+
+    @staticmethod
+    def _lstm_retention(
+        elapsed_scaled: Tensor, weights: Tensor, stabilities: Tensor, decays: Tensor
+    ) -> Tensor:
+        denom = stabilities + EPS
+        total = torch.sum(
+            weights * torch.pow(1.0 + elapsed_scaled.unsqueeze(-1) / denom, -decays),
+            dim=-1,
+        )
+        total = torch.clamp(total, min=0.0, max=1.0)
+        return (1.0 - EPS) * total
 
 
 __all__ = ["LSTMModel"]

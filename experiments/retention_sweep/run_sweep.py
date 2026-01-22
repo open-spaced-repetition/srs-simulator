@@ -319,11 +319,10 @@ def _run_vectorized(
     cost_model,
     progress_callback,
 ):
-    from simulator.models import FSRS6Model, LSTMModel
-    from simulator.vectorized import simulate_fsrs6_vectorized, simulate_lstm_vectorized
+    from simulator.vectorized import simulate as simulate_vectorized
 
-    if isinstance(env, FSRS6Model):
-        return simulate_fsrs6_vectorized(
+    try:
+        return simulate_vectorized(
             days=run_args.days,
             deck_size=run_args.deck,
             environment=env,
@@ -335,22 +334,8 @@ def _run_vectorized(
             progress=False,
             progress_callback=progress_callback,
         )
-    if isinstance(env, LSTMModel):
-        return simulate_lstm_vectorized(
-            days=run_args.days,
-            deck_size=run_args.deck,
-            environment=env,
-            scheduler=agent,
-            behavior=behavior,
-            cost_model=cost_model,
-            seed=run_args.seed,
-            device=run_args.torch_device,
-            progress=False,
-            progress_callback=progress_callback,
-        )
-    raise SystemExit(
-        "Vectorized engine only supports FSRS6 or LSTM environments for sweeps."
-    )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def main() -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Sequence
+from dataclasses import dataclass
+import math
+from typing import TYPE_CHECKING, Sequence
 
 from simulator.core import CardView, Scheduler
 from simulator.math.fsrs import (
@@ -23,6 +25,9 @@ from simulator.math.fsrs import (
     _clamp_d,
     _clamp_s,
 )
+
+if TYPE_CHECKING:
+    import torch
 
 
 class FSRS6Scheduler(Scheduler):
@@ -164,3 +169,250 @@ class FSRS3Scheduler(Scheduler):
 
 # Alias for backwards compatibility
 FSRSScheduler = FSRS6Scheduler
+
+
+@dataclass
+class FSRSVectorizedState:
+    s: "torch.Tensor"
+    d: "torch.Tensor"
+
+
+class FSRS6VectorizedSchedulerOps:
+    def __init__(
+        self,
+        scheduler: FSRS6Scheduler,
+        *,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+        from simulator.vectorized import math as vmath
+
+        self._torch = torch
+        self._vmath = vmath
+        self.device = device
+        self.dtype = dtype
+        self._weights = torch.tensor(
+            scheduler.params.weights, device=device, dtype=dtype
+        )
+        self._bounds = scheduler.params.bounds
+        self._decay = -self._weights[20]
+        self._factor = (
+            torch.pow(torch.tensor(0.9, device=device, dtype=dtype), 1.0 / self._decay)
+            - 1.0
+        )
+        self._retention_factor = (
+            torch.pow(
+                torch.tensor(scheduler.desired_retention, device=device, dtype=dtype),
+                1.0 / self._decay,
+            )
+            - 1.0
+        )
+        self._init_d = vmath.clamp(
+            self._weights[4] - torch.exp(self._weights[5] * 3.0) + 1.0,
+            self._bounds.d_min,
+            self._bounds.d_max,
+        )
+        self._priority_mode = scheduler.priority_mode
+
+    def init_state(self, deck_size: int) -> FSRSVectorizedState:
+        s = self._torch.full(
+            (deck_size,), self._bounds.s_min, dtype=self.dtype, device=self.device
+        )
+        d = self._torch.full(
+            (deck_size,), self._bounds.d_min, dtype=self.dtype, device=self.device
+        )
+        return FSRSVectorizedState(s=s, d=d)
+
+    def review_priority(
+        self, state: FSRSVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        r_sched = self._vmath.forgetting_curve(
+            self._decay,
+            self._factor,
+            elapsed,
+            state.s[idx],
+            self._bounds.s_min,
+        )
+        if self._priority_mode == "low_retrievability":
+            return r_sched
+        if self._priority_mode == "high_retrievability":
+            return -r_sched
+        if self._priority_mode == "low_difficulty":
+            return state.d[idx]
+        return -state.d[idx]
+
+    def update_review(
+        self,
+        state: FSRSVectorizedState,
+        idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        sched_s = state.s[idx]
+        sched_d = state.d[idx]
+        sched_r = self._vmath.forgetting_curve(
+            self._decay,
+            self._factor,
+            elapsed,
+            sched_s,
+            self._bounds.s_min,
+        )
+        sched_short = elapsed < 1.0
+        sched_success = rating > 1
+
+        sched_new_s = sched_s
+        sched_new_s = self._torch.where(
+            sched_short,
+            self._vmath.stability_short_term(self._weights, sched_s, rating),
+            sched_new_s,
+        )
+        sched_new_s = self._torch.where(
+            ~sched_short & sched_success,
+            self._vmath.stability_after_success(
+                self._weights, sched_s, sched_r, sched_d, rating
+            ),
+            sched_new_s,
+        )
+        sched_new_s = self._torch.where(
+            ~sched_short & ~sched_success,
+            self._vmath.stability_after_failure(
+                self._weights, sched_s, sched_r, sched_d
+            ),
+            sched_new_s,
+        )
+        sched_new_d = self._vmath.next_d(
+            self._weights,
+            sched_d,
+            rating,
+            self._init_d,
+            self._bounds.d_min,
+            self._bounds.d_max,
+        )
+        state.s[idx] = self._vmath.clamp(
+            sched_new_s, self._bounds.s_min, self._bounds.s_max
+        )
+        state.d[idx] = self._vmath.clamp(
+            sched_new_d, self._bounds.d_min, self._bounds.d_max
+        )
+        return torch.clamp(
+            state.s[idx] / self._factor * self._retention_factor, min=1.0
+        )
+
+    def update_learn(
+        self,
+        state: FSRSVectorizedState,
+        idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        s_init, d_init = self._vmath.init_state(
+            self._weights, rating, self._bounds.d_min, self._bounds.d_max
+        )
+        state.s[idx] = self._vmath.clamp(s_init, self._bounds.s_min, self._bounds.s_max)
+        state.d[idx] = self._vmath.clamp(d_init, self._bounds.d_min, self._bounds.d_max)
+        return torch.clamp(
+            state.s[idx] / self._factor * self._retention_factor, min=1.0
+        )
+
+
+class FSRS3VectorizedSchedulerOps:
+    def __init__(
+        self,
+        scheduler: FSRS3Scheduler,
+        *,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+        from simulator.vectorized import math as vmath
+
+        self._torch = torch
+        self._vmath = vmath
+        self.device = device
+        self.dtype = dtype
+        self._weights = torch.tensor(
+            scheduler.params.weights, device=device, dtype=dtype
+        )
+        self._bounds = scheduler.params.bounds
+        self._fsrs3_ln = math.log(0.9)
+        self._log_desired = math.log(scheduler.desired_retention)
+
+    def init_state(self, deck_size: int) -> FSRSVectorizedState:
+        s = self._torch.full(
+            (deck_size,), self._bounds.s_min, dtype=self.dtype, device=self.device
+        )
+        d = self._torch.full(
+            (deck_size,), self._bounds.d_min, dtype=self.dtype, device=self.device
+        )
+        return FSRSVectorizedState(s=s, d=d)
+
+    def review_priority(
+        self, state: FSRSVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        return self._vmath.fsrs3_forgetting_curve(
+            elapsed, state.s[idx], self._bounds.s_min
+        )
+
+    def update_review(
+        self,
+        state: FSRSVectorizedState,
+        idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        sched_s = state.s[idx]
+        sched_d = state.d[idx]
+        sched_r = self._vmath.fsrs3_forgetting_curve(
+            elapsed, sched_s, self._bounds.s_min
+        )
+        sched_success = rating > 1
+        sched_new_s = self._torch.where(
+            sched_success,
+            self._vmath.fsrs3_stability_after_success(
+                self._weights, sched_s, sched_d, sched_r
+            ),
+            self._vmath.fsrs3_stability_after_failure(
+                self._weights, sched_s, sched_d, sched_r
+            ),
+        )
+        d_update = sched_d + self._weights[4] * (rating.to(self.dtype) - 3.0)
+        sched_new_d = 0.5 * self._weights[2] + 0.5 * d_update
+        state.s[idx] = self._vmath.clamp(
+            sched_new_s, self._bounds.s_min, self._bounds.s_max
+        )
+        state.d[idx] = self._vmath.clamp(
+            sched_new_d, self._bounds.d_min, self._bounds.d_max
+        )
+        return state.s[idx] * (self._log_desired / self._fsrs3_ln)
+
+    def update_learn(
+        self,
+        state: FSRSVectorizedState,
+        idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        s_init, d_init = self._vmath.fsrs3_init_state(
+            self._weights,
+            rating,
+            self._bounds.s_min,
+            self._bounds.s_max,
+            self._bounds.d_min,
+            self._bounds.d_max,
+        )
+        state.s[idx] = self._vmath.clamp(s_init, self._bounds.s_min, self._bounds.s_max)
+        state.d[idx] = self._vmath.clamp(d_init, self._bounds.d_min, self._bounds.d_max)
+        return state.s[idx] * (self._log_desired / self._fsrs3_ln)

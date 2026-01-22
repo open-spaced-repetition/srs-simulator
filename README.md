@@ -58,8 +58,7 @@ FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficul
 - **CostModel / Workload**: (`simulator.core.CostModel`) converts each review into a dynamic time cost (e.g. longer latency when R is low).
 - **Scheduler** (`simulator.core.Scheduler`): the agent under test. It only receives a `CardView` projection (history, due date, prior intervals) and returns the next interval plus its internal state.
 - **simulate** (`simulator.core.simulate`): a day-stepped loop that wires all four components together.
-- **simulate_fsrs6_vectorized** (`simulator.vectorized.simulate_fsrs6_vectorized`): a torch/GPU vectorized FSRS6 environment engine (FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers) that returns aggregate stats without per-event logs.
-- **simulate_lstm_vectorized** (`simulator.vectorized.simulate_lstm_vectorized`): a torch/GPU vectorized LSTM environment engine (FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers) that returns aggregate stats without per-event logs.
+- **simulate** (`simulator.vectorized.simulate`): a torch/GPU vectorized engine for FSRS6 or LSTM environments with FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC schedulers. It returns aggregate stats without per-event logs and accepts `device`/`lstm_batch_size` overrides.
 
 ## Architecture & Control Flow
 The simulator follows an environment-agent loop where each module owns a distinct responsibility and communicates through lightweight data structures.
