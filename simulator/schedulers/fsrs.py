@@ -300,7 +300,7 @@ class FSRS6VectorizedSchedulerOps:
         state.d[idx] = self._vmath.clamp(
             sched_new_d, self._bounds.d_min, self._bounds.d_max
         )
-        return torch.clamp(
+        return self._torch.clamp(
             state.s[idx] / self._factor * self._retention_factor, min=1.0
         )
 
@@ -317,7 +317,7 @@ class FSRS6VectorizedSchedulerOps:
         )
         state.s[idx] = self._vmath.clamp(s_init, self._bounds.s_min, self._bounds.s_max)
         state.d[idx] = self._vmath.clamp(d_init, self._bounds.d_min, self._bounds.d_max)
-        return torch.clamp(
+        return self._torch.clamp(
             state.s[idx] / self._factor * self._retention_factor, min=1.0
         )
 
