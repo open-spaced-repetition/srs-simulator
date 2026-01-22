@@ -32,7 +32,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
-from simulator.vectorized import simulate_fsrs6_vectorized, simulate_lstm_vectorized
+from simulator.vectorized import simulate as simulate_vectorized
 
 
 def _resolve_benchmark_weights(
@@ -278,30 +278,17 @@ def main() -> None:
                 "--log-reviews ignored.\n"
             )
         try:
-            if isinstance(env, LSTMModel):
-                stats = simulate_lstm_vectorized(
-                    days=args.days,
-                    deck_size=args.deck,
-                    environment=env,
-                    scheduler=agent,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    seed=args.seed,
-                    device=args.torch_device,
-                    progress=not args.no_progress,
-                )
-            else:
-                stats = simulate_fsrs6_vectorized(
-                    days=args.days,
-                    deck_size=args.deck,
-                    environment=env,
-                    scheduler=agent,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    seed=args.seed,
-                    device=args.torch_device,
-                    progress=not args.no_progress,
-                )
+            stats = simulate_vectorized(
+                days=args.days,
+                deck_size=args.deck,
+                environment=env,
+                scheduler=agent,
+                behavior=behavior,
+                cost_model=cost_model,
+                seed=args.seed,
+                device=args.torch_device,
+                progress=not args.no_progress,
+            )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
     else:

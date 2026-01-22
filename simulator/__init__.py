@@ -10,7 +10,6 @@ from simulator.core import (
     SimulationStats,
     simulate,
 )
-from simulator.vectorized import simulate_fsrs6_vectorized, simulate_lstm_vectorized
 
 __all__ = [
     "Action",
@@ -23,6 +22,4 @@ __all__ = [
     "Scheduler",
     "SimulationStats",
     "simulate",
-    "simulate_fsrs6_vectorized",
-    "simulate_lstm_vectorized",
 ]
