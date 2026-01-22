@@ -10,7 +10,7 @@ from simulator.benchmark_loader import load_benchmark_weights
 from simulator.cost import StatefulCostModel
 from simulator.models.lstm import LSTMModel
 from simulator.schedulers import FSRS6Scheduler
-from simulator.vectorized import simulate_lstm_vectorized
+from simulator.vectorized import simulate as simulate_vectorized
 
 DEFAULT_DAYS = 365
 DEFAULT_DECK_SIZE = 1000
@@ -36,7 +36,7 @@ def main() -> None:
     cost_model = StatefulCostModel()
 
     env.reset_forward_calls()
-    stats = simulate_lstm_vectorized(
+    stats = simulate_vectorized(
         days=DEFAULT_DAYS,
         deck_size=DEFAULT_DECK_SIZE,
         environment=env,
