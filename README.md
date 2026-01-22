@@ -10,7 +10,7 @@ uv sync
 uv run simulate.py --priority new-first --days 90 --no-log
 ```
 
-Simulation logs now store metadata + totals by default; add `--log-reviews` to include per-event logs (can be large).
+Simulation logs now store metadata + totals by default; add `--log-reviews` to include per-event logs (can be large). Note: the vectorized engine is now the default and does not emit per-event logs, so use `--engine event` if you need per-event records.
 
 For faster GPU runs, use the vectorized engine:
 
