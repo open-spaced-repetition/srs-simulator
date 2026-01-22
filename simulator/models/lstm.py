@@ -3,13 +3,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from simulator.core import Card, MemoryModel
 
 import torch
 from torch import Tensor, nn
-from torch.nn.utils.rnn import PackedSequence, pack_padded_sequence, pad_packed_sequence
 
 EPS = 1e-7
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -181,6 +180,9 @@ class _SequenceLSTM(nn.Module):
             nn.Linear(self.n_hidden, self.n_hidden),
             nn.SiLU(),
         )
+        self.n_rnns = sum(
+            1 for module in self.process.modules() if isinstance(module, _RNNWrapper)
+        )
 
         for name, param in self.named_parameters():
             if "weight_ih" in name:
@@ -215,28 +217,31 @@ class _SequenceLSTM(nn.Module):
         ).float()
         return torch.cat([x_main, x_rating], dim=-1)
 
-    def _pack_like(self, packed: PackedSequence, data: Tensor) -> PackedSequence:
-        return PackedSequence(
-            data,
-            packed.batch_sizes,
-            packed.sorted_indices,
-            packed.unsorted_indices,
-        )
-
-    def _apply_packed(
-        self, module: nn.Module, packed: PackedSequence
-    ) -> PackedSequence:
+    def _apply_step(
+        self,
+        module: nn.Module,
+        inputs: Tensor,
+        states: list[tuple[Tensor, Tensor]],
+        state_idx: int,
+    ) -> tuple[Tensor, int]:
         if isinstance(module, nn.Sequential):
-            out = packed
+            out = inputs
             for sub in module:
-                out = self._apply_packed(sub, out)
-            return out
+                out, state_idx = self._apply_step(sub, out, states, state_idx)
+            return out, state_idx
         if isinstance(module, _ResBlock):
-            inner = self._apply_packed(module.module, packed)
-            return self._pack_like(packed, packed.data + inner.data)
+            inner, state_idx = self._apply_step(
+                module.module, inputs, states, state_idx
+            )
+            return inner + inputs, state_idx
         if isinstance(module, _RNNWrapper):
-            return module(packed)
-        return self._pack_like(packed, module(packed.data))
+            h, c = states[state_idx]
+            out_seq, (h_new, c_new) = module.module(
+                inputs.unsqueeze(0), (h.unsqueeze(0), c.unsqueeze(0))
+            )
+            states[state_idx] = (h_new.squeeze(0), c_new.squeeze(0))
+            return out_seq.squeeze(0), state_idx + 1
+        return module(inputs), state_idx
 
     def forward(self, x_lni: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         self.forward_calls += 1
@@ -248,22 +253,30 @@ class _SequenceLSTM(nn.Module):
         d_lnh = torch.exp(torch.clamp(self.d_fc(x_lnh), min=-25, max=25))
         return w_lnh, s_lnh, d_lnh
 
-    def forward_packed_last(
-        self, x_lni: PackedSequence, lengths: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    def forward_step(
+        self, x_lni: Tensor, state: tuple[Tensor, Tensor]
+    ) -> tuple[Tensor, Tensor, Tensor, tuple[Tensor, Tensor]]:
         self.forward_calls += 1
-        x = self._build_features(x_lni.data)
-        packed = self._pack_like(x_lni, x)
-        packed_hidden = self._apply_packed(self.process, packed)
-        hidden_padded, _ = pad_packed_sequence(packed_hidden)
-        lengths_device = lengths.to(hidden_padded.device)
-        idx = torch.clamp(lengths_device - 1, min=0)
-        batch_idx = torch.arange(lengths_device.shape[0], device=hidden_padded.device)
-        hidden_last = hidden_padded[idx, batch_idx]
-        w_last = torch.nn.functional.softmax(self.w_fc(hidden_last), dim=-1)
-        s_last = torch.exp(torch.clamp(self.s_fc(hidden_last), min=-25, max=25))
-        d_last = torch.exp(torch.clamp(self.d_fc(hidden_last), min=-25, max=25))
-        return w_last, s_last, d_last
+        h, c = state
+        if h.ndim == 2:
+            h = h.unsqueeze(0)
+        if c.ndim == 2:
+            c = c.unsqueeze(0)
+        if h.shape[0] != self.n_rnns:
+            raise ValueError(f"Expected {self.n_rnns} LSTM states, got {h.shape[0]}.")
+        states = [(h[i], c[i]) for i in range(self.n_rnns)]
+        x = self._build_features(x_lni)
+        x_lnh, final_idx = self._apply_step(self.process, x, states, 0)
+        if final_idx != self.n_rnns:
+            raise RuntimeError(
+                f"Consumed {final_idx} LSTM states, expected {self.n_rnns}."
+            )
+        w_last = torch.nn.functional.softmax(self.w_fc(x_lnh), dim=-1)
+        s_last = torch.exp(torch.clamp(self.s_fc(x_lnh), min=-25, max=25))
+        d_last = torch.exp(torch.clamp(self.d_fc(x_lnh), min=-25, max=25))
+        new_h = torch.stack([pair[0] for pair in states], dim=0)
+        new_c = torch.stack([pair[1] for pair in states], dim=0)
+        return w_last, s_last, d_last, (new_h, new_c)
 
 
 class LSTMModel(MemoryModel):
@@ -354,8 +367,8 @@ class LSTMModel(MemoryModel):
         self.network.load_state_dict(cleaned)  # type: ignore[arg-type]
 
     def init_card(self, card: Card, rating: int) -> None:
-        card.memory_state = {"events": []}
-        self._append_event(card, float(0.0), rating)
+        card.memory_state = {}
+        self._update_state(card, float(0.0), rating)
 
     def reset_forward_calls(self) -> None:
         self.network.forward_calls = 0
@@ -373,51 +386,62 @@ class LSTMModel(MemoryModel):
         return self._forgetting_curve(elapsed_scaled, curves)
 
     def update_card(self, card: Card, rating: int, elapsed: float) -> None:
-        if card.memory_state is None:
-            card.memory_state = {"events": []}
-        self._append_event(card, float(max(elapsed, 0.0)), rating)
-
-    def _append_event(self, card: Card, elapsed: float, rating: int) -> None:
-        state = self._ensure_state(card)
-        events: list[tuple[float, int]] = state.setdefault("events", [])
-        events.append((elapsed, int(rating)))
-        if len(events) > self.max_events:
-            del events[: len(events) - self.max_events]
-        state["curves"] = self._compute_curves(events)
+        self._update_state(card, float(max(elapsed, 0.0)), rating)
 
     def _ensure_state(self, card: Card) -> dict[str, Any]:
         if not isinstance(card.memory_state, dict):
-            card.memory_state = {"events": []}
+            card.memory_state = {}
         return card.memory_state
 
-    def _build_sequence(self, events: Iterable[tuple[float, int]]) -> Tensor | None:
-        rows: list[list[float]] = []
-        for elapsed, rating in events:
-            delay = max(elapsed, 0.0) * self.interval_scale
-            features = [delay]
-            if self.use_duration_feature:
-                features.append(self.default_duration_ms)
-            features.append(float(max(1, min(4, rating))))
-            rows.append(features)
-        if not rows:
-            return None
-        tensor = torch.as_tensor(rows, dtype=self.dtype, device=self.device)
-        tensor = tensor.unsqueeze(1)  # sequence, batch, features
-        return tensor
+    def _init_lstm_state(self) -> tuple[Tensor, Tensor]:
+        h = torch.zeros(
+            (self.network.n_rnns, self.network.n_hidden),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        c = torch.zeros_like(h)
+        return h, c
 
-    def _compute_curves(
-        self, events: Sequence[tuple[float, int]]
-    ) -> dict[str, list[float]]:
-        sequence = self._build_sequence(events)
-        if sequence is None:
-            return {}
+    def _ensure_lstm_state(self, state: dict[str, Any]) -> tuple[Tensor, Tensor]:
+        h = state.get("lstm_h")
+        c = state.get("lstm_c")
+        if not isinstance(h, torch.Tensor) or not isinstance(c, torch.Tensor):
+            h, c = self._init_lstm_state()
+        if h.shape != c.shape or h.ndim != 2:
+            h, c = self._init_lstm_state()
+        if h.shape[0] != self.network.n_rnns or h.shape[1] != self.network.n_hidden:
+            h, c = self._init_lstm_state()
+        if h.device != self.device or h.dtype != self.dtype:
+            h = h.to(device=self.device, dtype=self.dtype)
+            c = c.to(device=self.device, dtype=self.dtype)
+        state["lstm_h"] = h
+        state["lstm_c"] = c
+        return h, c
+
+    def _build_step_tensor(self, elapsed: float, rating: int) -> Tensor:
+        delay = max(float(elapsed), 0.0) * self.interval_scale
+        rating_clamped = max(1, min(4, int(rating)))
+        features: list[float] = [delay]
+        if self.use_duration_feature:
+            features.append(self.default_duration_ms)
+        features.append(float(rating_clamped))
+        return torch.as_tensor([features], dtype=self.dtype, device=self.device)
+
+    def _update_state(self, card: Card, elapsed: float, rating: int) -> None:
+        state = self._ensure_state(card)
+        h, c = self._ensure_lstm_state(state)
+        step = self._build_step_tensor(elapsed, rating)
         with torch.no_grad():
-            w_lnh, s_lnh, d_lnh = self.network(sequence)
-        idx = sequence.size(0) - 1
-        w = w_lnh[idx, 0].detach().cpu().tolist()
-        s = s_lnh[idx, 0].detach().cpu().tolist()
-        d = d_lnh[idx, 0].detach().cpu().tolist()
-        return {"w": w, "s": s, "d": d}
+            w_last, s_last, d_last, (h_new, c_new) = self.network.forward_step(
+                step, (h.unsqueeze(1), c.unsqueeze(1))
+            )
+        state["lstm_h"] = h_new.squeeze(1).detach()
+        state["lstm_c"] = c_new.squeeze(1).detach()
+        state["curves"] = {
+            "w": w_last[0].detach().cpu().tolist(),
+            "s": s_last[0].detach().cpu().tolist(),
+            "d": d_last[0].detach().cpu().tolist(),
+        }
 
     def _forgetting_curve(
         self, elapsed_scaled: float, curves: dict[str, list[float]]
@@ -436,9 +460,8 @@ class LSTMModel(MemoryModel):
 
 @dataclass
 class LSTMVectorizedEnvState:
-    event_delays: Tensor
-    event_ratings: Tensor
-    event_counts: Tensor
+    lstm_h: Tensor
+    lstm_c: Tensor
     mem_w: Tensor
     mem_s: Tensor
     mem_d: Tensor
@@ -466,7 +489,8 @@ class LSTMVectorizedEnvOps:
         self.dtype = env_dtype
         self.environment = environment
         self.batch_size = max(1, int(lstm_batch_size))
-        self.max_events = int(environment.max_events)
+        self.n_rnns = int(environment.network.n_rnns)
+        self.n_hidden = int(environment.network.n_hidden)
         self.n_curves = int(environment.network.n_curves)
         self.interval_scale = float(environment.interval_scale)
         self.use_duration_feature = environment.use_duration_feature
@@ -478,13 +502,12 @@ class LSTMVectorizedEnvOps:
             )
 
     def init_state(self, deck_size: int) -> LSTMVectorizedEnvState:
-        event_delays = torch.zeros(
-            (deck_size, self.max_events), dtype=self.dtype, device=self.device
+        lstm_h = torch.zeros(
+            (self.n_rnns, deck_size, self.n_hidden),
+            dtype=self.dtype,
+            device=self.device,
         )
-        event_ratings = torch.zeros(
-            (deck_size, self.max_events), dtype=torch.int64, device=self.device
-        )
-        event_counts = torch.zeros(deck_size, dtype=torch.int64, device=self.device)
+        lstm_c = torch.zeros_like(lstm_h)
         mem_w = torch.zeros(
             (deck_size, self.n_curves), dtype=self.dtype, device=self.device
         )
@@ -496,9 +519,8 @@ class LSTMVectorizedEnvOps:
         )
         has_curves = torch.zeros(deck_size, dtype=torch.bool, device=self.device)
         return LSTMVectorizedEnvState(
-            event_delays=event_delays,
-            event_ratings=event_ratings,
-            event_counts=event_counts,
+            lstm_h=lstm_h,
+            lstm_c=lstm_c,
             mem_w=mem_w,
             mem_s=mem_s,
             mem_d=mem_d,
@@ -553,62 +575,29 @@ class LSTMVectorizedEnvOps:
         delays: Tensor,
         ratings: Tensor,
     ) -> None:
-        counts = state.event_counts[idx]
-        full_mask = counts >= self.max_events
-        if full_mask.any():
-            full_idx = idx[full_mask]
-            state.event_delays[full_idx, :-1] = state.event_delays[full_idx, 1:]
-            state.event_ratings[full_idx, :-1] = state.event_ratings[full_idx, 1:]
-            state.event_delays[full_idx, -1] = delays[full_mask]
-            state.event_ratings[full_idx, -1] = ratings[full_mask]
-            state.event_counts[full_idx] = self.max_events
-        partial_mask = ~full_mask
-        if partial_mask.any():
-            part_idx = idx[partial_mask]
-            positions = counts[partial_mask]
-            state.event_delays[part_idx, positions] = delays[partial_mask]
-            state.event_ratings[part_idx, positions] = ratings[partial_mask]
-            state.event_counts[part_idx] = positions + 1
-
-        lengths = state.event_counts[idx]
-        if lengths.numel() == 0:
+        if idx.numel() == 0:
             return
-        max_len = int(lengths.max().item())
-        if max_len <= 0:
-            return
-        order = torch.argsort(lengths, descending=True)
-        idx_sorted = idx[order]
-        lengths_sorted = lengths[order]
+        delay_scaled = torch.clamp(delays, min=0.0) * self.interval_scale
+        rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
+        delay_feature = delay_scaled.unsqueeze(-1)
+        rating_feature = rating_clamped.unsqueeze(-1)
+        if self.use_duration_feature:
+            duration_feature = self.duration_value.expand_as(delay_feature)
+            step = torch.cat([delay_feature, duration_feature, rating_feature], dim=-1)
+        else:
+            step = torch.cat([delay_feature, rating_feature], dim=-1)
 
-        for start in range(0, idx_sorted.numel(), self.batch_size):
-            end = min(start + self.batch_size, idx_sorted.numel())
-            batch_idx = idx_sorted[start:end]
-            batch_lengths = lengths_sorted[start:end]
-            if batch_lengths.numel() == 0:
-                continue
-            batch_max = int(batch_lengths.max().item())
-            if batch_max <= 0:
-                continue
-            delays_group = state.event_delays[batch_idx, :batch_max]
-            ratings_group = state.event_ratings[batch_idx, :batch_max]
-            delay_scaled = torch.clamp(delays_group, min=0.0) * self.interval_scale
-            seq_delay = delay_scaled.transpose(0, 1).unsqueeze(-1)
-            rating_seq = ratings_group.transpose(0, 1).unsqueeze(-1).to(self.dtype)
-            if self.use_duration_feature:
-                duration_seq = self.duration_value.expand(seq_delay.shape)
-                sequence = torch.cat([seq_delay, duration_seq, rating_seq], dim=-1)
-            else:
-                sequence = torch.cat([seq_delay, rating_seq], dim=-1)
-            packed = pack_padded_sequence(
-                sequence, batch_lengths.to("cpu"), enforce_sorted=True
-            )
-            w_last, s_last, d_last = self.environment.network.forward_packed_last(
-                packed, batch_lengths
-            )
-            state.mem_w[batch_idx] = w_last
-            state.mem_s[batch_idx] = s_last
-            state.mem_d[batch_idx] = d_last
-            state.has_curves[batch_idx] = True
+        h = state.lstm_h[:, idx, :]
+        c = state.lstm_c[:, idx, :]
+        w_last, s_last, d_last, (h_new, c_new) = self.environment.network.forward_step(
+            step, (h, c)
+        )
+        state.lstm_h[:, idx, :] = h_new
+        state.lstm_c[:, idx, :] = c_new
+        state.mem_w[idx] = w_last
+        state.mem_s[idx] = s_last
+        state.mem_d[idx] = d_last
+        state.has_curves[idx] = True
 
     @staticmethod
     def _lstm_retention(
