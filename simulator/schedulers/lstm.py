@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Sequence
 
@@ -77,28 +78,103 @@ class LSTMScheduler(Scheduler):
     def _target_interval(self, curves: dict[str, list[float]], view: CardView) -> float:
         if not curves:
             return self.min_interval
-
-        def retention(days: float) -> float:
-            return self.model.predict_retention_from_curves(curves, days)
-
         target = self.desired_retention
         low = self.min_interval
         high = max(low, float(view.interval or low))
 
-        if retention(low) <= target:
+        r_low = self.model.predict_retention_from_curves(curves, low)
+        if r_low <= target:
             return max(low, self.min_interval)
 
-        while high < self.max_interval and retention(high) > target:
+        t0 = self._effective_initial_guess(curves, target)
+        if t0 is not None and t0 > high:
+            high = min(self.max_interval, t0)
+
+        while (
+            high < self.max_interval
+            and self.model.predict_retention_from_curves(curves, high) > target
+        ):
             high = min(self.max_interval, high * 2.0)
 
-        for _ in range(self.search_steps):
+        t = 0.5 * (low + high)
+        if t0 is not None and math.isfinite(t0):
+            t = min(high, max(low, t0))
+        tol = 1e-5
+        newton_steps = min(self.search_steps, 6)
+        remaining_steps = self.search_steps - newton_steps
+        for _ in range(newton_steps):
+            pred, deriv = self._retention_and_derivative(curves, t)
+            diff = pred - target
+            if abs(diff) < tol:
+                remaining_steps = 0
+                break
+            if diff > 0.0:
+                low = t
+            else:
+                high = t
+            if deriv == 0.0:
+                t_new = 0.5 * (low + high)
+            else:
+                t_new = t - diff / deriv
+            if not math.isfinite(t_new) or t_new < low or t_new > high:
+                t = 0.5 * (low + high)
+            else:
+                t = t_new
+        for _ in range(remaining_steps):
             mid = 0.5 * (low + high)
-            pred = retention(mid)
+            pred = self.model.predict_retention_from_curves(curves, mid)
             if pred > target:
                 low = mid
             else:
                 high = mid
-        return max(self.min_interval, min(high, self.max_interval))
+        if remaining_steps > 0:
+            t = high
+        return max(self.min_interval, min(t, self.max_interval))
+
+    def _retention_and_derivative(
+        self, curves: dict[str, list[float]], days: float
+    ) -> tuple[float, float]:
+        weights = curves.get("w") or []
+        stabilities = curves.get("s") or []
+        decays = curves.get("d") or []
+        if not (weights and stabilities and decays):
+            return self.model.default_retention, 0.0
+        total = 0.0
+        deriv = 0.0
+        for w, s, d in zip(weights, stabilities, decays):
+            denom = s + EPS
+            x = 1.0 + days / denom
+            x_pow = x ** (-d)
+            total += w * x_pow
+            deriv += w * (-d / denom) * x_pow / x
+        total = max(0.0, min(1.0, total))
+        return (1.0 - EPS) * total, (1.0 - EPS) * deriv
+
+    def _effective_initial_guess(
+        self, curves: dict[str, list[float]], target: float
+    ) -> float | None:
+        weights = curves.get("w") or []
+        stabilities = curves.get("s") or []
+        decays = curves.get("d") or []
+        if not (weights and stabilities and decays):
+            return None
+        a = 0.0
+        b = 0.0
+        for w, s, d in zip(weights, stabilities, decays):
+            denom = s + EPS
+            a += w * d / denom
+            b += w * d * (d + 1.0) / (denom * denom)
+        if a <= 0.0:
+            return None
+        ratio = b / (a * a)
+        ratio = max(ratio, 1.0 + 1e-6)
+        d_eff = 1.0 / (ratio - 1.0)
+        s_eff = d_eff / a
+        base = target ** (-1.0 / d_eff) - 1.0
+        t0 = s_eff * base
+        if not math.isfinite(t0):
+            return None
+        return max(self.min_interval, min(self.max_interval, t0))
 
     def review_priority(self, card_view: CardView, day: float) -> Sequence[float]:
         state = card_view.scheduler_state
@@ -280,10 +356,12 @@ class LSTMVectorizedSchedulerOps:
         low = self._torch.full(
             (idx.numel(),), self.min_interval, dtype=self.dtype, device=self.device
         )
+        t0 = self._effective_initial_guess(weights, stabilities, decays)
         if prev_interval is None:
             high = low.clone()
         else:
             high = self._torch.maximum(low, prev_interval.to(self.dtype))
+        high = self._torch.maximum(high, t0)
 
         pred_low = self._retention_at(low, weights, stabilities, decays)
         high = self._torch.where(pred_low <= self._target, low, high)
@@ -300,13 +378,40 @@ class LSTMVectorizedSchedulerOps:
                 if not (high < self._max_interval).any():
                     break
 
-        for _ in range(self.search_steps):
+        t = self._torch.clamp(t0, min=low, max=high)
+        tol = 1e-5
+        newton_steps = min(self.search_steps, 6)
+        remaining_steps = self.search_steps - newton_steps
+        for _ in range(newton_steps):
+            pred, deriv = self._retention_and_derivative(
+                t, weights, stabilities, decays
+            )
+            diff = pred - self._target
+            if self._torch.max(self._torch.abs(diff)).item() < tol:
+                remaining_steps = 0
+                break
+            go_low = diff > 0.0
+            low = self._torch.where(go_low, t, low)
+            high = self._torch.where(go_low, high, t)
+            mid = 0.5 * (low + high)
+            step = diff / deriv
+            t_new = t - step
+            invalid = (
+                (deriv == 0.0)
+                | ~self._torch.isfinite(t_new)
+                | (t_new < low)
+                | (t_new > high)
+            )
+            t = self._torch.where(invalid, mid, t_new)
+        for _ in range(remaining_steps):
             mid = 0.5 * (low + high)
             pred_mid = self._retention_at(mid, weights, stabilities, decays)
             go_low = pred_mid > self._target
             low = self._torch.where(go_low, mid, low)
             high = self._torch.where(go_low, high, mid)
-        return self._torch.clamp(high, min=self.min_interval, max=self.max_interval)
+        if remaining_steps > 0:
+            t = high
+        return self._torch.clamp(t, min=self.min_interval, max=self.max_interval)
 
     def _retention_at(
         self,
@@ -317,6 +422,43 @@ class LSTMVectorizedSchedulerOps:
     ) -> "torch.Tensor":
         elapsed_scaled = self._torch.clamp(days, min=0.0) * self.interval_scale
         return self._lstm_retention(elapsed_scaled, weights, stabilities, decays)
+
+    def _retention_and_derivative(
+        self,
+        days: "torch.Tensor",
+        weights: "torch.Tensor",
+        stabilities: "torch.Tensor",
+        decays: "torch.Tensor",
+    ) -> tuple["torch.Tensor", "torch.Tensor"]:
+        elapsed_scaled = self._torch.clamp(days, min=0.0) * self.interval_scale
+        denom = stabilities + EPS
+        x = 1.0 + elapsed_scaled.unsqueeze(-1) / denom
+        x_pow = x ** (-decays)
+        total = self._torch.sum(weights * x_pow, dim=-1)
+        deriv = (
+            self._torch.sum(weights * (-decays / denom) * x_pow / x, dim=-1)
+            * self.interval_scale
+        )
+        total = self._torch.clamp(total, min=0.0, max=1.0)
+        return (1.0 - EPS) * total, (1.0 - EPS) * deriv
+
+    def _effective_initial_guess(
+        self,
+        weights: "torch.Tensor",
+        stabilities: "torch.Tensor",
+        decays: "torch.Tensor",
+    ) -> "torch.Tensor":
+        denom = stabilities + EPS
+        a = self._torch.sum(weights * decays / denom, dim=-1)
+        b = self._torch.sum(weights * decays * (decays + 1.0) / (denom * denom), dim=-1)
+        a = self._torch.clamp(a, min=EPS)
+        ratio = b / (a * a)
+        ratio = self._torch.clamp(ratio, min=1.0 + 1e-6)
+        d_eff = 1.0 / (ratio - 1.0)
+        s_eff = d_eff / a
+        base = self._torch.pow(self._target, -1.0 / d_eff) - 1.0
+        t0 = s_eff * base
+        return self._torch.clamp(t0, min=self.min_interval, max=self.max_interval)
 
     @staticmethod
     def _lstm_retention(
