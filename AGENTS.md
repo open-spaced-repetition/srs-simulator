@@ -32,5 +32,32 @@ Additional types are not mandated by the Conventional Commits specification, and
 ## Project Structure & Module Organization
 Core simulator types and event plumbing live in `simulator/core.py`, while `simulator/behavior.py`, `simulator/cost.py`, `simulator/models/`, and `simulator/schedulers/` host pluggable user, workload, environment, and scheduler implementations. The CLI entry point is `simulate.py` for Matplotlib dashboards that write JSON logs into `logs/`.
 
+## Architecture Style & Responsibilities
+Overall style: layered, plug-in architecture with explicit separation of concerns and dual simulation engines (event-driven + vectorized).
+
+### Responsibilities (by area)
+- **Core abstractions & event engine** (`simulator/core.py`):
+  - Defines `Card`, `CardView`, `SimulationStats`, and abstract interfaces (`MemoryModel`, `Scheduler`, `BehaviorModel`, `CostModel`).
+  - Implements the event-driven `SimulationEngine` and `simulate`.
+- **Environment / Memory models** (`simulator/models/`):
+  - FSRS3/FSRS6/LSTM/HLR/DASH models implement `MemoryModel`.
+  - Each model may host its own vectorized env ops (e.g., `FSRS6VectorizedEnvOps`, `LSTMVectorizedEnvOps`).
+- **Schedulers** (`simulator/schedulers/`):
+  - Scheduler implementations (FSRS3/FSRS6/HLR/DASH/Fixed/AnkiSM2/Memrise/SSPMMC).
+  - Each scheduler may host vectorized scheduler ops (e.g., `FSRS6VectorizedSchedulerOps`).
+- **Vectorized engine package** (`simulator/vectorized/`):
+  - `engine.py`: unified vectorized loop (`simulate`).
+  - `types.py`: Protocols + `VectorizedConfig`.
+  - `registry.py`: resolves env/scheduler ops for a given instance.
+  - `math.py`: shared vectorized math utilities (FSRS/SSPMMC helpers).
+- **CLI + experiments**:
+  - `simulate.py` is the CLI entry point; `experiments/` hosts sweep and plotting scripts.
+
+### Architecture Notes / Guardrails
+- **Dual engines**: event-driven engine is the reference; vectorized engine trades per-event logging for speed.
+- **Explicit separation**: environments update memory state; schedulers update scheduling state; behavior/cost are independent.
+- **Vectorized integration**: new models/schedulers should provide corresponding vectorized ops to hook into the shared vectorized engine. Avoid hardcoding logic in `simulator/vectorized/engine.py`.
+- **Priority plumbing**: scheduler priority hints live in `Card.metadata["scheduler_priority"]` and are consumed by behavior priority rules (review-first/new-first).
+
 ## Security & Configuration Tips
 No secrets are needed; configuration is driven via CLI flags. Always pass explicit `--seed`/RNG seeds when sharing repro steps, keep large log dumps in `logs/` but out of git, and guard optional visualization dependencies with clear import errors. Document any new third-party packages in `README.md` to preserve the dependency-light promise.
