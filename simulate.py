@@ -20,6 +20,7 @@ from simulator.schedulers import (
     FSRS6Scheduler,
     HLRScheduler,
     DASHScheduler,
+    LSTMScheduler,
     FixedIntervalScheduler,
     AnkiSM2Scheduler,
     MemriseScheduler,
@@ -92,6 +93,11 @@ SCHEDULER_FACTORIES = {
     ),
     "dash": lambda args: DASHScheduler(
         weights=_resolve_benchmark_weights(args, "dash", expected_len=9),
+        desired_retention=args.desired_retention,
+    ),
+    "lstm": lambda args: LSTMScheduler(
+        user_id=args.user_id or 1,
+        benchmark_root=args.srs_benchmark_root,
         desired_retention=args.desired_retention,
     ),
     "fixed": lambda args: FixedIntervalScheduler(

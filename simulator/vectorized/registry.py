@@ -10,6 +10,7 @@ from simulator.models.lstm import LSTMVectorizedEnvOps
 from simulator.schedulers import (
     AnkiSM2Scheduler,
     DASHScheduler,
+    LSTMScheduler,
     FixedIntervalScheduler,
     FSRS3Scheduler,
     FSRS6Scheduler,
@@ -76,6 +77,11 @@ def resolve_scheduler_ops(
     if isinstance(scheduler, DASHScheduler):
         raise ValueError(
             "Vectorized engine does not support DASHScheduler; "
+            "use the event-driven engine instead."
+        )
+    if isinstance(scheduler, LSTMScheduler):
+        raise ValueError(
+            "Vectorized engine does not support LSTMScheduler; "
             "use the event-driven engine instead."
         )
     raise ValueError(
