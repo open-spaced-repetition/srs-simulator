@@ -208,7 +208,7 @@ class FSRS6VectorizedSchedulerOps:
             )
             - 1.0
         )
-        self._init_d = vmath.clamp(
+        self._mean_reversion_d = vmath.clamp(
             self._weights[4] - torch.exp(self._weights[5] * 3.0) + 1.0,
             self._bounds.d_min,
             self._bounds.d_max,
@@ -290,7 +290,7 @@ class FSRS6VectorizedSchedulerOps:
             self._weights,
             sched_d,
             rating,
-            self._init_d,
+            self._mean_reversion_d,
             self._bounds.d_min,
             self._bounds.d_max,
         )
