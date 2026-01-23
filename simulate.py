@@ -12,7 +12,12 @@ from matplotlib.lines import Line2D
 
 from simulator import simulate
 from simulator.behavior import StochasticBehavior
-from simulator.cost import StatefulCostModel
+from simulator.button_usage import (
+    DEFAULT_BUTTON_USAGE_PATH,
+    load_button_usage_config,
+    normalize_button_usage,
+)
+from simulator.cost import StatefulCostModel, StateRatingCosts
 from simulator.benchmark_loader import load_benchmark_weights, parse_result_overrides
 from simulator.models import FSRS3Model, FSRS6Model, LSTMModel
 from simulator.schedulers import (
@@ -218,6 +223,12 @@ def main() -> None:
         help="Path to the srs-benchmark repo (used for LSTM weights).",
     )
     parser.add_argument(
+        "--button-usage",
+        type=Path,
+        default=DEFAULT_BUTTON_USAGE_PATH,
+        help="Path to Anki button usage JSONL for per-user costs/probabilities.",
+    )
+    parser.add_argument(
         "--scheduler",
         default="fsrs6",
         help=(
@@ -267,6 +278,12 @@ def main() -> None:
     cost_limit = (
         args.cost_limit_minutes * 60.0 if args.cost_limit_minutes is not None else None
     )
+    button_usage = (
+        load_button_usage_config(args.button_usage, args.user_id or 1)
+        if args.button_usage is not None
+        else None
+    )
+    usage = normalize_button_usage(button_usage)
     behavior = StochasticBehavior(
         attendance_prob=1.0,
         lazy_good_bias=0.0,
@@ -274,8 +291,15 @@ def main() -> None:
         max_reviews_per_day=args.review_limit,
         max_cost_per_day=cost_limit,
         priority_fn=priority_fn,
+        first_rating_prob=usage["first_rating_prob"],
+        review_rating_prob=usage["review_rating_prob"],
     )
-    cost_model = StatefulCostModel()
+    cost_model = StatefulCostModel(
+        state_costs=StateRatingCosts(
+            learning=usage["learn_costs"],
+            review=usage["review_costs"],
+        )
+    )
     start_time = time.perf_counter()
     if args.engine == "vectorized":
         if args.log_reviews:
@@ -449,6 +473,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "scheduler": args.scheduler,
         "scheduler_spec": getattr(args, "scheduler_spec", args.scheduler),
         "user_id": args.user_id or 1,
+        "button_usage": str(args.button_usage) if args.button_usage else None,
         "desired_retention": desired_retention,
         "scheduler_priority": args.scheduler_priority,
         "sspmmc_policy": str(args.sspmmc_policy) if args.sspmmc_policy else None,
