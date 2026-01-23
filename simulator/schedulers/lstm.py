@@ -11,9 +11,7 @@ from simulator.models.lstm import EPS, LSTMModel
 
 @dataclass
 class LSTMSchedulerState:
-    weights: "torch.Tensor"
-    stabilities: "torch.Tensor"
-    decays: "torch.Tensor"
+    curves: dict[str, list[float]]
 
 
 class LSTMScheduler(Scheduler):
@@ -62,69 +60,39 @@ class LSTMScheduler(Scheduler):
 
     def init_card(self, card_view: CardView, rating: int, day: float):
         curves = self._curves_with_event(card_view, rating, elapsed=0.0)
-        if curves is None:
-            return self.min_interval, None
-        weights, stabilities, decays = curves
-        interval = self._target_interval(weights, stabilities, decays, card_view)
-        return interval, LSTMSchedulerState(
-            weights=weights, stabilities=stabilities, decays=decays
-        )
+        interval = self._target_interval(curves, card_view)
+        return interval, LSTMSchedulerState(curves=curves)
 
     def schedule(self, card_view: CardView, rating: int, elapsed: float, day: float):
         curves = self._curves_with_event(card_view, rating, elapsed)
-        if curves is None:
-            return self.min_interval, None
-        weights, stabilities, decays = curves
-        interval = self._target_interval(weights, stabilities, decays, card_view)
-        return interval, LSTMSchedulerState(
-            weights=weights, stabilities=stabilities, decays=decays
-        )
+        interval = self._target_interval(curves, card_view)
+        return interval, LSTMSchedulerState(curves=curves)
 
     def _curves_with_event(
         self, view: CardView, rating: int, elapsed: float
-    ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"] | None:
-        import torch
-
+    ) -> dict[str, list[float]]:
         events = [(log.elapsed, log.rating) for log in view.history]
         events.append((elapsed, int(rating)))
-        curves = self.model.curves_from_events(events)
-        if not curves:
-            return None
-        weights = torch.as_tensor(
-            curves.get("w", []), device=self.model.device, dtype=self.model.dtype
-        )
-        stabilities = torch.as_tensor(
-            curves.get("s", []), device=self.model.device, dtype=self.model.dtype
-        )
-        decays = torch.as_tensor(
-            curves.get("d", []), device=self.model.device, dtype=self.model.dtype
-        )
-        return weights, stabilities, decays
+        return self.model.curves_from_events(events)
 
-    def _target_interval(
-        self,
-        weights: "torch.Tensor",
-        stabilities: "torch.Tensor",
-        decays: "torch.Tensor",
-        view: CardView,
-    ) -> float:
-        if weights.numel() == 0:
+    def _target_interval(self, curves: dict[str, list[float]], view: CardView) -> float:
+        if not curves:
             return self.min_interval
         target = self.desired_retention
         low = self.min_interval
         high = max(low, float(view.interval or low))
 
-        r_low = self._retention(weights, stabilities, decays, low)
+        r_low = self.model.predict_retention_from_curves(curves, low)
         if r_low <= target:
             return max(low, self.min_interval)
 
-        t0 = self._effective_initial_guess(weights, stabilities, decays, target)
+        t0 = self._effective_initial_guess(curves, target)
         if t0 is not None and t0 > high:
             high = min(self.max_interval, t0)
 
         while (
             high < self.max_interval
-            and self._retention(weights, stabilities, decays, high) > target
+            and self.model.predict_retention_from_curves(curves, high) > target
         ):
             high = min(self.max_interval, high * 2.0)
 
@@ -135,9 +103,7 @@ class LSTMScheduler(Scheduler):
         newton_steps = min(self.search_steps, 6)
         remaining_steps = self.search_steps - newton_steps
         for _ in range(newton_steps):
-            pred, deriv = self._retention_and_derivative(
-                weights, stabilities, decays, t
-            )
+            pred, deriv = self._retention_and_derivative(curves, t)
             diff = pred - target
             if abs(diff) < tol:
                 remaining_steps = 0
@@ -156,7 +122,7 @@ class LSTMScheduler(Scheduler):
                 t = t_new
         for _ in range(remaining_steps):
             mid = 0.5 * (low + high)
-            pred = self._retention(weights, stabilities, decays, mid)
+            pred = self.model.predict_retention_from_curves(curves, mid)
             if pred > target:
                 low = mid
             else:
@@ -166,70 +132,55 @@ class LSTMScheduler(Scheduler):
         return max(self.min_interval, min(t, self.max_interval))
 
     def _retention_and_derivative(
-        self,
-        weights: "torch.Tensor",
-        stabilities: "torch.Tensor",
-        decays: "torch.Tensor",
-        days: float,
+        self, curves: dict[str, list[float]], days: float
     ) -> tuple[float, float]:
-        if weights.numel() == 0:
+        weights = curves.get("w") or []
+        stabilities = curves.get("s") or []
+        decays = curves.get("d") or []
+        if not (weights and stabilities and decays):
             return self.model.default_retention, 0.0
-        elapsed_scaled = max(0.0, float(days)) * self.model.interval_scale
-        denom = stabilities + EPS
-        x = 1.0 + elapsed_scaled / denom
-        x_pow = x ** (-decays)
-        total = (weights * x_pow).sum()
-        deriv = (weights * (-decays / denom) * x_pow / x).sum()
-        total = float(total.clamp(min=0.0, max=1.0).item())
-        deriv = float((deriv * self.model.interval_scale).item())
+        total = 0.0
+        deriv = 0.0
+        for w, s, d in zip(weights, stabilities, decays):
+            denom = s + EPS
+            x = 1.0 + days / denom
+            x_pow = x ** (-d)
+            total += w * x_pow
+            deriv += w * (-d / denom) * x_pow / x
+        total = max(0.0, min(1.0, total))
         return (1.0 - EPS) * total, (1.0 - EPS) * deriv
 
     def _effective_initial_guess(
-        self,
-        weights: "torch.Tensor",
-        stabilities: "torch.Tensor",
-        decays: "torch.Tensor",
-        target: float,
+        self, curves: dict[str, list[float]], target: float
     ) -> float | None:
-        if weights.numel() == 0:
+        weights = curves.get("w") or []
+        stabilities = curves.get("s") or []
+        decays = curves.get("d") or []
+        if not (weights and stabilities and decays):
             return None
-        denom = stabilities + EPS
-        a = (weights * decays / denom).sum()
-        b = (weights * decays * (decays + 1.0) / (denom * denom)).sum()
-        if a.item() <= 0.0:
+        a = 0.0
+        b = 0.0
+        for w, s, d in zip(weights, stabilities, decays):
+            denom = s + EPS
+            a += w * d / denom
+            b += w * d * (d + 1.0) / (denom * denom)
+        if a <= 0.0:
             return None
-        ratio = float((b / (a * a)).item())
+        ratio = b / (a * a)
         ratio = max(ratio, 1.0 + 1e-6)
         d_eff = 1.0 / (ratio - 1.0)
-        s_eff = d_eff / float(a.item())
+        s_eff = d_eff / a
         base = target ** (-1.0 / d_eff) - 1.0
         t0 = s_eff * base
         if not math.isfinite(t0):
             return None
         return max(self.min_interval, min(self.max_interval, t0))
 
-    def _retention(
-        self,
-        weights: "torch.Tensor",
-        stabilities: "torch.Tensor",
-        decays: "torch.Tensor",
-        days: float,
-    ) -> float:
-        if weights.numel() == 0:
-            return self.model.default_retention
-        elapsed_scaled = max(0.0, float(days)) * self.model.interval_scale
-        denom = stabilities + EPS
-        x = 1.0 + elapsed_scaled / denom
-        x_pow = x ** (-decays)
-        total = (weights * x_pow).sum()
-        total = float(total.clamp(min=0.0, max=1.0).item())
-        return (1.0 - EPS) * total
-
     def review_priority(self, card_view: CardView, day: float) -> Sequence[float]:
         state = card_view.scheduler_state
         if isinstance(state, LSTMSchedulerState):
             elapsed = max(0.0, float(day) - card_view.last_review)
-            r = self._retention(state.weights, state.stabilities, state.decays, elapsed)
+            r = self.model.predict_retention_from_curves(state.curves, elapsed)
             return (r, card_view.due, card_view.id)
         return super().review_priority(card_view, day)
 
