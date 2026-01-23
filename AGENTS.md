@@ -7,6 +7,7 @@ Project rules:
 3. Before each commit, run `uv run ruff format`.
 4. Commit messages must follow Conventional Commits.
 5. Do not push code to remotes.
+6. For performance-related changes, run a baseline performance test first and report results by engine (event vs vectorized) affected by the change.
 
 ## Conventional Commits
 
