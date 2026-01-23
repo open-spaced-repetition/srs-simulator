@@ -91,7 +91,7 @@ class FSRS6Scheduler(Scheduler):
         return interval, state
 
     def review_priority(self, card_view: CardView, day: float) -> Sequence[float]:
-        state = card_view.scheduler_state or {}
+        state: dict[str, float] = card_view.scheduler_state or {}
         s = state.get("s")
         d = state.get("d")
         if (
@@ -158,7 +158,7 @@ class FSRS3Scheduler(Scheduler):
         return interval, state
 
     def review_priority(self, card_view: CardView, day: float) -> Sequence[float]:
-        state = card_view.scheduler_state or {}
+        state: dict[str, float] = card_view.scheduler_state or {}
         s = state.get("s")
         if s is None:
             return super().review_priority(card_view, day)

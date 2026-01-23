@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import torch
 from pathlib import Path
 from typing import Sequence
 
@@ -324,7 +325,7 @@ class LSTMVectorizedSchedulerOps:
         rating_clamped = self._torch.clamp(ratings, min=1, max=4).to(self.dtype)
         delay_feature = delay_scaled.unsqueeze(-1)
         rating_feature = rating_clamped.unsqueeze(-1)
-        if self.use_duration_feature:
+        if self.use_duration_feature and self.duration_value is not None:
             duration_feature = self.duration_value.expand_as(delay_feature)
             step = self._torch.cat(
                 [delay_feature, duration_feature, rating_feature], dim=-1
