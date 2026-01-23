@@ -19,6 +19,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,6 +94,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to the srs-benchmark repo (used for LSTM weights).",
+    )
+    parser.add_argument(
+        "--button-usage",
+        type=Path,
+        default=DEFAULT_BUTTON_USAGE_PATH,
+        help="Path to Anki button usage JSONL for per-user costs/probabilities.",
     )
     parser.add_argument(
         "--priority",
@@ -277,6 +284,15 @@ def _run_once(
         if run_args.cost_limit_minutes is not None
         else None
     )
+    from simulator.button_usage import load_button_usage_config, normalize_button_usage
+    from simulator.cost import StateRatingCosts
+
+    button_usage = (
+        load_button_usage_config(run_args.button_usage, run_args.user_id or 1)
+        if run_args.button_usage is not None
+        else None
+    )
+    usage = normalize_button_usage(button_usage)
     behavior = behavior_cls(
         attendance_prob=1.0,
         lazy_good_bias=0.0,
@@ -284,8 +300,15 @@ def _run_once(
         max_reviews_per_day=run_args.review_limit,
         max_cost_per_day=cost_limit,
         priority_fn=priority_fn,
+        first_rating_prob=usage["first_rating_prob"],
+        review_rating_prob=usage["review_rating_prob"],
     )
-    cost_model = cost_model_cls()
+    cost_model = cost_model_cls(
+        state_costs=StateRatingCosts(
+            learning=usage["learn_costs"],
+            review=usage["review_costs"],
+        )
+    )
     try:
         if run_args.engine == "vectorized":
             stats = _run_vectorized(
