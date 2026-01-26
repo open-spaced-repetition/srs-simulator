@@ -122,7 +122,7 @@ def _anki_next_interval(
     )
 
     interval = torch.where(is_new_card, new_card_interval, existing_interval)
-    interval = interval.clamp(min=1.0)
+    interval = interval.clamp(min=1.0).round()
     return interval, new_ease
 
 
