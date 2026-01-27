@@ -410,24 +410,25 @@ def main() -> None:
         user_count=len(user_ids),
         show_labels=args.show_labels,
     )
-    equivalent_series, equivalent_user_count = _build_equivalent_fsrs6_series(
+    equivalent_distributions = _compute_equivalent_fsrs6_distributions(
         groups,
         envs,
+        common_user_ids,
     )
-    if equivalent_series:
-        equivalent_title = _format_title(
-            "Pareto frontier (Anki-SM-2 vs FSRS-6 equiv)",
-            sorted(equivalent_user_count),
+    for entry in equivalent_distributions:
+        env_label = entry["environment"]
+        distribution_title = _format_title(
+            "Anki-SM-2 vs FSRS-6 equiv distributions",
+            sorted(entry["user_ids"]),
         )
-        equivalent_path = plot_dir / "retention_sweep_equivalent_fsrs6.png"
-        _plot_compare_frontier(
-            equivalent_series,
-            equivalent_path,
-            title_base=equivalent_title,
-            user_count=len(equivalent_user_count),
-            show_labels=args.show_labels,
+        if len(envs) > 1:
+            distribution_title = f"{env_label} {distribution_title}"
+        suffix = f"_{env_label}" if len(envs) > 1 else ""
+        distribution_path = (
+            plot_dir / f"retention_sweep_equivalent_fsrs6_distributions{suffix}.png"
         )
-        print(f"Saved plot to {equivalent_path}")
+        _plot_equivalent_distributions(entry, distribution_path, distribution_title)
+        print(f"Saved plot to {distribution_path}")
     print(f"Wrote {results_path}")
     print(f"Saved plot to {output_path_mean}")
     print(f"Saved plot to {output_path_median}")
@@ -524,12 +525,12 @@ def _build_series(
     return series
 
 
-def _build_equivalent_fsrs6_series(
+def _compute_equivalent_fsrs6_distributions(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
-) -> Tuple[List[Dict[str, Any]], set[int]]:
-    series: List[Dict[str, Any]] = []
-    user_ids_used: set[int] = set()
+    common_user_ids: set[int],
+) -> List[Dict[str, Any]]:
+    distributions: List[Dict[str, Any]] = []
     for env in envs:
         anki_users: Dict[int, Dict[str, float]] = {}
         fsrs_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
@@ -549,73 +550,110 @@ def _build_equivalent_fsrs6_series(
                         (float(desired), payload["metrics"])
                     )
 
-        eligible_users = set(anki_users) & set(fsrs_users)
+        eligible_users = set(anki_users) & set(fsrs_users) & common_user_ids
         if not eligible_users:
             continue
 
-        anki_points: List[Dict[str, float]] = []
-        fsrs_points: List[Dict[str, float]] = []
-        fsrs_dr_values: List[float] = []
+        anki_per_minute: List[float] = []
+        fsrs_per_minute: List[float] = []
+        fsrs_dr_equiv: List[float] = []
+        used_users: set[int] = set()
         for user_id in sorted(eligible_users):
             anki_metrics = anki_users[user_id]
-            target_value = anki_metrics["memorized_average"]
             candidates = fsrs_users[user_id]
-            candidates.sort(
-                key=lambda item: (
-                    abs(item[1]["memorized_average"] - target_value),
-                    item[0],
-                )
-            )
-            chosen_dr, chosen_metrics = candidates[0]
-            anki_points.append(anki_metrics)
-            fsrs_points.append(chosen_metrics)
-            fsrs_dr_values.append(chosen_dr)
+            if len(candidates) < 2:
+                continue
+            target_value = anki_metrics["memorized_average"]
+            candidate_points = [
+                {
+                    "dr": dr,
+                    "x": payload["memorized_average"],
+                    "y": payload["memorized_per_minute"],
+                }
+                for dr, payload in candidates
+            ]
+            candidate_points.sort(key=lambda item: item["x"])
+            lower = None
+            upper = None
+            for point in candidate_points:
+                if point["x"] <= target_value:
+                    lower = point
+                if point["x"] >= target_value and upper is None:
+                    upper = point
+            if lower is None or upper is None:
+                candidate_points.sort(key=lambda item: abs(item["x"] - target_value))
+                lower = candidate_points[0]
+                upper = candidate_points[1]
+            x1 = lower["x"]
+            x2 = upper["x"]
+            if math.isclose(x1, x2):
+                dr_equiv = (lower["dr"] + upper["dr"]) / 2.0
+                y_equiv = (lower["y"] + upper["y"]) / 2.0
+            else:
+                t = (target_value - x1) / (x2 - x1)
+                t = max(0.0, min(1.0, t))
+                dr_equiv = lower["dr"] + t * (upper["dr"] - lower["dr"])
+                y_equiv = lower["y"] + t * (upper["y"] - lower["y"])
 
-        if not anki_points or not fsrs_points:
+            anki_per_minute.append(anki_metrics["memorized_per_minute"])
+            fsrs_per_minute.append(y_equiv)
+            fsrs_dr_equiv.append(dr_equiv)
+            used_users.add(user_id)
+
+        if not used_users:
             continue
 
-        user_ids_used.update(eligible_users)
-        mean_anki_average = mean(item["memorized_average"] for item in anki_points)
-        mean_anki_per_minute = mean(
-            item["memorized_per_minute"] for item in anki_points
-        )
-        mean_fsrs_average = mean(item["memorized_average"] for item in fsrs_points)
-        mean_fsrs_per_minute = mean(
-            item["memorized_per_minute"] for item in fsrs_points
-        )
-        mean_dr = mean(fsrs_dr_values)
-
-        env_label = f"env={env} " if len(envs) > 1 else ""
-        series.append(
+        distributions.append(
             {
-                "label": f"{env_label}Anki-SM-2",
-                "entries": [
-                    {
-                        "memorized_average": mean_anki_average,
-                        "memorized_per_minute": mean_anki_per_minute,
-                        "title": "Anki-SM-2",
-                    }
-                ],
-                "scheduler": "anki_sm2",
                 "environment": env,
-            }
-        )
-        series.append(
-            {
-                "label": f"{env_label}FSRS-6 equiv (DR≈{format_float(mean_dr * 100)}%)",
-                "entries": [
-                    {
-                        "memorized_average": mean_fsrs_average,
-                        "memorized_per_minute": mean_fsrs_per_minute,
-                        "title": f"FSRS-6 DR≈{format_float(mean_dr * 100)}%",
-                    }
-                ],
-                "scheduler": "fsrs6",
-                "environment": env,
+                "anki_per_minute": anki_per_minute,
+                "fsrs_per_minute": fsrs_per_minute,
+                "fsrs_dr_equiv": fsrs_dr_equiv,
+                "user_ids": used_users,
             }
         )
 
-    return series, user_ids_used
+    return distributions
+
+
+def _plot_equivalent_distributions(
+    entry: Dict[str, Any],
+    output_path: Path,
+    title_base: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    anki_per_minute = entry["anki_per_minute"]
+    fsrs_per_minute = entry["fsrs_per_minute"]
+    fsrs_dr_equiv = entry["fsrs_dr_equiv"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
+    ax_left, ax_right = axes
+
+    ax_left.boxplot(
+        [anki_per_minute, fsrs_per_minute],
+        widths=0.5,
+        patch_artist=True,
+        showfliers=True,
+        boxprops={"facecolor": "#d9d9d9", "edgecolor": "black"},
+        medianprops={"color": "black"},
+    )
+    ax_left.set_xticks([1, 2])
+    ax_left.set_xticklabels(["Anki-SM-2", "FSRS-6 equiv"])
+    ax_left.set_ylabel("Memorized cards/min (average)")
+    ax_left.grid(True, axis="y", ls="--", alpha=0.6)
+
+    dr_percent = [value * 100 for value in fsrs_dr_equiv]
+    bins = min(15, max(5, len(dr_percent) // 3))
+    ax_right.hist(dr_percent, bins=bins, color="#1f77b4", alpha=0.8)
+    ax_right.set_xlabel("Equivalent FSRS-6 DR (%)")
+    ax_right.set_ylabel("User count")
+    ax_right.grid(True, axis="y", ls="--", alpha=0.6)
+
+    fig.suptitle(title_base, fontsize=16)
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
 
 
 def _plot_compare_frontier(
