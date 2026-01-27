@@ -6,7 +6,7 @@ import math
 import re
 import sys
 from pathlib import Path
-from statistics import mean
+from statistics import mean, median
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,8 +24,8 @@ from simulator.scheduler_spec import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Aggregate retention_sweep logs across users and plot a Pareto-style "
-            "frontier (mean across users)."
+            "Aggregate retention_sweep logs across users and plot Pareto-style "
+            "frontiers (mean + median across users)."
         ),
     )
     parser.add_argument(
@@ -204,7 +204,6 @@ def main() -> None:
 
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]] = {}
     duplicate_count = 0
-    all_user_ids: set[int] = set()
 
     for path in _iter_log_paths(log_root):
         try:
@@ -262,8 +261,6 @@ def main() -> None:
             user_id = _infer_user_id_from_path(path)
         user_key = user_id if user_id is not None else f"unknown::{path}"
         mtime = path.stat().st_mtime
-        if user_id is not None:
-            all_user_ids.add(user_id)
 
         key = (environment, scheduler, desired, fixed_interval)
         group = groups.setdefault(
@@ -289,6 +286,27 @@ def main() -> None:
             "mtime": mtime,
         }
 
+    common_user_ids: Optional[set[int]] = None
+    groups_with_users = 0
+    for group in groups.values():
+        group_user_ids = {
+            user_key for user_key in group["users"].keys() if isinstance(user_key, int)
+        }
+        if not group_user_ids:
+            continue
+        if common_user_ids is None:
+            common_user_ids = set(group_user_ids)
+        else:
+            common_user_ids &= group_user_ids
+        groups_with_users += 1
+
+    if common_user_ids is None:
+        raise SystemExit("No user ids found across logs; cannot compute intersections.")
+    if not common_user_ids:
+        raise SystemExit(
+            "No overlapping user ids across configs; intersection is empty."
+        )
+
     results: List[Dict[str, Any]] = []
     for key, group in sorted(
         groups.items(),
@@ -299,7 +317,11 @@ def main() -> None:
             item[0][3] or -1,
         ),
     ):
-        users = [item["metrics"] for item in group["users"].values()]
+        users = [
+            payload["metrics"]
+            for user_key, payload in group["users"].items()
+            if isinstance(user_key, int) and user_key in common_user_ids
+        ]
         if not users:
             continue
         scheduler = group["scheduler"]
@@ -311,17 +333,25 @@ def main() -> None:
             title = f"DR={format_float(float(desired) * 100)}%"
         else:
             title = _format_scheduler_title(scheduler)
+        memorized_average_values = [item["memorized_average"] for item in users]
+        memorized_per_minute_values = [item["memorized_per_minute"] for item in users]
+        memorized_average_mean = mean(memorized_average_values)
+        memorized_per_minute_mean = mean(memorized_per_minute_values)
+        memorized_average_median = median(memorized_average_values)
+        memorized_per_minute_median = median(memorized_per_minute_values)
         results.append(
             {
                 "environment": group["environment"],
                 "scheduler": group["scheduler"],
                 "desired_retention": group["desired_retention"],
                 "fixed_interval": group["fixed_interval"],
-                "user_count": len(users),
-                "memorized_average": mean(item["memorized_average"] for item in users),
-                "memorized_per_minute": mean(
-                    item["memorized_per_minute"] for item in users
-                ),
+                "user_count": len(common_user_ids),
+                "memorized_average": memorized_average_mean,
+                "memorized_per_minute": memorized_per_minute_mean,
+                "memorized_average_mean": memorized_average_mean,
+                "memorized_per_minute_mean": memorized_per_minute_mean,
+                "memorized_average_median": memorized_average_median,
+                "memorized_per_minute_median": memorized_per_minute_median,
                 "title": title,
             }
         )
@@ -332,23 +362,84 @@ def main() -> None:
 
     if duplicate_count:
         print(f"Note: skipped {duplicate_count} duplicate logs (kept newest per user).")
+    if groups_with_users:
+        print(
+            "Note: using intersection of users across configs: "
+            f"{len(common_user_ids)} users."
+        )
 
     if args.no_plot:
         print(f"Wrote {results_path}")
         return
 
     plot_dir.mkdir(parents=True, exist_ok=True)
+    series_mean = _build_series(
+        results,
+        envs,
+        dr_schedulers,
+        run_dr,
+        run_fixed,
+        value_suffix="mean",
+    )
+    series_median = _build_series(
+        results,
+        envs,
+        dr_schedulers,
+        run_dr,
+        run_fixed,
+        value_suffix="median",
+    )
+
+    _setup_plot_style()
+    user_ids = sorted(common_user_ids)
+    mean_title = _format_title("Pareto frontier (mean)", user_ids)
+    median_title = _format_title("Pareto frontier (median)", user_ids)
+    output_path_mean = plot_dir / "retention_sweep_user_averages_mean.png"
+    output_path_median = plot_dir / "retention_sweep_user_averages_median.png"
+    _plot_compare_frontier(
+        series_mean,
+        output_path_mean,
+        title_base=mean_title,
+        user_count=len(user_ids),
+        show_labels=args.show_labels,
+    )
+    _plot_compare_frontier(
+        series_median,
+        output_path_median,
+        title_base=median_title,
+        user_count=len(user_ids),
+        show_labels=args.show_labels,
+    )
+    print(f"Wrote {results_path}")
+    print(f"Saved plot to {output_path_mean}")
+    print(f"Saved plot to {output_path_median}")
+
+
+def _setup_plot_style() -> None:
+    import matplotlib.pyplot as plt
+
+    plt.style.use("ggplot")
+
+
+def _build_series(
+    results: List[Dict[str, Any]],
+    envs: List[str],
+    dr_schedulers: List[str],
+    run_dr: bool,
+    run_fixed: bool,
+    value_suffix: str,
+) -> List[Dict[str, Any]]:
     series: List[Dict[str, Any]] = []
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:
-                entries = [
+                base_entries = [
                     entry
                     for entry in results
                     if entry["environment"] == env and entry["scheduler"] == scheduler
                 ]
                 if scheduler_uses_desired_retention(scheduler):
-                    entries.sort(
+                    base_entries.sort(
                         key=lambda entry: entry["desired_retention"]
                         if entry["desired_retention"] is not None
                         else -1
@@ -358,22 +449,32 @@ def main() -> None:
                     label_parts.append(f"env={env}")
                 if len(dr_schedulers) > 1:
                     label_parts.append(f"sched={scheduler}")
-                label = " ".join(label_parts) or scheduler
+                base_label = " ".join(label_parts) or scheduler
+                entries = [
+                    {
+                        **entry,
+                        "memorized_average": entry[f"memorized_average_{value_suffix}"],
+                        "memorized_per_minute": entry[
+                            f"memorized_per_minute_{value_suffix}"
+                        ],
+                    }
+                    for entry in base_entries
+                ]
                 series.append(
                     {
-                        "label": label,
+                        "label": base_label,
                         "entries": entries,
                         "scheduler": scheduler,
                         "environment": env,
                     }
                 )
         if run_fixed:
-            fixed_entries = [
+            fixed_base = [
                 entry
                 for entry in results
                 if entry["environment"] == env and entry["scheduler"] == "fixed"
             ]
-            fixed_entries.sort(
+            fixed_base.sort(
                 key=lambda entry: entry["fixed_interval"]
                 if entry["fixed_interval"] is not None
                 else 0.0
@@ -384,34 +485,25 @@ def main() -> None:
             if run_dr or len(envs) > 1:
                 fixed_label_parts.append("sched=fixed")
             fixed_label = " ".join(fixed_label_parts) or "fixed"
+            entries = [
+                {
+                    **entry,
+                    "memorized_average": entry[f"memorized_average_{value_suffix}"],
+                    "memorized_per_minute": entry[
+                        f"memorized_per_minute_{value_suffix}"
+                    ],
+                }
+                for entry in fixed_base
+            ]
             series.append(
                 {
                     "label": fixed_label,
-                    "entries": fixed_entries,
+                    "entries": entries,
                     "scheduler": "fixed",
                     "environment": env,
                 }
             )
-
-    _setup_plot_style()
-    output_path = plot_dir / "retention_sweep_user_averages.png"
-    user_ids = sorted(all_user_ids)
-    title = _format_title("Pareto frontier (user averages)", user_ids)
-    _plot_compare_frontier(
-        series,
-        output_path,
-        title_base=title,
-        user_count=len(user_ids),
-        show_labels=args.show_labels,
-    )
-    print(f"Wrote {results_path}")
-    print(f"Saved plot to {output_path}")
-
-
-def _setup_plot_style() -> None:
-    import matplotlib.pyplot as plt
-
-    plt.style.use("ggplot")
+    return series
 
 
 def _plot_compare_frontier(
@@ -520,6 +612,7 @@ def _plot_compare_frontier(
             marker = "o"
             linewidth = 2
             markersize = 6
+        alpha = 1.0
         x_vals = [entry["memorized_average"] for entry in entries]
         y_vals = [entry["memorized_per_minute"] for entry in entries]
         avoid_x.extend(x_vals)
@@ -539,6 +632,7 @@ def _plot_compare_frontier(
             color=color,
             linewidth=linewidth,
             markersize=markersize,
+            alpha=alpha,
         )
         if show_labels and scheduler != "sspmmc":
             label_indices = _select_label_indices(len(entries), max_labels_per_series)
