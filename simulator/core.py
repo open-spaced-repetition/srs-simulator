@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import heapq
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -470,7 +471,7 @@ class SimulationEngine:
         self, card: Card, interval: float, sched_state: Any, day: int
     ) -> None:
         card.scheduler_state = sched_state
-        interval_days = max(1, int(round(interval)))
+        interval_days = max(1, int(math.floor(float(interval) + 0.5)))
         card.interval = interval_days
         card.last_review = day
         card.due = day + interval_days
