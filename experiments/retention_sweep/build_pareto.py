@@ -80,9 +80,9 @@ def parse_args() -> argparse.Namespace:
         help="Skip plotting and only write the results JSON.",
     )
     parser.add_argument(
-        "--show-labels",
+        "--hide-labels",
         action="store_true",
-        help="Annotate points with scheduler configuration labels.",
+        help="Hide point annotations for scheduler configurations.",
     )
     return parser.parse_args()
 
@@ -679,7 +679,7 @@ def main() -> None:
         series,
         plot_dir / output_name,
         title_base=title_base,
-        show_labels=args.show_labels,
+        show_labels=not args.hide_labels,
     )
     print(f"Wrote {len(combined_results)} entries to {results_path}")
 
