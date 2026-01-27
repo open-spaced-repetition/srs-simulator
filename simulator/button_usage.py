@@ -98,7 +98,7 @@ def _normalize_prob(values: Sequence[float], key: str) -> list[float]:
     total = float(sum(values))
     if total <= 0:
         raise ValueError(f"{key} sums to zero: {values}")
-    if abs(total - 1.0) > 1e-6:
+    if abs(total - 1.0) > 0.01:
         logging.warning("%s does not sum to 1 (%.6f); normalizing.", key, total)
         return [float(value) / total for value in values]
     return [float(value) for value in values]

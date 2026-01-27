@@ -435,10 +435,6 @@ def main() -> None:
                         run_args.desired_retention = dr
                         run_args.scheduler_spec = scheduler
                         run_args.log_dir = log_dir
-                        tqdm.write(
-                            f"Running env={environment} scheduler={scheduler} "
-                            f"desired_retention={dr:.2f}"
-                        )
                         _run_once(
                             run_args,
                             priority_fn,
@@ -457,7 +453,6 @@ def main() -> None:
                     run_args.desired_retention = None
                     run_args.scheduler_spec = scheduler
                     run_args.log_dir = log_dir
-                    tqdm.write(f"Running env={environment} scheduler={scheduler}")
                     _run_once(
                         run_args,
                         priority_fn,
@@ -477,9 +472,6 @@ def main() -> None:
                     run_args.desired_retention = None
                     run_args.scheduler_spec = raw
                     run_args.log_dir = log_dir
-                    tqdm.write(
-                        f"Running env={environment} scheduler={raw} interval={format_float(fixed_interval)}"
-                    )
                     _run_once(
                         run_args,
                         priority_fn,
@@ -498,7 +490,6 @@ def main() -> None:
                     run_args.desired_retention = args.sspmmc_desired_retention
                     run_args.scheduler_spec = "sspmmc"
                     run_args.log_dir = log_dir
-                    tqdm.write(f"Running env={environment} sspmmc_policy={policy_path}")
                     _run_once(
                         run_args,
                         priority_fn,
