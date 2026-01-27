@@ -23,10 +23,7 @@ from simulator.scheduler_spec import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Aggregate retention_sweep logs across users and plot Pareto-style "
-            "frontiers (mean + median across users)."
-        ),
+        description="Aggregate retention_sweep logs across users and write summary JSON.",
     )
     parser.add_argument(
         "--log-dir",
@@ -72,11 +69,6 @@ def parse_args() -> argparse.Namespace:
         "--no-plot",
         action="store_true",
         help="Skip plotting.",
-    )
-    parser.add_argument(
-        "--show-labels",
-        action="store_true",
-        help="Annotate points with DR labels (requires adjustText).",
     )
     return parser.parse_args()
 
@@ -373,43 +365,7 @@ def main() -> None:
         return
 
     plot_dir.mkdir(parents=True, exist_ok=True)
-    series_mean = _build_series(
-        results,
-        envs,
-        dr_schedulers,
-        run_dr,
-        run_fixed,
-        value_suffix="mean",
-    )
-    series_median = _build_series(
-        results,
-        envs,
-        dr_schedulers,
-        run_dr,
-        run_fixed,
-        value_suffix="median",
-    )
-
     _setup_plot_style()
-    user_ids = sorted(common_user_ids)
-    mean_title = _format_title("Pareto frontier (mean)", user_ids)
-    median_title = _format_title("Pareto frontier (median)", user_ids)
-    output_path_mean = plot_dir / "retention_sweep_user_averages_mean.png"
-    output_path_median = plot_dir / "retention_sweep_user_averages_median.png"
-    _plot_compare_frontier(
-        series_mean,
-        output_path_mean,
-        title_base=mean_title,
-        user_count=len(user_ids),
-        show_labels=args.show_labels,
-    )
-    _plot_compare_frontier(
-        series_median,
-        output_path_median,
-        title_base=median_title,
-        user_count=len(user_ids),
-        show_labels=args.show_labels,
-    )
     equivalent_distributions = _compute_equivalent_fsrs6_distributions(
         groups,
         envs,
@@ -433,99 +389,12 @@ def main() -> None:
         _plot_equivalent_distributions(entry, distribution_path, distribution_title)
         print(f"Saved plot to {distribution_path}")
     print(f"Wrote {results_path}")
-    print(f"Saved plot to {output_path_mean}")
-    print(f"Saved plot to {output_path_median}")
 
 
 def _setup_plot_style() -> None:
     import matplotlib.pyplot as plt
 
     plt.style.use("ggplot")
-
-
-def _build_series(
-    results: List[Dict[str, Any]],
-    envs: List[str],
-    dr_schedulers: List[str],
-    run_dr: bool,
-    run_fixed: bool,
-    value_suffix: str,
-) -> List[Dict[str, Any]]:
-    series: List[Dict[str, Any]] = []
-    for env in envs:
-        if run_dr:
-            for scheduler in dr_schedulers:
-                base_entries = [
-                    entry
-                    for entry in results
-                    if entry["environment"] == env and entry["scheduler"] == scheduler
-                ]
-                if scheduler_uses_desired_retention(scheduler):
-                    base_entries.sort(
-                        key=lambda entry: entry["desired_retention"]
-                        if entry["desired_retention"] is not None
-                        else -1
-                    )
-                label_parts = []
-                if len(envs) > 1:
-                    label_parts.append(f"env={env}")
-                if len(dr_schedulers) > 1:
-                    label_parts.append(f"sched={scheduler}")
-                base_label = " ".join(label_parts) or scheduler
-                entries = [
-                    {
-                        **entry,
-                        "memorized_average": entry[f"memorized_average_{value_suffix}"],
-                        "memorized_per_minute": entry[
-                            f"memorized_per_minute_{value_suffix}"
-                        ],
-                    }
-                    for entry in base_entries
-                ]
-                series.append(
-                    {
-                        "label": base_label,
-                        "entries": entries,
-                        "scheduler": scheduler,
-                        "environment": env,
-                    }
-                )
-        if run_fixed:
-            fixed_base = [
-                entry
-                for entry in results
-                if entry["environment"] == env and entry["scheduler"] == "fixed"
-            ]
-            fixed_base.sort(
-                key=lambda entry: entry["fixed_interval"]
-                if entry["fixed_interval"] is not None
-                else 0.0
-            )
-            fixed_label_parts = []
-            if len(envs) > 1:
-                fixed_label_parts.append(f"env={env}")
-            if run_dr or len(envs) > 1:
-                fixed_label_parts.append("sched=fixed")
-            fixed_label = " ".join(fixed_label_parts) or "fixed"
-            entries = [
-                {
-                    **entry,
-                    "memorized_average": entry[f"memorized_average_{value_suffix}"],
-                    "memorized_per_minute": entry[
-                        f"memorized_per_minute_{value_suffix}"
-                    ],
-                }
-                for entry in fixed_base
-            ]
-            series.append(
-                {
-                    "label": fixed_label,
-                    "entries": entries,
-                    "scheduler": "fixed",
-                    "environment": env,
-                }
-            )
-    return series
 
 
 def _compute_equivalent_fsrs6_distributions(
@@ -824,224 +693,6 @@ def _plot_equivalent_distributions(
         ax_ratio_box.axis("off")
 
     fig.suptitle(title_base, fontsize=16)
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-
-
-def _plot_compare_frontier(
-    series: List[Dict[str, Any]],
-    output_path: Path,
-    title_base: str,
-    user_count: int | None = None,
-    show_labels: bool = False,
-) -> None:
-    import matplotlib.pyplot as plt
-
-    if show_labels:
-        try:
-            from adjustText import adjust_text
-        except ImportError as exc:
-            raise SystemExit(
-                "adjustText is required for --show-labels. "
-                "Install it with `uv add adjustText`."
-            ) from exc
-
-    all_entries = [entry for item in series for entry in item["entries"]]
-    if not all_entries:
-        raise ValueError("No entries available to plot.")
-
-    min_x = min(entry["memorized_average"] for entry in all_entries)
-    max_x = max(entry["memorized_average"] for entry in all_entries)
-    max_y = max(entry["memorized_per_minute"] for entry in all_entries)
-
-    x_min = 200 * math.floor(min_x / 200) if min_x else 0
-    x_max = 200 * math.ceil(max_x / 200) if max_x else 1
-    y_min = 0
-    y_max = max_y * 1.03 if max_y else 1
-
-    colors = [
-        "#1f77b4",
-        "#ff7f0e",
-        "#2ca02c",
-        "#9467bd",
-        "#8c564b",
-        "#e377c2",
-        "#7f7f7f",
-        "#bcbd22",
-        "#17becf",
-    ]
-    linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
-    scheduler_order: List[str] = []
-    environment_order: List[str] = []
-    for item in series:
-        scheduler = item.get("scheduler")
-        environment = item.get("environment")
-        if scheduler and scheduler not in scheduler_order:
-            scheduler_order.append(scheduler)
-        if environment and environment not in environment_order:
-            environment_order.append(environment)
-    scheduler_colors = {
-        scheduler: colors[idx % len(colors)]
-        for idx, scheduler in enumerate(scheduler_order)
-    }
-    environment_linestyles = {
-        environment: linestyles[idx % len(linestyles)]
-        for idx, environment in enumerate(environment_order)
-    }
-
-    single_point_markers = {
-        "anki_sm2": "^",
-        "memrise": "s",
-    }
-
-    def _select_label_indices(count: int, max_labels: int) -> List[int]:
-        if count <= 0:
-            return []
-        if count <= max_labels:
-            return list(range(count))
-        step = max(1, math.ceil(count / max_labels))
-        indices = list(range(0, count, step))
-        if indices[-1] != count - 1:
-            indices.append(count - 1)
-        return indices
-
-    plt.figure(figsize=(12, 9))
-    non_empty_series = [item for item in series if item["entries"]]
-    max_labels_total = 40
-    max_labels_per_series = max(2, max_labels_total // max(1, len(non_empty_series)))
-    texts = []
-    label_points_x = []
-    label_points_y = []
-    avoid_x = []
-    avoid_y = []
-
-    for item in series:
-        entries = item["entries"]
-        if not entries:
-            continue
-        scheduler = item.get("scheduler")
-        environment = item.get("environment")
-        is_single_point = scheduler in single_point_markers and len(entries) == 1
-        if is_single_point:
-            color = "red"
-            linestyle = ""
-            marker = single_point_markers.get(scheduler, "^")
-            linewidth = 2
-            markersize = 7.5
-        else:
-            color = scheduler_colors.get(scheduler, colors[0])
-            linestyle = environment_linestyles.get(environment, linestyles[0])
-            marker = "o"
-            linewidth = 2
-            markersize = 6
-        alpha = 1.0
-        x_vals = [entry["memorized_average"] for entry in entries]
-        y_vals = [entry["memorized_per_minute"] for entry in entries]
-        avoid_x.extend(x_vals)
-        avoid_y.extend(y_vals)
-        if len(x_vals) > 1:
-            for x0, y0, x1, y1 in zip(x_vals[:-1], y_vals[:-1], x_vals[1:], y_vals[1:]):
-                avoid_x.append(x0 + (x1 - x0) * 0.33)
-                avoid_y.append(y0 + (y1 - y0) * 0.33)
-                avoid_x.append(x0 + (x1 - x0) * 0.66)
-                avoid_y.append(y0 + (y1 - y0) * 0.66)
-        plt.plot(
-            x_vals,
-            y_vals,
-            label=item["label"],
-            linestyle=linestyle,
-            marker=marker,
-            color=color,
-            linewidth=linewidth,
-            markersize=markersize,
-            alpha=alpha,
-        )
-        if show_labels and scheduler != "sspmmc":
-            label_indices = _select_label_indices(len(entries), max_labels_per_series)
-            for entry_idx in label_indices:
-                entry = entries[entry_idx]
-                title = entry.get("title")
-                if not title:
-                    continue
-                texts.append(
-                    plt.text(
-                        x_vals[entry_idx],
-                        y_vals[entry_idx],
-                        title,
-                        fontsize=9,
-                        color="black",
-                    )
-                )
-                label_points_x.append(x_vals[entry_idx])
-                label_points_y.append(y_vals[entry_idx])
-
-    plt.xlim([x_min, x_max])
-    plt.ylim([y_min, y_max])
-    if show_labels and texts:
-        import logging
-        from matplotlib.patches import FancyArrowPatch
-
-        adjust_logger = logging.getLogger("adjustText")
-        previous_level = adjust_logger.level
-        adjust_logger.setLevel(logging.ERROR)
-        try:
-            adjust_text(
-                texts,
-                x=avoid_x,
-                y=avoid_y,
-                target_x=label_points_x,
-                target_y=label_points_y,
-                expand=(1.02, 1.02),
-                force_static=(0.05, 0.05),
-                force_text=(0.1, 0.1),
-                force_pull=(0.06, 0.06),
-                max_move=(5, 5),
-                lim=200,
-            )
-        finally:
-            adjust_logger.setLevel(previous_level)
-        ax = plt.gca()
-        for text, target_x, target_y in zip(texts, label_points_x, label_points_y):
-            arrow = FancyArrowPatch(
-                posA=text.get_position(),
-                posB=(target_x, target_y),
-                patchA=text,
-                transform=ax.transData,
-                arrowstyle="-",
-                color="gray",
-                lw=0.5,
-                shrinkA=8,
-                shrinkB=4,
-            )
-            ax.add_patch(arrow)
-    plt.xlabel(
-        "Memorized cards (average, all days)\n(higher=better)",
-        fontsize=18,
-        color="black",
-    )
-    plt.ylabel(
-        "Memorized cards (average)/minutes per day\n(higher=better)",
-        fontsize=18,
-        color="black",
-    )
-    plt.xticks(fontsize=16, color="black")
-    plt.yticks(fontsize=16, color="black")
-    plt.title(title_base, fontsize=22)
-    if user_count is not None:
-        ax = plt.gca()
-        ax.text(
-            0.98,
-            0.98,
-            f"Users: {user_count}",
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=12,
-            bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
-        )
-    plt.grid(True, ls="--")
-    plt.legend(fontsize=16, loc="lower left", facecolor="white")
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
