@@ -488,7 +488,11 @@ def _plot_compare_frontier(
         fontsize=18,
         color="black",
     )
-    plt.ylabel("Memorized cards (average)/minutes per day", fontsize=18, color="black")
+    plt.ylabel(
+        "Memorized cards (average)/minutes per day\n(higher=better)",
+        fontsize=18,
+        color="black",
+    )
     plt.xticks(fontsize=16, color="black")
     plt.yticks(fontsize=16, color="black")
     user_ids = sorted(
