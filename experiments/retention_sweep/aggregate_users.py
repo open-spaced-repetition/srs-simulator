@@ -131,6 +131,10 @@ def _format_scheduler_title(scheduler: str) -> str:
 def _normalize_user_id(value: Any) -> Optional[int]:
     if value is None:
         return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _infer_user_id_from_path(path: Path) -> Optional[int]:
@@ -158,10 +162,6 @@ def _format_title(base: str, user_ids: List[int]) -> str:
     if user_ids_sorted[-1] - user_ids_sorted[0] + 1 == len(user_ids_sorted):
         return f"{base} (users {user_ids_sorted[0]}-{user_ids_sorted[-1]}, n={len(user_ids_sorted)})"
     return f"{base} (n={len(user_ids_sorted)})"
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def main() -> None:
@@ -179,11 +179,7 @@ def main() -> None:
     dr_schedulers: List[str] = []
     fixed_intervals: List[float] = []
     include_all_fixed = False
-    has_sspmmc = False
     for name, interval, raw in scheduler_specs:
-        if name == "sspmmc":
-            has_sspmmc = True
-            continue
         if name == "fixed":
             if interval is None or raw == "fixed":
                 include_all_fixed = True
@@ -195,9 +191,8 @@ def main() -> None:
     if include_all_fixed:
         fixed_intervals = []
     run_dr = bool(dr_schedulers)
-    run_sspmmc = False
     run_fixed = include_all_fixed or bool(fixed_intervals)
-    if not run_dr and not run_sspmmc and not run_fixed:
+    if not run_dr and not run_fixed:
         raise SystemExit("No schedulers specified. Use --schedulers to select plots.")
 
     results_path = args.results_path or (
@@ -262,9 +257,6 @@ def main() -> None:
 
         memorized_average = float(totals.get("memorized_average", 0.0))
         memorized_per_minute = memorized_average / time_average
-        avg_accum_memorized_per_hour = float(
-            totals.get("avg_accum_memorized_per_hour", 0.0)
-        )
         user_id = _normalize_user_id(meta.get("user_id"))
         if user_id is None:
             user_id = _infer_user_id_from_path(path)
@@ -293,7 +285,6 @@ def main() -> None:
             "metrics": {
                 "memorized_average": memorized_average,
                 "memorized_per_minute": memorized_per_minute,
-                "avg_accum_memorized_per_hour": avg_accum_memorized_per_hour,
             },
             "mtime": mtime,
         }
@@ -330,9 +321,6 @@ def main() -> None:
                 "memorized_average": mean(item["memorized_average"] for item in users),
                 "memorized_per_minute": mean(
                     item["memorized_per_minute"] for item in users
-                ),
-                "avg_accum_memorized_per_hour": mean(
-                    item["avg_accum_memorized_per_hour"] for item in users
                 ),
                 "title": title,
             }
@@ -393,7 +381,7 @@ def main() -> None:
             fixed_label_parts = []
             if len(envs) > 1:
                 fixed_label_parts.append(f"env={env}")
-            if run_dr or run_sspmmc or len(envs) > 1:
+            if run_dr or len(envs) > 1:
                 fixed_label_parts.append("sched=fixed")
             fixed_label = " ".join(fixed_label_parts) or "fixed"
             series.append(
@@ -401,26 +389,6 @@ def main() -> None:
                     "label": fixed_label,
                     "entries": fixed_entries,
                     "scheduler": "fixed",
-                    "environment": env,
-                }
-            )
-        if run_sspmmc:
-            sspmmc_entries = [
-                entry
-                for entry in results
-                if entry["environment"] == env and entry["scheduler"] == "sspmmc"
-            ]
-            sspmmc_label_parts = []
-            if len(envs) > 1:
-                sspmmc_label_parts.append(f"env={env}")
-            if run_dr or run_fixed or len(envs) > 1:
-                sspmmc_label_parts.append("sched=sspmmc")
-            sspmmc_label = " ".join(sspmmc_label_parts) or "sspmmc"
-            series.append(
-                {
-                    "label": sspmmc_label,
-                    "entries": sspmmc_entries,
-                    "scheduler": "sspmmc",
                     "environment": env,
                 }
             )
