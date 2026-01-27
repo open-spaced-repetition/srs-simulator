@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -35,7 +36,7 @@ class AnkiSM2Scheduler(Scheduler):
 
     def init_card(self, card_view: CardView, rating: int, day: float):
         interval, ease = self._next_interval(
-            prev_interval=0.0, rating=rating, ease=self.ease_start
+            prev_interval=0.0, elapsed=0.0, rating=rating, ease=self.ease_start
         )
         return interval, {"ease": ease, "ivl": interval}
 
@@ -44,48 +45,48 @@ class AnkiSM2Scheduler(Scheduler):
         ease = float(state.get("ease", self.ease_start))
         prev_interval = float(card_view.interval or 0.0)
         interval, ease = self._next_interval(
-            prev_interval=prev_interval, rating=rating, ease=ease
+            prev_interval=prev_interval, elapsed=elapsed, rating=rating, ease=ease
         )
         return interval, {"ease": ease, "ivl": interval}
 
     def _next_interval(
-        self, *, prev_interval: float, rating: int, ease: float
+        self, *, prev_interval: float, elapsed: float, rating: int, ease: float
     ) -> tuple[float, float]:
         rating = int(rating)
-        if rating == 1:
-            ease -= 0.2
-        elif rating == 2:
-            ease -= 0.15
-        elif rating == 4:
-            ease += 0.15
         ease = min(self.ease_max, max(self.ease_min, ease))
-
+        current_interval = max(1.0, prev_interval)
         is_new_card = prev_interval == 0.0
         if rating < 4:
             new_card_interval = self.graduating_interval
         else:
             new_card_interval = self.easy_interval
-
-        elapsed = prev_interval
-        if rating == 1:
-            existing_interval = prev_interval * 0.0
-        elif rating == 2:
-            existing_interval = max(
-                elapsed * self.hard_interval_factor,
-                prev_interval * self.hard_interval_factor / 2.0,
-            )
-        elif rating == 4:
-            existing_interval = max(elapsed * ease, prev_interval) * self.easy_bonus
+        if is_new_card:
+            interval = max(1.0, new_card_interval)
+        elif rating == 1:
+            interval = 1.0
         else:
-            existing_interval = max(elapsed * ease, prev_interval)
+            interval = _passing_review_interval(
+                prev_interval=current_interval,
+                elapsed=max(0.0, float(elapsed)),
+                ease=ease,
+                hard_multiplier=self.hard_interval_factor,
+                easy_multiplier=self.easy_bonus,
+                rating=rating,
+            )
 
-        interval = new_card_interval if is_new_card else existing_interval
-        interval = max(1.0, interval)
+        if rating == 1:
+            ease += 0.2 * -1
+        elif rating == 2:
+            ease += 0.15 * -1
+        elif rating == 4:
+            ease += 0.15
+        ease = min(self.ease_max, max(self.ease_min, ease))
         return interval, ease
 
 
 def _anki_next_interval(
     prev_interval,
+    elapsed,
     rating,
     ease,
     *,
@@ -96,34 +97,133 @@ def _anki_next_interval(
     ease_min: float,
     ease_max: float,
 ):
-    new_ease = ease
-    new_ease = new_ease - 0.2 * (rating == 1).to(new_ease.dtype)
-    new_ease = new_ease - 0.15 * (rating == 2).to(new_ease.dtype)
-    new_ease = new_ease + 0.15 * (rating == 4).to(new_ease.dtype)
-    new_ease = new_ease.clamp(min=ease_min, max=ease_max)
-
+    new_ease = ease.clamp(min=ease_min, max=ease_max)
+    current_interval = torch.clamp(prev_interval, min=1.0)
     is_new_card = prev_interval == 0.0
     new_card_interval = prev_interval.new_full(prev_interval.shape, graduating_interval)
     new_card_interval = new_card_interval.where(rating < 4, easy_interval)
 
-    elapsed = prev_interval
-    existing_interval = prev_interval
-    existing_interval = existing_interval.where(rating != 1, prev_interval * 0.0)
-    hard_interval = torch.maximum(
-        elapsed * hard_interval_factor, prev_interval * hard_interval_factor / 2.0
+    is_early = elapsed < current_interval
+    hard_multiplier = hard_interval_factor
+    easy_multiplier = easy_bonus
+
+    hard_minimum = (
+        torch.zeros_like(current_interval)
+        if hard_multiplier <= 1.0
+        else current_interval + 1.0
     )
-    existing_interval = existing_interval.where(rating != 2, hard_interval)
-    easy_interval_val = torch.maximum(elapsed * new_ease, prev_interval) * easy_bonus
-    existing_interval = existing_interval.where(rating != 4, easy_interval_val)
-    normal_interval = torch.maximum(elapsed * new_ease, prev_interval)
-    existing_interval = existing_interval.where(
-        (rating == 1) | (rating == 2) | (rating == 4),
-        normal_interval,
+    hard_non_early = _constrain_passing_interval_tensor(
+        current_interval * hard_multiplier, hard_minimum
+    )
+    good_minimum = (
+        current_interval + 1.0 if hard_multiplier <= 1.0 else hard_non_early + 1.0
+    )
+    days_late = torch.clamp(elapsed - current_interval, min=0.0)
+    good_non_early = _constrain_passing_interval_tensor(
+        (current_interval + days_late / 2.0) * new_ease, good_minimum
+    )
+    easy_non_early = _constrain_passing_interval_tensor(
+        (current_interval + days_late) * new_ease * easy_multiplier,
+        good_non_early + 1.0,
     )
 
-    interval = torch.where(is_new_card, new_card_interval, existing_interval)
-    interval = interval.clamp(min=1.0)
+    half_usual = hard_multiplier / 2.0
+    hard_early = _constrain_passing_interval_tensor(
+        torch.maximum(elapsed * hard_multiplier, current_interval * half_usual),
+        torch.zeros_like(current_interval),
+    )
+    good_early = _constrain_passing_interval_tensor(
+        torch.maximum(elapsed * new_ease, current_interval),
+        torch.zeros_like(current_interval),
+    )
+    reduced_bonus = easy_multiplier - (easy_multiplier - 1.0) / 2.0
+    easy_early = _constrain_passing_interval_tensor(
+        torch.maximum(elapsed * new_ease, current_interval) * reduced_bonus,
+        torch.zeros_like(current_interval),
+    )
+
+    hard_interval = torch.where(is_early, hard_early, hard_non_early)
+    good_interval = torch.where(is_early, good_early, good_non_early)
+    easy_interval_val = torch.where(is_early, easy_early, easy_non_early)
+
+    interval = torch.where(
+        is_new_card,
+        new_card_interval,
+        torch.where(
+            rating == 2,
+            hard_interval,
+            torch.where(rating == 4, easy_interval_val, good_interval),
+        ),
+    )
+    interval = torch.where(rating == 1, torch.ones_like(interval), interval)
+
+    new_ease = new_ease + -0.2 * (rating == 1).to(new_ease.dtype)
+    new_ease = new_ease + -0.15 * (rating == 2).to(new_ease.dtype)
+    new_ease = new_ease + 0.15 * (rating == 4).to(new_ease.dtype)
+    new_ease = new_ease.clamp(min=ease_min, max=ease_max)
     return interval, new_ease
+
+
+def _round_half_up(value: float) -> float:
+    return float(math.floor(value + 0.5))
+
+
+def _constrain_passing_interval(interval: float, minimum: float) -> float:
+    rounded = _round_half_up(interval)
+    return max(1.0, float(max(rounded, minimum)))
+
+
+def _constrain_passing_interval_tensor(
+    interval: "torch.Tensor", minimum: "torch.Tensor"
+) -> "torch.Tensor":
+    rounded = torch.floor(interval + 0.5)
+    return torch.maximum(rounded, minimum).clamp(min=1.0)
+
+
+def _passing_review_interval(
+    *,
+    prev_interval: float,
+    elapsed: float,
+    ease: float,
+    hard_multiplier: float,
+    easy_multiplier: float,
+    rating: int,
+) -> float:
+    current_interval = max(1.0, prev_interval)
+    elapsed = max(0.0, elapsed)
+    if elapsed < current_interval:
+        hard = _constrain_passing_interval(
+            max(elapsed * hard_multiplier, current_interval * hard_multiplier / 2.0),
+            0.0,
+        )
+        good = _constrain_passing_interval(
+            max(elapsed * ease, current_interval),
+            0.0,
+        )
+        reduced_bonus = easy_multiplier - (easy_multiplier - 1.0) / 2.0
+        easy = _constrain_passing_interval(
+            max(elapsed * ease, current_interval) * reduced_bonus,
+            0.0,
+        )
+    else:
+        days_late = max(0.0, elapsed - current_interval)
+        hard_minimum = 0.0 if hard_multiplier <= 1.0 else current_interval + 1.0
+        hard = _constrain_passing_interval(
+            current_interval * hard_multiplier, hard_minimum
+        )
+        good_minimum = current_interval + 1.0 if hard_multiplier <= 1.0 else hard + 1.0
+        good = _constrain_passing_interval(
+            (current_interval + days_late / 2.0) * ease, good_minimum
+        )
+        easy = _constrain_passing_interval(
+            (current_interval + days_late) * ease * easy_multiplier,
+            good + 1.0,
+        )
+    if rating == 2:
+        return hard
+    if rating == 4:
+        return easy
+    return good
 
 
 @dataclass
@@ -175,6 +275,7 @@ class AnkiSM2VectorizedSchedulerOps:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
         intervals, new_ease = _anki_next_interval(
             prev_interval,
+            elapsed,
             rating,
             state.ease[idx],
             graduating_interval=self._graduating_interval,
@@ -198,8 +299,10 @@ class AnkiSM2VectorizedSchedulerOps:
         prev_interval = self._torch.zeros(
             idx.numel(), device=self.device, dtype=self.dtype
         )
+        elapsed = self._torch.zeros_like(prev_interval)
         intervals, new_ease = _anki_next_interval(
             prev_interval,
+            elapsed,
             rating,
             state.ease[idx],
             graduating_interval=self._graduating_interval,
