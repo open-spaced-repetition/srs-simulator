@@ -227,9 +227,9 @@ def simulate(
                     sched_state, exec_idx, exec_elapsed, exec_rating, prev_interval
                 )
 
-                interval_days = torch.clamp(torch.round(intervals_next), min=1.0).to(
-                    torch.int64
-                )
+                interval_days = torch.clamp(
+                    torch.floor(intervals_next + 0.5), min=1.0
+                ).to(torch.int64)
                 intervals[exec_idx] = interval_days
                 last_review[exec_idx] = day
                 due[exec_idx] = day + interval_days
@@ -272,9 +272,9 @@ def simulate(
                 intervals_next = sched_ops.update_learn(
                     sched_state, exec_idx, exec_rating
                 )
-                interval_days = torch.clamp(torch.round(intervals_next), min=1.0).to(
-                    torch.int64
-                )
+                interval_days = torch.clamp(
+                    torch.floor(intervals_next + 0.5), min=1.0
+                ).to(torch.int64)
                 intervals[exec_idx] = interval_days
                 last_review[exec_idx] = day
                 due[exec_idx] = day + interval_days

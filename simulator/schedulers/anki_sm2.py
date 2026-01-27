@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -82,7 +81,7 @@ class AnkiSM2Scheduler(Scheduler):
 
         interval = new_card_interval if is_new_card else existing_interval
         interval = max(1.0, interval)
-        return _round_half_up(interval), ease
+        return interval, ease
 
 
 def _anki_next_interval(
@@ -124,16 +123,7 @@ def _anki_next_interval(
 
     interval = torch.where(is_new_card, new_card_interval, existing_interval)
     interval = interval.clamp(min=1.0)
-    interval = _round_half_up_tensor(interval)
     return interval, new_ease
-
-
-def _round_half_up(value: float) -> float:
-    return math.floor(value + 0.5)
-
-
-def _round_half_up_tensor(value: "torch.Tensor") -> "torch.Tensor":
-    return torch.floor(value + 0.5)
 
 
 @dataclass
