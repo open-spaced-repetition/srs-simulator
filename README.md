@@ -48,8 +48,20 @@ uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --sche
 uv run experiments/retention_sweep/build_pareto.py --environments fsrs6,lstm --schedulers fsrs6,sspmmc
 ```
 
-By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--schedulers` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--schedulers`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. Add `--show-labels` to annotate Pareto points with scheduler configurations (requires `adjustText`).
+By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--schedulers` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--schedulers`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`.
 The retention sweep now defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
+
+Additional retention sweep helpers:
+
+```bash
+uv run experiments/retention_sweep/run_sweep_users.py --start 1 --stop 10 --environments fsrs6,lstm --schedulers fsrs6,anki_sm2,memrise
+uv run experiments/retention_sweep/aggregate_users.py --environments lstm --schedulers fsrs6,anki_sm2,memrise
+uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
+```
+
+- `run_sweep_users.py` fans out `run_sweep.py` across a user-id range.
+- `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON and plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise.
+- `dominance_sm2_memrise.py` reports per-user dominance rates between Anki-SM-2 and Memrise and saves a stacked bar chart.
 
 FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficulty`, `high_difficulty`.
 
