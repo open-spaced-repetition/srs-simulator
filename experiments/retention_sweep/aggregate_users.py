@@ -410,6 +410,24 @@ def main() -> None:
         user_count=len(user_ids),
         show_labels=args.show_labels,
     )
+    equivalent_series, equivalent_user_count = _build_equivalent_fsrs6_series(
+        groups,
+        envs,
+    )
+    if equivalent_series:
+        equivalent_title = _format_title(
+            "Pareto frontier (Anki-SM-2 vs FSRS-6 equiv)",
+            sorted(equivalent_user_count),
+        )
+        equivalent_path = plot_dir / "retention_sweep_equivalent_fsrs6.png"
+        _plot_compare_frontier(
+            equivalent_series,
+            equivalent_path,
+            title_base=equivalent_title,
+            user_count=len(equivalent_user_count),
+            show_labels=args.show_labels,
+        )
+        print(f"Saved plot to {equivalent_path}")
     print(f"Wrote {results_path}")
     print(f"Saved plot to {output_path_mean}")
     print(f"Saved plot to {output_path_median}")
@@ -504,6 +522,100 @@ def _build_series(
                 }
             )
     return series
+
+
+def _build_equivalent_fsrs6_series(
+    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    envs: List[str],
+) -> Tuple[List[Dict[str, Any]], set[int]]:
+    series: List[Dict[str, Any]] = []
+    user_ids_used: set[int] = set()
+    for env in envs:
+        anki_users: Dict[int, Dict[str, float]] = {}
+        fsrs_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
+
+        for (group_env, scheduler, desired, _), group in groups.items():
+            if group_env != env:
+                continue
+            if scheduler == "anki_sm2":
+                for user_key, payload in group["users"].items():
+                    if isinstance(user_key, int):
+                        anki_users[user_key] = payload["metrics"]
+            elif scheduler == "fsrs6" and desired is not None:
+                for user_key, payload in group["users"].items():
+                    if not isinstance(user_key, int):
+                        continue
+                    fsrs_users.setdefault(user_key, []).append(
+                        (float(desired), payload["metrics"])
+                    )
+
+        eligible_users = set(anki_users) & set(fsrs_users)
+        if not eligible_users:
+            continue
+
+        anki_points: List[Dict[str, float]] = []
+        fsrs_points: List[Dict[str, float]] = []
+        fsrs_dr_values: List[float] = []
+        for user_id in sorted(eligible_users):
+            anki_metrics = anki_users[user_id]
+            target_value = anki_metrics["memorized_average"]
+            candidates = fsrs_users[user_id]
+            candidates.sort(
+                key=lambda item: (
+                    abs(item[1]["memorized_average"] - target_value),
+                    item[0],
+                )
+            )
+            chosen_dr, chosen_metrics = candidates[0]
+            anki_points.append(anki_metrics)
+            fsrs_points.append(chosen_metrics)
+            fsrs_dr_values.append(chosen_dr)
+
+        if not anki_points or not fsrs_points:
+            continue
+
+        user_ids_used.update(eligible_users)
+        mean_anki_average = mean(item["memorized_average"] for item in anki_points)
+        mean_anki_per_minute = mean(
+            item["memorized_per_minute"] for item in anki_points
+        )
+        mean_fsrs_average = mean(item["memorized_average"] for item in fsrs_points)
+        mean_fsrs_per_minute = mean(
+            item["memorized_per_minute"] for item in fsrs_points
+        )
+        mean_dr = mean(fsrs_dr_values)
+
+        env_label = f"env={env} " if len(envs) > 1 else ""
+        series.append(
+            {
+                "label": f"{env_label}Anki-SM-2",
+                "entries": [
+                    {
+                        "memorized_average": mean_anki_average,
+                        "memorized_per_minute": mean_anki_per_minute,
+                        "title": "Anki-SM-2",
+                    }
+                ],
+                "scheduler": "anki_sm2",
+                "environment": env,
+            }
+        )
+        series.append(
+            {
+                "label": f"{env_label}FSRS-6 equiv (DR≈{format_float(mean_dr * 100)}%)",
+                "entries": [
+                    {
+                        "memorized_average": mean_fsrs_average,
+                        "memorized_per_minute": mean_fsrs_per_minute,
+                        "title": f"FSRS-6 DR≈{format_float(mean_dr * 100)}%",
+                    }
+                ],
+                "scheduler": "fsrs6",
+                "environment": env,
+            }
+        )
+
+    return series, user_ids_used
 
 
 def _plot_compare_frontier(
