@@ -55,11 +55,13 @@ Additional retention sweep helpers:
 
 ```bash
 uv run experiments/retention_sweep/run_sweep_users.py --start 1 --stop 10 --environments fsrs6,lstm --schedulers fsrs6,anki_sm2,memrise
+uv run experiments/retention_sweep/build_pareto_users.py --start 1 --stop 10 --environments fsrs6,lstm --schedulers fsrs6,sspmmc
 uv run experiments/retention_sweep/aggregate_users.py --environments lstm --schedulers fsrs6,anki_sm2,memrise
 uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
 ```
 
 - `run_sweep_users.py` fans out `run_sweep.py` across a user-id range.
+- `build_pareto_users.py` fans out `build_pareto.py` across a user-id range.
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON and plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise.
 - `dominance_sm2_memrise.py` reports per-user dominance rates between Anki-SM-2 and Memrise and saves a stacked bar chart.
 
