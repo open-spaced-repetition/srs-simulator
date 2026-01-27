@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--schedulers",
-        default="fsrs6,anki_sm2",
+        default="fsrs6,anki_sm2,memrise",
         help="Comma-separated schedulers to include.",
     )
     parser.add_argument(
@@ -414,18 +414,21 @@ def main() -> None:
         groups,
         envs,
         common_user_ids,
+        baselines=["anki_sm2", "memrise"],
     )
     for entry in equivalent_distributions:
         env_label = entry["environment"]
         distribution_title = _format_title(
-            "Anki-SM-2 vs FSRS-6 equiv distributions",
+            f"{_format_scheduler_title(entry['baseline'])} vs FSRS-6 equiv distributions",
             sorted(entry["user_ids"]),
         )
         if len(envs) > 1:
             distribution_title = f"{env_label} {distribution_title}"
         suffix = f"_{env_label}" if len(envs) > 1 else ""
+        baseline_suffix = entry["baseline"]
         distribution_path = (
-            plot_dir / f"retention_sweep_equivalent_fsrs6_distributions{suffix}.png"
+            plot_dir
+            / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}.png"
         )
         _plot_equivalent_distributions(entry, distribution_path, distribution_title)
         print(f"Saved plot to {distribution_path}")
@@ -529,20 +532,16 @@ def _compute_equivalent_fsrs6_distributions(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
+    baselines: List[str],
 ) -> List[Dict[str, Any]]:
     distributions: List[Dict[str, Any]] = []
     for env in envs:
-        anki_users: Dict[int, Dict[str, float]] = {}
         fsrs_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
 
         for (group_env, scheduler, desired, _), group in groups.items():
             if group_env != env:
                 continue
-            if scheduler == "anki_sm2":
-                for user_key, payload in group["users"].items():
-                    if isinstance(user_key, int):
-                        anki_users[user_key] = payload["metrics"]
-            elif scheduler == "fsrs6" and desired is not None:
+            if scheduler == "fsrs6" and desired is not None:
                 for user_key, payload in group["users"].items():
                     if not isinstance(user_key, int):
                         continue
@@ -550,68 +549,80 @@ def _compute_equivalent_fsrs6_distributions(
                         (float(desired), payload["metrics"])
                     )
 
-        eligible_users = set(anki_users) & set(fsrs_users) & common_user_ids
-        if not eligible_users:
-            continue
+        for baseline in baselines:
+            baseline_users: Dict[int, Dict[str, float]] = {}
+            for (group_env, scheduler, _, _), group in groups.items():
+                if group_env != env or scheduler != baseline:
+                    continue
+                for user_key, payload in group["users"].items():
+                    if isinstance(user_key, int):
+                        baseline_users[user_key] = payload["metrics"]
 
-        anki_per_minute: List[float] = []
-        fsrs_per_minute: List[float] = []
-        fsrs_dr_equiv: List[float] = []
-        used_users: set[int] = set()
-        for user_id in sorted(eligible_users):
-            anki_metrics = anki_users[user_id]
-            candidates = fsrs_users[user_id]
-            if len(candidates) < 2:
+            eligible_users = set(baseline_users) & set(fsrs_users) & common_user_ids
+            if not eligible_users:
                 continue
-            target_value = anki_metrics["memorized_average"]
-            candidate_points = [
+
+            baseline_per_minute: List[float] = []
+            fsrs_per_minute: List[float] = []
+            fsrs_dr_equiv: List[float] = []
+            used_users: set[int] = set()
+            for user_id in sorted(eligible_users):
+                baseline_metrics = baseline_users[user_id]
+                candidates = fsrs_users[user_id]
+                if len(candidates) < 2:
+                    continue
+                target_value = baseline_metrics["memorized_average"]
+                candidate_points = [
+                    {
+                        "dr": dr,
+                        "x": payload["memorized_average"],
+                        "y": payload["memorized_per_minute"],
+                    }
+                    for dr, payload in candidates
+                ]
+                candidate_points.sort(key=lambda item: item["x"])
+                lower = None
+                upper = None
+                for point in candidate_points:
+                    if point["x"] <= target_value:
+                        lower = point
+                    if point["x"] >= target_value and upper is None:
+                        upper = point
+                if lower is None or upper is None:
+                    candidate_points.sort(
+                        key=lambda item: abs(item["x"] - target_value)
+                    )
+                    lower = candidate_points[0]
+                    upper = candidate_points[1]
+                x1 = lower["x"]
+                x2 = upper["x"]
+                if math.isclose(x1, x2):
+                    dr_equiv = (lower["dr"] + upper["dr"]) / 2.0
+                    y_equiv = (lower["y"] + upper["y"]) / 2.0
+                else:
+                    t = (target_value - x1) / (x2 - x1)
+                    t = max(0.0, min(1.0, t))
+                    dr_equiv = lower["dr"] + t * (upper["dr"] - lower["dr"])
+                    y_equiv = lower["y"] + t * (upper["y"] - lower["y"])
+
+                baseline_per_minute.append(baseline_metrics["memorized_per_minute"])
+                fsrs_per_minute.append(y_equiv)
+                fsrs_dr_equiv.append(dr_equiv)
+                used_users.add(user_id)
+
+            if not used_users:
+                continue
+
+            distributions.append(
                 {
-                    "dr": dr,
-                    "x": payload["memorized_average"],
-                    "y": payload["memorized_per_minute"],
+                    "environment": env,
+                    "baseline": baseline,
+                    "baseline_per_minute": baseline_per_minute,
+                    "fsrs_per_minute": fsrs_per_minute,
+                    "fsrs_dr_equiv": fsrs_dr_equiv,
+                    "user_ids": used_users,
                 }
-                for dr, payload in candidates
-            ]
-            candidate_points.sort(key=lambda item: item["x"])
-            lower = None
-            upper = None
-            for point in candidate_points:
-                if point["x"] <= target_value:
-                    lower = point
-                if point["x"] >= target_value and upper is None:
-                    upper = point
-            if lower is None or upper is None:
-                candidate_points.sort(key=lambda item: abs(item["x"] - target_value))
-                lower = candidate_points[0]
-                upper = candidate_points[1]
-            x1 = lower["x"]
-            x2 = upper["x"]
-            if math.isclose(x1, x2):
-                dr_equiv = (lower["dr"] + upper["dr"]) / 2.0
-                y_equiv = (lower["y"] + upper["y"]) / 2.0
-            else:
-                t = (target_value - x1) / (x2 - x1)
-                t = max(0.0, min(1.0, t))
-                dr_equiv = lower["dr"] + t * (upper["dr"] - lower["dr"])
-                y_equiv = lower["y"] + t * (upper["y"] - lower["y"])
-
-            anki_per_minute.append(anki_metrics["memorized_per_minute"])
-            fsrs_per_minute.append(y_equiv)
-            fsrs_dr_equiv.append(dr_equiv)
-            used_users.add(user_id)
-
-        if not used_users:
-            continue
-
-        distributions.append(
-            {
-                "environment": env,
-                "anki_per_minute": anki_per_minute,
-                "fsrs_per_minute": fsrs_per_minute,
-                "fsrs_dr_equiv": fsrs_dr_equiv,
-                "user_ids": used_users,
-            }
-        )
+            )
 
     return distributions
 
@@ -623,9 +634,10 @@ def _plot_equivalent_distributions(
 ) -> None:
     import matplotlib.pyplot as plt
 
-    anki_per_minute = entry["anki_per_minute"]
+    baseline_per_minute = entry["baseline_per_minute"]
     fsrs_per_minute = entry["fsrs_per_minute"]
     fsrs_dr_equiv = entry["fsrs_dr_equiv"]
+    baseline_label = _format_scheduler_title(entry["baseline"])
 
     fig, axes = plt.subplots(3, 2, figsize=(14, 12))
     ax_middle = axes[0, 0]
@@ -636,7 +648,7 @@ def _plot_equivalent_distributions(
     ax_ratio_box = axes[2, 1]
 
     boxplot_left = ax_left.boxplot(
-        [anki_per_minute, fsrs_per_minute],
+        [baseline_per_minute, fsrs_per_minute],
         widths=0.5,
         patch_artist=True,
         showfliers=True,
@@ -646,7 +658,7 @@ def _plot_equivalent_distributions(
     for patch, color in zip(boxplot_left["boxes"], ["#1f77b4", "#2ca02c"]):
         patch.set_facecolor(color)
     ax_left.set_xticks([1, 2])
-    ax_left.set_xticklabels(["Anki-SM-2", "FSRS-6 equiv"])
+    ax_left.set_xticklabels([baseline_label, "FSRS-6 equiv"])
     ax_left.set_ylabel("Memorized cards/min (average)")
     ax_left.grid(True, axis="y", ls="--", alpha=0.6)
 
@@ -687,7 +699,7 @@ def _plot_equivalent_distributions(
 
     left_labels, _, _ = _annotate_box_stats(
         ax_left,
-        [anki_per_minute, fsrs_per_minute],
+        [baseline_per_minute, fsrs_per_minute],
         [1, 2],
     )
     if left_labels:
@@ -707,14 +719,14 @@ def _plot_equivalent_distributions(
     ax_middle.grid(True, axis="y", ls="--", alpha=0.6)
 
     diff_values = [
-        fsrs_value - anki_value
-        for anki_value, fsrs_value in zip(anki_per_minute, fsrs_per_minute)
+        fsrs_value - baseline_value
+        for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
     ]
     if diff_values:
         diff_bins = min(15, max(5, len(diff_values) // 3))
         ax_right.hist(diff_values, bins=diff_bins, color="#ff7f0e", alpha=0.8)
     ax_right.axvline(0.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
-    ax_right.set_xlabel("FSRS-6 equiv - Anki-SM-2 (cards/min)")
+    ax_right.set_xlabel(f"FSRS-6 equiv - {baseline_label} (cards/min)")
     ax_right.set_ylabel("User count")
     ax_right.grid(True, axis="y", ls="--", alpha=0.6)
 
@@ -731,7 +743,7 @@ def _plot_equivalent_distributions(
         ax_box.axhline(0.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
         ax_box.set_xticks([1])
         ax_box.set_xticklabels(["Diff"])
-        ax_box.set_ylabel("FSRS-6 equiv - Anki-SM-2 (cards/min)")
+        ax_box.set_ylabel(f"FSRS-6 equiv - {baseline_label} (cards/min)")
         ax_box.grid(True, axis="y", ls="--", alpha=0.6)
         diff_positive = sum(value > 0 for value in diff_values)
         diff_ratio = diff_positive / len(diff_values)
@@ -758,15 +770,15 @@ def _plot_equivalent_distributions(
         ax_box.axis("off")
 
     ratio_values = [
-        fsrs_value / anki_value
-        for anki_value, fsrs_value in zip(anki_per_minute, fsrs_per_minute)
-        if anki_value > 0
+        fsrs_value / baseline_value
+        for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
+        if baseline_value > 0
     ]
     if ratio_values:
         ratio_bins = min(15, max(5, len(ratio_values) // 3))
         ax_ratio_hist.hist(ratio_values, bins=ratio_bins, color="#2ca02c", alpha=0.8)
     ax_ratio_hist.axvline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
-    ax_ratio_hist.set_xlabel("FSRS-6 equiv / Anki-SM-2 (cards/min)")
+    ax_ratio_hist.set_xlabel(f"FSRS-6 equiv / {baseline_label} (cards/min)")
     ax_ratio_hist.set_ylabel("User count")
     ax_ratio_hist.grid(True, axis="y", ls="--", alpha=0.6)
 
@@ -785,7 +797,7 @@ def _plot_equivalent_distributions(
         )
         ax_ratio_box.set_xticks([1])
         ax_ratio_box.set_xticklabels(["Ratio"])
-        ax_ratio_box.set_ylabel("FSRS-6 equiv / Anki-SM-2 (cards/min)")
+        ax_ratio_box.set_ylabel(f"FSRS-6 equiv / {baseline_label} (cards/min)")
         ax_ratio_box.grid(True, axis="y", ls="--", alpha=0.6)
         ratio_above = sum(value > 1 for value in ratio_values)
         ratio_ratio = ratio_above / len(ratio_values)
