@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from statistics import mean
@@ -132,6 +133,22 @@ def _normalize_user_id(value: Any) -> Optional[int]:
         return None
 
 
+def _infer_user_id_from_path(path: Path) -> Optional[int]:
+    parent = path.parent.name
+    if parent.startswith("user_"):
+        try:
+            return int(parent.split("_", 1)[1])
+        except (IndexError, ValueError):
+            pass
+    match = re.search(r"_user=(\d+)_", path.name)
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
 def _format_title(base: str, user_ids: List[int]) -> str:
     if not user_ids:
         return base
@@ -192,6 +209,7 @@ def main() -> None:
 
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]] = {}
     duplicate_count = 0
+    all_user_ids: set[int] = set()
 
     for path in _iter_log_paths(log_root):
         try:
@@ -248,8 +266,12 @@ def main() -> None:
             totals.get("avg_accum_memorized_per_hour", 0.0)
         )
         user_id = _normalize_user_id(meta.get("user_id"))
+        if user_id is None:
+            user_id = _infer_user_id_from_path(path)
         user_key = user_id if user_id is not None else f"unknown::{path}"
         mtime = path.stat().st_mtime
+        if user_id is not None:
+            all_user_ids.add(user_id)
 
         key = (environment, scheduler, desired, fixed_interval)
         group = groups.setdefault(
@@ -405,19 +427,13 @@ def main() -> None:
 
     _setup_plot_style()
     output_path = plot_dir / "retention_sweep_user_averages.png"
-    user_ids = sorted(
-        {
-            user_key
-            for group in groups.values()
-            for user_key in group["users"].keys()
-            if isinstance(user_key, int)
-        }
-    )
+    user_ids = sorted(all_user_ids)
     title = _format_title("Pareto frontier (user averages)", user_ids)
     _plot_compare_frontier(
         series,
         output_path,
         title_base=title,
+        user_count=len(user_ids),
         show_labels=args.show_labels,
     )
     print(f"Wrote {results_path}")
@@ -434,6 +450,7 @@ def _plot_compare_frontier(
     series: List[Dict[str, Any]],
     output_path: Path,
     title_base: str,
+    user_count: int | None = None,
     show_labels: bool = False,
 ) -> None:
     import matplotlib.pyplot as plt
@@ -622,6 +639,18 @@ def _plot_compare_frontier(
     plt.xticks(fontsize=16, color="black")
     plt.yticks(fontsize=16, color="black")
     plt.title(title_base, fontsize=22)
+    if user_count is not None:
+        ax = plt.gca()
+        ax.text(
+            0.98,
+            0.98,
+            f"Users: {user_count}",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=12,
+            bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"},
+        )
     plt.grid(True, ls="--")
     plt.legend(fontsize=16, loc="lower left", facecolor="white")
     plt.tight_layout()
