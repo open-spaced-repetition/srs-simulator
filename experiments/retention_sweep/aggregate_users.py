@@ -627,10 +627,15 @@ def _plot_equivalent_distributions(
     fsrs_per_minute = entry["fsrs_per_minute"]
     fsrs_dr_equiv = entry["fsrs_dr_equiv"]
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.5))
-    ax_left, ax_right = axes
+    fig, axes = plt.subplots(3, 2, figsize=(14, 12))
+    ax_middle = axes[0, 0]
+    ax_left = axes[0, 1]
+    ax_right = axes[1, 0]
+    ax_box = axes[1, 1]
+    ax_ratio_hist = axes[2, 0]
+    ax_ratio_box = axes[2, 1]
 
-    ax_left.boxplot(
+    boxplot_left = ax_left.boxplot(
         [anki_per_minute, fsrs_per_minute],
         widths=0.5,
         patch_artist=True,
@@ -638,17 +643,149 @@ def _plot_equivalent_distributions(
         boxprops={"facecolor": "#d9d9d9", "edgecolor": "black"},
         medianprops={"color": "black"},
     )
+    for patch, color in zip(boxplot_left["boxes"], ["#1f77b4", "#2ca02c"]):
+        patch.set_facecolor(color)
     ax_left.set_xticks([1, 2])
     ax_left.set_xticklabels(["Anki-SM-2", "FSRS-6 equiv"])
     ax_left.set_ylabel("Memorized cards/min (average)")
     ax_left.grid(True, axis="y", ls="--", alpha=0.6)
 
+    def _annotate_box_stats(
+        ax: Any,
+        values_list: List[List[float]],
+        x_positions: List[float],
+    ) -> Tuple[List[str], List[float], List[float]]:
+        labels: List[str] = []
+        means: List[float] = []
+        medians: List[float] = []
+        for x_pos, values in zip(x_positions, values_list):
+            if not values:
+                continue
+            mean_value = mean(values)
+            median_value = median(values)
+            means.append(mean_value)
+            medians.append(median_value)
+            labels.append(f"μ={mean_value:.2f}  med={median_value:.2f}")
+            ax.scatter(
+                [x_pos],
+                [mean_value],
+                color="black",
+                marker="D",
+                s=28,
+                zorder=4,
+            )
+            ax.scatter(
+                [x_pos],
+                [median_value],
+                color="white",
+                edgecolor="black",
+                marker="o",
+                s=26,
+                zorder=4,
+            )
+        return labels, means, medians
+
+    left_labels, _, _ = _annotate_box_stats(
+        ax_left,
+        [anki_per_minute, fsrs_per_minute],
+        [1, 2],
+    )
+    if left_labels:
+        ax_left.legend(
+            left_labels,
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            fontsize=8,
+        )
+
     dr_percent = [value * 100 for value in fsrs_dr_equiv]
-    bins = min(15, max(5, len(dr_percent) // 3))
-    ax_right.hist(dr_percent, bins=bins, color="#1f77b4", alpha=0.8)
-    ax_right.set_xlabel("Equivalent FSRS-6 DR (%)")
+    dr_bins = min(15, max(5, len(dr_percent) // 3))
+    ax_middle.hist(dr_percent, bins=dr_bins, color="#1f77b4", alpha=0.8)
+    ax_middle.set_xlabel("Equivalent FSRS-6 DR (%)")
+    ax_middle.set_ylabel("User count")
+    ax_middle.grid(True, axis="y", ls="--", alpha=0.6)
+
+    diff_values = [
+        fsrs_value - anki_value
+        for anki_value, fsrs_value in zip(anki_per_minute, fsrs_per_minute)
+    ]
+    if diff_values:
+        diff_bins = min(15, max(5, len(diff_values) // 3))
+        ax_right.hist(diff_values, bins=diff_bins, color="#ff7f0e", alpha=0.8)
+    ax_right.axvline(0.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+    ax_right.set_xlabel("FSRS-6 equiv - Anki-SM-2 (cards/min)")
     ax_right.set_ylabel("User count")
     ax_right.grid(True, axis="y", ls="--", alpha=0.6)
+
+    if diff_values:
+        ax_box.boxplot(
+            diff_values,
+            vert=True,
+            widths=0.5,
+            patch_artist=True,
+            showfliers=True,
+            boxprops={"facecolor": "#ff7f0e", "edgecolor": "black"},
+            medianprops={"color": "black"},
+        )
+        ax_box.axhline(0.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+        ax_box.set_xticks([1])
+        ax_box.set_xticklabels(["Diff"])
+        ax_box.set_ylabel("FSRS-6 equiv - Anki-SM-2 (cards/min)")
+        ax_box.grid(True, axis="y", ls="--", alpha=0.6)
+        diff_labels, _, _ = _annotate_box_stats(ax_box, [diff_values], [1])
+        if diff_labels:
+            ax_box.legend(
+                diff_labels,
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                frameon=False,
+                fontsize=8,
+            )
+    else:
+        ax_box.axis("off")
+
+    ratio_values = [
+        fsrs_value / anki_value
+        for anki_value, fsrs_value in zip(anki_per_minute, fsrs_per_minute)
+        if anki_value > 0
+    ]
+    if ratio_values:
+        ratio_bins = min(15, max(5, len(ratio_values) // 3))
+        ax_ratio_hist.hist(ratio_values, bins=ratio_bins, color="#2ca02c", alpha=0.8)
+    ax_ratio_hist.axvline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+    ax_ratio_hist.set_xlabel("FSRS-6 equiv / Anki-SM-2 (cards/min)")
+    ax_ratio_hist.set_ylabel("User count")
+    ax_ratio_hist.grid(True, axis="y", ls="--", alpha=0.6)
+
+    if ratio_values:
+        ax_ratio_box.boxplot(
+            ratio_values,
+            vert=True,
+            widths=0.5,
+            patch_artist=True,
+            showfliers=True,
+            boxprops={"facecolor": "#2ca02c", "edgecolor": "black"},
+            medianprops={"color": "black"},
+        )
+        ax_ratio_box.axhline(
+            1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7
+        )
+        ax_ratio_box.set_xticks([1])
+        ax_ratio_box.set_xticklabels(["Ratio"])
+        ax_ratio_box.set_ylabel("FSRS-6 equiv / Anki-SM-2 (cards/min)")
+        ax_ratio_box.grid(True, axis="y", ls="--", alpha=0.6)
+        ratio_labels, _, _ = _annotate_box_stats(ax_ratio_box, [ratio_values], [1])
+        if ratio_labels:
+            ax_ratio_box.legend(
+                ratio_labels,
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                frameon=False,
+                fontsize=8,
+            )
+    else:
+        ax_ratio_box.axis("off")
 
     fig.suptitle(title_base, fontsize=16)
     plt.tight_layout()
