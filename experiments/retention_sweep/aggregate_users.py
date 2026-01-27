@@ -733,6 +733,18 @@ def _plot_equivalent_distributions(
         ax_box.set_xticklabels(["Diff"])
         ax_box.set_ylabel("FSRS-6 equiv - Anki-SM-2 (cards/min)")
         ax_box.grid(True, axis="y", ls="--", alpha=0.6)
+        diff_positive = sum(value > 0 for value in diff_values)
+        diff_ratio = diff_positive / len(diff_values)
+        ax_box.text(
+            0.98,
+            0.98,
+            f"diff>0: {diff_ratio:.1%}",
+            transform=ax_box.transAxes,
+            ha="right",
+            va="top",
+            fontsize=9,
+            bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "none"},
+        )
         diff_labels, _, _ = _annotate_box_stats(ax_box, [diff_values], [1])
         if diff_labels:
             ax_box.legend(
@@ -775,6 +787,18 @@ def _plot_equivalent_distributions(
         ax_ratio_box.set_xticklabels(["Ratio"])
         ax_ratio_box.set_ylabel("FSRS-6 equiv / Anki-SM-2 (cards/min)")
         ax_ratio_box.grid(True, axis="y", ls="--", alpha=0.6)
+        ratio_above = sum(value > 1 for value in ratio_values)
+        ratio_ratio = ratio_above / len(ratio_values)
+        ax_ratio_box.text(
+            0.98,
+            0.98,
+            f"ratio>1: {ratio_ratio:.1%}",
+            transform=ax_ratio_box.transAxes,
+            ha="right",
+            va="top",
+            fontsize=9,
+            bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "none"},
+        )
         ratio_labels, _, _ = _annotate_box_stats(ax_ratio_box, [ratio_values], [1])
         if ratio_labels:
             ax_ratio_box.legend(
