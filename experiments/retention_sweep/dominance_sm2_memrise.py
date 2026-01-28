@@ -45,6 +45,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip plotting.",
     )
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=0.0,
+        help="Treat metric differences within this epsilon as ties.",
+    )
     return parser.parse_args()
 
 
@@ -113,24 +119,36 @@ def _infer_user_id_from_path(path: Path) -> Optional[int]:
     return None
 
 
+def _compare(a: float, b: float, epsilon: float) -> int:
+    if abs(a - b) <= epsilon:
+        return 0
+    return 1 if a > b else -1
+
+
 def _dominance_label(
     sm2_metrics: Dict[str, float],
     memrise_metrics: Dict[str, float],
+    *,
+    epsilon: float,
 ) -> str:
-    sm2_better = (
-        sm2_metrics["memorized_average"] > memrise_metrics["memorized_average"]
-        and sm2_metrics["memorized_per_minute"]
-        > memrise_metrics["memorized_per_minute"]
+    mem_cmp = _compare(
+        sm2_metrics["memorized_average"],
+        memrise_metrics["memorized_average"],
+        epsilon,
     )
-    memrise_better = (
-        memrise_metrics["memorized_average"] > sm2_metrics["memorized_average"]
-        and memrise_metrics["memorized_per_minute"]
-        > sm2_metrics["memorized_per_minute"]
+    eff_cmp = _compare(
+        sm2_metrics["memorized_per_minute"],
+        memrise_metrics["memorized_per_minute"],
+        epsilon,
     )
-    if sm2_better:
+    if mem_cmp > 0 and eff_cmp > 0:
         return "sm2_dominates"
-    if memrise_better:
+    if mem_cmp < 0 and eff_cmp < 0:
         return "memrise_dominates"
+    if mem_cmp > 0 and eff_cmp < 0:
+        return "sm2_memrise_tradeoff"
+    if mem_cmp < 0 and eff_cmp > 0:
+        return "memrise_sm2_tradeoff"
     return "neither"
 
 
@@ -151,6 +169,8 @@ def _plot_dominance(
     envs = [item["environment"] for item in results]
     sm2 = [item["sm2_dominates_pct"] * 100 for item in results]
     memrise = [item["memrise_dominates_pct"] * 100 for item in results]
+    sm2_tradeoff = [item["sm2_memrise_tradeoff_pct"] * 100 for item in results]
+    memrise_tradeoff = [item["memrise_sm2_tradeoff_pct"] * 100 for item in results]
     neither = [item["neither_pct"] * 100 for item in results]
     counts = [item["user_count"] for item in results]
 
@@ -164,10 +184,27 @@ def _plot_dominance(
         label="Memrise dominates",
         color="#2ca02c",
     )
+    bars_sm2_tradeoff = plt.bar(
+        x,
+        sm2_tradeoff,
+        bottom=[a + b for a, b in zip(sm2, memrise)],
+        label="SM-2 higher memorized, lower efficiency",
+        color="#ff7f0e",
+    )
+    bars_memrise_tradeoff = plt.bar(
+        x,
+        memrise_tradeoff,
+        bottom=[a + b + c for a, b, c in zip(sm2, memrise, sm2_tradeoff)],
+        label="Memrise higher memorized, lower efficiency",
+        color="#d62728",
+    )
     bars_neither = plt.bar(
         x,
         neither,
-        bottom=[a + b for a, b in zip(sm2, memrise)],
+        bottom=[
+            a + b + c + d
+            for a, b, c, d in zip(sm2, memrise, sm2_tradeoff, memrise_tradeoff)
+        ],
         label="Neither",
         color="#7f7f7f",
     )
@@ -195,9 +232,18 @@ def _plot_dominance(
 
     sm2_bottoms = [0.0] * len(x)
     memrise_bottoms = sm2
-    neither_bottoms = [a + b for a, b in zip(sm2, memrise)]
+    sm2_tradeoff_bottoms = [a + b for a, b in zip(sm2, memrise)]
+    memrise_tradeoff_bottoms = [
+        a + b + c for a, b, c in zip(sm2, memrise, sm2_tradeoff)
+    ]
+    neither_bottoms = [
+        a + b + c + d
+        for a, b, c, d in zip(sm2, memrise, sm2_tradeoff, memrise_tradeoff)
+    ]
     _label_segment(bars_sm2, sm2, sm2_bottoms)
     _label_segment(bars_memrise, memrise, memrise_bottoms)
+    _label_segment(bars_sm2_tradeoff, sm2_tradeoff, sm2_tradeoff_bottoms)
+    _label_segment(bars_memrise_tradeoff, memrise_tradeoff, memrise_tradeoff_bottoms)
     _label_segment(bars_neither, neither, neither_bottoms)
 
     for idx, total in enumerate(counts):
@@ -289,9 +335,19 @@ def main() -> None:
         eligible_users = set(sm2_for_env) & set(memrise_for_env)
         if not eligible_users:
             continue
-        counts = {"sm2_dominates": 0, "memrise_dominates": 0, "neither": 0}
+        counts = {
+            "sm2_dominates": 0,
+            "memrise_dominates": 0,
+            "sm2_memrise_tradeoff": 0,
+            "memrise_sm2_tradeoff": 0,
+            "neither": 0,
+        }
         for user_id in eligible_users:
-            label = _dominance_label(sm2_for_env[user_id], memrise_for_env[user_id])
+            label = _dominance_label(
+                sm2_for_env[user_id],
+                memrise_for_env[user_id],
+                epsilon=args.epsilon,
+            )
             counts[label] += 1
         total = len(eligible_users)
         results.append(
@@ -300,9 +356,13 @@ def main() -> None:
                 "user_count": total,
                 "sm2_dominates": counts["sm2_dominates"],
                 "memrise_dominates": counts["memrise_dominates"],
+                "sm2_memrise_tradeoff": counts["sm2_memrise_tradeoff"],
+                "memrise_sm2_tradeoff": counts["memrise_sm2_tradeoff"],
                 "neither": counts["neither"],
                 "sm2_dominates_pct": counts["sm2_dominates"] / total,
                 "memrise_dominates_pct": counts["memrise_dominates"] / total,
+                "sm2_memrise_tradeoff_pct": counts["sm2_memrise_tradeoff"] / total,
+                "memrise_sm2_tradeoff_pct": counts["memrise_sm2_tradeoff"] / total,
                 "neither_pct": counts["neither"] / total,
             }
         )
