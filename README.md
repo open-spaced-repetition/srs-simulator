@@ -3,7 +3,7 @@
 This project is a small, dependency-light simulator inspired by [*What will a general simulator of spaced repetition consist of?*](https://l-m-sherlock.notion.site/What-will-a-general-simulator-of-spaced-repetition-consist-of-2c7c250163a1809684f3fe8cf8011a00) and mirrors the [Rust FSRS simulator](https://github.com/open-spaced-repetition/fsrs-rs/blob/main/src/simulation.rs) ideas in Python. It separates the simulator into four modules so you can stress-test schedulers against richer real-world assumptions, with both event-driven and vectorized engines.
 
 ## Quickstart
-Install dependencies with uv, then run a quick simulation (no logs, just plots). Quickstart assumes `../srs-benchmark` and `../Anki-button-usage` are available; see Requirements and data.
+Install dependencies with uv, then run a quick simulation (no logs, just plots). Quickstart assumes [`../srs-benchmark`](https://github.com/open-spaced-repetition/srs-benchmark) and [`../Anki-button-usage`](https://github.com/open-spaced-repetition/Anki-button-usage) are available; see Requirements and data.
 
 ```bash
 uv sync
@@ -34,7 +34,7 @@ uv run script.py --algo LSTM --weights
 ```
 
 - `Anki-button-usage` repo is required by `simulate.py` and defaults to `../Anki-button-usage/button_usage.jsonl` (override with `--button-usage`). Pass `--user-id` to select the matching per-user row.
-- SSP-MMC policies require precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS/README.md`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
+- SSP-MMC policies require precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
 
 ## CLI usage
 Simulation logs store metadata and totals by default; add `--log-reviews` to include per-event logs (can be large). The vectorized engine ignores `--log-reviews` and only returns aggregate stats.
