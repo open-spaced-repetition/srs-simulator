@@ -489,7 +489,7 @@ def _plot_compare_frontier(
         color="black",
     )
     plt.ylabel(
-        "Memorized cards (average)/minutes per day\n(higher=better)",
+        "Memorized cards (average)/Minutes of studying per day\n(higher=better)",
         fontsize=18,
         color="black",
     )
