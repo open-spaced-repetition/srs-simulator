@@ -88,14 +88,15 @@ uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
 - `dominance_sm2_memrise.py` reports per-user dominance rates between Anki-SM-2 and Memrise and saves a stacked bar chart.
 
 ## Evaluation
-`experiments/retention_sweep/aggregate_users.py` compares scheduler efficiency by aggregating retention_sweep logs across users for each (environment, scheduler, desired_retention or fixed_interval) configuration and restricting to the intersection of user IDs so each config is compared on the same users.
+`experiments/retention_sweep/aggregate_users.py` compares scheduler efficiency by aggregating retention_sweep logs across users for each environment, scheduler, and target setting (desired retention or fixed interval) and restricting to the intersection of user IDs so each config is compared on the same users.
 
 Metrics and outputs:
-- `memorized_average`: average memorized cards across all days (from totals in each JSONL log).
-- `time_average`: average study minutes per day (from totals in each JSONL log).
-- `memorized_per_minute`: `memorized_average / time_average`, used as the primary efficiency metric.
-- Summary JSON: per-config means and medians for `memorized_average` and `memorized_per_minute`, plus user count and a display title.
-- Plots: for baseline schedulers (default Anki-SM-2 and Memrise), it computes each user's FSRS-6 equivalent DR by interpolating FSRS-6 points to match the baseline `memorized_average`, then compares `memorized_per_minute` distributions and deltas.
+- Memorized cards (average, all days): average number of memorized cards across the full simulation horizon.
+- Study minutes per day (average): average study time per day from the logs.
+- Memorized cards per minute (average): memorized cards divided by study minutes, used as the primary efficiency metric.
+- Plots: for baseline schedulers (default Anki-SM-2 and Memrise), it computes each user's FSRS-6 equivalent DR by interpolating FSRS-6 points to match the baseline memorized cards (average, all days), then compares memorized cards per minute (average) distributions along with per-user differences and ratios.
+- Per-user Pareto frontier comparison: `build_pareto_users.py` saves a "Pareto frontier env compare" plot for each user that overlays environments and schedulers to show the efficiency frontier in terms of memorized cards (average, all days) vs memorized cards per minute (average).
+- Axes under default retention_sweep settings (1825 days, deck 10,000, learn limit 10/day, review limit 9,999/day, cost limit 720 minutes/day, review-first, seed 42, vectorized engine): the X axis "Memorized cards (average, all days)" is the expected number of cards remembered per day averaged over the whole run (sum of predicted retrievability across learned cards), and the Y axis "Memorized cards per minute (average)" is computed by taking that average memorized-cards-per-day value and dividing it by the average study minutes per day from the cost model, so it can be read as "how many cards you effectively keep remembered for each minute of study" over the whole run (higher = more efficient use of time, lower = more time spent per remembered card).
 
 ## Benchmarks
 Performance baselines live under `benches/`. See `benches/README.md` for details.
