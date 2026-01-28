@@ -10,7 +10,6 @@ import torch
 class VectorizedConfig:
     device: Optional[torch.device] = None
     dtype: Optional[torch.dtype] = None
-    lstm_batch_size: int = 2048
 
 
 class VectorizedEnvOps(Protocol):
