@@ -510,7 +510,6 @@ class LSTMVectorizedEnvOps:
         environment: LSTMModel,
         *,
         device: torch.device | None,
-        lstm_batch_size: int,
     ) -> None:
         if device is None:
             self.device = environment.device
@@ -524,7 +523,6 @@ class LSTMVectorizedEnvOps:
         environment.dtype = env_dtype
         self.dtype = env_dtype
         self.environment = environment
-        self.batch_size = max(1, int(lstm_batch_size))
         self.n_rnns = int(environment.network.n_rnns)
         self.n_hidden = int(environment.network.n_hidden)
         self.n_curves = int(environment.network.n_curves)

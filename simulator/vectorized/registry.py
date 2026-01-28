@@ -38,9 +38,7 @@ from simulator.vectorized.types import (
 def resolve_env_ops(environment: Any, config: VectorizedConfig) -> VectorizedEnvOps:
     if isinstance(environment, LSTMModel):
         device = torch.device(config.device) if config.device is not None else None
-        return LSTMVectorizedEnvOps(
-            environment, device=device, lstm_batch_size=config.lstm_batch_size
-        )
+        return LSTMVectorizedEnvOps(environment, device=device)
     if isinstance(environment, FSRS6Model):
         device = (
             torch.device(config.device)

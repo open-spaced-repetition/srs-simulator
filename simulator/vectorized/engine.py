@@ -48,7 +48,6 @@ def simulate(
     seed: int = 0,
     device: Optional[str | torch.device] = None,
     dtype: Optional[torch.dtype] = None,
-    lstm_batch_size: int = 2048,
     progress: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> SimulationStats:
@@ -60,7 +59,6 @@ def simulate(
     config = VectorizedConfig(
         device=torch.device(device) if device is not None else None,
         dtype=dtype,
-        lstm_batch_size=lstm_batch_size,
     )
     env_ops = resolve_env_ops(environment, config)
     sched_ops = resolve_scheduler_ops(
