@@ -11,13 +11,13 @@ Prereqs
 Run the default suite:
 
 ```bash
-uv run python benches/run_bench.py --srs-benchmark-root ..\\srs-benchmark
+uv run python benches/run_bench.py --srs-benchmark-root ../srs-benchmark
 ```
 
 Run a single scenario:
 
 ```bash
-uv run python benches/run_bench.py --scenario event_lstm_lstm --srs-benchmark-root ..\\srs-benchmark
+uv run python benches/run_bench.py --scenario event_lstm_lstm --srs-benchmark-root ../srs-benchmark
 ```
 
 Notes

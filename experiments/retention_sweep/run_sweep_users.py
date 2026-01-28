@@ -4,6 +4,7 @@ import argparse
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,6 +58,7 @@ def main() -> int:
     if args.start_user < 1 or args.end_user < args.start_user:
         raise ValueError("Invalid user range.")
 
+    script_path = Path("experiments") / "retention_sweep" / "run_sweep.py"
     extra_args = []
     if "--" in sys.argv:
         extra_args = sys.argv[sys.argv.index("--") + 1 :]
@@ -66,7 +68,7 @@ def main() -> int:
         cmd = [
             args.uv_cmd,
             "run",
-            ".\\experiments\\retention_sweep\\run_sweep.py",
+            str(script_path),
             "--environments",
             args.environments,
             "--schedulers",
