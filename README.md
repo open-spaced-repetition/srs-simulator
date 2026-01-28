@@ -87,6 +87,16 @@ uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON and plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise.
 - `dominance_sm2_memrise.py` reports per-user dominance rates between Anki-SM-2 and Memrise and saves a stacked bar chart.
 
+## Evaluation
+`experiments/retention_sweep/aggregate_users.py` compares scheduler efficiency by aggregating retention_sweep logs across users for each (environment, scheduler, desired_retention or fixed_interval) configuration and restricting to the intersection of user IDs so each config is compared on the same users.
+
+Metrics and outputs:
+- `memorized_average`: average memorized cards across all days (from totals in each JSONL log).
+- `time_average`: average study minutes per day (from totals in each JSONL log).
+- `memorized_per_minute`: `memorized_average / time_average`, used as the primary efficiency metric.
+- Summary JSON: per-config means and medians for `memorized_average` and `memorized_per_minute`, plus user count and a display title.
+- Plots: for baseline schedulers (default Anki-SM-2 and Memrise), it computes each user's FSRS-6 equivalent DR by interpolating FSRS-6 points to match the baseline `memorized_average`, then compares `memorized_per_minute` distributions and deltas.
+
 ## Benchmarks
 Performance baselines live under `benches/`. See `benches/README.md` for details.
 
