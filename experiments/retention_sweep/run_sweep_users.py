@@ -11,6 +11,11 @@ from pathlib import Path
 import threading
 
 from tqdm import tqdm
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
