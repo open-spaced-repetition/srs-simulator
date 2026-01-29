@@ -203,6 +203,12 @@ def parse_args() -> argparse.Namespace:
         help="Emit JSON progress events to stdout (for parent aggregation).",
     )
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Emit progress events every N days (defaults to ~100 steps).",
+    )
+    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable tqdm progress bars (useful for parallel runs).",
@@ -237,12 +243,21 @@ def _make_progress_callback(
     if args.progress_events:
         label = _progress_label(args)
         last_completed = -1
+        emit_every = args.progress_every
+        if emit_every is None:
+            emit_every = max(1, args.days // 100)
+        if emit_every < 1:
+            emit_every = 1
+        last_emitted = -emit_every
 
         def _emit_progress(completed: int, total: int) -> None:
-            nonlocal last_completed
+            nonlocal last_completed, last_emitted
             if completed == last_completed:
                 return
             last_completed = completed
+            if completed not in (0, total) and completed - last_emitted < emit_every:
+                return
+            last_emitted = completed
             event = {
                 "type": "progress",
                 "completed": completed,
