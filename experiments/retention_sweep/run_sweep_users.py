@@ -11,6 +11,10 @@ from pathlib import Path
 import threading
 
 from tqdm import tqdm
+from simulator.scheduler_spec import (
+    parse_scheduler_spec,
+    scheduler_uses_desired_retention,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,6 +111,119 @@ def _parse_env_overrides(values: list[str]) -> dict[str, str]:
     return overrides
 
 
+def _parse_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--start", type=int, default=70)
+    parser.add_argument("--end", type=int, default=99)
+    parser.add_argument("--step", type=int, default=1)
+    parser.add_argument("--days", type=int, default=1825)
+    parser.add_argument("--sspmmc-policy", type=Path, default=None)
+    parser.add_argument("--sspmmc-policy-dir", type=Path, default=None)
+    parser.add_argument("--sspmmc-policies", default=None)
+    parser.add_argument("--sspmmc-policy-glob", default="*.json")
+    parser.add_argument("--sspmmc-max", type=int, default=None)
+    return parser.parse_known_args(extra_args)[0]
+
+
+def _resolve_sspmmc_policies(
+    overrides: argparse.Namespace,
+    repo_root: Path,
+    user_id: int,
+    run_sspmmc: bool,
+) -> list[Path]:
+    if overrides.sspmmc_policies:
+        paths = [Path(path) for path in _parse_csv(overrides.sspmmc_policies)]
+        return [path.resolve() for path in paths]
+
+    if overrides.sspmmc_policy:
+        return [overrides.sspmmc_policy.resolve()]
+
+    policy_dir = overrides.sspmmc_policy_dir
+    if policy_dir is None and run_sspmmc:
+        candidate = (
+            repo_root.parent
+            / "SSP-MMC-FSRS"
+            / "outputs"
+            / "policies"
+            / f"user_{user_id}"
+        )
+        if candidate.exists():
+            policy_dir = candidate
+
+    if policy_dir is None:
+        return []
+
+    policy_dir = policy_dir.resolve()
+    paths = sorted(policy_dir.glob(overrides.sspmmc_policy_glob))
+    if overrides.sspmmc_max is not None:
+        paths = paths[: overrides.sspmmc_max]
+    return paths
+
+
+def _count_dr_steps(start: int, end: int, step: int) -> int:
+    if step == 0:
+        return 0
+    stop = end + (1 if step > 0 else -1)
+    return len(range(start, stop, step))
+
+
+def _estimate_total_days(
+    user_ids: list[int],
+    environments: list[str],
+    schedulers: list[str],
+    overrides: argparse.Namespace,
+    repo_root: Path,
+) -> int:
+    scheduler_specs = [parse_scheduler_spec(item) for item in schedulers]
+    fixed_schedulers = [spec for spec in scheduler_specs if spec[0] == "fixed"]
+    has_sspmmc = any(spec[0] == "sspmmc" for spec in scheduler_specs)
+    dr_schedulers: list[str] = []
+    non_dr_schedulers: list[str] = []
+    for name, _, _ in scheduler_specs:
+        if name in {"sspmmc", "fixed"}:
+            continue
+        if scheduler_uses_desired_retention(name):
+            if name not in dr_schedulers:
+                dr_schedulers.append(name)
+        else:
+            if name not in non_dr_schedulers:
+                non_dr_schedulers.append(name)
+
+    run_dr = bool(dr_schedulers)
+    run_sspmmc = has_sspmmc
+    run_fixed = bool(fixed_schedulers)
+    run_non_dr = bool(non_dr_schedulers)
+    dr_steps = _count_dr_steps(overrides.start, overrides.end, overrides.step)
+    base_runs = 0
+    if run_dr:
+        base_runs += dr_steps * len(dr_schedulers)
+    if run_non_dr:
+        base_runs += len(non_dr_schedulers)
+    if run_fixed:
+        base_runs += len(fixed_schedulers)
+
+    total_days = 0
+    for user_id in user_ids:
+        sspmmc_runs = 0
+        if run_sspmmc:
+            policies = _resolve_sspmmc_policies(
+                overrides,
+                repo_root,
+                user_id,
+                run_sspmmc,
+            )
+            sspmmc_runs = len(policies)
+        total_runs = base_runs + sspmmc_runs
+        total_days += total_runs * len(environments) * overrides.days
+    return total_days
+
+
 def _build_command(
     uv_cmd: str,
     script_path: Path,
@@ -185,8 +302,6 @@ def _run_command(
             try:
                 if overall_bar is not None:
                     if label and label != overall_label:
-                        if total > 0:
-                            overall_bar.total = (overall_bar.total or 0) + total
                         overall_label = label
                         overall_completed = 0
                     if completed < overall_completed:
@@ -237,6 +352,8 @@ def main() -> int:
     extra_args = []
     if "--" in sys.argv:
         extra_args = sys.argv[sys.argv.index("--") + 1 :]
+    sweep_overrides = _parse_run_sweep_overrides(extra_args)
+    repo_root = Path(__file__).resolve().parents[2]
 
     parallel = args.max_parallel > 1 and not args.dry_run
     enable_child_progress = args.child_progress == "on" or (
@@ -259,12 +376,23 @@ def main() -> int:
         )
 
     user_ids = list(range(args.start_user, args.end_user + 1, args.step_user))
+    envs = _parse_csv(args.environments) or ["lstm"]
+    schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
+    overall_total = None
     show_overall = use_parent_progress
+    if show_overall:
+        overall_total = _estimate_total_days(
+            user_ids,
+            envs,
+            schedulers,
+            sweep_overrides,
+            repo_root,
+        )
     overall_bar = None
     users_position = 0
     if show_overall:
         overall_bar = tqdm(
-            total=0,
+            total=overall_total,
             desc="overall",
             unit="day",
             file=sys.stderr,
