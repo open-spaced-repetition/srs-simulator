@@ -65,6 +65,12 @@ def parse_args() -> argparse.Namespace:
         help="Control command echoing (auto shows only in sequential runs).",
     )
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=None,
+        help="Child progress event frequency in days (passed to run_sweep.py).",
+    )
+    parser.add_argument(
         "--sleep-seconds",
         type=float,
         default=0.0,
@@ -118,6 +124,7 @@ def _build_command(
     disable_summary: bool,
     progress_position: int | None,
     emit_progress_events: bool,
+    progress_every: int | None,
 ) -> list[str]:
     cmd = [
         uv_cmd,
@@ -139,6 +146,8 @@ def _build_command(
         cmd.extend(["--progress-position", str(progress_position)])
     if emit_progress_events and "--progress-events" not in extra_args:
         cmd.append("--progress-events")
+    if progress_every is not None and "--progress-every" not in extra_args:
+        cmd.extend(["--progress-every", str(progress_every)])
     return cmd
 
 
@@ -261,6 +270,7 @@ def main() -> int:
                     not enable_child_summary,
                     None,
                     False,
+                    args.progress_every,
                 )
                 if args.dry_run or show_commands:
                     progress.write(f"[{user_id}] {' '.join(cmd)}")
@@ -309,6 +319,7 @@ def main() -> int:
                 not enable_child_summary or use_parent_progress,
                 None,
                 use_parent_progress,
+                args.progress_every,
             )
             if show_commands:
                 progress.write(f"[{user_id}] {' '.join(cmd)}")
