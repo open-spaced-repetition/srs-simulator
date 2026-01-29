@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from tqdm import tqdm
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -150,9 +152,53 @@ def main() -> int:
         )
 
     user_ids = list(range(args.start_user, args.end_user + 1, args.step_user))
-    if args.dry_run or args.max_parallel == 1:
+    progress = tqdm(
+        total=len(user_ids),
+        desc="users",
+        unit="user",
+        file=sys.stderr,
+        ascii=True,
+        leave=True,
+    )
+    try:
+        if args.dry_run or args.max_parallel == 1:
+            failures = 0
+            for user_id in user_ids:
+                cmd = _build_command(
+                    args.uv_cmd,
+                    script_path,
+                    args.environments,
+                    args.schedulers,
+                    user_id,
+                    extra_args,
+                    disable_progress,
+                )
+                print(f"[{user_id}] {' '.join(cmd)}")
+                if not args.dry_run:
+                    returncode = _run_command(cmd, env)
+                    if returncode != 0:
+                        failures += 1
+                        print(f"[{user_id}] FAILED with exit code {returncode}")
+                        if args.fail_fast:
+                            return returncode
+                progress.update(1)
+                if args.sleep_seconds > 0:
+                    time.sleep(args.sleep_seconds)
+            if failures:
+                print(f"Completed with {failures} failures.")
+                return 1
+            return 0
+
         failures = 0
-        for user_id in user_ids:
+        first_failure_code: int | None = None
+        stop_scheduling = False
+        user_iter = iter(user_ids)
+
+        def submit_next(executor: concurrent.futures.Executor) -> bool:
+            try:
+                user_id = next(user_iter)
+            except StopIteration:
+                return False
             cmd = _build_command(
                 args.uv_cmd,
                 script_path,
@@ -163,95 +209,66 @@ def main() -> int:
                 disable_progress,
             )
             print(f"[{user_id}] {' '.join(cmd)}")
-            if not args.dry_run:
-                returncode = _run_command(cmd, env)
-                if returncode != 0:
-                    failures += 1
-                    print(f"[{user_id}] FAILED with exit code {returncode}")
-                    if args.fail_fast:
-                        return returncode
+            future = executor.submit(_run_command, cmd, env)
+            pending[future] = user_id
             if args.sleep_seconds > 0:
                 time.sleep(args.sleep_seconds)
-        if failures:
-            print(f"Completed with {failures} failures.")
-            return 1
-        return 0
+            return True
 
-    failures = 0
-    first_failure_code: int | None = None
-    stop_scheduling = False
-    user_iter = iter(user_ids)
-
-    def submit_next(executor: concurrent.futures.Executor) -> bool:
-        try:
-            user_id = next(user_iter)
-        except StopIteration:
-            return False
-        cmd = _build_command(
-            args.uv_cmd,
-            script_path,
-            args.environments,
-            args.schedulers,
-            user_id,
-            extra_args,
-            disable_progress,
-        )
-        print(f"[{user_id}] {' '.join(cmd)}")
-        future = executor.submit(_run_command, cmd, env)
-        pending[future] = user_id
-        if args.sleep_seconds > 0:
-            time.sleep(args.sleep_seconds)
-        return True
-
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=args.max_parallel
-    ) as executor:
-        pending: dict[concurrent.futures.Future[int], int] = {}
-        for _ in range(args.max_parallel):
-            if not submit_next(executor):
-                break
-        while pending:
-            done, _ = concurrent.futures.wait(
-                pending,
-                return_when=concurrent.futures.FIRST_COMPLETED,
-            )
-            for future in done:
-                user_id = pending.pop(future)
-                try:
-                    returncode = future.result()
-                except concurrent.futures.CancelledError:
-                    continue
-                except (
-                    Exception
-                ) as exc:  # pragma: no cover - unexpected subprocess error
-                    failures += 1
-                    print(f"[{user_id}] FAILED with exception: {exc}")
-                    if first_failure_code is None:
-                        first_failure_code = 1
-                    if args.fail_fast:
-                        stop_scheduling = True
-                    continue
-                if returncode != 0:
-                    failures += 1
-                    print(f"[{user_id}] FAILED with exit code {returncode}")
-                    if first_failure_code is None:
-                        first_failure_code = returncode
-                    if args.fail_fast:
-                        stop_scheduling = True
-            if stop_scheduling:
-                for future in list(pending):
-                    future.cancel()
-                continue
-            while len(pending) < args.max_parallel:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=args.max_parallel
+        ) as executor:
+            pending: dict[concurrent.futures.Future[int], int] = {}
+            for _ in range(args.max_parallel):
                 if not submit_next(executor):
                     break
+            while pending:
+                done, _ = concurrent.futures.wait(
+                    pending,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in done:
+                    user_id = pending.pop(future)
+                    try:
+                        returncode = future.result()
+                    except concurrent.futures.CancelledError:
+                        progress.update(1)
+                        continue
+                    except (
+                        Exception
+                    ) as exc:  # pragma: no cover - unexpected subprocess error
+                        failures += 1
+                        print(f"[{user_id}] FAILED with exception: {exc}")
+                        if first_failure_code is None:
+                            first_failure_code = 1
+                        if args.fail_fast:
+                            stop_scheduling = True
+                        progress.update(1)
+                        continue
+                    if returncode != 0:
+                        failures += 1
+                        print(f"[{user_id}] FAILED with exit code {returncode}")
+                        if first_failure_code is None:
+                            first_failure_code = returncode
+                        if args.fail_fast:
+                            stop_scheduling = True
+                    progress.update(1)
+                if stop_scheduling:
+                    for future in list(pending):
+                        future.cancel()
+                    continue
+                while len(pending) < args.max_parallel:
+                    if not submit_next(executor):
+                        break
 
-    if failures:
-        print(f"Completed with {failures} failures.")
-        if args.fail_fast and first_failure_code is not None:
-            return first_failure_code
-        return 1
-    return 0
+        if failures:
+            print(f"Completed with {failures} failures.")
+            if args.fail_fast and first_failure_code is not None:
+                return first_failure_code
+            return 1
+        return 0
+    finally:
+        progress.close()
 
 
 if __name__ == "__main__":
