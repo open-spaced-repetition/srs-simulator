@@ -216,13 +216,13 @@ def _progress_label(args: argparse.Namespace) -> str:
         interval = getattr(args, "fixed_interval", None)
         if interval is not None:
             label = f"{label} ivl={format_float(interval)}"
-        return label
+        return f"u{args.user_id} {label}" if args.user_id is not None else label
     if args.scheduler == "sspmmc":
         if args.sspmmc_policy:
             label = f"{label}:{args.sspmmc_policy.stem}"
     elif scheduler_uses_desired_retention(args.scheduler):
         label = f"{label} dr={args.desired_retention:.2f}"
-    return label
+    return f"u{args.user_id} {label}" if args.user_id is not None else label
 
 
 def _make_progress_callback(
