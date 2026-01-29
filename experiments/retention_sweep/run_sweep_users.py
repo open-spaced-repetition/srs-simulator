@@ -143,6 +143,7 @@ def _run_command(
     cmd: list[str],
     env: dict[str, str],
     progress_bar: tqdm | None,
+    overall_bar: tqdm | None,
     progress_lock: threading.RLock | None,
 ) -> int:
     if progress_bar is None:
@@ -158,6 +159,8 @@ def _run_command(
         bufsize=1,
     )
     last_label = None
+    overall_label = None
+    overall_completed = 0
     if process.stdout is not None:
         for line in process.stdout:
             line = line.strip()
@@ -180,6 +183,19 @@ def _run_command(
             if progress_lock is not None:
                 progress_lock.acquire()
             try:
+                if overall_bar is not None:
+                    if label and label != overall_label:
+                        if total > 0:
+                            overall_bar.total = (overall_bar.total or 0) + total
+                        overall_label = label
+                        overall_completed = 0
+                    if completed < overall_completed:
+                        overall_completed = 0
+                    delta_overall = completed - overall_completed
+                    if delta_overall > 0:
+                        overall_bar.update(delta_overall)
+                        overall_completed = completed
+
                 if label and label != last_label:
                     reset_total = total if total > 0 else progress_bar.total
                     progress_bar.reset(total=reset_total)
@@ -243,13 +259,28 @@ def main() -> int:
         )
 
     user_ids = list(range(args.start_user, args.end_user + 1, args.step_user))
+    show_overall = use_parent_progress
+    overall_bar = None
+    users_position = 0
+    if show_overall:
+        overall_bar = tqdm(
+            total=0,
+            desc="overall",
+            unit="day",
+            file=sys.stderr,
+            ascii=True,
+            position=0,
+            leave=True,
+        )
+        users_position = 1
+
     progress = tqdm(
         total=len(user_ids),
         desc="users",
         unit="user",
         file=sys.stderr,
         ascii=True,
-        position=0,
+        position=users_position,
         leave=True,
     )
     try:
@@ -270,7 +301,7 @@ def main() -> int:
                 if args.dry_run or show_commands:
                     progress.write(f"[{user_id}] {' '.join(cmd)}")
                 if not args.dry_run:
-                    returncode = _run_command(cmd, env, None, None)
+                    returncode = _run_command(cmd, env, None, None, None)
                     if returncode != 0:
                         failures += 1
                         progress.write(
@@ -290,7 +321,10 @@ def main() -> int:
         first_failure_code: int | None = None
         stop_scheduling = False
         user_iter = iter(user_ids)
-        available_positions = list(range(1, args.max_parallel + 1))
+        worker_position_base = users_position + 1
+        available_positions = list(
+            range(worker_position_base, worker_position_base + args.max_parallel)
+        )
         worker_bars: dict[int, tqdm] = {}
         progress_lock = threading.RLock()
         tqdm.set_lock(progress_lock)
@@ -338,6 +372,7 @@ def main() -> int:
                 cmd,
                 env,
                 progress_bar,
+                overall_bar,
                 progress_lock if use_parent_progress else None,
             )
             pending[future] = (user_id, position)
@@ -410,6 +445,8 @@ def main() -> int:
         return 0
     finally:
         progress.close()
+        if overall_bar is not None:
+            overall_bar.close()
 
 
 if __name__ == "__main__":
