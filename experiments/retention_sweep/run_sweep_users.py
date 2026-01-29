@@ -342,6 +342,13 @@ def _run_command(
     return process.wait()
 
 
+def _reset_worker_bar(progress_bar: tqdm, label: str | None = None) -> None:
+    progress_bar.reset(total=0)
+    if label is not None:
+        progress_bar.set_description_str(label)
+    progress_bar.refresh()
+
+
 def main() -> int:
     args = parse_args()
     if args.start_user < 1 or args.end_user < args.start_user:
@@ -498,8 +505,8 @@ def main() -> int:
                     )
                     worker_bars[position] = progress_bar
                 else:
-                    progress_bar.reset(total=0)
-                    progress_bar.set_description_str(f"u{user_id}")
+                    _reset_worker_bar(progress_bar, f"u{user_id}")
+                progress_bar.refresh()
             future = executor.submit(
                 _run_command,
                 cmd,
@@ -532,7 +539,7 @@ def main() -> int:
                     except concurrent.futures.CancelledError:
                         progress.update(1)
                         if use_parent_progress and position in worker_bars:
-                            worker_bars[position].close()
+                            _reset_worker_bar(worker_bars[position], "idle")
                         available_positions.append(position)
                         continue
                     except (
@@ -546,7 +553,7 @@ def main() -> int:
                             stop_scheduling = True
                         progress.update(1)
                         if use_parent_progress and position in worker_bars:
-                            worker_bars[position].close()
+                            _reset_worker_bar(worker_bars[position], "idle")
                         available_positions.append(position)
                         continue
                     if returncode != 0:
@@ -560,7 +567,7 @@ def main() -> int:
                             stop_scheduling = True
                     progress.update(1)
                     if use_parent_progress and position in worker_bars:
-                        worker_bars[position].close()
+                        _reset_worker_bar(worker_bars[position], "idle")
                     available_positions.append(position)
                 if stop_scheduling:
                     for future in list(pending):
@@ -580,6 +587,9 @@ def main() -> int:
         progress.close()
         if overall_bar is not None:
             overall_bar.close()
+        if use_parent_progress:
+            for bar in worker_bars.values():
+                bar.close()
 
 
 if __name__ == "__main__":
