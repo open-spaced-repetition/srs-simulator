@@ -193,16 +193,25 @@ def _run_command(
                 progress_lock.acquire()
             try:
                 if label and label != last_label:
+                    reset_total = total if total > 0 else progress_bar.total
+                    progress_bar.reset(total=reset_total)
                     progress_bar.set_description_str(label)
                     last_label = label
+                    if completed > 0:
+                        progress_bar.update(completed)
+                    else:
+                        progress_bar.refresh()
+                    continue
                 if total > 0 and progress_bar.total != total:
                     progress_bar.total = total
-                delta = completed - progress_bar.n
-                if delta > 0:
-                    progress_bar.update(delta)
-                elif delta < 0:
-                    progress_bar.n = completed
-                    progress_bar.refresh()
+                if completed < progress_bar.n:
+                    progress_bar.reset(total=progress_bar.total)
+                    if completed > 0:
+                        progress_bar.update(completed)
+                    else:
+                        progress_bar.refresh()
+                elif completed > progress_bar.n:
+                    progress_bar.update(completed - progress_bar.n)
             finally:
                 if progress_lock is not None:
                     progress_lock.release()
