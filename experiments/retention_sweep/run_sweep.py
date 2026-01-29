@@ -187,12 +187,6 @@ def parse_args() -> argparse.Namespace:
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
     )
     parser.add_argument(
-        "--progress-position",
-        type=int,
-        default=None,
-        help="tqdm progress bar line position.",
-    )
-    parser.add_argument(
         "--no-summary",
         action="store_true",
         help="Disable total sweep time summary output.",
@@ -201,12 +195,6 @@ def parse_args() -> argparse.Namespace:
         "--progress-events",
         action="store_true",
         help="Emit JSON progress events to stdout (for parent aggregation).",
-    )
-    parser.add_argument(
-        "--progress-every",
-        type=int,
-        default=None,
-        help="Emit progress events every N days (defaults to ~100 steps).",
     )
     parser.add_argument(
         "--no-progress",
@@ -243,21 +231,12 @@ def _make_progress_callback(
     if args.progress_events:
         label = _progress_label(args)
         last_completed = -1
-        emit_every = args.progress_every
-        if emit_every is None:
-            emit_every = max(1, args.days // 100)
-        if emit_every < 1:
-            emit_every = 1
-        last_emitted = -emit_every
 
         def _emit_progress(completed: int, total: int) -> None:
-            nonlocal last_completed, last_emitted
+            nonlocal last_completed
             if completed == last_completed:
                 return
             last_completed = completed
-            if completed not in (0, total) and completed - last_emitted < emit_every:
-                return
-            last_emitted = completed
             event = {
                 "type": "progress",
                 "completed": completed,
@@ -288,7 +267,7 @@ def _make_progress_callback(
         unit="day",
         file=sys.stderr,
         ascii=True,
-        position=args.progress_position or 0,
+        position=0,
         leave=False,
     )
 
