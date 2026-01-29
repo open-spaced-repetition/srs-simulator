@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
         help="Max parallel users to run (1 keeps sequential behavior).",
     )
     parser.add_argument(
+        "--child-progress",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control child progress bars (auto disables when parallel).",
+    )
+    parser.add_argument(
         "--sleep-seconds",
         type=float,
         default=0.0,
@@ -92,6 +98,7 @@ def _build_command(
     schedulers: str,
     user_id: int,
     extra_args: list[str],
+    disable_progress: bool,
 ) -> list[str]:
     cmd = [
         uv_cmd,
@@ -105,6 +112,8 @@ def _build_command(
         str(user_id),
     ]
     cmd.extend(extra_args)
+    if disable_progress and "--no-progress" not in extra_args:
+        cmd.append("--no-progress")
     return cmd
 
 
@@ -129,6 +138,10 @@ def main() -> int:
     if "--" in sys.argv:
         extra_args = sys.argv[sys.argv.index("--") + 1 :]
 
+    disable_progress = args.child_progress == "off" or (
+        args.child_progress == "auto" and args.max_parallel > 1
+    )
+
     env = os.environ.copy()
     env.update(_parse_env_overrides(args.set_env))
     if args.mps_active_thread_percentage is not None:
@@ -147,6 +160,7 @@ def main() -> int:
                 args.schedulers,
                 user_id,
                 extra_args,
+                disable_progress,
             )
             print(f"[{user_id}] {' '.join(cmd)}")
             if not args.dry_run:
@@ -180,6 +194,7 @@ def main() -> int:
             args.schedulers,
             user_id,
             extra_args,
+            disable_progress,
         )
         print(f"[{user_id}] {' '.join(cmd)}")
         future = executor.submit(_run_command, cmd, env)
