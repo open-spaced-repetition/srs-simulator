@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+import threading
 
 from tqdm import tqdm
 
@@ -115,6 +117,7 @@ def _build_command(
     disable_progress: bool,
     disable_summary: bool,
     progress_position: int | None,
+    emit_progress_events: bool,
 ) -> list[str]:
     cmd = [
         uv_cmd,
@@ -134,12 +137,67 @@ def _build_command(
         cmd.append("--no-summary")
     if progress_position is not None and "--progress-position" not in extra_args:
         cmd.extend(["--progress-position", str(progress_position)])
+    if emit_progress_events and "--progress-events" not in extra_args:
+        cmd.append("--progress-events")
     return cmd
 
 
-def _run_command(cmd: list[str], env: dict[str, str]) -> int:
-    result = subprocess.run(cmd, check=False, env=env)
-    return result.returncode
+def _run_command(
+    cmd: list[str],
+    env: dict[str, str],
+    progress_bar: tqdm | None,
+    progress_lock: threading.RLock | None,
+) -> int:
+    if progress_bar is None:
+        result = subprocess.run(cmd, check=False, env=env)
+        return result.returncode
+
+    process = subprocess.Popen(
+        cmd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=None,
+        text=True,
+        bufsize=1,
+    )
+    last_label = None
+    if process.stdout is not None:
+        for line in process.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                if progress_lock is not None:
+                    with progress_lock:
+                        progress_bar.write(line)
+                else:
+                    progress_bar.write(line)
+                continue
+            if payload.get("type") != "progress":
+                continue
+            label = payload.get("label", "")
+            completed = int(payload.get("completed", 0))
+            total = int(payload.get("total", 0))
+            if progress_lock is not None:
+                progress_lock.acquire()
+            try:
+                if label and label != last_label:
+                    progress_bar.set_description_str(label)
+                    last_label = label
+                if total > 0 and progress_bar.total != total:
+                    progress_bar.total = total
+                delta = completed - progress_bar.n
+                if delta > 0:
+                    progress_bar.update(delta)
+                elif delta < 0:
+                    progress_bar.n = completed
+                    progress_bar.refresh()
+            finally:
+                if progress_lock is not None:
+                    progress_lock.release()
+    return process.wait()
 
 
 def main() -> int:
@@ -158,10 +216,12 @@ def main() -> int:
     if "--" in sys.argv:
         extra_args = sys.argv[sys.argv.index("--") + 1 :]
 
+    parallel = args.max_parallel > 1 and not args.dry_run
     enable_child_progress = args.child_progress == "on" or (
         args.child_progress == "auto" and args.max_parallel > 1
     )
-    disable_progress = not enable_child_progress
+    use_parent_progress = parallel and enable_child_progress
+    disable_progress = not enable_child_progress or use_parent_progress
     show_commands = args.show_commands == "on" or (
         args.show_commands == "auto" and args.max_parallel == 1
     )
@@ -200,11 +260,12 @@ def main() -> int:
                     disable_progress,
                     not enable_child_summary,
                     None,
+                    False,
                 )
                 if args.dry_run or show_commands:
                     progress.write(f"[{user_id}] {' '.join(cmd)}")
                 if not args.dry_run:
-                    returncode = _run_command(cmd, env)
+                    returncode = _run_command(cmd, env, None, None)
                     if returncode != 0:
                         failures += 1
                         progress.write(
@@ -225,6 +286,9 @@ def main() -> int:
         stop_scheduling = False
         user_iter = iter(user_ids)
         available_positions = list(range(1, args.max_parallel + 1))
+        worker_bars: dict[int, tqdm] = {}
+        progress_lock = threading.RLock()
+        tqdm.set_lock(progress_lock)
 
         def submit_next(executor: concurrent.futures.Executor) -> bool:
             try:
@@ -242,12 +306,36 @@ def main() -> int:
                 user_id,
                 extra_args,
                 disable_progress,
-                not enable_child_summary,
-                position if enable_child_progress else None,
+                not enable_child_summary or use_parent_progress,
+                None,
+                use_parent_progress,
             )
             if show_commands:
                 progress.write(f"[{user_id}] {' '.join(cmd)}")
-            future = executor.submit(_run_command, cmd, env)
+            progress_bar = None
+            if use_parent_progress:
+                progress_bar = worker_bars.get(position)
+                if progress_bar is None:
+                    progress_bar = tqdm(
+                        total=0,
+                        desc=f"u{user_id}",
+                        unit="day",
+                        file=sys.stderr,
+                        ascii=True,
+                        position=position,
+                        leave=False,
+                    )
+                    worker_bars[position] = progress_bar
+                else:
+                    progress_bar.reset(total=0)
+                    progress_bar.set_description_str(f"u{user_id}")
+            future = executor.submit(
+                _run_command,
+                cmd,
+                env,
+                progress_bar,
+                progress_lock if use_parent_progress else None,
+            )
             pending[future] = (user_id, position)
             if args.sleep_seconds > 0:
                 time.sleep(args.sleep_seconds)
@@ -271,6 +359,8 @@ def main() -> int:
                         returncode = future.result()
                     except concurrent.futures.CancelledError:
                         progress.update(1)
+                        if use_parent_progress and position in worker_bars:
+                            worker_bars[position].close()
                         available_positions.append(position)
                         continue
                     except (
@@ -283,6 +373,8 @@ def main() -> int:
                         if args.fail_fast:
                             stop_scheduling = True
                         progress.update(1)
+                        if use_parent_progress and position in worker_bars:
+                            worker_bars[position].close()
                         available_positions.append(position)
                         continue
                     if returncode != 0:
@@ -295,6 +387,8 @@ def main() -> int:
                         if args.fail_fast:
                             stop_scheduling = True
                     progress.update(1)
+                    if use_parent_progress and position in worker_bars:
+                        worker_bars[position].close()
                     available_positions.append(position)
                 if stop_scheduling:
                     for future in list(pending):

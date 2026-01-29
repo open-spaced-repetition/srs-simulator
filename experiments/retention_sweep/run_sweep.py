@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import random
@@ -197,6 +198,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable total sweep time summary output.",
     )
     parser.add_argument(
+        "--progress-events",
+        action="store_true",
+        help="Emit JSON progress events to stdout (for parent aggregation).",
+    )
+    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable tqdm progress bars (useful for parallel runs).",
@@ -228,6 +234,28 @@ def _progress_label(args: argparse.Namespace) -> str:
 def _make_progress_callback(
     args: argparse.Namespace,
 ) -> tuple[Callable[[int, int], None], Callable[[], None]]:
+    if args.progress_events:
+        label = _progress_label(args)
+        last_completed = -1
+
+        def _emit_progress(completed: int, total: int) -> None:
+            nonlocal last_completed
+            if completed == last_completed:
+                return
+            last_completed = completed
+            event = {
+                "type": "progress",
+                "completed": completed,
+                "total": total,
+                "label": label,
+            }
+            print(json.dumps(event), flush=True)
+
+        def _noop_close() -> None:
+            return None
+
+        return _emit_progress, _noop_close
+
     if args.no_progress:
 
         def _noop_update(_completed: int, _total: int) -> None:
