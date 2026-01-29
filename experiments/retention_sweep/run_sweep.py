@@ -186,6 +186,17 @@ def parse_args() -> argparse.Namespace:
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
     )
     parser.add_argument(
+        "--progress-position",
+        type=int,
+        default=None,
+        help="tqdm progress bar line position.",
+    )
+    parser.add_argument(
+        "--no-summary",
+        action="store_true",
+        help="Disable total sweep time summary output.",
+    )
+    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable tqdm progress bars (useful for parallel runs).",
@@ -233,6 +244,7 @@ def _make_progress_callback(
         unit="day",
         file=sys.stderr,
         ascii=True,
+        position=args.progress_position or 0,
         leave=False,
     )
 
@@ -515,7 +527,8 @@ def main() -> None:
                     )
     finally:
         elapsed = time.perf_counter() - start_time
-        print(f"Total sweep time: {elapsed:.2f}s", file=sys.stderr)
+        if not args.no_summary:
+            print(f"Total sweep time: {elapsed:.2f}s", file=sys.stderr)
 
 
 if __name__ == "__main__":

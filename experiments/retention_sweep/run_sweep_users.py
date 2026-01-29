@@ -48,7 +48,19 @@ def parse_args() -> argparse.Namespace:
         "--child-progress",
         choices=["auto", "on", "off"],
         default="auto",
-        help="Control child progress bars (auto disables when parallel).",
+        help="Control child progress bars (auto enables in parallel).",
+    )
+    parser.add_argument(
+        "--child-summary",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control child summary lines (auto disables in parallel).",
+    )
+    parser.add_argument(
+        "--show-commands",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control command echoing (auto shows only in sequential runs).",
     )
     parser.add_argument(
         "--sleep-seconds",
@@ -101,6 +113,8 @@ def _build_command(
     user_id: int,
     extra_args: list[str],
     disable_progress: bool,
+    disable_summary: bool,
+    progress_position: int | None,
 ) -> list[str]:
     cmd = [
         uv_cmd,
@@ -116,6 +130,10 @@ def _build_command(
     cmd.extend(extra_args)
     if disable_progress and "--no-progress" not in extra_args:
         cmd.append("--no-progress")
+    if disable_summary and "--no-summary" not in extra_args:
+        cmd.append("--no-summary")
+    if progress_position is not None and "--progress-position" not in extra_args:
+        cmd.extend(["--progress-position", str(progress_position)])
     return cmd
 
 
@@ -140,8 +158,15 @@ def main() -> int:
     if "--" in sys.argv:
         extra_args = sys.argv[sys.argv.index("--") + 1 :]
 
-    disable_progress = args.child_progress == "off" or (
+    enable_child_progress = args.child_progress == "on" or (
         args.child_progress == "auto" and args.max_parallel > 1
+    )
+    disable_progress = not enable_child_progress
+    show_commands = args.show_commands == "on" or (
+        args.show_commands == "auto" and args.max_parallel == 1
+    )
+    enable_child_summary = args.child_summary == "on" or (
+        args.child_summary == "auto" and args.max_parallel == 1
     )
 
     env = os.environ.copy()
@@ -158,6 +183,7 @@ def main() -> int:
         unit="user",
         file=sys.stderr,
         ascii=True,
+        position=0,
         leave=True,
     )
     try:
@@ -172,13 +198,18 @@ def main() -> int:
                     user_id,
                     extra_args,
                     disable_progress,
+                    not enable_child_summary,
+                    None,
                 )
-                print(f"[{user_id}] {' '.join(cmd)}")
+                if args.dry_run or show_commands:
+                    progress.write(f"[{user_id}] {' '.join(cmd)}")
                 if not args.dry_run:
                     returncode = _run_command(cmd, env)
                     if returncode != 0:
                         failures += 1
-                        print(f"[{user_id}] FAILED with exit code {returncode}")
+                        progress.write(
+                            f"[{user_id}] FAILED with exit code {returncode}"
+                        )
                         if args.fail_fast:
                             return returncode
                 progress.update(1)
@@ -193,12 +224,16 @@ def main() -> int:
         first_failure_code: int | None = None
         stop_scheduling = False
         user_iter = iter(user_ids)
+        available_positions = list(range(1, args.max_parallel + 1))
 
         def submit_next(executor: concurrent.futures.Executor) -> bool:
             try:
                 user_id = next(user_iter)
             except StopIteration:
                 return False
+            if not available_positions:
+                return False
+            position = available_positions.pop(0)
             cmd = _build_command(
                 args.uv_cmd,
                 script_path,
@@ -207,10 +242,13 @@ def main() -> int:
                 user_id,
                 extra_args,
                 disable_progress,
+                not enable_child_summary,
+                position if enable_child_progress else None,
             )
-            print(f"[{user_id}] {' '.join(cmd)}")
+            if show_commands:
+                progress.write(f"[{user_id}] {' '.join(cmd)}")
             future = executor.submit(_run_command, cmd, env)
-            pending[future] = user_id
+            pending[future] = (user_id, position)
             if args.sleep_seconds > 0:
                 time.sleep(args.sleep_seconds)
             return True
@@ -218,7 +256,7 @@ def main() -> int:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=args.max_parallel
         ) as executor:
-            pending: dict[concurrent.futures.Future[int], int] = {}
+            pending: dict[concurrent.futures.Future[int], tuple[int, int]] = {}
             for _ in range(args.max_parallel):
                 if not submit_next(executor):
                     break
@@ -228,31 +266,36 @@ def main() -> int:
                     return_when=concurrent.futures.FIRST_COMPLETED,
                 )
                 for future in done:
-                    user_id = pending.pop(future)
+                    user_id, position = pending.pop(future)
                     try:
                         returncode = future.result()
                     except concurrent.futures.CancelledError:
                         progress.update(1)
+                        available_positions.append(position)
                         continue
                     except (
                         Exception
                     ) as exc:  # pragma: no cover - unexpected subprocess error
                         failures += 1
-                        print(f"[{user_id}] FAILED with exception: {exc}")
+                        progress.write(f"[{user_id}] FAILED with exception: {exc}")
                         if first_failure_code is None:
                             first_failure_code = 1
                         if args.fail_fast:
                             stop_scheduling = True
                         progress.update(1)
+                        available_positions.append(position)
                         continue
                     if returncode != 0:
                         failures += 1
-                        print(f"[{user_id}] FAILED with exit code {returncode}")
+                        progress.write(
+                            f"[{user_id}] FAILED with exit code {returncode}"
+                        )
                         if first_failure_code is None:
                             first_failure_code = returncode
                         if args.fail_fast:
                             stop_scheduling = True
                     progress.update(1)
+                    available_positions.append(position)
                 if stop_scheduling:
                     for future in list(pending):
                         future.cancel()
