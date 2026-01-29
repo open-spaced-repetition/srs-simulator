@@ -254,6 +254,7 @@ def _make_progress_callback(
         def _noop_close() -> None:
             return None
 
+        _emit_progress(0, args.days)
         return _emit_progress, _noop_close
 
     if args.no_progress:
