@@ -185,6 +185,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
     )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable tqdm progress bars (useful for parallel runs).",
+    )
     return parser.parse_args()
 
 
@@ -212,6 +217,16 @@ def _progress_label(args: argparse.Namespace) -> str:
 def _make_progress_callback(
     args: argparse.Namespace,
 ) -> tuple[Callable[[int, int], None], Callable[[], None]]:
+    if args.no_progress:
+
+        def _noop_update(_completed: int, _total: int) -> None:
+            return None
+
+        def _noop_close() -> None:
+            return None
+
+        return _noop_update, _noop_close
+
     bar = tqdm(
         total=args.days,
         desc=_progress_label(args),

@@ -82,7 +82,7 @@ uv run experiments/retention_sweep/aggregate_users.py --environments lstm --sche
 uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
 ```
 
-- `run_sweep_users.py` fans out `run_sweep.py` across a user-id range and supports `--max-parallel` plus MPS env passthrough.
+- `run_sweep_users.py` fans out `run_sweep.py` across a user-id range and supports `--max-parallel` plus MPS env passthrough; it disables child progress bars when parallel unless `--child-progress on` is set.
 - `build_pareto_users.py` fans out `build_pareto.py` across a user-id range.
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON and plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise.
 - `dominance_sm2_memrise.py` reports per-user dominance rates between Anki-SM-2 and Memrise and saves a stacked bar chart.
