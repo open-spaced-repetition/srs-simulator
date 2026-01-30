@@ -225,3 +225,8 @@ logs/
 *.gif
 *.svg
 *.webp
+
+# Retention sweep figures tracked for README
+!experiments/retention_sweep/plots/dominance/dominance_sm2_memrise.png
+!experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_anki_sm2.png
+!experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_memrise.png

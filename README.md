@@ -98,6 +98,23 @@ Metrics and outputs:
 - Per-user Pareto frontier comparison: `build_pareto_users.py` saves a "Pareto frontier env compare" plot for each user that overlays environments and schedulers to show the efficiency frontier in terms of memorized cards (average, all days) vs memorized cards per minute (average).
 - Axes under default retention_sweep settings (1825 days, deck 10,000, learn limit 10/day, review limit 9,999/day, cost limit 720 minutes/day, review-first, seed 42, vectorized engine): the X axis "Memorized cards (average, all days)" is the expected number of cards remembered per day averaged over the whole run (sum of predicted retrievability across learned cards), and the Y axis "Memorized cards per minute (average)" is computed by taking that average memorized-cards-per-day value and dividing it by the average study minutes per day from the cost model, so it can be read as "how many cards you effectively keep remembered for each minute of study" over the whole run (higher = more efficient use of time, lower = more time spent per remembered card).
 
+## Retention sweep comparisons (lstm)
+
+**SM2 vs Memrise dominance**
+
+![SM2 vs Memrise dominance](experiments/retention_sweep/plots/dominance/dominance_sm2_memrise.png)
+_Caption: Per-user dominance outcomes between Anki-SM-2 and Memrise (dominates vs tradeoff)._
+
+**FSRS6 equivalence vs Anki-SM-2**
+
+![FSRS6 equiv vs Anki-SM-2](experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_anki_sm2.png)
+_Caption: FSRS-6 interpolated to match Anki-SM-2 memorized-average per user; compares memorized-per-minute distributions and deltas._
+
+**FSRS6 equivalence vs Memrise**
+
+![FSRS6 equiv vs Memrise](experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_memrise.png)
+_Caption: FSRS-6 interpolated to match Memrise memorized-average per user; compares memorized-per-minute distributions and deltas._
+
 ## Benchmarks
 Performance baselines live under `benches/`. See `benches/README.md` for details.
 
