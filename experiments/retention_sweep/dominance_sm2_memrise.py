@@ -141,6 +141,12 @@ def _dominance_label(
         memrise_metrics["memorized_per_minute"],
         epsilon,
     )
+    if mem_cmp == 0 and eff_cmp == 0:
+        return "neither"
+    if mem_cmp == 0:
+        return "sm2_dominates" if eff_cmp > 0 else "memrise_dominates"
+    if eff_cmp == 0:
+        return "sm2_dominates" if mem_cmp > 0 else "memrise_dominates"
     if mem_cmp > 0 and eff_cmp > 0:
         return "sm2_dominates"
     if mem_cmp < 0 and eff_cmp < 0:
@@ -342,6 +348,7 @@ def main() -> None:
             "memrise_sm2_tradeoff": 0,
             "neither": 0,
         }
+        neither_users: List[int] = []
         for user_id in eligible_users:
             label = _dominance_label(
                 sm2_for_env[user_id],
@@ -349,6 +356,8 @@ def main() -> None:
                 epsilon=args.epsilon,
             )
             counts[label] += 1
+            if label == "neither":
+                neither_users.append(user_id)
         total = len(eligible_users)
         results.append(
             {
@@ -364,6 +373,7 @@ def main() -> None:
                 "sm2_memrise_tradeoff_pct": counts["sm2_memrise_tradeoff"] / total,
                 "memrise_sm2_tradeoff_pct": counts["memrise_sm2_tradeoff"] / total,
                 "neither_pct": counts["neither"] / total,
+                "neither_users": sorted(neither_users),
             }
         )
 
