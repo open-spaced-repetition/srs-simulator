@@ -37,6 +37,160 @@ class FSRS6BatchState:
     d: torch.Tensor
 
 
+@dataclass
+class FSRS6BatchEnvState:
+    mem_s: torch.Tensor
+    mem_d: torch.Tensor
+
+
+class FSRS6BatchEnvOps:
+    def __init__(
+        self,
+        *,
+        weights: torch.Tensor,
+        bounds: Bounds,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> None:
+        self.device = device
+        self.dtype = dtype
+        self._weights = weights.to(device=device, dtype=dtype)
+        self._bounds = bounds
+        self._decay = -self._weights[:, 20]
+        base = torch.tensor(0.9, device=device, dtype=dtype)
+        self._factor = torch.pow(base, 1.0 / self._decay) - 1.0
+        self._init_d = torch.clamp(
+            self._weights[:, 4] - torch.exp(self._weights[:, 5] * 3.0) + 1.0,
+            self._bounds.d_min,
+            self._bounds.d_max,
+        )
+
+    def init_state(self, user_count: int, deck_size: int) -> FSRS6BatchEnvState:
+        mem_s = torch.full(
+            (user_count, deck_size),
+            self._bounds.s_min,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        mem_d = torch.full(
+            (user_count, deck_size),
+            self._bounds.d_min,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        return FSRS6BatchEnvState(mem_s=mem_s, mem_d=mem_d)
+
+    def retrievability(
+        self, state: FSRS6BatchEnvState, elapsed: torch.Tensor
+    ) -> torch.Tensor:
+        return _fsrs6_forgetting_curve(
+            self._decay[:, None],
+            self._factor[:, None],
+            elapsed,
+            state.mem_s,
+            self._bounds.s_min,
+        )
+
+    def retrievability_entries(
+        self,
+        state: FSRS6BatchEnvState,
+        user_idx: torch.Tensor,
+        card_idx: torch.Tensor,
+        elapsed: torch.Tensor,
+    ) -> torch.Tensor:
+        if user_idx.numel() == 0:
+            return torch.zeros(0, device=self.device, dtype=self.dtype)
+        decay = self._decay.index_select(0, user_idx)
+        factor = self._factor.index_select(0, user_idx)
+        s = state.mem_s[user_idx, card_idx]
+        return _fsrs6_forgetting_curve(
+            decay,
+            factor,
+            elapsed,
+            s,
+            self._bounds.s_min,
+        )
+
+    def update_review(
+        self,
+        state: FSRS6BatchEnvState,
+        user_idx: torch.Tensor,
+        card_idx: torch.Tensor,
+        elapsed: torch.Tensor,
+        rating: torch.Tensor,
+    ) -> None:
+        if user_idx.numel() == 0:
+            return
+        weights = self._weights.index_select(0, user_idx)
+        decay = self._decay.index_select(0, user_idx)
+        factor = self._factor.index_select(0, user_idx)
+        init_d = self._init_d.index_select(0, user_idx)
+        exec_s = state.mem_s[user_idx, card_idx]
+        exec_d = state.mem_d[user_idx, card_idx]
+        retrievability = _fsrs6_forgetting_curve(
+            decay,
+            factor,
+            elapsed,
+            exec_s,
+            self._bounds.s_min,
+        )
+        short_term = elapsed < 1.0
+        success = rating > 1
+
+        new_s = exec_s
+        new_s = torch.where(
+            short_term,
+            _fsrs6_stability_short_term(weights, exec_s, rating),
+            new_s,
+        )
+        new_s = torch.where(
+            ~short_term & success,
+            _fsrs6_stability_after_success(
+                weights, exec_s, retrievability, exec_d, rating
+            ),
+            new_s,
+        )
+        new_s = torch.where(
+            ~short_term & ~success,
+            _fsrs6_stability_after_failure(weights, exec_s, retrievability, exec_d),
+            new_s,
+        )
+        new_d = _fsrs6_next_d(
+            weights,
+            exec_d,
+            rating,
+            init_d,
+            self._bounds.d_min,
+            self._bounds.d_max,
+        )
+        state.mem_s[user_idx, card_idx] = torch.clamp(
+            new_s, self._bounds.s_min, self._bounds.s_max
+        )
+        state.mem_d[user_idx, card_idx] = torch.clamp(
+            new_d, self._bounds.d_min, self._bounds.d_max
+        )
+
+    def update_learn(
+        self,
+        state: FSRS6BatchEnvState,
+        user_idx: torch.Tensor,
+        card_idx: torch.Tensor,
+        rating: torch.Tensor,
+    ) -> None:
+        if user_idx.numel() == 0:
+            return
+        weights = self._weights.index_select(0, user_idx)
+        s_init, d_init = _fsrs6_init_state(
+            weights, rating, self._bounds.d_min, self._bounds.d_max
+        )
+        state.mem_s[user_idx, card_idx] = torch.clamp(
+            s_init, self._bounds.s_min, self._bounds.s_max
+        )
+        state.mem_d[user_idx, card_idx] = torch.clamp(
+            d_init, self._bounds.d_min, self._bounds.d_max
+        )
+
+
 class FSRS6BatchSchedulerOps:
     PRIORITY_MODES = {
         "low_retrievability",
