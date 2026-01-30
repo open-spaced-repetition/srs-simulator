@@ -243,7 +243,7 @@ def main() -> None:
             if desired is None:
                 continue
             try:
-                desired = float(desired)
+                desired = round(float(desired), 2)
             except (TypeError, ValueError):
                 continue
             if desired < args.min_retention or desired > args.max_retention:
