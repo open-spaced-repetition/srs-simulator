@@ -586,17 +586,19 @@ def _print_equiv_report(summaries: List[Dict[str, Any]]) -> None:
         user_count = summary.get("user_count")
         pos_pct = summary.get("pos_pct")
         neg_pct = summary.get("neg_pct")
-        diff_median = summary.get("diff_median")
+        ratio_mean = summary.get("ratio_mean")
         ratio_median = summary.get("ratio_median")
         ratio_q25 = summary.get("ratio_q25")
         ratio_q75 = summary.get("ratio_q75")
+        dr_mean = summary.get("dr_equiv_mean")
         dr_median = summary.get("dr_equiv_median")
         print(
-            f"- {env} vs {baseline}: n={user_count}, "
-            f"better={pos_pct:.1%}, worse={neg_pct:.1%}, "
-            f"median gain={diff_median:.2f}, "
+            f"- FSRS-6 vs {baseline} (env={env}): n={user_count}, "
+            f"superiority={pos_pct:.1%}, "
+            f"mean ratio={ratio_mean:.3f}, "
             f"median ratio={ratio_median:.3f} "
             f"(IQR {ratio_q25:.3f}-{ratio_q75:.3f}), "
+            f"mean DR={dr_mean:.3f}, "
             f"median DR={dr_median:.3f}"
         )
 
