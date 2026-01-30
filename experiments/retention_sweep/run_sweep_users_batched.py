@@ -141,7 +141,27 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
     )
+    parser.add_argument(
+        "--cuda-devices",
+        default=None,
+        help=(
+            "Comma-separated CUDA device indices to distribute batches across "
+            "(e.g. 0,1). Each batch is assigned a device round-robin."
+        ),
+    )
     return parser.parse_args()
+
+
+def _parse_cuda_devices(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    devices = [item.strip() for item in raw.split(",") if item.strip()]
+    for device in devices:
+        if not device.isdigit():
+            raise ValueError(
+                f"Invalid --cuda-devices entry '{device}'. Expected numeric indices."
+            )
+    return devices
 
 
 def _chunked(values: list[int], batch_size: int) -> Iterable[list[int]]:
@@ -252,6 +272,8 @@ def main() -> int:
         raise ValueError("No schedulers specified.")
     if args.batch_size < 1:
         raise ValueError("--batch-size must be >= 1.")
+    if args.torch_device and args.cuda_devices:
+        raise ValueError("--torch-device cannot be combined with --cuda-devices.")
 
     user_ids = list(range(args.start_user, args.end_user + 1, args.step_user))
     if not user_ids:
@@ -265,6 +287,9 @@ def main() -> int:
     log_root.mkdir(parents=True, exist_ok=True)
 
     dr_values = _dr_values(args.start_retention, args.end_retention, args.step)
+    devices = _parse_cuda_devices(args.cuda_devices)
+    if devices and not torch.cuda.is_available():
+        raise ValueError("--cuda-devices was provided but CUDA is not available.")
     device = torch.device(args.torch_device) if args.torch_device else None
     dtype = torch.float32
 
@@ -301,12 +326,16 @@ def main() -> int:
 
         return _update
 
-    for batch in batches:
+    for batch_idx, batch in enumerate(batches):
+        if devices:
+            batch_device = torch.device(f"cuda:{devices[batch_idx % len(devices)]}")
+        else:
+            batch_device = device
         lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
         packed = PackedLSTMWeights.from_paths(
             lstm_paths,
             use_duration_feature=False,
-            device=device
+            device=batch_device
             or torch.device("cuda" if torch.cuda.is_available() else "cpu"),
             dtype=dtype,
         )
