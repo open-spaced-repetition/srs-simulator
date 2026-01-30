@@ -101,6 +101,14 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Set CUDA_MPS_ACTIVE_THREAD_PERCENTAGE for each subprocess.",
     )
     parser.add_argument(
+        "--cuda-devices",
+        default=None,
+        help=(
+            "Comma-separated CUDA device indices to distribute workers across "
+            "(e.g. 0,1). Each worker is assigned a device round-robin."
+        ),
+    )
+    parser.add_argument(
         "--set-env",
         action="append",
         default=[],
@@ -124,6 +132,18 @@ def _parse_env_overrides(values: list[str]) -> dict[str, str]:
             raise ValueError(f"Invalid --set-env '{item}'. Missing key.")
         overrides[key] = value
     return overrides
+
+
+def _parse_cuda_devices(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    devices = [item.strip() for item in raw.split(",") if item.strip()]
+    for device in devices:
+        if not device.isdigit():
+            raise ValueError(
+                f"Invalid --cuda-devices entry '{device}'. Expected numeric indices."
+            )
+    return devices
 
 
 def _parse_csv(value: str | None) -> list[str]:
@@ -262,6 +282,8 @@ def _build_command(
     disable_progress: bool,
     disable_summary: bool,
     emit_progress_events: bool,
+    torch_device: str | None,
+    inject_torch_device: bool,
 ) -> list[str]:
     cmd = [
         uv_cmd,
@@ -274,6 +296,8 @@ def _build_command(
         "--user-id",
         str(user_id),
     ]
+    if inject_torch_device and torch_device is not None:
+        cmd.extend(["--torch-device", torch_device])
     cmd.extend(extra_args)
     if disable_progress and "--no-progress" not in extra_args:
         cmd.append("--no-progress")
@@ -282,6 +306,13 @@ def _build_command(
     if emit_progress_events and "--progress-events" not in extra_args:
         cmd.append("--progress-events")
     return cmd
+
+
+def _has_arg(extra_args: list[str], flag: str) -> bool:
+    for arg in extra_args:
+        if arg == flag or arg.startswith(f"{flag}="):
+            return True
+    return False
 
 
 def _run_command(
@@ -402,7 +433,13 @@ def main() -> int:
     )
 
     env = os.environ.copy()
-    env.update(_parse_env_overrides(args.set_env))
+    env_overrides = _parse_env_overrides(args.set_env)
+    cuda_devices = _parse_cuda_devices(args.cuda_devices)
+    if cuda_devices and "CUDA_VISIBLE_DEVICES" in env_overrides:
+        raise ValueError(
+            "--cuda-devices cannot be combined with --set-env CUDA_VISIBLE_DEVICES."
+        )
+    env.update(env_overrides)
     if args.mps_active_thread_percentage is not None:
         env["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = str(
             args.mps_active_thread_percentage
@@ -411,6 +448,9 @@ def main() -> int:
     user_ids = list(range(args.start_user, args.end_user + 1, args.step_user))
     envs = _parse_csv(args.environments) or ["lstm"]
     schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
+    inject_torch_device = cuda_devices and not _has_arg(extra_args, "--torch-device")
+    if inject_torch_device:
+        extra_args = list(extra_args)
     overall_total = None
     show_overall = use_parent_progress
     if show_overall:
@@ -447,7 +487,13 @@ def main() -> int:
     try:
         if args.dry_run or args.max_parallel == 1:
             failures = 0
-            for user_id in user_ids:
+            for index, user_id in enumerate(user_ids):
+                device = None
+                worker_env = env
+                if cuda_devices:
+                    device = cuda_devices[index % len(cuda_devices)]
+                    worker_env = env.copy()
+                    worker_env["CUDA_VISIBLE_DEVICES"] = device
                 cmd = _build_command(
                     args.uv_cmd,
                     script_path,
@@ -458,11 +504,16 @@ def main() -> int:
                     disable_progress,
                     not enable_child_summary,
                     False,
+                    torch_device="cuda:0" if device is not None else None,
+                    inject_torch_device=inject_torch_device,
                 )
                 if args.dry_run or show_commands:
-                    progress.write(f"[{user_id}] {' '.join(cmd)}")
+                    prefix = (
+                        f"CUDA_VISIBLE_DEVICES={device} " if device is not None else ""
+                    )
+                    progress.write(f"[{user_id}] {prefix}{' '.join(cmd)}")
                 if not args.dry_run:
-                    returncode = _run_command(cmd, env, None, None, None)
+                    returncode = _run_command(cmd, worker_env, None, None, None)
                     if returncode != 0:
                         failures += 1
                         progress.write(
@@ -498,6 +549,10 @@ def main() -> int:
             if not available_positions:
                 return False
             position = available_positions.pop(0)
+            device = None
+            if cuda_devices:
+                device_index = (position - worker_position_base) % len(cuda_devices)
+                device = cuda_devices[device_index]
             cmd = _build_command(
                 args.uv_cmd,
                 script_path,
@@ -508,9 +563,12 @@ def main() -> int:
                 disable_progress,
                 not enable_child_summary or use_parent_progress,
                 use_parent_progress,
+                torch_device="cuda:0" if device is not None else None,
+                inject_torch_device=inject_torch_device,
             )
             if show_commands:
-                progress.write(f"[{user_id}] {' '.join(cmd)}")
+                prefix = f"CUDA_VISIBLE_DEVICES={device} " if device is not None else ""
+                progress.write(f"[{user_id}] {prefix}{' '.join(cmd)}")
             progress_bar = None
             if use_parent_progress:
                 progress_bar = worker_bars.get(position)
@@ -528,10 +586,14 @@ def main() -> int:
                 else:
                     _reset_worker_bar(progress_bar, f"u{user_id}")
                 progress_bar.refresh()
+            worker_env = env
+            if device is not None:
+                worker_env = env.copy()
+                worker_env["CUDA_VISIBLE_DEVICES"] = device
             future = executor.submit(
                 _run_command,
                 cmd,
-                env,
+                worker_env,
                 progress_bar,
                 overall_bar,
                 progress_lock if use_parent_progress else None,
