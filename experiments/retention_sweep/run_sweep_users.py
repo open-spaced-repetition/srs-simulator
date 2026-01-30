@@ -22,9 +22,18 @@ from simulator.scheduler_spec import (
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(
         description="Run retention_sweep.run_sweep.py for a range of user IDs.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=(
+            "Extra arguments after `--` are forwarded to run_sweep.py.\n"
+            "Example:\n"
+            "  uv run experiments/retention_sweep/run_sweep_users.py \\\n"
+            "    --start-user 1 --end-user 200 --environments lstm \\\n"
+            "    --schedulers fsrs6 --max-parallel 3 \\\n"
+            "    -- --start 50 --end 68 --step 2\n"
+        ),
     )
     parser.add_argument("--start-user", type=int, default=1, help="First user id.")
     parser.add_argument("--end-user", type=int, default=10000, help="Last user id.")
@@ -101,7 +110,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print commands without executing them.",
     )
-    return parser.parse_args()
+    return parser.parse_known_args()
 
 
 def _parse_env_overrides(values: list[str]) -> dict[str, str]:
@@ -134,6 +143,12 @@ def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
     parser.add_argument("--sspmmc-policy-glob", default="*.json")
     parser.add_argument("--sspmmc-max", type=int, default=None)
     return parser.parse_known_args(extra_args)[0]
+
+
+def _strip_arg_terminator(extra_args: list[str]) -> list[str]:
+    if extra_args and extra_args[0] == "--":
+        return extra_args[1:]
+    return extra_args
 
 
 def _resolve_sspmmc_policies(
@@ -350,7 +365,8 @@ def _reset_worker_bar(progress_bar: tqdm, label: str | None = None) -> None:
 
 
 def main() -> int:
-    args = parse_args()
+    args, extra_args = parse_args()
+    extra_args = _strip_arg_terminator(extra_args)
     if args.start_user < 1 or args.end_user < args.start_user:
         raise ValueError("Invalid user range.")
     if args.max_parallel < 1:
@@ -361,9 +377,6 @@ def main() -> int:
         raise ValueError("--mps-active-thread-percentage must be between 1 and 100.")
 
     script_path = Path("experiments") / "retention_sweep" / "run_sweep.py"
-    extra_args = []
-    if "--" in sys.argv:
-        extra_args = sys.argv[sys.argv.index("--") + 1 :]
     sweep_overrides = _parse_run_sweep_overrides(extra_args)
     repo_root = Path(__file__).resolve().parents[2]
 

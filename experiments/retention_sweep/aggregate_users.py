@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import re
+import statistics
 import sys
 from pathlib import Path
 from statistics import mean, median
@@ -69,6 +70,17 @@ def parse_args() -> argparse.Namespace:
         "--no-plot",
         action="store_true",
         help="Skip plotting.",
+    )
+    parser.add_argument(
+        "--equiv-report",
+        action="store_true",
+        help="Print summary stats for FSRS-6 equivalence comparisons.",
+    )
+    parser.add_argument(
+        "--equiv-report-path",
+        type=Path,
+        default=None,
+        help="Optional path to write FSRS-6 equivalence summary JSON.",
     )
     return parser.parse_args()
 
@@ -360,34 +372,49 @@ def main() -> None:
             f"{len(common_user_ids)} users."
         )
 
+    wants_equiv = args.equiv_report or args.equiv_report_path is not None
+    needs_equiv = wants_equiv or not args.no_plot
+    equivalent_distributions: List[Dict[str, Any]] = []
+    if needs_equiv:
+        equivalent_distributions = _compute_equivalent_fsrs6_distributions(
+            groups,
+            envs,
+            common_user_ids,
+            baselines=["anki_sm2", "memrise"],
+        )
+
+    if not args.no_plot:
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        _setup_plot_style()
+        for entry in equivalent_distributions:
+            env_label = entry["environment"]
+            distribution_title = _format_title(
+                f"{_format_scheduler_title(entry['baseline'])} vs FSRS-6 equiv distributions",
+                sorted(entry["user_ids"]),
+            )
+            if len(envs) > 1:
+                distribution_title = f"{env_label} {distribution_title}"
+            suffix = f"_{env_label}" if len(envs) > 1 else ""
+            baseline_suffix = entry["baseline"]
+            distribution_path = (
+                plot_dir
+                / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}.png"
+            )
+            _plot_equivalent_distributions(entry, distribution_path, distribution_title)
+            print(f"Saved plot to {distribution_path}")
+
+    if wants_equiv:
+        summaries = _summarize_equivalent_distributions(equivalent_distributions)
+        _print_equiv_report(summaries)
+        if args.equiv_report_path is not None:
+            args.equiv_report_path.parent.mkdir(parents=True, exist_ok=True)
+            with args.equiv_report_path.open("w", encoding="utf-8") as fh:
+                json.dump(summaries, fh, indent=2)
+            print(f"Wrote {args.equiv_report_path}")
+
     if args.no_plot:
         print(f"Wrote {results_path}")
         return
-
-    plot_dir.mkdir(parents=True, exist_ok=True)
-    _setup_plot_style()
-    equivalent_distributions = _compute_equivalent_fsrs6_distributions(
-        groups,
-        envs,
-        common_user_ids,
-        baselines=["anki_sm2", "memrise"],
-    )
-    for entry in equivalent_distributions:
-        env_label = entry["environment"]
-        distribution_title = _format_title(
-            f"{_format_scheduler_title(entry['baseline'])} vs FSRS-6 equiv distributions",
-            sorted(entry["user_ids"]),
-        )
-        if len(envs) > 1:
-            distribution_title = f"{env_label} {distribution_title}"
-        suffix = f"_{env_label}" if len(envs) > 1 else ""
-        baseline_suffix = entry["baseline"]
-        distribution_path = (
-            plot_dir
-            / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}.png"
-        )
-        _plot_equivalent_distributions(entry, distribution_path, distribution_title)
-        print(f"Saved plot to {distribution_path}")
     print(f"Wrote {results_path}")
 
 
@@ -494,6 +521,84 @@ def _compute_equivalent_fsrs6_distributions(
             )
 
     return distributions
+
+
+def _summarize_equivalent_distributions(
+    distributions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    summaries: List[Dict[str, Any]] = []
+    for entry in distributions:
+        baseline_per_minute = entry.get("baseline_per_minute", [])
+        fsrs_per_minute = entry.get("fsrs_per_minute", [])
+        dr_equiv = entry.get("fsrs_dr_equiv", [])
+        if not baseline_per_minute or not fsrs_per_minute:
+            continue
+        diffs = [
+            fsrs_value - baseline_value
+            for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
+        ]
+        ratios = [
+            fsrs_value / baseline_value
+            for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
+            if baseline_value > 0
+        ]
+        if not ratios:
+            continue
+        pos = sum(1 for value in diffs if value > 0)
+        neg = sum(1 for value in diffs if value < 0)
+        zero = len(diffs) - pos - neg
+        try:
+            q1, _, q3 = statistics.quantiles(ratios, n=4, method="inclusive")
+        except Exception:
+            ratios_sorted = sorted(ratios)
+            q1 = ratios_sorted[0]
+            q3 = ratios_sorted[-1]
+
+        summaries.append(
+            {
+                "environment": entry.get("environment"),
+                "baseline": entry.get("baseline"),
+                "user_count": len(entry.get("user_ids", [])),
+                "diff_mean": mean(diffs),
+                "diff_median": median(diffs),
+                "ratio_mean": mean(ratios),
+                "ratio_median": median(ratios),
+                "ratio_q25": q1,
+                "ratio_q75": q3,
+                "pos_pct": pos / len(diffs),
+                "neg_pct": neg / len(diffs),
+                "zero_pct": zero / len(diffs),
+                "dr_equiv_mean": mean(dr_equiv) if dr_equiv else None,
+                "dr_equiv_median": median(dr_equiv) if dr_equiv else None,
+            }
+        )
+    return summaries
+
+
+def _print_equiv_report(summaries: List[Dict[str, Any]]) -> None:
+    if not summaries:
+        print("No FSRS-6 equivalence summaries available.")
+        return
+    print("FSRS-6 equivalence summary (matched memorized average)")
+    for summary in summaries:
+        env = summary.get("environment")
+        baseline = _format_scheduler_title(str(summary.get("baseline")))
+        user_count = summary.get("user_count")
+        pos_pct = summary.get("pos_pct")
+        neg_pct = summary.get("neg_pct")
+        diff_median = summary.get("diff_median")
+        ratio_median = summary.get("ratio_median")
+        ratio_q25 = summary.get("ratio_q25")
+        ratio_q75 = summary.get("ratio_q75")
+        dr_median = summary.get("dr_equiv_median")
+        print(
+            f"- {env} vs {baseline}: n={user_count}, "
+            f"better={pos_pct:.1%}, worse={neg_pct:.1%}, "
+            f"median gain={diff_median:.2f}, "
+            f"median ratio={ratio_median:.3f} "
+            f"(IQR {ratio_q25:.3f}-{ratio_q75:.3f}), "
+            f"median DR={dr_median:.3f}"
+        )
 
 
 def _plot_equivalent_distributions(
