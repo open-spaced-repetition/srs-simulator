@@ -165,10 +165,15 @@ def _coerce_input_stat(
 ) -> Tensor:
     if value.ndim == 0:
         value = value.repeat(length)
+    if value.ndim == 1:
+        if value.shape[0] == length:
+            value = value.unsqueeze(0)
+        elif length == 1:
+            value = value.unsqueeze(-1)
+        else:
+            raise ValueError(f"Expected input stat length {length}, got {value.shape}.")
     if value.shape[-1] != length:
         raise ValueError(f"Expected input stat length {length}, got {value.shape}.")
-    if value.ndim == 1:
-        value = value.unsqueeze(0)
     return value.to(device=device, dtype=dtype)
 
 
