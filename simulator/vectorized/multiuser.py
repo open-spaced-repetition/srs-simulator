@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 
@@ -458,6 +458,7 @@ def simulate_multiuser(
     dtype: Optional[torch.dtype] = None,
     progress: bool = False,
     progress_label: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> list[SimulationStats]:
     config = VectorizedConfig(
         device=torch.device(device) if device is not None else None,
@@ -529,9 +530,13 @@ def simulate_multiuser(
         )
 
     try:
+        if progress_callback is not None:
+            progress_callback(0, days)
         for day in range(days):
             if progress_bar is not None:
                 progress_bar.update(1)
+            if progress_callback is not None:
+                progress_callback(day + 1, days)
             day_float = torch.tensor(float(day), device=torch_device, dtype=env_dtype)
 
             learned_mask = reps > 0

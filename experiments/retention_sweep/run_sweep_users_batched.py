@@ -268,21 +268,36 @@ def main() -> int:
     device = torch.device(args.torch_device) if args.torch_device else None
     dtype = torch.float32
 
+    batches = list(_chunked(user_ids, args.batch_size))
+    total_runs = len(batches) * len(schedulers)
+    if "fsrs6" in schedulers:
+        total_runs += (len(dr_values) - 1) * len(batches)
     overall = None
     if not args.no_progress:
-        total_runs = len(list(_chunked(user_ids, args.batch_size))) * len(schedulers)
-        if "fsrs6" in schedulers:
-            total_runs += (len(dr_values) - 1) * len(
-                list(_chunked(user_ids, args.batch_size))
-            )
         overall = tqdm(
-            total=total_runs,
+            total=args.days * total_runs,
             desc="Overall",
-            unit="run",
+            unit="day",
             leave=True,
         )
 
-    for batch in _chunked(user_ids, args.batch_size):
+    def _make_overall_callback():
+        if overall is None:
+            return None
+        last = 0
+
+        def _update(completed: int, total: int) -> None:
+            nonlocal last
+            if total <= 0:
+                return
+            delta = completed - last
+            if delta > 0:
+                overall.update(delta)
+            last = completed
+
+        return _update
+
+    for batch in batches:
         lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
         packed = PackedLSTMWeights.from_paths(
             lstm_paths,
@@ -357,6 +372,7 @@ def main() -> int:
                         priority_mode=args.priority,
                         progress=not args.no_progress,
                         progress_label=f"{label_prefix} dr={dr:.2f}",
+                        progress_callback=_make_overall_callback(),
                     )
                     if not args.no_log:
                         for user_id, stats in zip(batch, stats_list):
@@ -386,8 +402,6 @@ def main() -> int:
                                 log_reviews=False,
                             )
                             simulate_cli._write_log(log_args, stats)
-                    if overall is not None:
-                        overall.update(1)
                 continue
 
             if name == "anki_sm2":
@@ -416,6 +430,7 @@ def main() -> int:
                     priority_mode=args.priority,
                     progress=not args.no_progress,
                     progress_label=label_prefix,
+                    progress_callback=_make_overall_callback(),
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -445,8 +460,6 @@ def main() -> int:
                             log_reviews=False,
                         )
                         simulate_cli._write_log(log_args, stats)
-                if overall is not None:
-                    overall.update(1)
                 continue
 
             if name == "memrise":
@@ -469,6 +482,7 @@ def main() -> int:
                     priority_mode=args.priority,
                     progress=not args.no_progress,
                     progress_label=label_prefix,
+                    progress_callback=_make_overall_callback(),
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -498,9 +512,6 @@ def main() -> int:
                             log_reviews=False,
                         )
                         simulate_cli._write_log(log_args, stats)
-                if overall is not None:
-                    overall.update(1)
-
     if overall is not None:
         overall.close()
     return 0
