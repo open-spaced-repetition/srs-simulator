@@ -27,10 +27,20 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a desired-retention sweep for simulate.py.",
     )
-    parser.add_argument("--start", type=int, default=70, help="Start retention x100.")
-    parser.add_argument("--end", type=int, default=99, help="End retention x100.")
     parser.add_argument(
-        "--step", type=int, default=1, help="Step size for retention x100."
+        "--start-retention",
+        type=float,
+        default=0.70,
+        help="Start retention (0-1).",
+    )
+    parser.add_argument(
+        "--end-retention",
+        type=float,
+        default=0.99,
+        help="End retention (0-1).",
+    )
+    parser.add_argument(
+        "--step", type=float, default=0.01, help="Retention step (0-1)."
     )
     parser.add_argument(
         "--environment",
@@ -208,6 +218,23 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _dr_values(start: float, end: float, step: float) -> List[float]:
+    values: List[float] = []
+    if step == 0:
+        return values
+    value = start
+    epsilon = abs(step) * 1e-6
+    if step > 0:
+        while value <= end + epsilon:
+            values.append(value)
+            value += step
+    else:
+        while value >= end - epsilon:
+            values.append(value)
+            value += step
+    return values
 
 
 def _progress_label(args: argparse.Namespace) -> str:
@@ -417,8 +444,18 @@ def main() -> None:
 
     if args.step == 0:
         raise SystemExit("--step must be non-zero.")
-    if args.start > args.end and args.step > 0:
-        raise SystemExit("--start must be <= --end when --step is positive.")
+    if not (0.0 < args.start_retention <= 1.0):
+        raise SystemExit("--start-retention must be within (0, 1].")
+    if not (0.0 < args.end_retention <= 1.0):
+        raise SystemExit("--end-retention must be within (0, 1].")
+    if args.step > 0 and args.start_retention > args.end_retention:
+        raise SystemExit(
+            "--start-retention must be <= --end-retention when --step is positive."
+        )
+    if args.step < 0 and args.start_retention < args.end_retention:
+        raise SystemExit(
+            "--start-retention must be >= --end-retention when --step is negative."
+        )
 
     if not args.plot:
         os.environ.setdefault("MPLBACKEND", "Agg")
@@ -476,8 +513,9 @@ def main() -> None:
         for environment in envs:
             if run_dr:
                 for scheduler in dr_schedulers:
-                    for i in range(args.start, args.end + 1, args.step):
-                        dr = i / 100.0
+                    for dr in _dr_values(
+                        args.start_retention, args.end_retention, args.step
+                    ):
                         run_args = argparse.Namespace(**vars(args))
                         run_args.environment = environment
                         run_args.scheduler = scheduler

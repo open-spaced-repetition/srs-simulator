@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import math
 import os
 import subprocess
 import sys
@@ -32,7 +33,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
             "  uv run experiments/retention_sweep/run_sweep_users.py \\\n"
             "    --start-user 1 --end-user 200 --environments lstm \\\n"
             "    --schedulers fsrs6 --max-parallel 3 \\\n"
-            "    -- --start 50 --end 68 --step 2\n"
+            "    -- --start-retention 0.50 --end-retention 0.68 --step 0.02\n"
         ),
     )
     parser.add_argument("--start-user", type=int, default=1, help="First user id.")
@@ -133,9 +134,9 @@ def _parse_csv(value: str | None) -> list[str]:
 
 def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--start", type=int, default=70)
-    parser.add_argument("--end", type=int, default=99)
-    parser.add_argument("--step", type=int, default=1)
+    parser.add_argument("--start-retention", type=float, default=0.70)
+    parser.add_argument("--end-retention", type=float, default=0.99)
+    parser.add_argument("--step", type=float, default=0.01)
     parser.add_argument("--days", type=int, default=1825)
     parser.add_argument("--sspmmc-policy", type=Path, default=None)
     parser.add_argument("--sspmmc-policy-dir", type=Path, default=None)
@@ -186,11 +187,16 @@ def _resolve_sspmmc_policies(
     return paths
 
 
-def _count_dr_steps(start: int, end: int, step: int) -> int:
+def _count_dr_steps(start: float, end: float, step: float) -> int:
     if step == 0:
         return 0
-    stop = end + (1 if step > 0 else -1)
-    return len(range(start, stop, step))
+    if step > 0 and start > end:
+        return 0
+    if step < 0 and start < end:
+        return 0
+    span_abs = abs(end - start)
+    step_abs = abs(step)
+    return int(math.floor(span_abs / step_abs + 1e-9)) + 1
 
 
 def _estimate_total_days(
@@ -219,7 +225,9 @@ def _estimate_total_days(
     run_sspmmc = has_sspmmc
     run_fixed = bool(fixed_schedulers)
     run_non_dr = bool(non_dr_schedulers)
-    dr_steps = _count_dr_steps(overrides.start, overrides.end, overrides.step)
+    dr_steps = _count_dr_steps(
+        overrides.start_retention, overrides.end_retention, overrides.step
+    )
     base_runs = 0
     if run_dr:
         base_runs += dr_steps * len(dr_schedulers)
