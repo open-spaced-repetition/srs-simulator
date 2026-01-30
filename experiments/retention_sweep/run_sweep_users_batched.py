@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 import torch
+from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -267,6 +268,20 @@ def main() -> int:
     device = torch.device(args.torch_device) if args.torch_device else None
     dtype = torch.float32
 
+    overall = None
+    if not args.no_progress:
+        total_runs = len(list(_chunked(user_ids, args.batch_size))) * len(schedulers)
+        if "fsrs6" in schedulers:
+            total_runs += (len(dr_values) - 1) * len(
+                list(_chunked(user_ids, args.batch_size))
+            )
+        overall = tqdm(
+            total=total_runs,
+            desc="Overall",
+            unit="run",
+            leave=True,
+        )
+
     for batch in _chunked(user_ids, args.batch_size):
         lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
         packed = PackedLSTMWeights.from_paths(
@@ -371,6 +386,8 @@ def main() -> int:
                                 log_reviews=False,
                             )
                             simulate_cli._write_log(log_args, stats)
+                    if overall is not None:
+                        overall.update(1)
                 continue
 
             if name == "anki_sm2":
@@ -428,6 +445,8 @@ def main() -> int:
                             log_reviews=False,
                         )
                         simulate_cli._write_log(log_args, stats)
+                if overall is not None:
+                    overall.update(1)
                 continue
 
             if name == "memrise":
@@ -479,7 +498,11 @@ def main() -> int:
                             log_reviews=False,
                         )
                         simulate_cli._write_log(log_args, stats)
+                if overall is not None:
+                    overall.update(1)
 
+    if overall is not None:
+        overall.close()
     return 0
 
 
