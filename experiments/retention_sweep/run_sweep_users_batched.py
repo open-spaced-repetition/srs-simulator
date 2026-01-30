@@ -131,6 +131,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable writing logs to disk.",
     )
     parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable tqdm progress bars.",
+    )
+    parser.add_argument(
         "--torch-device",
         default=None,
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
@@ -334,6 +339,7 @@ def main() -> int:
                         device=env_ops.device,
                         dtype=dtype,
                         priority_mode=args.priority,
+                        progress=not args.no_progress,
                     )
                     if not args.no_log:
                         for user_id, stats in zip(batch, stats_list):
@@ -389,6 +395,7 @@ def main() -> int:
                     device=env_ops.device,
                     dtype=dtype,
                     priority_mode=args.priority,
+                    progress=not args.no_progress,
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -438,6 +445,7 @@ def main() -> int:
                     device=env_ops.device,
                     dtype=dtype,
                     priority_mode=args.priority,
+                    progress=not args.no_progress,
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
