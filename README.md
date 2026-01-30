@@ -208,3 +208,10 @@ CLI environments are `fsrs6`, `fsrs3`, and `lstm`; HLR/DASH models are available
 - Add a new cost model: subclass `CostModel`, implement `review_cost`.
 - Add a new scheduler: subclass `Scheduler`, implement `init_card` and `schedule` that operate on `CardView`.
 - Swap components in `simulate` to study how scheduler policies perform under different ground-truth models, user behaviors, and workload assumptions.
+
+## Acknowledgements
+- [1DWalker](https://github.com/1DWalker) provided acceleration advice.
+- [Asuka Minato](https://github.com/asukaminato0721) provided GPU servers.
+- [Expertium](https://github.com/Expertium) provided visualization advice.
+- [Jarrett Ye](https://github.com/L-M-Sherlock) supervised Codex on this project.
+- [Luc Mcgrady](https://github.com/Luc-Mcgrady) inspired the event-driven engine.
