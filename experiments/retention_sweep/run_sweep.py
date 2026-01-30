@@ -31,16 +31,19 @@ def parse_args() -> argparse.Namespace:
         "--start-retention",
         type=float,
         default=0.70,
-        help="Start retention (0-1).",
+        help="Start retention (0-1, rounded to 2 decimals).",
     )
     parser.add_argument(
         "--end-retention",
         type=float,
         default=0.99,
-        help="End retention (0-1).",
+        help="End retention (0-1, rounded to 2 decimals).",
     )
     parser.add_argument(
-        "--step", type=float, default=0.01, help="Retention step (0-1)."
+        "--step",
+        type=float,
+        default=0.01,
+        help="Retention step (0-1, rounded to 2 decimals).",
     )
     parser.add_argument(
         "--environment",
@@ -224,16 +227,29 @@ def _dr_values(start: float, end: float, step: float) -> List[float]:
     values: List[float] = []
     if step == 0:
         return values
-    value = start
+    value = round(start, 2)
+    end = round(end, 2)
     epsilon = abs(step) * 1e-6
     if step > 0:
         while value <= end + epsilon:
             values.append(value)
-            value += step
+            next_value = round(value + step, 2)
+            if next_value == value:
+                raise SystemExit(
+                    "Retention step is too small after rounding; "
+                    "use a step of at least 0.01."
+                )
+            value = next_value
     else:
         while value >= end - epsilon:
             values.append(value)
-            value += step
+            next_value = round(value + step, 2)
+            if next_value == value:
+                raise SystemExit(
+                    "Retention step is too small after rounding; "
+                    "use a step of at least 0.01."
+                )
+            value = next_value
     return values
 
 
