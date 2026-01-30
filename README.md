@@ -88,6 +88,7 @@ uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
 - `build_pareto_users.py` fans out `build_pareto.py` across a user-id range.
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON and plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise.
 - `dominance_sm2_memrise.py` reports per-user dominance rates between Anki-SM-2 and Memrise and saves a stacked bar chart.
+- Note: very high desired retention targets (e.g., `--end-retention 0.99` for FSRS6 sweeps) can dramatically increase GPU memory usage; reduce batch size or cap retention if you hit OOM.
 - To pass retention sweep overrides (e.g., `--start-retention/--end-retention/--step`, now 0-1 floats) to `run_sweep.py`, add them after `--` when invoking `run_sweep_users.py`.
 
 ## Evaluation
