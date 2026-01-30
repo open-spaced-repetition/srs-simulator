@@ -457,6 +457,7 @@ def simulate_multiuser(
     device: Optional[str | torch.device] = None,
     dtype: Optional[torch.dtype] = None,
     progress: bool = False,
+    progress_label: Optional[str] = None,
 ) -> list[SimulationStats]:
     config = VectorizedConfig(
         device=torch.device(device) if device is not None else None,
@@ -520,7 +521,12 @@ def simulate_multiuser(
     if progress:
         from tqdm import tqdm
 
-        progress_bar = tqdm(total=days, desc="Simulating", unit="day", leave=False)
+        progress_bar = tqdm(
+            total=days,
+            desc=progress_label or "Simulating",
+            unit="day",
+            leave=False,
+        )
 
     try:
         for day in range(days):

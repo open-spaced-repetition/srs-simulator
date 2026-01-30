@@ -300,6 +300,7 @@ def main() -> int:
             name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
             if name not in {"fsrs6", "anki_sm2", "memrise"}:
                 raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
+            label_prefix = f"u{batch[0]}-{batch[-1]} {name}"
 
             if name == "fsrs6":
                 weights = torch.stack(
@@ -340,6 +341,7 @@ def main() -> int:
                         dtype=dtype,
                         priority_mode=args.priority,
                         progress=not args.no_progress,
+                        progress_label=f"{label_prefix} dr={dr:.2f}",
                     )
                     if not args.no_log:
                         for user_id, stats in zip(batch, stats_list):
@@ -396,6 +398,7 @@ def main() -> int:
                     dtype=dtype,
                     priority_mode=args.priority,
                     progress=not args.no_progress,
+                    progress_label=label_prefix,
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -446,6 +449,7 @@ def main() -> int:
                     dtype=dtype,
                     priority_mode=args.priority,
                     progress=not args.no_progress,
+                    progress_label=label_prefix,
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
