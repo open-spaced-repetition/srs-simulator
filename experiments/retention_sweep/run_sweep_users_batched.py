@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+from concurrent import futures
+from multiprocessing import get_context
+import queue
 from pathlib import Path
 from typing import Iterable
 
@@ -262,6 +265,280 @@ def _build_behavior_cost(
     return behavior, cost
 
 
+def _progress_callback_from_queue(progress_queue, multiplier: int) -> callable | None:
+    if progress_queue is None:
+        return None
+    last = 0
+
+    def _update(completed: int, total: int) -> None:
+        nonlocal last
+        if total <= 0:
+            return
+        delta = completed - last
+        if delta > 0:
+            progress_queue.put(delta * multiplier)
+        last = completed
+
+    return _update
+
+
+def _run_batch_core(
+    *,
+    args: argparse.Namespace,
+    batch: list[int],
+    benchmark_root: Path,
+    overrides: dict[str, str],
+    log_root: Path,
+    dr_values: list[float],
+    device: torch.device | None,
+    progress: bool,
+    progress_callback,
+) -> None:
+    lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
+    packed = PackedLSTMWeights.from_paths(
+        lstm_paths,
+        use_duration_feature=False,
+        device=device or torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+        dtype=torch.float32,
+    )
+    env_ops = LSTMBatchedEnvOps(
+        packed,
+        device=packed.process_0_weight.device,
+        dtype=torch.float32,
+    )
+    learn_costs, review_costs, first_rating_prob, review_rating_prob = _load_usage(
+        batch, args.button_usage
+    )
+    behavior, cost_model = _build_behavior_cost(
+        len(batch),
+        deck_size=args.deck,
+        learn_limit=args.learn_limit,
+        review_limit=args.review_limit,
+        cost_limit_minutes=args.cost_limit_minutes,
+        learn_costs=learn_costs.to(env_ops.device),
+        review_costs=review_costs.to(env_ops.device),
+        first_rating_prob=first_rating_prob.to(env_ops.device),
+        review_rating_prob=review_rating_prob.to(env_ops.device),
+    )
+
+    schedulers = [item.strip() for item in args.schedulers.split(",") if item.strip()]
+    for scheduler_spec in schedulers:
+        name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
+        if name not in {"fsrs6", "anki_sm2", "memrise"}:
+            raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
+        label_prefix = f"u{batch[0]}-{batch[-1]} {name}"
+
+        if name == "fsrs6":
+            weights = torch.stack(
+                [
+                    torch.tensor(
+                        load_benchmark_weights(
+                            repo_root=REPO_ROOT,
+                            benchmark_root=benchmark_root,
+                            environment="fsrs6",
+                            user_id=user_id,
+                            partition_key=args.benchmark_partition,
+                            overrides=overrides,
+                        ),
+                        dtype=torch.float32,
+                    )
+                    for user_id in batch
+                ],
+                dim=0,
+            ).to(env_ops.device)
+            for dr in dr_values:
+                scheduler_ops = FSRS6BatchSchedulerOps(
+                    weights=weights,
+                    desired_retention=dr,
+                    bounds=Bounds(),
+                    priority_mode=args.scheduler_priority,
+                    device=env_ops.device,
+                    dtype=torch.float32,
+                )
+                stats_list = simulate_multiuser(
+                    days=args.days,
+                    deck_size=args.deck,
+                    env_ops=env_ops,
+                    sched_ops=scheduler_ops,
+                    behavior=behavior,
+                    cost_model=cost_model,
+                    seed=args.seed,
+                    device=env_ops.device,
+                    dtype=torch.float32,
+                    priority_mode=args.priority,
+                    progress=progress,
+                    progress_label=f"{label_prefix} dr={dr:.2f}",
+                    progress_callback=progress_callback,
+                )
+                if not args.no_log:
+                    for user_id, stats in zip(batch, stats_list):
+                        user_log_dir = log_root / f"user_{user_id}"
+                        user_log_dir.mkdir(parents=True, exist_ok=True)
+                        log_args = argparse.Namespace(
+                            engine="vectorized",
+                            days=args.days,
+                            deck=args.deck,
+                            learn_limit=args.learn_limit,
+                            review_limit=args.review_limit,
+                            cost_limit_minutes=args.cost_limit_minutes,
+                            priority=args.priority,
+                            environment="lstm",
+                            scheduler=name,
+                            scheduler_spec=raw,
+                            user_id=user_id,
+                            button_usage=str(args.button_usage)
+                            if args.button_usage is not None
+                            else None,
+                            desired_retention=dr,
+                            scheduler_priority=args.scheduler_priority,
+                            sspmmc_policy=None,
+                            fixed_interval=fixed_interval,
+                            seed=args.seed,
+                            log_dir=user_log_dir,
+                            log_reviews=False,
+                        )
+                        simulate_cli._write_log(log_args, stats)
+            continue
+
+        if name == "anki_sm2":
+            scheduler = AnkiSM2Scheduler()
+            sched_ops = AnkiSM2BatchSchedulerOps(
+                graduating_interval=scheduler.graduating_interval,
+                easy_interval=scheduler.easy_interval,
+                easy_bonus=scheduler.easy_bonus,
+                hard_interval_factor=scheduler.hard_interval_factor,
+                ease_start=scheduler.ease_start,
+                ease_min=scheduler.ease_min,
+                ease_max=scheduler.ease_max,
+                device=env_ops.device,
+                dtype=torch.float32,
+            )
+            stats_list = simulate_multiuser(
+                days=args.days,
+                deck_size=args.deck,
+                env_ops=env_ops,
+                sched_ops=sched_ops,
+                behavior=behavior,
+                cost_model=cost_model,
+                seed=args.seed,
+                device=env_ops.device,
+                dtype=torch.float32,
+                priority_mode=args.priority,
+                progress=progress,
+                progress_label=label_prefix,
+                progress_callback=progress_callback,
+            )
+            if not args.no_log:
+                for user_id, stats in zip(batch, stats_list):
+                    user_log_dir = log_root / f"user_{user_id}"
+                    user_log_dir.mkdir(parents=True, exist_ok=True)
+                    log_args = argparse.Namespace(
+                        engine="vectorized",
+                        days=args.days,
+                        deck=args.deck,
+                        learn_limit=args.learn_limit,
+                        review_limit=args.review_limit,
+                        cost_limit_minutes=args.cost_limit_minutes,
+                        priority=args.priority,
+                        environment="lstm",
+                        scheduler=name,
+                        scheduler_spec=raw,
+                        user_id=user_id,
+                        button_usage=str(args.button_usage)
+                        if args.button_usage is not None
+                        else None,
+                        desired_retention=None,
+                        scheduler_priority=args.scheduler_priority,
+                        sspmmc_policy=None,
+                        fixed_interval=fixed_interval,
+                        seed=args.seed,
+                        log_dir=user_log_dir,
+                        log_reviews=False,
+                    )
+                    simulate_cli._write_log(log_args, stats)
+            continue
+
+        if name == "memrise":
+            scheduler = MemriseScheduler()
+            sched_ops = MemriseBatchSchedulerOps(
+                scheduler,
+                device=env_ops.device,
+                dtype=torch.float32,
+            )
+            stats_list = simulate_multiuser(
+                days=args.days,
+                deck_size=args.deck,
+                env_ops=env_ops,
+                sched_ops=sched_ops,
+                behavior=behavior,
+                cost_model=cost_model,
+                seed=args.seed,
+                device=env_ops.device,
+                dtype=torch.float32,
+                priority_mode=args.priority,
+                progress=progress,
+                progress_label=label_prefix,
+                progress_callback=progress_callback,
+            )
+            if not args.no_log:
+                for user_id, stats in zip(batch, stats_list):
+                    user_log_dir = log_root / f"user_{user_id}"
+                    user_log_dir.mkdir(parents=True, exist_ok=True)
+                    log_args = argparse.Namespace(
+                        engine="vectorized",
+                        days=args.days,
+                        deck=args.deck,
+                        learn_limit=args.learn_limit,
+                        review_limit=args.review_limit,
+                        cost_limit_minutes=args.cost_limit_minutes,
+                        priority=args.priority,
+                        environment="lstm",
+                        scheduler=name,
+                        scheduler_spec=raw,
+                        user_id=user_id,
+                        button_usage=str(args.button_usage)
+                        if args.button_usage is not None
+                        else None,
+                        desired_retention=None,
+                        scheduler_priority=args.scheduler_priority,
+                        sspmmc_policy=None,
+                        fixed_interval=fixed_interval,
+                        seed=args.seed,
+                        log_dir=user_log_dir,
+                        log_reviews=False,
+                    )
+                    simulate_cli._write_log(log_args, stats)
+            continue
+
+
+def _run_batch_worker(
+    *,
+    args: argparse.Namespace,
+    batch: list[int],
+    benchmark_root: Path,
+    overrides: dict[str, str],
+    log_root: Path,
+    dr_values: list[float],
+    device_str: str,
+    progress_queue,
+) -> None:
+    device = torch.device(device_str)
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+    progress_callback = _progress_callback_from_queue(progress_queue, len(batch))
+    _run_batch_core(
+        args=args,
+        batch=batch,
+        benchmark_root=benchmark_root,
+        overrides=overrides,
+        log_root=log_root,
+        dr_values=dr_values,
+        device=device,
+        progress=False,
+        progress_callback=progress_callback,
+    )
+
+
 def main() -> int:
     args = parse_args()
     envs = [item.strip() for item in args.environments.split(",") if item.strip()]
@@ -291,7 +568,6 @@ def main() -> int:
     if devices and not torch.cuda.is_available():
         raise ValueError("--cuda-devices was provided but CUDA is not available.")
     device = torch.device(args.torch_device) if args.torch_device else None
-    dtype = torch.float32
 
     batches = list(_chunked(user_ids, args.batch_size))
     runs_per_batch = 0
@@ -326,225 +602,64 @@ def main() -> int:
 
         return _update
 
-    for batch_idx, batch in enumerate(batches):
-        if devices:
-            batch_device = torch.device(f"cuda:{devices[batch_idx % len(devices)]}")
-        else:
-            batch_device = device
-        lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
-        packed = PackedLSTMWeights.from_paths(
-            lstm_paths,
-            use_duration_feature=False,
-            device=batch_device
-            or torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            dtype=dtype,
-        )
-        env_ops = LSTMBatchedEnvOps(
-            packed,
-            device=packed.process_0_weight.device,
-            dtype=dtype,
-        )
-        learn_costs, review_costs, first_rating_prob, review_rating_prob = _load_usage(
-            batch, args.button_usage
-        )
-        behavior, cost_model = _build_behavior_cost(
-            len(batch),
-            deck_size=args.deck,
-            learn_limit=args.learn_limit,
-            review_limit=args.review_limit,
-            cost_limit_minutes=args.cost_limit_minutes,
-            learn_costs=learn_costs.to(env_ops.device),
-            review_costs=review_costs.to(env_ops.device),
-            first_rating_prob=first_rating_prob.to(env_ops.device),
-            review_rating_prob=review_rating_prob.to(env_ops.device),
-        )
-
-        for scheduler_spec in schedulers:
-            name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
-            if name not in {"fsrs6", "anki_sm2", "memrise"}:
-                raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
-            label_prefix = f"u{batch[0]}-{batch[-1]} {name}"
-
-            if name == "fsrs6":
-                weights = torch.stack(
-                    [
-                        torch.tensor(
-                            load_benchmark_weights(
-                                repo_root=REPO_ROOT,
-                                benchmark_root=benchmark_root,
-                                environment="fsrs6",
-                                user_id=user_id,
-                                partition_key=args.benchmark_partition,
-                                overrides=overrides,
-                            ),
-                            dtype=dtype,
-                        )
-                        for user_id in batch
-                    ],
-                    dim=0,
-                ).to(env_ops.device)
-                for dr in dr_values:
-                    scheduler_ops = FSRS6BatchSchedulerOps(
-                        weights=weights,
-                        desired_retention=dr,
-                        bounds=Bounds(),
-                        priority_mode=args.scheduler_priority,
-                        device=env_ops.device,
-                        dtype=dtype,
+    if devices and len(devices) > 1:
+        ctx = get_context("spawn")
+        progress_queue = None if args.no_progress else ctx.Queue()
+        pending: set[futures.Future] = set()
+        with futures.ProcessPoolExecutor(
+            max_workers=len(devices),
+            mp_context=ctx,
+        ) as executor:
+            for batch_idx, batch in enumerate(batches):
+                device_str = f"cuda:{devices[batch_idx % len(devices)]}"
+                pending.add(
+                    executor.submit(
+                        _run_batch_worker,
+                        args=args,
+                        batch=batch,
+                        benchmark_root=benchmark_root,
+                        overrides=overrides,
+                        log_root=log_root,
+                        dr_values=dr_values,
+                        device_str=device_str,
+                        progress_queue=progress_queue,
                     )
-                    stats_list = simulate_multiuser(
-                        days=args.days,
-                        deck_size=args.deck,
-                        env_ops=env_ops,
-                        sched_ops=scheduler_ops,
-                        behavior=behavior,
-                        cost_model=cost_model,
-                        seed=args.seed,
-                        device=env_ops.device,
-                        dtype=dtype,
-                        priority_mode=args.priority,
-                        progress=not args.no_progress,
-                        progress_label=f"{label_prefix} dr={dr:.2f}",
-                        progress_callback=_make_overall_callback(len(batch)),
-                    )
-                    if not args.no_log:
-                        for user_id, stats in zip(batch, stats_list):
-                            user_log_dir = log_root / f"user_{user_id}"
-                            user_log_dir.mkdir(parents=True, exist_ok=True)
-                            log_args = argparse.Namespace(
-                                engine="vectorized",
-                                days=args.days,
-                                deck=args.deck,
-                                learn_limit=args.learn_limit,
-                                review_limit=args.review_limit,
-                                cost_limit_minutes=args.cost_limit_minutes,
-                                priority=args.priority,
-                                environment="lstm",
-                                scheduler=name,
-                                scheduler_spec=raw,
-                                user_id=user_id,
-                                button_usage=str(args.button_usage)
-                                if args.button_usage is not None
-                                else None,
-                                desired_retention=dr,
-                                scheduler_priority=args.scheduler_priority,
-                                sspmmc_policy=None,
-                                fixed_interval=fixed_interval,
-                                seed=args.seed,
-                                log_dir=user_log_dir,
-                                log_reviews=False,
-                            )
-                            simulate_cli._write_log(log_args, stats)
-                continue
-
-            if name == "anki_sm2":
-                scheduler = AnkiSM2Scheduler()
-                sched_ops = AnkiSM2BatchSchedulerOps(
-                    graduating_interval=scheduler.graduating_interval,
-                    easy_interval=scheduler.easy_interval,
-                    easy_bonus=scheduler.easy_bonus,
-                    hard_interval_factor=scheduler.hard_interval_factor,
-                    ease_start=scheduler.ease_start,
-                    ease_min=scheduler.ease_min,
-                    ease_max=scheduler.ease_max,
-                    device=env_ops.device,
-                    dtype=dtype,
                 )
-                stats_list = simulate_multiuser(
-                    days=args.days,
-                    deck_size=args.deck,
-                    env_ops=env_ops,
-                    sched_ops=sched_ops,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    seed=args.seed,
-                    device=env_ops.device,
-                    dtype=dtype,
-                    priority_mode=args.priority,
-                    progress=not args.no_progress,
-                    progress_label=label_prefix,
-                    progress_callback=_make_overall_callback(len(batch)),
+            while pending:
+                done, pending = futures.wait(
+                    pending, timeout=0.1, return_when=futures.FIRST_COMPLETED
                 )
-                if not args.no_log:
-                    for user_id, stats in zip(batch, stats_list):
-                        user_log_dir = log_root / f"user_{user_id}"
-                        user_log_dir.mkdir(parents=True, exist_ok=True)
-                        log_args = argparse.Namespace(
-                            engine="vectorized",
-                            days=args.days,
-                            deck=args.deck,
-                            learn_limit=args.learn_limit,
-                            review_limit=args.review_limit,
-                            cost_limit_minutes=args.cost_limit_minutes,
-                            priority=args.priority,
-                            environment="lstm",
-                            scheduler=name,
-                            scheduler_spec=raw,
-                            user_id=user_id,
-                            button_usage=str(args.button_usage)
-                            if args.button_usage is not None
-                            else None,
-                            desired_retention=None,
-                            scheduler_priority=args.scheduler_priority,
-                            sspmmc_policy=None,
-                            fixed_interval=fixed_interval,
-                            seed=args.seed,
-                            log_dir=user_log_dir,
-                            log_reviews=False,
-                        )
-                        simulate_cli._write_log(log_args, stats)
-                continue
-
-            if name == "memrise":
-                scheduler = MemriseScheduler()
-                sched_ops = MemriseBatchSchedulerOps(
-                    scheduler,
-                    device=env_ops.device,
-                    dtype=dtype,
-                )
-                stats_list = simulate_multiuser(
-                    days=args.days,
-                    deck_size=args.deck,
-                    env_ops=env_ops,
-                    sched_ops=sched_ops,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    seed=args.seed,
-                    device=env_ops.device,
-                    dtype=dtype,
-                    priority_mode=args.priority,
-                    progress=not args.no_progress,
-                    progress_label=label_prefix,
-                    progress_callback=_make_overall_callback(len(batch)),
-                )
-                if not args.no_log:
-                    for user_id, stats in zip(batch, stats_list):
-                        user_log_dir = log_root / f"user_{user_id}"
-                        user_log_dir.mkdir(parents=True, exist_ok=True)
-                        log_args = argparse.Namespace(
-                            engine="vectorized",
-                            days=args.days,
-                            deck=args.deck,
-                            learn_limit=args.learn_limit,
-                            review_limit=args.review_limit,
-                            cost_limit_minutes=args.cost_limit_minutes,
-                            priority=args.priority,
-                            environment="lstm",
-                            scheduler=name,
-                            scheduler_spec=raw,
-                            user_id=user_id,
-                            button_usage=str(args.button_usage)
-                            if args.button_usage is not None
-                            else None,
-                            desired_retention=None,
-                            scheduler_priority=args.scheduler_priority,
-                            sspmmc_policy=None,
-                            fixed_interval=fixed_interval,
-                            seed=args.seed,
-                            log_dir=user_log_dir,
-                            log_reviews=False,
-                        )
-                        simulate_cli._write_log(log_args, stats)
+                if overall is not None and progress_queue is not None:
+                    try:
+                        while True:
+                            delta = progress_queue.get_nowait()
+                            overall.update(delta)
+                    except queue.Empty:
+                        pass
+                for task in done:
+                    task.result()
+            if overall is not None and progress_queue is not None:
+                try:
+                    while True:
+                        delta = progress_queue.get_nowait()
+                        overall.update(delta)
+                except queue.Empty:
+                    pass
+    else:
+        batch_device = torch.device(f"cuda:{devices[0]}") if devices else device
+        for batch in batches:
+            progress_callback = _make_overall_callback(len(batch))
+            _run_batch_core(
+                args=args,
+                batch=batch,
+                benchmark_root=benchmark_root,
+                overrides=overrides,
+                log_root=log_root,
+                dr_values=dr_values,
+                device=batch_device,
+                progress=not args.no_progress,
+                progress_callback=progress_callback,
+            )
     if overall is not None:
         overall.close()
     return 0
