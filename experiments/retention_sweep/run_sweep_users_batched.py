@@ -265,10 +265,18 @@ def _build_behavior_cost(
     return behavior, cost
 
 
-def _progress_callback_from_queue(progress_queue, multiplier: int) -> callable | None:
+def _progress_callback_from_queue(
+    progress_queue,
+    *,
+    multiplier: int,
+    device_label: str,
+    run_label: str,
+    total_days: int,
+) -> callable | None:
     if progress_queue is None:
         return None
     last = 0
+    progress_queue.put(("start", device_label, run_label, total_days))
 
     def _update(completed: int, total: int) -> None:
         nonlocal last
@@ -276,7 +284,8 @@ def _progress_callback_from_queue(progress_queue, multiplier: int) -> callable |
             return
         delta = completed - last
         if delta > 0:
-            progress_queue.put(delta * multiplier)
+            progress_queue.put(("overall", delta * multiplier))
+            progress_queue.put(("gpu", device_label, delta))
         last = completed
 
     return _update
@@ -292,7 +301,8 @@ def _run_batch_core(
     dr_values: list[float],
     device: torch.device | None,
     progress: bool,
-    progress_callback,
+    progress_queue,
+    device_label: str,
 ) -> None:
     lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
     packed = PackedLSTMWeights.from_paths(
@@ -347,6 +357,13 @@ def _run_batch_core(
                 dim=0,
             ).to(env_ops.device)
             for dr in dr_values:
+                progress_callback = _progress_callback_from_queue(
+                    progress_queue,
+                    multiplier=len(batch),
+                    device_label=device_label,
+                    run_label=f"{label_prefix} dr={dr:.2f}",
+                    total_days=args.days,
+                )
                 scheduler_ops = FSRS6BatchSchedulerOps(
                     weights=weights,
                     desired_retention=dr,
@@ -413,6 +430,13 @@ def _run_batch_core(
                 device=env_ops.device,
                 dtype=torch.float32,
             )
+            progress_callback = _progress_callback_from_queue(
+                progress_queue,
+                multiplier=len(batch),
+                device_label=device_label,
+                run_label=label_prefix,
+                total_days=args.days,
+            )
             stats_list = simulate_multiuser(
                 days=args.days,
                 deck_size=args.deck,
@@ -464,6 +488,13 @@ def _run_batch_core(
                 scheduler,
                 device=env_ops.device,
                 dtype=torch.float32,
+            )
+            progress_callback = _progress_callback_from_queue(
+                progress_queue,
+                multiplier=len(batch),
+                device_label=device_label,
+                run_label=label_prefix,
+                total_days=args.days,
             )
             stats_list = simulate_multiuser(
                 days=args.days,
@@ -525,7 +556,6 @@ def _run_batch_worker(
     device = torch.device(device_str)
     if device.type == "cuda":
         torch.cuda.set_device(device)
-    progress_callback = _progress_callback_from_queue(progress_queue, len(batch))
     _run_batch_core(
         args=args,
         batch=batch,
@@ -535,8 +565,21 @@ def _run_batch_worker(
         dr_values=dr_values,
         device=device,
         progress=False,
-        progress_callback=progress_callback,
+        progress_queue=progress_queue,
+        device_label=device_str,
     )
+
+
+class _LocalProgressQueue:
+    def __init__(self, overall: tqdm) -> None:
+        self._overall = overall
+
+    def put(self, message) -> None:
+        if not isinstance(message, tuple):
+            return
+        if message[0] != "overall":
+            return
+        self._overall.update(message[1])
 
 
 def main() -> int:
@@ -586,26 +629,58 @@ def main() -> int:
             leave=True,
         )
 
-    def _make_overall_callback(multiplier: int):
-        if overall is None:
-            return None
-        last = 0
-
-        def _update(completed: int, total: int) -> None:
-            nonlocal last
-            if total <= 0:
-                return
-            delta = completed - last
-            if delta > 0:
-                overall.update(delta * multiplier)
-            last = completed
-
-        return _update
-
     if devices and len(devices) > 1:
         ctx = get_context("spawn")
         manager = ctx.Manager() if overall is not None else None
         progress_queue = manager.Queue() if manager is not None else None
+        gpu_bars: dict[str, tqdm] = {}
+        if overall is not None:
+            for idx, dev in enumerate(devices, start=1):
+                label = f"cuda:{dev}"
+                gpu_bars[label] = tqdm(
+                    total=0,
+                    desc=label,
+                    unit="day",
+                    position=idx,
+                    leave=False,
+                )
+
+        def _drain_progress_queue() -> None:
+            if overall is None or progress_queue is None:
+                return
+            while True:
+                try:
+                    message = progress_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if not isinstance(message, tuple):
+                    continue
+                kind = message[0]
+                if kind == "overall":
+                    overall.update(message[1])
+                    continue
+                if kind == "start":
+                    _, device_label, run_label, total_days = message
+                    bar = gpu_bars.get(device_label)
+                    if bar is None:
+                        bar = tqdm(
+                            total=0,
+                            desc=device_label,
+                            unit="day",
+                            leave=False,
+                        )
+                        gpu_bars[device_label] = bar
+                    bar.reset(total=int(total_days))
+                    bar.set_description_str(f"{device_label} {run_label}")
+                    bar.refresh()
+                    continue
+                if kind == "gpu":
+                    _, device_label, delta = message
+                    bar = gpu_bars.get(device_label)
+                    if bar is not None:
+                        bar.update(int(delta))
+                    continue
+
         pending: set[futures.Future] = set()
         try:
             with futures.ProcessPoolExecutor(
@@ -631,29 +706,21 @@ def main() -> int:
                     done, pending = futures.wait(
                         pending, timeout=0.1, return_when=futures.FIRST_COMPLETED
                     )
-                    if overall is not None and progress_queue is not None:
-                        try:
-                            while True:
-                                delta = progress_queue.get_nowait()
-                                overall.update(delta)
-                        except queue.Empty:
-                            pass
+                    _drain_progress_queue()
                     for task in done:
                         task.result()
-                if overall is not None and progress_queue is not None:
-                    try:
-                        while True:
-                            delta = progress_queue.get_nowait()
-                            overall.update(delta)
-                    except queue.Empty:
-                        pass
+                _drain_progress_queue()
         finally:
+            for bar in gpu_bars.values():
+                bar.close()
             if manager is not None:
                 manager.shutdown()
     else:
         batch_device = torch.device(f"cuda:{devices[0]}") if devices else device
         for batch in batches:
-            progress_callback = _make_overall_callback(len(batch))
+            progress_queue = (
+                _LocalProgressQueue(overall) if overall is not None else None
+            )
             _run_batch_core(
                 args=args,
                 batch=batch,
@@ -663,7 +730,8 @@ def main() -> int:
                 dr_values=dr_values,
                 device=batch_device,
                 progress=not args.no_progress,
-                progress_callback=progress_callback,
+                progress_queue=progress_queue,
+                device_label=str(batch_device or "device"),
             )
     if overall is not None:
         overall.close()
