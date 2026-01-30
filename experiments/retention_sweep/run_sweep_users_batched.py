@@ -269,19 +269,23 @@ def main() -> int:
     dtype = torch.float32
 
     batches = list(_chunked(user_ids, args.batch_size))
-    total_runs = len(batches) * len(schedulers)
-    if "fsrs6" in schedulers:
-        total_runs += (len(dr_values) - 1) * len(batches)
+    runs_per_batch = 0
+    for scheduler in schedulers:
+        if scheduler == "fsrs6":
+            runs_per_batch += len(dr_values)
+        else:
+            runs_per_batch += 1
+    total_user_days = sum(len(batch) * args.days * runs_per_batch for batch in batches)
     overall = None
     if not args.no_progress:
         overall = tqdm(
-            total=args.days * total_runs,
+            total=total_user_days,
             desc="Overall",
-            unit="day",
+            unit="user-day",
             leave=True,
         )
 
-    def _make_overall_callback():
+    def _make_overall_callback(multiplier: int):
         if overall is None:
             return None
         last = 0
@@ -292,7 +296,7 @@ def main() -> int:
                 return
             delta = completed - last
             if delta > 0:
-                overall.update(delta)
+                overall.update(delta * multiplier)
             last = completed
 
         return _update
@@ -372,7 +376,7 @@ def main() -> int:
                         priority_mode=args.priority,
                         progress=not args.no_progress,
                         progress_label=f"{label_prefix} dr={dr:.2f}",
-                        progress_callback=_make_overall_callback(),
+                        progress_callback=_make_overall_callback(len(batch)),
                     )
                     if not args.no_log:
                         for user_id, stats in zip(batch, stats_list):
@@ -430,7 +434,7 @@ def main() -> int:
                     priority_mode=args.priority,
                     progress=not args.no_progress,
                     progress_label=label_prefix,
-                    progress_callback=_make_overall_callback(),
+                    progress_callback=_make_overall_callback(len(batch)),
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -482,7 +486,7 @@ def main() -> int:
                     priority_mode=args.priority,
                     progress=not args.no_progress,
                     progress_label=label_prefix,
-                    progress_callback=_make_overall_callback(),
+                    progress_callback=_make_overall_callback(len(batch)),
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
