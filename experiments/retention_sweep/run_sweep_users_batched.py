@@ -5,6 +5,7 @@ import math
 import sys
 from concurrent import futures
 from multiprocessing import get_context
+import queue
 from pathlib import Path
 from typing import Iterable
 
@@ -519,11 +520,12 @@ def _run_batch_worker(
     log_root: Path,
     dr_values: list[float],
     device_str: str,
-) -> int:
+    progress_queue,
+) -> None:
     device = torch.device(device_str)
     if device.type == "cuda":
         torch.cuda.set_device(device)
-    progress_callback = _progress_callback_from_queue(None, len(batch))
+    progress_callback = _progress_callback_from_queue(progress_queue, len(batch))
     _run_batch_core(
         args=args,
         batch=batch,
@@ -535,16 +537,6 @@ def _run_batch_worker(
         progress=False,
         progress_callback=progress_callback,
     )
-    runs_per_batch = 0
-    for scheduler in args.schedulers.split(","):
-        scheduler = scheduler.strip()
-        if not scheduler:
-            continue
-        if scheduler == "fsrs6":
-            runs_per_batch += len(dr_values)
-        else:
-            runs_per_batch += 1
-    return len(batch) * args.days * runs_per_batch
 
 
 def main() -> int:
@@ -612,33 +604,52 @@ def main() -> int:
 
     if devices and len(devices) > 1:
         ctx = get_context("spawn")
+        manager = ctx.Manager() if overall is not None else None
+        progress_queue = manager.Queue() if manager is not None else None
         pending: set[futures.Future] = set()
-        with futures.ProcessPoolExecutor(
-            max_workers=len(devices),
-            mp_context=ctx,
-        ) as executor:
-            for batch_idx, batch in enumerate(batches):
-                device_str = f"cuda:{devices[batch_idx % len(devices)]}"
-                pending.add(
-                    executor.submit(
-                        _run_batch_worker,
-                        args=args,
-                        batch=batch,
-                        benchmark_root=benchmark_root,
-                        overrides=overrides,
-                        log_root=log_root,
-                        dr_values=dr_values,
-                        device_str=device_str,
+        try:
+            with futures.ProcessPoolExecutor(
+                max_workers=len(devices),
+                mp_context=ctx,
+            ) as executor:
+                for batch_idx, batch in enumerate(batches):
+                    device_str = f"cuda:{devices[batch_idx % len(devices)]}"
+                    pending.add(
+                        executor.submit(
+                            _run_batch_worker,
+                            args=args,
+                            batch=batch,
+                            benchmark_root=benchmark_root,
+                            overrides=overrides,
+                            log_root=log_root,
+                            dr_values=dr_values,
+                            device_str=device_str,
+                            progress_queue=progress_queue,
+                        )
                     )
-                )
-            while pending:
-                done, pending = futures.wait(
-                    pending, timeout=0.1, return_when=futures.FIRST_COMPLETED
-                )
-                for task in done:
-                    completed_days = task.result()
-                    if overall is not None:
-                        overall.update(completed_days)
+                while pending:
+                    done, pending = futures.wait(
+                        pending, timeout=0.1, return_when=futures.FIRST_COMPLETED
+                    )
+                    if overall is not None and progress_queue is not None:
+                        try:
+                            while True:
+                                delta = progress_queue.get_nowait()
+                                overall.update(delta)
+                        except queue.Empty:
+                            pass
+                    for task in done:
+                        task.result()
+                if overall is not None and progress_queue is not None:
+                    try:
+                        while True:
+                            delta = progress_queue.get_nowait()
+                            overall.update(delta)
+                    except queue.Empty:
+                        pass
+        finally:
+            if manager is not None:
+                manager.shutdown()
     else:
         batch_device = torch.device(f"cuda:{devices[0]}") if devices else device
         for batch in batches:
