@@ -590,11 +590,17 @@ def simulate_multiuser(
                     )
                     lazy = lazy_rand < lazy_good_bias[due_user]
                 success_weights_sel = success_weights.index_select(0, due_user)
-                cum = success_weights_sel.cumsum(dim=1)
-                success_rand = torch.rand(
-                    r_due.shape, device=torch_device, generator=gen
+                success_sample = (
+                    torch.multinomial(
+                        success_weights_sel,
+                        num_samples=1,
+                        replacement=True,
+                        generator=gen,
+                    )
+                    .squeeze(1)
+                    .to(torch.int64)
+                    + 2
                 )
-                success_sample = (success_rand[:, None] > cum).sum(dim=1) + 2
                 rating_due = torch.where(
                     fail,
                     torch.ones_like(success_sample),
@@ -685,11 +691,15 @@ def simulate_multiuser(
                 positions = torch.arange(max_candidate, device=torch_device)[None, :]
                 candidate_mask = positions < candidate[:, None]
 
-                cum = first_rating_prob.cumsum(dim=1)
-                rand = torch.rand(
-                    (user_count, max_candidate), device=torch_device, generator=gen
+                rating = (
+                    torch.multinomial(
+                        first_rating_prob,
+                        num_samples=max_candidate,
+                        replacement=True,
+                        generator=gen,
+                    ).to(torch.int64)
+                    + 1
                 )
-                rating = (rand.unsqueeze(-1) > cum[:, None, :]).sum(dim=-1) + 1
                 user_idx = torch.arange(user_count, device=torch_device)[:, None]
                 learn_cost = learn_costs[user_idx, rating - 1]
                 learn_cost = torch.where(
