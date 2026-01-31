@@ -22,6 +22,8 @@ from simulator.scheduler_spec import (
     scheduler_uses_desired_retention,
 )
 
+from experiments.retention_sweep.cli_utils import add_user_range_args, parse_csv
+
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(
@@ -35,15 +37,9 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
             "    --schedulers fsrs6 --max-parallel 3 \\\n"
             "    -- --start-retention 0.50 --end-retention 0.68 --step 0.02\n"
         ),
+        allow_abbrev=False,
     )
-    parser.add_argument("--start-user", type=int, default=1, help="First user id.")
-    parser.add_argument("--end-user", type=int, default=10000, help="Last user id.")
-    parser.add_argument(
-        "--step-user",
-        type=int,
-        default=1,
-        help="Step size for user ids.",
-    )
+    add_user_range_args(parser, default_end=10000)
     parser.add_argument(
         "--environments",
         default="lstm",
@@ -144,12 +140,6 @@ def _parse_cuda_devices(raw: str | None) -> list[str]:
                 f"Invalid --cuda-devices entry '{device}'. Expected numeric indices."
             )
     return devices
-
-
-def _parse_csv(value: str | None) -> list[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
@@ -445,9 +435,9 @@ def main() -> int:
             args.mps_active_thread_percentage
         )
 
-    user_ids = list(range(args.start_user, args.end_user + 1, args.step_user))
-    envs = _parse_csv(args.environments) or ["lstm"]
-    schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
+    user_ids = list(range(args.start_user, args.end_user + 1))
+    envs = parse_csv(args.environments) or ["lstm"]
+    schedulers = parse_csv(args.schedulers) or ["fsrs6"]
     inject_torch_device = cuda_devices and not _has_arg(extra_args, "--torch-device")
     if inject_torch_device:
         extra_args = list(extra_args)

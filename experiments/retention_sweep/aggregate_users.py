@@ -43,13 +43,17 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated schedulers to include.",
     )
     parser.add_argument(
+        "--start-retention",
         "--min-retention",
+        dest="start_retention",
         type=float,
         default=0.70,
         help="Minimum desired retention to include.",
     )
     parser.add_argument(
+        "--end-retention",
         "--max-retention",
+        dest="end_retention",
         type=float,
         default=0.99,
         help="Maximum desired retention to include.",
@@ -246,7 +250,7 @@ def main() -> None:
                 desired = round(float(desired), 2)
             except (TypeError, ValueError):
                 continue
-            if desired < args.min_retention or desired > args.max_retention:
+            if desired < args.start_retention or desired > args.end_retention:
                 continue
         else:
             desired = None

@@ -39,19 +39,15 @@ from simulator.vectorized.multiuser import (
     simulate_multiuser,
 )
 
+from experiments.retention_sweep.cli_utils import add_user_range_args, parse_csv
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run multi-user retention sweeps with batched vectorized simulation."
+        description="Run multi-user retention sweeps with batched vectorized simulation.",
+        allow_abbrev=False,
     )
-    parser.add_argument("--start-user", type=int, default=1, help="First user id.")
-    parser.add_argument("--end-user", type=int, default=1000, help="Last user id.")
-    parser.add_argument(
-        "--step-user",
-        type=int,
-        default=1,
-        help="Step size for user ids.",
-    )
+    add_user_range_args(parser, default_end=1000)
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -309,7 +305,7 @@ def _run_batch_core(
         batch, args.button_usage
     )
     schedulers = [item.strip() for item in args.schedulers.split(",") if item.strip()]
-    envs = [item.strip() for item in args.environments.split(",") if item.strip()]
+    envs = parse_csv(args.environments)
     base_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for environment in envs:
@@ -617,13 +613,15 @@ class _LocalProgressQueue:
 
 def main() -> int:
     args = parse_args()
-    envs = [item.strip() for item in args.environments.split(",") if item.strip()]
+    envs = parse_csv(args.environments)
+    if not envs:
+        raise ValueError("No environments specified.")
     for env in envs:
         if env not in {"lstm", "fsrs6"}:
             raise ValueError(
                 "Batched retention sweep supports only lstm or fsrs6 environments."
             )
-    schedulers = [item.strip() for item in args.schedulers.split(",") if item.strip()]
+    schedulers = parse_csv(args.schedulers)
     if not schedulers:
         raise ValueError("No schedulers specified.")
     if args.batch_size < 1:
@@ -631,7 +629,7 @@ def main() -> int:
     if args.torch_device and args.cuda_devices:
         raise ValueError("--torch-device cannot be combined with --cuda-devices.")
 
-    user_ids = list(range(args.start_user, args.end_user + 1, args.step_user))
+    user_ids = list(range(args.start_user, args.end_user + 1))
     if not user_ids:
         raise ValueError("Empty user range.")
 

@@ -6,19 +6,19 @@ import sys
 import time
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-def parse_args() -> argparse.Namespace:
+from experiments.retention_sweep.cli_utils import add_user_range_args, passthrough_args
+
+
+def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser = argparse.ArgumentParser(
         description="Run retention_sweep.build_pareto.py for a range of user IDs.",
+        allow_abbrev=False,
     )
-    parser.add_argument("--start-user", type=int, default=1, help="First user id.")
-    parser.add_argument("--end-user", type=int, default=10000, help="Last user id.")
-    parser.add_argument(
-        "--step-user",
-        type=int,
-        default=1,
-        help="Step size for user ids.",
-    )
+    add_user_range_args(parser, default_end=10000)
     parser.add_argument(
         "--environments",
         default="lstm",
@@ -50,21 +50,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print commands without executing them.",
     )
-    return parser.parse_args()
+    return parser.parse_known_args()
 
 
 def main() -> int:
-    args = parse_args()
+    args, _ = parse_args()
     if args.start_user < 1 or args.end_user < args.start_user:
         raise ValueError("Invalid user range.")
 
     script_path = Path("experiments") / "retention_sweep" / "build_pareto.py"
-    extra_args = []
-    if "--" in sys.argv:
-        extra_args = sys.argv[sys.argv.index("--") + 1 :]
+    extra_args = passthrough_args(sys.argv)
 
     failures = 0
-    for user_id in range(args.start_user, args.end_user + 1, args.step_user):
+    for user_id in range(args.start_user, args.end_user + 1):
         cmd = [
             args.uv_cmd,
             "run",
