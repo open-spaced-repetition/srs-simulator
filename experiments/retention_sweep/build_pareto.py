@@ -66,6 +66,17 @@ def parse_args() -> argparse.Namespace:
         help="Maximum desired retention to include.",
     )
     parser.add_argument(
+        "--fuzz",
+        choices=["on", "off", "any"],
+        default="any",
+        help="Filter logs by fuzz flag (ignored when --compare-fuzz is set).",
+    )
+    parser.add_argument(
+        "--compare-fuzz",
+        action="store_true",
+        help="Plot fuzz on/off as separate series when logs include meta.fuzz.",
+    )
+    parser.add_argument(
         "--results-path",
         type=Path,
         default=None,
@@ -94,6 +105,22 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalize_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
 
 
 def _load_meta_totals(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -176,6 +203,7 @@ def _iter_log_entries(
     min_retention: float,
     max_retention: float,
     base_dirs: Sequence[Path],
+    fuzz_filter: Optional[bool],
     fixed_interval_filter: Optional[Sequence[float]] = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
     for path in sorted(log_dir.glob("*.jsonl")):
@@ -189,6 +217,11 @@ def _iter_log_entries(
         scheduler = meta.get("scheduler")
         if scheduler_filter and scheduler not in scheduler_filter:
             continue
+
+        fuzz_value = _normalize_bool(meta.get("fuzz"))
+        if fuzz_filter is not None:
+            if fuzz_value is None or fuzz_value != fuzz_filter:
+                continue
 
         fixed_interval = None
         if scheduler == "fixed":
@@ -247,6 +280,7 @@ def _iter_log_entries(
             "scheduler": scheduler,
             "user_id": user_id,
             "fixed_interval": fixed_interval,
+            "fuzz": fuzz_value,
         }
         yield desired_value, entry
 
@@ -258,11 +292,13 @@ def _build_results(
     min_retention: float,
     max_retention: float,
     base_dirs: Sequence[Path],
+    fuzz_filter: Optional[bool],
     fixed_interval_filter: Optional[Sequence[float]] = None,
     title_prefix: str | None = None,
     dedupe: bool = True,
+    dedupe_fuzz: bool = False,
 ) -> List[Dict[str, Any]]:
-    by_retention: Dict[float, Dict[str, Any]] = {}
+    by_retention: Dict[object, Dict[str, Any]] = {}
     results: List[Dict[str, Any]] = []
     for desired, entry in _iter_log_entries(
         log_dir,
@@ -271,13 +307,17 @@ def _build_results(
         min_retention,
         max_retention,
         base_dirs,
+        fuzz_filter,
         fixed_interval_filter,
     ):
         if title_prefix:
             entry["title"] = f"{title_prefix} {entry['title']}"
         entry["environment"] = environment
         if dedupe and desired is not None:
-            by_retention[desired] = entry
+            if dedupe_fuzz:
+                by_retention[(desired, entry.get("fuzz"))] = entry
+            else:
+                by_retention[desired] = entry
         else:
             results.append(entry)
 
@@ -347,21 +387,35 @@ def _plot_compare_frontier(
     linestyles = ["-", "--", "-.", ":", (0, (3, 1, 1, 1)), (0, (5, 1))]
     scheduler_order: List[str] = []
     environment_order: List[str] = []
+    env_fuzz_order: List[tuple[Optional[str], Optional[bool]]] = []
+    use_fuzz_linestyles = any(item.get("fuzz") is not None for item in series)
     for item in series:
         scheduler = item.get("scheduler")
         environment = item.get("environment")
+        fuzz_value = item.get("fuzz")
         if scheduler and scheduler not in scheduler_order:
             scheduler_order.append(scheduler)
-        if environment and environment not in environment_order:
+        if use_fuzz_linestyles:
+            key = (environment, fuzz_value)
+            if key not in env_fuzz_order:
+                env_fuzz_order.append(key)
+        elif environment and environment not in environment_order:
             environment_order.append(environment)
     scheduler_colors = {
         scheduler: colors[idx % len(colors)]
         for idx, scheduler in enumerate(scheduler_order)
     }
-    environment_linestyles = {
-        environment: linestyles[idx % len(linestyles)]
-        for idx, environment in enumerate(environment_order)
-    }
+    environment_linestyles: dict[object, object] = {}
+    if use_fuzz_linestyles:
+        environment_linestyles = {
+            key: linestyles[idx % len(linestyles)]
+            for idx, key in enumerate(env_fuzz_order)
+        }
+    else:
+        environment_linestyles = {
+            environment: linestyles[idx % len(linestyles)]
+            for idx, environment in enumerate(environment_order)
+        }
 
     single_point_markers = {
         "anki_sm2": "^",
@@ -395,6 +449,8 @@ def _plot_compare_frontier(
             continue
         scheduler = item.get("scheduler")
         environment = item.get("environment")
+        fuzz_value = item.get("fuzz")
+        style_key = (environment, fuzz_value) if use_fuzz_linestyles else environment
         is_single_point = scheduler in single_point_markers and len(entries) == 1
         if is_single_point:
             color = "red"
@@ -404,7 +460,7 @@ def _plot_compare_frontier(
             markersize = 7.5
         else:
             color = scheduler_colors.get(scheduler, colors[0])
-            linestyle = environment_linestyles.get(environment, linestyles[0])
+            linestyle = environment_linestyles.get(style_key, linestyles[0])
             marker = "o"
             linewidth = 2
             markersize = 6
@@ -574,93 +630,122 @@ def main() -> None:
     run_fixed = include_all_fixed or bool(fixed_intervals)
     if not run_dr and not run_sspmmc and not run_fixed:
         raise SystemExit("No schedulers specified. Use --sched to select plots.")
+    fuzz_filter = None
+    if not args.compare_fuzz and args.fuzz != "any":
+        fuzz_filter = args.fuzz == "on"
+    fuzz_series = [None]
+    if args.compare_fuzz:
+        fuzz_series = [False, True]
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:
-                results = _build_results(
+                for fuzz_value in fuzz_series:
+                    results = _build_results(
+                        log_dir,
+                        env,
+                        {scheduler},
+                        args.start_retention,
+                        args.end_retention,
+                        base_dirs,
+                        fuzz_value if args.compare_fuzz else fuzz_filter,
+                        title_prefix=None,
+                        dedupe_fuzz=args.compare_fuzz,
+                    )
+                    if not results:
+                        continue
+                    label_parts = []
+                    if len(envs) > 1:
+                        label_parts.append(f"env={env}")
+                    if len(dr_schedulers) > 1:
+                        label_parts.append(f"sched={scheduler}")
+                    if args.compare_fuzz:
+                        label_parts.append("fuzz=on" if fuzz_value else "fuzz=off")
+                    label = " ".join(label_parts) or scheduler
+                    series.append(
+                        {
+                            "label": label,
+                            "entries": results,
+                            "style": "dr",
+                            "scheduler": scheduler,
+                            "environment": env,
+                            "fuzz": fuzz_value if args.compare_fuzz else None,
+                        }
+                    )
+                    combined_results.extend(results)
+        if run_fixed:
+            interval_filter = None if include_all_fixed else fixed_intervals
+            for fuzz_value in fuzz_series:
+                fixed_results = _build_results(
                     log_dir,
                     env,
-                    {scheduler},
+                    {"fixed"},
                     args.start_retention,
                     args.end_retention,
                     base_dirs,
+                    fuzz_value if args.compare_fuzz else fuzz_filter,
+                    fixed_interval_filter=interval_filter,
                     title_prefix=None,
+                    dedupe_fuzz=args.compare_fuzz,
                 )
-                label_parts = []
+                if not fixed_results:
+                    continue
+                fixed_results.sort(
+                    key=lambda entry: entry.get("fixed_interval")
+                    if entry.get("fixed_interval") is not None
+                    else 0.0
+                )
+                fixed_label_parts = []
                 if len(envs) > 1:
-                    label_parts.append(f"env={env}")
-                if len(dr_schedulers) > 1:
-                    label_parts.append(f"sched={scheduler}")
-                label = " ".join(label_parts) or scheduler
+                    fixed_label_parts.append(f"env={env}")
+                if run_dr or run_sspmmc or len(envs) > 1:
+                    fixed_label_parts.append("sched=fixed")
+                if args.compare_fuzz:
+                    fixed_label_parts.append("fuzz=on" if fuzz_value else "fuzz=off")
+                fixed_label = " ".join(fixed_label_parts) or "fixed"
                 series.append(
                     {
-                        "label": label,
-                        "entries": results,
+                        "label": fixed_label,
+                        "entries": fixed_results,
                         "style": "dr",
-                        "scheduler": scheduler,
+                        "scheduler": "fixed",
                         "environment": env,
+                        "fuzz": fuzz_value if args.compare_fuzz else None,
                     }
                 )
-                combined_results.extend(results)
-        if run_fixed:
-            interval_filter = None if include_all_fixed else fixed_intervals
-            fixed_results = _build_results(
-                log_dir,
-                env,
-                {"fixed"},
-                args.start_retention,
-                args.end_retention,
-                base_dirs,
-                fixed_interval_filter=interval_filter,
-                title_prefix=None,
-            )
-            fixed_results.sort(
-                key=lambda entry: entry.get("fixed_interval")
-                if entry.get("fixed_interval") is not None
-                else 0.0
-            )
-            fixed_label_parts = []
-            if len(envs) > 1:
-                fixed_label_parts.append(f"env={env}")
-            if run_dr or run_sspmmc or len(envs) > 1:
-                fixed_label_parts.append("sched=fixed")
-            fixed_label = " ".join(fixed_label_parts) or "fixed"
-            series.append(
-                {
-                    "label": fixed_label,
-                    "entries": fixed_results,
-                    "style": "dr",
-                    "scheduler": "fixed",
-                    "environment": env,
-                }
-            )
-            combined_results.extend(fixed_results)
+                combined_results.extend(fixed_results)
         if run_sspmmc:
-            sspmmc_results = _build_results(
-                log_dir,
-                env,
-                {"sspmmc"},
-                args.start_retention,
-                args.end_retention,
-                base_dirs,
-                title_prefix=None,
-                dedupe=False,
-            )
-            sspmmc_results.sort(key=lambda entry: entry["memorized_average"])
-            ssp_label_parts = ["sched=sspmmc"]
-            if len(envs) > 1:
-                ssp_label_parts.insert(0, f"env={env}")
-            ssp_label = " ".join(ssp_label_parts)
-            series.append(
-                {
-                    "label": ssp_label,
-                    "entries": sspmmc_results,
-                    "style": "sspmmc",
-                    "scheduler": "sspmmc",
-                    "environment": env,
-                }
-            )
-            combined_results.extend(sspmmc_results)
+            for fuzz_value in fuzz_series:
+                sspmmc_results = _build_results(
+                    log_dir,
+                    env,
+                    {"sspmmc"},
+                    args.start_retention,
+                    args.end_retention,
+                    base_dirs,
+                    fuzz_value if args.compare_fuzz else fuzz_filter,
+                    title_prefix=None,
+                    dedupe=False,
+                )
+                if not sspmmc_results:
+                    continue
+                sspmmc_results.sort(key=lambda entry: entry["memorized_average"])
+                ssp_label_parts = ["sched=sspmmc"]
+                if len(envs) > 1:
+                    ssp_label_parts.insert(0, f"env={env}")
+                if args.compare_fuzz:
+                    ssp_label_parts.append("fuzz=on" if fuzz_value else "fuzz=off")
+                ssp_label = " ".join(ssp_label_parts)
+                series.append(
+                    {
+                        "label": ssp_label,
+                        "entries": sspmmc_results,
+                        "style": "sspmmc",
+                        "scheduler": "sspmmc",
+                        "environment": env,
+                        "fuzz": fuzz_value if args.compare_fuzz else None,
+                    }
+                )
+                combined_results.extend(sspmmc_results)
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with results_path.open("w", encoding="utf-8") as fh:
         json.dump(combined_results, fh, indent=2, sort_keys=True)
