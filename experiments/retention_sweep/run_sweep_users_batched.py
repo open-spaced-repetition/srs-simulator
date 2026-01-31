@@ -68,13 +68,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--start-retention",
         type=float,
-        default=0.70,
+        default=0.50,
         help="Start retention (0-1, rounded to 2 decimals).",
     )
     parser.add_argument(
         "--end-retention",
         type=float,
-        default=0.99,
+        default=0.98,
         help="End retention (0-1, rounded to 2 decimals).",
     )
     parser.add_argument(

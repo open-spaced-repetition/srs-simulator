@@ -146,9 +146,9 @@ def _parse_cuda_devices(raw: str | None) -> list[str]:
 
 def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--start-retention", type=float, default=0.70)
-    parser.add_argument("--end-retention", type=float, default=0.99)
-    parser.add_argument("--step", type=float, default=0.01)
+    parser.add_argument("--start-retention", type=float, default=0.50)
+    parser.add_argument("--end-retention", type=float, default=0.98)
+    parser.add_argument("--step", type=float, default=0.02)
     parser.add_argument("--days", type=int, default=1825)
     parser.add_argument("--sspmmc-policy", type=Path, default=None)
     parser.add_argument("--sspmmc-policy-dir", type=Path, default=None)
