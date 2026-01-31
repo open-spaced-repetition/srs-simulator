@@ -108,4 +108,71 @@ class MemriseVectorizedSchedulerOps:
         return self._torch.ones(idx.numel(), device=self.device, dtype=self.dtype)
 
 
+@dataclass
+class MemriseBatchState:
+    sequence: "torch.Tensor"
+
+
+class MemriseBatchSchedulerOps:
+    def __init__(
+        self,
+        scheduler: MemriseScheduler,
+        *,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+
+        self._torch = torch
+        self.device = device
+        self.dtype = dtype
+        self._sequence = torch.tensor(scheduler.sequence, device=device, dtype=dtype)
+        self._seq_len = int(self._sequence.numel())
+
+    def init_state(self, user_count: int, deck_size: int) -> MemriseBatchState:
+        return MemriseBatchState(sequence=self._sequence)
+
+    def review_priority(
+        self, state: MemriseBatchState, elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        return self._torch.zeros_like(elapsed, device=self.device, dtype=self.dtype)
+
+    def update_review(
+        self,
+        state: MemriseBatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        if self._seq_len == 0:
+            intervals = self._torch.ones_like(prev_interval, dtype=self.dtype)
+        else:
+            dist = self._torch.abs(
+                prev_interval.unsqueeze(1) - self._sequence.unsqueeze(0)
+            )
+            closest = self._torch.argmin(dist, dim=1)
+            next_idx = self._torch.clamp(closest + 1, max=self._seq_len - 1)
+            intervals = self._sequence[next_idx]
+        fail = rating == 1
+        is_new = prev_interval == 0.0
+        return self._torch.where(
+            is_new | fail,
+            self._torch.ones_like(intervals, dtype=self.dtype),
+            intervals,
+        )
+
+    def update_learn(
+        self,
+        state: MemriseBatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        return self._torch.ones(rating.shape[0], device=self.device, dtype=self.dtype)
+
+
 __all__ = ["MemriseScheduler"]

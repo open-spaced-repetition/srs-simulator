@@ -8,6 +8,7 @@ from typing import Sequence
 
 from simulator.core import CardView, Scheduler
 from simulator.models.lstm import EPS, LSTMModel
+from simulator.models.lstm_batch import PackedLSTMWeights, forward_step
 
 
 @dataclass
@@ -470,6 +471,284 @@ class LSTMVectorizedSchedulerOps:
     ) -> "torch.Tensor":
         denom = stabilities + EPS
         total = weights * (1.0 + elapsed_scaled.unsqueeze(-1) / denom) ** (-decays)
+        total = total.sum(dim=-1)
+        total = total.clamp(min=0.0, max=1.0)
+        return (1.0 - EPS) * total
+
+
+@dataclass
+class LSTMBatchSchedulerState:
+    lstm_h: "torch.Tensor"
+    lstm_c: "torch.Tensor"
+    mem_w: "torch.Tensor"
+    mem_s: "torch.Tensor"
+    mem_d: "torch.Tensor"
+    has_curves: "torch.Tensor"
+
+
+class LSTMBatchSchedulerOps:
+    def __init__(
+        self,
+        weights: PackedLSTMWeights,
+        *,
+        desired_retention: float,
+        min_interval: float = 1.0,
+        max_interval: float = 3650.0,
+        search_steps: int = 24,
+        interval_scale: float = 1.0,
+        default_retention: float = 0.85,
+        default_duration_ms: float = 2500.0,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        self.weights = weights
+        self.device = device
+        self.dtype = dtype
+        self.desired_retention = float(desired_retention)
+        self.min_interval = float(min_interval)
+        self.max_interval = float(max_interval)
+        self.search_steps = int(search_steps)
+        self.interval_scale = float(interval_scale)
+        self.default_retention = float(default_retention)
+        self.use_duration_feature = bool(weights.use_duration_feature)
+        self.duration_value = None
+        if self.use_duration_feature:
+            self.duration_value = torch.tensor(
+                default_duration_ms, device=device, dtype=dtype
+            )
+        self._target = torch.tensor(self.desired_retention, device=device, dtype=dtype)
+        self._min_interval = torch.tensor(self.min_interval, device=device, dtype=dtype)
+        self._max_interval = torch.tensor(self.max_interval, device=device, dtype=dtype)
+
+    def init_state(self, user_count: int, deck_size: int) -> LSTMBatchSchedulerState:
+        lstm_h = torch.zeros(
+            (self.weights.n_rnns, user_count, deck_size, self.weights.n_hidden),
+            dtype=self.dtype,
+            device=self.device,
+        )
+        lstm_c = torch.zeros_like(lstm_h)
+        mem_w = torch.zeros(
+            (user_count, deck_size, self.weights.n_curves),
+            dtype=self.dtype,
+            device=self.device,
+        )
+        mem_s = torch.zeros_like(mem_w)
+        mem_d = torch.zeros_like(mem_w)
+        has_curves = torch.zeros(
+            (user_count, deck_size), dtype=torch.bool, device=self.device
+        )
+        return LSTMBatchSchedulerState(
+            lstm_h=lstm_h,
+            lstm_c=lstm_c,
+            mem_w=mem_w,
+            mem_s=mem_s,
+            mem_d=mem_d,
+            has_curves=has_curves,
+        )
+
+    def review_priority(
+        self, state: LSTMBatchSchedulerState, elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        elapsed_scaled = torch.clamp(elapsed, min=0.0) * self.interval_scale
+        scores = torch.full(
+            elapsed_scaled.shape,
+            self.default_retention,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        curves_mask = state.has_curves
+        if curves_mask.any():
+            scores[curves_mask] = self._lstm_retention(
+                elapsed_scaled[curves_mask],
+                state.mem_w[curves_mask],
+                state.mem_s[curves_mask],
+                state.mem_d[curves_mask],
+            )
+        return scores
+
+    def update_review(
+        self,
+        state: LSTMBatchSchedulerState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return torch.zeros(0, device=self.device, dtype=self.dtype)
+        self._update_curves(state, user_idx, card_idx, elapsed, rating)
+        return self._target_interval(state, user_idx, card_idx, prev_interval)
+
+    def update_learn(
+        self,
+        state: LSTMBatchSchedulerState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return torch.zeros(0, device=self.device, dtype=self.dtype)
+        elapsed = torch.zeros(rating.shape[0], device=self.device, dtype=self.dtype)
+        self._update_curves(state, user_idx, card_idx, elapsed, rating)
+        return self._target_interval(state, user_idx, card_idx, None)
+
+    def _update_curves(
+        self,
+        state: LSTMBatchSchedulerState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        delays: "torch.Tensor",
+        ratings: "torch.Tensor",
+    ) -> None:
+        delay_scaled = torch.clamp(delays, min=0.0) * self.interval_scale
+        rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
+        delay_feature = delay_scaled.unsqueeze(-1)
+        rating_feature = rating_clamped.unsqueeze(-1)
+        if self.use_duration_feature and self.duration_value is not None:
+            duration_feature = self.duration_value.expand_as(delay_feature)
+            step = torch.cat([delay_feature, duration_feature, rating_feature], dim=-1)
+        else:
+            step = torch.cat([delay_feature, rating_feature], dim=-1)
+
+        h = state.lstm_h[:, user_idx, card_idx, :]
+        c = state.lstm_c[:, user_idx, card_idx, :]
+        w_last, s_last, d_last, (h_new, c_new) = forward_step(
+            self.weights, step, (h, c), user_idx
+        )
+        state.lstm_h[:, user_idx, card_idx, :] = h_new
+        state.lstm_c[:, user_idx, card_idx, :] = c_new
+        state.mem_w[user_idx, card_idx] = w_last
+        state.mem_s[user_idx, card_idx] = s_last
+        state.mem_d[user_idx, card_idx] = d_last
+        state.has_curves[user_idx, card_idx] = True
+
+    def _target_interval(
+        self,
+        state: LSTMBatchSchedulerState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        prev_interval: "torch.Tensor | None",
+    ) -> "torch.Tensor":
+        weights = state.mem_w[user_idx, card_idx]
+        stabilities = state.mem_s[user_idx, card_idx]
+        decays = state.mem_d[user_idx, card_idx]
+        low = torch.full(
+            (user_idx.numel(),),
+            self.min_interval,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        t0 = self._effective_initial_guess(weights, stabilities, decays)
+        if prev_interval is None:
+            high = low.clone()
+        else:
+            high = torch.maximum(low, prev_interval.to(self.dtype))
+        high = torch.maximum(high, t0)
+
+        pred_low = self._retention_at(low, weights, stabilities, decays)
+        high = torch.where(pred_low <= self._target, low, high)
+        needs_expand = pred_low > self._target
+        if needs_expand.any():
+            while True:
+                pred_high = self._retention_at(high, weights, stabilities, decays)
+                still = (pred_high > self._target) & (high < self._max_interval)
+                if not still.any():
+                    break
+                high = torch.where(
+                    still, torch.minimum(high * 2.0, self._max_interval), high
+                )
+                if not (high < self._max_interval).any():
+                    break
+
+        t = torch.clamp(t0, min=low, max=high)
+        tol = 1e-5
+        newton_steps = min(self.search_steps, 6)
+        remaining_steps = self.search_steps - newton_steps
+        for _ in range(newton_steps):
+            pred, deriv = self._retention_and_derivative(
+                t, weights, stabilities, decays
+            )
+            diff = pred - self._target
+            if torch.max(torch.abs(diff)).item() < tol:
+                remaining_steps = 0
+                break
+            go_low = diff > 0.0
+            low = torch.where(go_low, t, low)
+            high = torch.where(go_low, high, t)
+            mid = 0.5 * (low + high)
+            step = diff / deriv
+            t_new = t - step
+            invalid = (
+                (deriv == 0.0) | ~torch.isfinite(t_new) | (t_new < low) | (t_new > high)
+            )
+            t = torch.where(invalid, mid, t_new)
+        for _ in range(remaining_steps):
+            mid = 0.5 * (low + high)
+            pred_mid = self._retention_at(mid, weights, stabilities, decays)
+            go_low = pred_mid > self._target
+            low = torch.where(go_low, mid, low)
+            high = torch.where(go_low, high, mid)
+        if remaining_steps > 0:
+            t = high
+        return torch.clamp(t, min=self.min_interval, max=self.max_interval)
+
+    def _retention_at(
+        self,
+        days: "torch.Tensor",
+        weights: "torch.Tensor",
+        stabilities: "torch.Tensor",
+        decays: "torch.Tensor",
+    ) -> "torch.Tensor":
+        elapsed_scaled = torch.clamp(days, min=0.0) * self.interval_scale
+        return self._lstm_retention(elapsed_scaled, weights, stabilities, decays)
+
+    def _retention_and_derivative(
+        self,
+        days: "torch.Tensor",
+        weights: "torch.Tensor",
+        stabilities: "torch.Tensor",
+        decays: "torch.Tensor",
+    ) -> tuple["torch.Tensor", "torch.Tensor"]:
+        elapsed_scaled = torch.clamp(days, min=0.0) * self.interval_scale
+        denom = stabilities + EPS
+        x = 1.0 + elapsed_scaled.unsqueeze(-1) / denom
+        x_pow = x ** (-decays)
+        total = torch.sum(weights * x_pow, dim=-1)
+        deriv = (
+            torch.sum(weights * (-decays / denom) * x_pow / x, dim=-1)
+            * self.interval_scale
+        )
+        total = torch.clamp(total, min=0.0, max=1.0)
+        return (1.0 - EPS) * total, (1.0 - EPS) * deriv
+
+    def _effective_initial_guess(
+        self,
+        weights: "torch.Tensor",
+        stabilities: "torch.Tensor",
+        decays: "torch.Tensor",
+    ) -> "torch.Tensor":
+        denom = stabilities + EPS
+        a = torch.sum(weights * decays / denom, dim=-1)
+        b = torch.sum(weights * decays * (decays + 1.0) / (denom * denom), dim=-1)
+        a = torch.clamp(a, min=EPS)
+        ratio = b / (a * a)
+        ratio = torch.clamp(ratio, min=1.0 + 1e-6)
+        d_eff = 1.0 / (ratio - 1.0)
+        s_eff = d_eff / a
+        base = torch.pow(self._target, -1.0 / d_eff) - 1.0
+        t0 = s_eff * base
+        return torch.clamp(t0, min=self.min_interval, max=self.max_interval)
+
+    @staticmethod
+    def _lstm_retention(
+        elapsed_scaled: "torch.Tensor",
+        weights: "torch.Tensor",
+        stabilities: "torch.Tensor",
+        decays: "torch.Tensor",
+    ) -> "torch.Tensor":
+        denom = stabilities + EPS
+        total = weights * torch.pow(1.0 + elapsed_scaled.unsqueeze(-1) / denom, -decays)
         total = total.sum(dim=-1)
         total = total.clamp(min=0.0, max=1.0)
         return (1.0 - EPS) * total

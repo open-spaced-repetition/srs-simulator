@@ -25,6 +25,14 @@ from simulator.math.fsrs import (
     _clamp_d,
     _clamp_s,
 )
+from simulator.math.fsrs_batch import (
+    fsrs6_forgetting_curve as fsrs6_forgetting_curve_batch,
+    fsrs6_init_state as fsrs6_init_state_batch,
+    fsrs6_next_d as fsrs6_next_d_batch,
+    fsrs6_stability_after_failure as fsrs6_stability_after_failure_batch,
+    fsrs6_stability_after_success as fsrs6_stability_after_success_batch,
+    fsrs6_stability_short_term as fsrs6_stability_short_term_batch,
+)
 
 if TYPE_CHECKING:
     import torch
@@ -319,6 +327,180 @@ class FSRS6VectorizedSchedulerOps:
         state.d[idx] = self._vmath.clamp(d_init, self._bounds.d_min, self._bounds.d_max)
         return self._torch.clamp(
             state.s[idx] / self._factor * self._retention_factor, min=1.0
+        )
+
+
+@dataclass
+class FSRS6BatchState:
+    s: "torch.Tensor"
+    d: "torch.Tensor"
+
+
+class FSRS6BatchSchedulerOps:
+    PRIORITY_MODES = {
+        "low_retrievability",
+        "high_retrievability",
+        "low_difficulty",
+        "high_difficulty",
+    }
+
+    def __init__(
+        self,
+        *,
+        weights: "torch.Tensor",
+        desired_retention: float,
+        bounds: Bounds,
+        priority_mode: str,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+
+        if priority_mode not in self.PRIORITY_MODES:
+            raise ValueError(f"Unknown priority_mode '{priority_mode}'")
+        self._torch = torch
+        self.device = device
+        self.dtype = dtype
+        self._weights = weights.to(device=device, dtype=dtype)
+        self._bounds = bounds
+        self._decay = -self._weights[:, 20]
+        base = torch.tensor(0.9, device=device, dtype=dtype)
+        self._factor = torch.pow(base, 1.0 / self._decay) - 1.0
+        self._retention_factor = (
+            torch.pow(
+                torch.tensor(desired_retention, device=device, dtype=dtype),
+                1.0 / self._decay,
+            )
+            - 1.0
+        )
+        self._init_d = torch.clamp(
+            self._weights[:, 4] - torch.exp(self._weights[:, 5] * 3.0) + 1.0,
+            self._bounds.d_min,
+            self._bounds.d_max,
+        )
+        self._priority_mode = priority_mode
+
+    def init_state(self, user_count: int, deck_size: int) -> FSRS6BatchState:
+        s = self._torch.full(
+            (user_count, deck_size),
+            self._bounds.s_min,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        d = self._torch.full(
+            (user_count, deck_size),
+            self._bounds.d_min,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        return FSRS6BatchState(s=s, d=d)
+
+    def review_priority(
+        self, state: FSRS6BatchState, elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        r_sched = fsrs6_forgetting_curve_batch(
+            self._decay[:, None],
+            self._factor[:, None],
+            elapsed,
+            state.s,
+            self._bounds.s_min,
+        )
+        if self._priority_mode == "low_retrievability":
+            return r_sched
+        if self._priority_mode == "high_retrievability":
+            return -r_sched
+        if self._priority_mode == "low_difficulty":
+            return state.d
+        if self._priority_mode == "high_difficulty":
+            return -state.d
+        raise ValueError(f"Unknown priority_mode '{self._priority_mode}'")
+
+    def update_review(
+        self,
+        state: FSRS6BatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        weights = self._weights.index_select(0, user_idx)
+        decay = self._decay.index_select(0, user_idx)
+        factor = self._factor.index_select(0, user_idx)
+        retention_factor = self._retention_factor.index_select(0, user_idx)
+        init_d = self._init_d.index_select(0, user_idx)
+        sched_s = state.s[user_idx, card_idx]
+        sched_d = state.d[user_idx, card_idx]
+        sched_r = fsrs6_forgetting_curve_batch(
+            decay,
+            factor,
+            elapsed,
+            sched_s,
+            self._bounds.s_min,
+        )
+        short_term = elapsed < 1.0
+        success = rating > 1
+        new_s = sched_s
+        new_s = self._torch.where(
+            short_term,
+            fsrs6_stability_short_term_batch(weights, sched_s, rating),
+            new_s,
+        )
+        new_s = self._torch.where(
+            ~short_term & success,
+            fsrs6_stability_after_success_batch(
+                weights, sched_s, sched_r, sched_d, rating
+            ),
+            new_s,
+        )
+        new_s = self._torch.where(
+            ~short_term & ~success,
+            fsrs6_stability_after_failure_batch(weights, sched_s, sched_r, sched_d),
+            new_s,
+        )
+        new_d = fsrs6_next_d_batch(
+            weights,
+            sched_d,
+            rating,
+            init_d,
+            self._bounds.d_min,
+            self._bounds.d_max,
+        )
+        state.s[user_idx, card_idx] = self._torch.clamp(
+            new_s, self._bounds.s_min, self._bounds.s_max
+        )
+        state.d[user_idx, card_idx] = self._torch.clamp(
+            new_d, self._bounds.d_min, self._bounds.d_max
+        )
+        return self._torch.clamp(
+            state.s[user_idx, card_idx] / factor * retention_factor, min=1.0
+        )
+
+    def update_learn(
+        self,
+        state: FSRS6BatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        weights = self._weights.index_select(0, user_idx)
+        factor = self._factor.index_select(0, user_idx)
+        retention_factor = self._retention_factor.index_select(0, user_idx)
+        s_init, d_init = fsrs6_init_state_batch(
+            weights, rating, self._bounds.d_min, self._bounds.d_max
+        )
+        state.s[user_idx, card_idx] = self._torch.clamp(
+            s_init, self._bounds.s_min, self._bounds.s_max
+        )
+        state.d[user_idx, card_idx] = self._torch.clamp(
+            d_init, self._bounds.d_min, self._bounds.d_max
+        )
+        return self._torch.clamp(
+            state.s[user_idx, card_idx] / factor * retention_factor, min=1.0
         )
 
 

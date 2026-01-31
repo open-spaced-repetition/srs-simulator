@@ -25,22 +25,18 @@ from simulator.button_usage import (
 )
 from simulator.math.fsrs import Bounds
 from simulator.models.lstm import _resolve_benchmark_weights
+from simulator.models.fsrs import FSRS6BatchEnvOps
 from simulator.models.lstm_batch import LSTMBatchedEnvOps, PackedLSTMWeights
 from simulator.scheduler_spec import parse_scheduler_spec
 from simulator.scheduler_spec import normalize_fixed_interval
-from simulator.schedulers.anki_sm2 import AnkiSM2Scheduler
+from simulator.schedulers.anki_sm2 import AnkiSM2BatchSchedulerOps, AnkiSM2Scheduler
+from simulator.schedulers.fixed import FixedBatchSchedulerOps
+from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
+from simulator.schedulers.lstm import LSTMBatchSchedulerOps
 from simulator.schedulers.memrise import MemriseScheduler
-from simulator.vectorized.multiuser import (
-    AnkiSM2BatchSchedulerOps,
-    FSRS6BatchEnvOps,
-    FSRS6BatchSchedulerOps,
-    FixedBatchSchedulerOps,
-    LSTMBatchSchedulerOps,
-    MemriseBatchSchedulerOps,
-    MultiUserBehavior,
-    MultiUserCost,
-    simulate_multiuser,
-)
+from simulator.schedulers.memrise import MemriseBatchSchedulerOps
+from simulator.vectorized.multiuser_engine import simulate_multiuser
+from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 
 from experiments.retention_sweep.cli_utils import add_user_range_args, parse_csv
 
@@ -86,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step",
         type=float,
-        default=0.01,
+        default=0.02,
         help="Retention step (0-1, rounded to 2 decimals).",
     )
     parser.add_argument("--days", type=int, default=1825)

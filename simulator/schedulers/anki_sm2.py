@@ -164,6 +164,102 @@ def _anki_next_interval(
     return interval, new_ease
 
 
+@dataclass
+class AnkiBatchState:
+    ease: "torch.Tensor"
+
+
+class AnkiSM2BatchSchedulerOps:
+    def __init__(
+        self,
+        *,
+        graduating_interval: float,
+        easy_interval: float,
+        easy_bonus: float,
+        hard_interval_factor: float,
+        ease_start: float,
+        ease_min: float,
+        ease_max: float,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        self.device = device
+        self.dtype = dtype
+        self._graduating_interval = float(graduating_interval)
+        self._easy_interval = float(easy_interval)
+        self._easy_bonus = float(easy_bonus)
+        self._hard_interval_factor = float(hard_interval_factor)
+        self._ease_start = float(ease_start)
+        self._ease_min = float(ease_min)
+        self._ease_max = float(ease_max)
+
+    def init_state(self, user_count: int, deck_size: int) -> AnkiBatchState:
+        ease = torch.full(
+            (user_count, deck_size),
+            self._ease_start,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        return AnkiBatchState(ease=ease)
+
+    def review_priority(
+        self, state: AnkiBatchState, elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        return torch.zeros_like(elapsed, device=self.device, dtype=self.dtype)
+
+    def update_review(
+        self,
+        state: AnkiBatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return torch.zeros(0, device=self.device, dtype=self.dtype)
+        intervals, new_ease = _anki_next_interval(
+            prev_interval,
+            elapsed,
+            rating,
+            state.ease[user_idx, card_idx],
+            graduating_interval=self._graduating_interval,
+            easy_interval=self._easy_interval,
+            easy_bonus=self._easy_bonus,
+            hard_interval_factor=self._hard_interval_factor,
+            ease_min=self._ease_min,
+            ease_max=self._ease_max,
+        )
+        state.ease[user_idx, card_idx] = new_ease
+        return intervals
+
+    def update_learn(
+        self,
+        state: AnkiBatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return torch.zeros(0, device=self.device, dtype=self.dtype)
+        prev_interval = torch.zeros_like(rating, dtype=self.dtype)
+        elapsed = torch.zeros_like(prev_interval)
+        intervals, new_ease = _anki_next_interval(
+            prev_interval,
+            elapsed,
+            rating,
+            state.ease[user_idx, card_idx],
+            graduating_interval=self._graduating_interval,
+            easy_interval=self._easy_interval,
+            easy_bonus=self._easy_bonus,
+            hard_interval_factor=self._hard_interval_factor,
+            ease_min=self._ease_min,
+            ease_max=self._ease_max,
+        )
+        state.ease[user_idx, card_idx] = new_ease
+        return intervals
+
+
 def _round_half_up(value: float) -> float:
     return float(math.floor(value + 0.5))
 
