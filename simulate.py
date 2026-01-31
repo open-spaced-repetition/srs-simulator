@@ -441,7 +441,8 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     )
     cost_limit = format_float(args.cost_limit_minutes)
     review_limit = args.review_limit if args.review_limit is not None else "none"
-    parts = [f"env={args.env}", f"sched={args.scheduler}"]
+    env_name = getattr(args, "env", None) or getattr(args, "environment", None)
+    parts = [f"env={env_name}", f"sched={args.scheduler}"]
     if fixed_interval is not None:
         parts.append(f"ivl={format_float(fixed_interval)}")
     if args.sspmmc_policy:
@@ -469,7 +470,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "review_limit": args.review_limit,
         "cost_limit_minutes": args.cost_limit_minutes,
         "priority": args.priority,
-        "environment": args.env,
+        "environment": env_name,
         "scheduler": args.scheduler,
         "scheduler_spec": getattr(args, "scheduler_spec", args.scheduler),
         "user_id": args.user_id or 1,
