@@ -20,6 +20,12 @@ Run a single scenario:
 uv run python benches/run_bench.py --scenario event_lstm_lstm --srs-benchmark-root ../srs-benchmark
 ```
 
+Run batched retention sweep baselines:
+
+```bash
+uv run python benches/run_batched_bench.py --srs-benchmark-root ../srs-benchmark
+```
+
 Notes
 - The runner disables plots and progress bars to reduce noise.
 - Report results by engine (event vs vectorized) when evaluating perf changes.
