@@ -16,6 +16,7 @@ def parse_args() -> argparse.Namespace:
         description=(
             "Compare Anki-SM-2 vs Memrise dominance per user using retention_sweep logs."
         ),
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--log-dir",
@@ -24,7 +25,9 @@ def parse_args() -> argparse.Namespace:
         help="Root directory containing retention_sweep logs (default logs/retention_sweep).",
     )
     parser.add_argument(
+        "--env",
         "--environments",
+        dest="environments",
         default="lstm",
         help="Comma-separated environments to include.",
     )

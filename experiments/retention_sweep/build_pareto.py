@@ -23,6 +23,7 @@ from simulator.scheduler_spec import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert simulate.py logs into a Pareto frontier plot.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--log-dir",
@@ -31,12 +32,16 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing simulate.py JSONL logs.",
     )
     parser.add_argument(
+        "--env",
         "--environments",
+        dest="environments",
         default="lstm",
         help="Comma-separated list of environments to compare.",
     )
     parser.add_argument(
+        "--sched",
         "--schedulers",
+        dest="schedulers",
         default="fsrs6",
         help=(
             "Comma-separated list of schedulers to plot "
@@ -574,7 +579,9 @@ def main() -> None:
     run_sspmmc = has_sspmmc
     run_fixed = include_all_fixed or bool(fixed_intervals)
     if not run_dr and not run_sspmmc and not run_fixed:
-        raise SystemExit("No schedulers specified. Use --schedulers to select plots.")
+        raise SystemExit(
+            "No schedulers specified. Use --sched/--schedulers to select plots."
+        )
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:

@@ -20,12 +20,16 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
     add_user_range_args(parser, default_end=10000)
     parser.add_argument(
+        "--env",
         "--environments",
+        dest="environments",
         default="lstm",
         help="Comma-separated environments passed to build_pareto.py.",
     )
     parser.add_argument(
+        "--sched",
         "--schedulers",
+        dest="schedulers",
         default="fsrs6,anki_sm2,memrise,fixed,sspmmc",
         help="Comma-separated schedulers passed to build_pareto.py.",
     )
@@ -67,9 +71,9 @@ def main() -> int:
             args.uv_cmd,
             "run",
             str(script_path),
-            "--environments",
+            "--env",
             args.environments,
-            "--schedulers",
+            "--sched",
             args.schedulers,
             "--user-id",
             str(user_id),

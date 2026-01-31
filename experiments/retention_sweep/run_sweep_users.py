@@ -33,20 +33,24 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
             "Extra arguments after `--` are forwarded to run_sweep.py.\n"
             "Example:\n"
             "  uv run experiments/retention_sweep/run_sweep_users.py \\\n"
-            "    --start-user 1 --end-user 200 --environments lstm \\\n"
-            "    --schedulers fsrs6 --max-parallel 3 \\\n"
+            "    --start-user 1 --end-user 200 --env lstm \\\n"
+            "    --sched fsrs6 --max-parallel 3 \\\n"
             "    -- --start-retention 0.50 --end-retention 0.68 --step 0.02\n"
         ),
         allow_abbrev=False,
     )
     add_user_range_args(parser, default_end=10000)
     parser.add_argument(
+        "--env",
         "--environments",
+        dest="environments",
         default="lstm",
         help="Comma-separated environments passed to run_sweep.py.",
     )
     parser.add_argument(
+        "--sched",
         "--schedulers",
+        dest="schedulers",
         default="fsrs6,anki_sm2",
         help="Comma-separated schedulers passed to run_sweep.py.",
     )
@@ -279,9 +283,9 @@ def _build_command(
         uv_cmd,
         "run",
         str(script_path),
-        "--environments",
+        "--env",
         environments,
-        "--schedulers",
+        "--sched",
         schedulers,
         "--user-id",
         str(user_id),

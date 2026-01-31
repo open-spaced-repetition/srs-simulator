@@ -65,10 +65,10 @@ Sanity checks: `tests/sanity_lstm_forward_calls.py` runs a quick vectorized LSTM
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
 
 ```bash
-uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --schedulers fsrs6
-uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --schedulers sspmmc
-uv run experiments/retention_sweep/run_sweep.py --environments fsrs6,lstm --schedulers fsrs6,sspmmc
-uv run experiments/retention_sweep/build_pareto.py --environments fsrs6,lstm --schedulers fsrs6,sspmmc
+uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6
+uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched sspmmc
+uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6,sspmmc
+uv run experiments/retention_sweep/build_pareto.py --env fsrs6,lstm --sched fsrs6,sspmmc
 ```
 
 By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--schedulers` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--schedulers`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
@@ -76,11 +76,11 @@ By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/u
 Additional retention sweep helpers:
 
 ```bash
-uv run experiments/retention_sweep/run_sweep_users.py --start-user 1 --end-user 10 --environments fsrs6,lstm --schedulers fsrs6,anki_sm2,memrise --max-parallel 4
-uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 200 --environments lstm --schedulers fsrs6,anki_sm2,memrise --batch-size 100
-uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 10 --environments fsrs6,lstm --schedulers fsrs6,sspmmc
-uv run experiments/retention_sweep/aggregate_users.py --environments lstm --schedulers fsrs6,anki_sm2,memrise
-uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
+uv run experiments/retention_sweep/run_sweep_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,anki_sm2,memrise --max-parallel 4
+uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 200 --env lstm --sched fsrs6,anki_sm2,memrise --batch-size 100
+uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,sspmmc
+uv run experiments/retention_sweep/aggregate_users.py --env lstm --sched fsrs6,anki_sm2,memrise
+uv run experiments/retention_sweep/dominance_sm2_memrise.py --env lstm
 ```
 
 - `run_sweep_users.py` fans out `run_sweep.py` across a user-id range and supports `--max-parallel`, `--cuda-devices` (round-robin per worker), plus MPS env passthrough; `--max-parallel` only delivers speedups when GPU Multi-Process Service (MPS) is enabled on the host. In parallel it shows an overall work bar, a user bar, and per-worker bars (disable with `--child-progress off`, and use `--show-commands on` if you need the raw subprocess commands).

@@ -25,6 +25,7 @@ from simulator.scheduler_spec import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Aggregate retention_sweep logs across users and write summary JSON.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--log-dir",
@@ -33,12 +34,16 @@ def parse_args() -> argparse.Namespace:
         help="Root directory containing retention_sweep logs (default logs/retention_sweep).",
     )
     parser.add_argument(
+        "--env",
         "--environments",
+        dest="environments",
         default="lstm",
         help="Comma-separated environments to include.",
     )
     parser.add_argument(
+        "--sched",
         "--schedulers",
+        dest="schedulers",
         default="fsrs6,anki_sm2,memrise",
         help="Comma-separated schedulers to include.",
     )
@@ -201,7 +206,9 @@ def main() -> None:
     run_dr = bool(dr_schedulers)
     run_fixed = include_all_fixed or bool(fixed_intervals)
     if not run_dr and not run_fixed:
-        raise SystemExit("No schedulers specified. Use --schedulers to select plots.")
+        raise SystemExit(
+            "No schedulers specified. Use --sched/--schedulers to select plots."
+        )
 
     results_path = args.results_path or (
         log_root / "simulation_results_retention_sweep_user_averages.json"

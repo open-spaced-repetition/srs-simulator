@@ -26,6 +26,7 @@ from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a desired-retention sweep for simulate.py.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--start-retention",
@@ -51,12 +52,16 @@ def parse_args() -> argparse.Namespace:
         help="Environment name passed to simulate.py.",
     )
     parser.add_argument(
+        "--env",
         "--environments",
+        dest="environments",
         default=None,
         help="Comma-separated list of environments to sweep.",
     )
     parser.add_argument(
+        "--sched",
         "--schedulers",
+        dest="schedulers",
         default="fsrs6",
         help=(
             "Comma-separated list of schedulers to sweep "
@@ -515,7 +520,9 @@ def main() -> None:
     run_fixed = bool(fixed_schedulers)
     run_non_dr = bool(non_dr_schedulers)
     if not run_dr and not run_sspmmc and not run_fixed and not run_non_dr:
-        raise SystemExit("No schedulers specified. Use --schedulers to select runs.")
+        raise SystemExit(
+            "No schedulers specified. Use --sched/--schedulers to select runs."
+        )
 
     sspmmc_policies = _resolve_policy_paths(args, repo_root, run_sspmmc)
     if run_sspmmc and not sspmmc_policies:

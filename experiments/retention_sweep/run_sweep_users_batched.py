@@ -55,12 +55,16 @@ def parse_args() -> argparse.Namespace:
         help="Number of users to simulate in parallel per batch.",
     )
     parser.add_argument(
+        "--env",
         "--environments",
+        dest="environments",
         default="lstm",
         help="Comma-separated environments to sweep (lstm, fsrs6).",
     )
     parser.add_argument(
+        "--sched",
         "--schedulers",
+        dest="schedulers",
         default="fsrs6,anki_sm2,memrise",
         help="Comma-separated schedulers to sweep.",
     )
@@ -304,7 +308,7 @@ def _run_batch_core(
     learn_costs, review_costs, first_rating_prob, review_rating_prob = _load_usage(
         batch, args.button_usage
     )
-    schedulers = [item.strip() for item in args.schedulers.split(",") if item.strip()]
+    schedulers = parse_csv(args.schedulers)
     envs = parse_csv(args.environments)
     base_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
