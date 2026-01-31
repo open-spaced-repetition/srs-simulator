@@ -115,10 +115,10 @@ Vectorized engine:
 
 Batched (multi-user vectorized in `run_sweep_users_batched.py`):
 
-| env \\ sched | fsrs6 | anki_sm2 | memrise | fixed |
-| --- | --- | --- | --- | --- |
-| lstm | ✓ | ✓ | ✓ | ✓ |
-| fsrs6 | ✓ | ✓ | ✓ | ✓ |
+| env \\ sched | fsrs6 | lstm | anki_sm2 | memrise | fixed |
+| --- | --- | --- | --- | --- | --- |
+| lstm | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Notes:
 - Event engine is the reference implementation and supports all scheduler/environment combinations, even if some pairings are not meaningful.

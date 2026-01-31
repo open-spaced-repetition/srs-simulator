@@ -35,6 +35,7 @@ from simulator.vectorized.multiuser import (
     FSRS6BatchEnvOps,
     FSRS6BatchSchedulerOps,
     FixedBatchSchedulerOps,
+    LSTMBatchSchedulerOps,
     MemriseBatchSchedulerOps,
     MultiUserBehavior,
     MultiUserCost,
@@ -68,7 +69,7 @@ def parse_args() -> argparse.Namespace:
         "--schedulers",
         dest="schedulers",
         default="fsrs6,anki_sm2,memrise",
-        help="Comma-separated schedulers to sweep.",
+        help="Comma-separated schedulers to sweep (fsrs6, lstm, anki_sm2, memrise, fixed).",
     )
     parser.add_argument(
         "--start-retention",
@@ -315,17 +316,18 @@ def _run_batch_core(
     base_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for environment in envs:
+        lstm_packed: PackedLSTMWeights | None = None
         if environment == "lstm":
             lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
-            packed = PackedLSTMWeights.from_paths(
+            lstm_packed = PackedLSTMWeights.from_paths(
                 lstm_paths,
                 use_duration_feature=False,
                 device=base_device,
                 dtype=torch.float32,
             )
             env_ops = LSTMBatchedEnvOps(
-                packed,
-                device=packed.process_0_weight.device,
+                lstm_packed,
+                device=lstm_packed.process_0_weight.device,
                 dtype=torch.float32,
             )
         elif environment == "fsrs6":
@@ -369,7 +371,7 @@ def _run_batch_core(
 
         for scheduler_spec in schedulers:
             name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
-            if name not in {"fsrs6", "anki_sm2", "memrise", "fixed"}:
+            if name not in {"fsrs6", "anki_sm2", "memrise", "fixed", "lstm"}:
                 raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
             label_prefix = f"{environment} u{batch[0]}-{batch[-1]} {name}"
 
@@ -412,6 +414,74 @@ def _run_batch_core(
                         deck_size=args.deck,
                         env_ops=env_ops,
                         sched_ops=scheduler_ops,
+                        behavior=behavior,
+                        cost_model=cost_model,
+                        seed=args.seed,
+                        device=env_ops.device,
+                        dtype=torch.float32,
+                        priority_mode=args.priority,
+                        progress=progress,
+                        progress_label=f"{label_prefix} dr={dr:.2f}",
+                        progress_callback=progress_callback,
+                    )
+                    if not args.no_log:
+                        for user_id, stats in zip(batch, stats_list):
+                            user_log_dir = log_root / f"user_{user_id}"
+                            user_log_dir.mkdir(parents=True, exist_ok=True)
+                            log_args = argparse.Namespace(
+                                engine="vectorized",
+                                days=args.days,
+                                deck=args.deck,
+                                learn_limit=args.learn_limit,
+                                review_limit=args.review_limit,
+                                cost_limit_minutes=args.cost_limit_minutes,
+                                priority=args.priority,
+                                environment=environment,
+                                scheduler=name,
+                                scheduler_spec=raw,
+                                user_id=user_id,
+                                button_usage=str(args.button_usage)
+                                if args.button_usage is not None
+                                else None,
+                                desired_retention=dr,
+                                scheduler_priority=args.scheduler_priority,
+                                sspmmc_policy=None,
+                                fixed_interval=fixed_interval,
+                                seed=args.seed,
+                                log_dir=user_log_dir,
+                                log_reviews=False,
+                            )
+                            simulate_cli._write_log(log_args, stats)
+                continue
+
+            if name == "lstm":
+                if lstm_packed is None:
+                    lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
+                    lstm_packed = PackedLSTMWeights.from_paths(
+                        lstm_paths,
+                        use_duration_feature=False,
+                        device=env_ops.device,
+                        dtype=torch.float32,
+                    )
+                for dr in dr_values:
+                    progress_callback = _progress_callback_from_queue(
+                        progress_queue,
+                        multiplier=len(batch),
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr={dr:.2f}",
+                        total_days=args.days,
+                    )
+                    sched_ops = LSTMBatchSchedulerOps(
+                        lstm_packed,
+                        desired_retention=dr,
+                        device=env_ops.device,
+                        dtype=torch.float32,
+                    )
+                    stats_list = simulate_multiuser(
+                        days=args.days,
+                        deck_size=args.deck,
+                        env_ops=env_ops,
+                        sched_ops=sched_ops,
                         behavior=behavior,
                         cost_model=cost_model,
                         seed=args.seed,
@@ -714,7 +784,8 @@ def main() -> int:
     batches = list(_chunked(user_ids, args.batch_size))
     runs_per_batch = 0
     for scheduler in schedulers:
-        if scheduler == "fsrs6":
+        name, _, _ = parse_scheduler_spec(scheduler)
+        if name in {"fsrs6", "lstm"}:
             runs_per_batch += len(dr_values)
         else:
             runs_per_batch += 1
