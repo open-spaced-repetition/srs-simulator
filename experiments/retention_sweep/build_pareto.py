@@ -33,15 +33,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env",
-        "--environments",
-        dest="environments",
+        dest="env",
         default="lstm",
         help="Comma-separated list of environments to compare.",
     )
     parser.add_argument(
         "--sched",
-        "--schedulers",
-        dest="schedulers",
+        dest="sched",
         default="fsrs6",
         help=(
             "Comma-separated list of schedulers to plot "
@@ -57,16 +55,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--start-retention",
-        "--min-retention",
-        dest="start_retention",
         type=float,
         default=0.50,
         help="Minimum desired retention to include.",
     )
     parser.add_argument(
         "--end-retention",
-        "--max-retention",
-        dest="end_retention",
         type=float,
         default=0.98,
         help="Maximum desired retention to include.",
@@ -536,7 +530,7 @@ def main() -> None:
     if not log_dir.exists():
         raise SystemExit(f"Log directory not found: {log_dir}")
 
-    envs = _parse_csv(args.environments)
+    envs = _parse_csv(args.env)
 
     plot_dir = args.plot_dir or (
         repo_root / "experiments" / "retention_sweep" / "plots" / f"user_{user_id}"
@@ -552,7 +546,7 @@ def main() -> None:
     base_dirs = [repo_root, log_dir]
     combined_results: List[Dict[str, Any]] = []
     series: List[Dict[str, Any]] = []
-    schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
+    schedulers = _parse_csv(args.sched) or ["fsrs6"]
     try:
         scheduler_specs = [parse_scheduler_spec(item) for item in schedulers]
     except ValueError as exc:
@@ -579,9 +573,7 @@ def main() -> None:
     run_sspmmc = has_sspmmc
     run_fixed = include_all_fixed or bool(fixed_intervals)
     if not run_dr and not run_sspmmc and not run_fixed:
-        raise SystemExit(
-            "No schedulers specified. Use --sched/--schedulers to select plots."
-        )
+        raise SystemExit("No schedulers specified. Use --sched to select plots.")
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:

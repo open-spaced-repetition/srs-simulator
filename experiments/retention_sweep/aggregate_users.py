@@ -35,30 +35,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env",
-        "--environments",
-        dest="environments",
+        dest="env",
         default="lstm",
         help="Comma-separated environments to include.",
     )
     parser.add_argument(
         "--sched",
-        "--schedulers",
-        dest="schedulers",
+        dest="sched",
         default="fsrs6,anki_sm2,memrise",
         help="Comma-separated schedulers to include.",
     )
     parser.add_argument(
         "--start-retention",
-        "--min-retention",
-        dest="start_retention",
         type=float,
         default=0.50,
         help="Minimum desired retention to include.",
     )
     parser.add_argument(
         "--end-retention",
-        "--max-retention",
-        dest="end_retention",
         type=float,
         default=0.98,
         help="Maximum desired retention to include.",
@@ -181,8 +175,8 @@ def main() -> None:
     args = parse_args()
 
     log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
-    envs = _parse_csv(args.environments)
-    schedulers = [item for item in _parse_csv(args.schedulers) if item != "sspmmc"]
+    envs = _parse_csv(args.env)
+    schedulers = [item for item in _parse_csv(args.sched) if item != "sspmmc"]
     if not schedulers:
         schedulers = ["fsrs6"]
     try:
@@ -206,9 +200,7 @@ def main() -> None:
     run_dr = bool(dr_schedulers)
     run_fixed = include_all_fixed or bool(fixed_intervals)
     if not run_dr and not run_fixed:
-        raise SystemExit(
-            "No schedulers specified. Use --sched/--schedulers to select plots."
-        )
+        raise SystemExit("No schedulers specified. Use --sched to select plots.")
 
     results_path = args.results_path or (
         log_root / "simulation_results_retention_sweep_user_averages.json"

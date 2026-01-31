@@ -55,15 +55,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env",
-        "--environments",
-        dest="environments",
+        dest="env",
         default="lstm",
         help="Comma-separated environments to sweep (lstm, fsrs6).",
     )
     parser.add_argument(
         "--sched",
-        "--schedulers",
-        dest="schedulers",
+        dest="sched",
         default="fsrs6,anki_sm2,memrise",
         help="Comma-separated schedulers to sweep (fsrs6, lstm, anki_sm2, memrise, fixed).",
     )
@@ -307,8 +305,8 @@ def _run_batch_core(
     learn_costs, review_costs, first_rating_prob, review_rating_prob = _load_usage(
         batch, args.button_usage
     )
-    schedulers = parse_csv(args.schedulers)
-    envs = parse_csv(args.environments)
+    schedulers = parse_csv(args.sched)
+    envs = parse_csv(args.env)
     base_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for environment in envs:
@@ -744,7 +742,7 @@ class _LocalProgressQueue:
 
 def main() -> int:
     args = parse_args()
-    envs = parse_csv(args.environments)
+    envs = parse_csv(args.env)
     if not envs:
         raise ValueError("No environments specified.")
     for env in envs:
@@ -752,7 +750,7 @@ def main() -> int:
             raise ValueError(
                 "Batched retention sweep supports only lstm or fsrs6 environments."
             )
-    schedulers = parse_csv(args.schedulers)
+    schedulers = parse_csv(args.sched)
     if not schedulers:
         raise ValueError("No schedulers specified.")
     if args.batch_size < 1:

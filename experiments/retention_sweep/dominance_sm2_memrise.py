@@ -26,8 +26,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env",
-        "--environments",
-        dest="environments",
+        dest="env",
         default="lstm",
         help="Comma-separated environments to include.",
     )
@@ -279,7 +278,7 @@ def _plot_dominance(
 def main() -> None:
     args = parse_args()
     log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
-    envs = _parse_csv(args.environments)
+    envs = _parse_csv(args.env)
 
     sm2_users: Dict[Tuple[str, int], Dict[str, float]] = {}
     memrise_users: Dict[Tuple[str, int], Dict[str, float]] = {}

@@ -20,7 +20,7 @@ For faster GPU runs, use the vectorized engine:
 
 ```bash
 uv run simulate.py --engine vectorized --torch-device cuda --no-log
-uv run simulate.py --engine vectorized --environment lstm --scheduler fsrs6 --no-log
+uv run simulate.py --engine vectorized --env lstm --sched fsrs6 --no-log
 ```
 
 ## Requirements and data
@@ -43,12 +43,12 @@ Common examples:
 
 ```bash
 uv run simulate.py --days 30 --deck 500 --learn-limit 20 --review-limit 200 --cost-limit-minutes 60 --seed 7 --no-progress --no-log
-uv run simulate.py --environment fsrs3 --scheduler fsrs3 --desired-retention 0.85 --no-log
-uv run simulate.py --environment fsrs6 --scheduler hlr --desired-retention 0.8 --no-log
-uv run simulate.py --scheduler fsrs6 --scheduler-priority high_difficulty --no-log
-uv run simulate.py --scheduler fixed@7 --priority review-first --no-log
+uv run simulate.py --env fsrs3 --sched fsrs3 --desired-retention 0.85 --no-log
+uv run simulate.py --env fsrs6 --sched hlr --desired-retention 0.8 --no-log
+uv run simulate.py --sched fsrs6 --scheduler-priority high_difficulty --no-log
+uv run simulate.py --sched fixed@7 --priority review-first --no-log
 uv run simulate.py --log-dir logs/runs --days 180 --seed 123
-uv run simulate.py --scheduler sspmmc --sspmmc-policy ../SSP-MMC-FSRS/outputs/policies/<policy>.json --no-log
+uv run simulate.py --sched sspmmc --sspmmc-policy ../SSP-MMC-FSRS/outputs/policies/<policy>.json --no-log
 ```
 
 Flag notes:
@@ -71,7 +71,7 @@ uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6,s
 uv run experiments/retention_sweep/build_pareto.py --env fsrs6,lstm --sched fsrs6,sspmmc
 ```
 
-By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--schedulers` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--schedulers`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
+By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
 
 Additional retention sweep helpers:
 
@@ -89,7 +89,7 @@ uv run experiments/retention_sweep/dominance_sm2_memrise.py --env lstm
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON and plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise.
 - `dominance_sm2_memrise.py` reports per-user dominance rates between Anki-SM-2 and Memrise and saves a stacked bar chart.
 - Note: very high desired retention targets (e.g., `--end-retention 0.99` for FSRS6 sweeps) can dramatically increase GPU memory usage; reduce batch size or cap retention if you hit OOM.
-- Retention range flags use `--start-retention/--end-retention` (aliases: `--min-retention/--max-retention`) across the sweep, aggregate, and pareto tools.
+- Retention range flags use `--start-retention/--end-retention` across the sweep, aggregate, and pareto tools.
 - To pass retention sweep overrides (e.g., `--start-retention/--end-retention/--step`, now 0-1 floats) to `run_sweep.py`, add them after `--` when invoking `run_sweep_users.py`.
 
 ## Engine support matrix
@@ -227,9 +227,9 @@ CLI environments are `fsrs6`, `fsrs3`, and `lstm`; HLR/DASH models are available
 - `HLRScheduler`: schedules using half-life regression weights from `srs-benchmark`.
 - `DASHScheduler`: logistic retention solver that mirrors the DASH model and uses weights from `srs-benchmark`.
 - `SSPMMCScheduler`: loads precomputed SSP-MMC-FSRS policies (JSON + `.npz`) and maintains its own FSRS6 state so it can target optimal retention under any environment.
-- `FixedIntervalScheduler`: stateless fixed-interval baseline (`--scheduler fixed@<days>`).
-- `AnkiSM2Scheduler`: Anki SM-2-style ease scheduler (`--scheduler anki_sm2`).
-- `MemriseScheduler`: Memrise sequence scheduler (`--scheduler memrise`).
+- `FixedIntervalScheduler`: stateless fixed-interval baseline (`--sched fixed@<days>`).
+- `AnkiSM2Scheduler`: Anki SM-2-style ease scheduler (`--sched anki_sm2`).
+- `MemriseScheduler`: Memrise sequence scheduler (`--sched memrise`).
 - `LSTMScheduler`: LSTM curve-fit scheduler that targets a desired retention from review history.
 
 ## Provided behavior and cost models

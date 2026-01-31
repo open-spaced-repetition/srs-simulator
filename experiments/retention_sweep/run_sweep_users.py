@@ -42,15 +42,13 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     add_user_range_args(parser, default_end=10000)
     parser.add_argument(
         "--env",
-        "--environments",
-        dest="environments",
+        dest="env",
         default="lstm",
         help="Comma-separated environments passed to run_sweep.py.",
     )
     parser.add_argument(
         "--sched",
-        "--schedulers",
-        dest="schedulers",
+        dest="sched",
         default="fsrs6,anki_sm2",
         help="Comma-separated schedulers passed to run_sweep.py.",
     )
@@ -440,8 +438,8 @@ def main() -> int:
         )
 
     user_ids = list(range(args.start_user, args.end_user + 1))
-    envs = parse_csv(args.environments) or ["lstm"]
-    schedulers = parse_csv(args.schedulers) or ["fsrs6"]
+    envs = parse_csv(args.env) or ["lstm"]
+    schedulers = parse_csv(args.sched) or ["fsrs6"]
     inject_torch_device = cuda_devices and not _has_arg(extra_args, "--torch-device")
     if inject_torch_device:
         extra_args = list(extra_args)
@@ -491,8 +489,8 @@ def main() -> int:
                 cmd = _build_command(
                     args.uv_cmd,
                     script_path,
-                    args.environments,
-                    args.schedulers,
+                    args.env,
+                    args.sched,
                     user_id,
                     extra_args,
                     disable_progress,
@@ -550,8 +548,8 @@ def main() -> int:
             cmd = _build_command(
                 args.uv_cmd,
                 script_path,
-                args.environments,
-                args.schedulers,
+                args.env,
+                args.sched,
                 user_id,
                 extra_args,
                 disable_progress,

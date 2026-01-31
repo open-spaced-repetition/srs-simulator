@@ -192,7 +192,7 @@ def main() -> None:
         help="Card action priority: review-first favors due cards, new-first favors introductions.",
     )
     parser.add_argument(
-        "--environment",
+        "--env",
         choices=sorted(ENVIRONMENT_FACTORIES),
         default="fsrs6",
         help="Memory model to simulate.",
@@ -229,7 +229,7 @@ def main() -> None:
         help="Path to Anki button usage JSONL for per-user costs/probabilities.",
     )
     parser.add_argument(
-        "--scheduler",
+        "--sched",
         default="fsrs6",
         help=(
             "Scheduler under evaluation "
@@ -253,18 +253,18 @@ def main() -> None:
         "--sspmmc-policy",
         type=Path,
         default=None,
-        help="Path to an SSP-MMC policy metadata JSON when using --scheduler sspmmc.",
+        help="Path to an SSP-MMC policy metadata JSON when using --sched sspmmc.",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     args = parser.parse_args()
 
     try:
-        scheduler_name, fixed_interval, _ = parse_scheduler_spec(args.scheduler)
+        scheduler_name, fixed_interval, _ = parse_scheduler_spec(args.sched)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     if scheduler_name not in SCHEDULER_FACTORIES:
         raise SystemExit(f"Unknown scheduler '{scheduler_name}'.")
-    args.scheduler_spec = args.scheduler
+    args.scheduler_spec = args.sched
     args.scheduler = scheduler_name
     args.fixed_interval = fixed_interval
 
@@ -273,7 +273,7 @@ def main() -> None:
     )
 
     rng = random.Random(args.seed)
-    env = ENVIRONMENT_FACTORIES[args.environment](args)
+    env = ENVIRONMENT_FACTORIES[args.env](args)
     agent = SCHEDULER_FACTORIES[args.scheduler](args)
     cost_limit = (
         args.cost_limit_minutes * 60.0 if args.cost_limit_minutes is not None else None
@@ -441,7 +441,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     )
     cost_limit = format_float(args.cost_limit_minutes)
     review_limit = args.review_limit if args.review_limit is not None else "none"
-    parts = [f"env={args.environment}", f"sched={args.scheduler}"]
+    parts = [f"env={args.env}", f"sched={args.scheduler}"]
     if fixed_interval is not None:
         parts.append(f"ivl={format_float(fixed_interval)}")
     if args.sspmmc_policy:
@@ -469,7 +469,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "review_limit": args.review_limit,
         "cost_limit_minutes": args.cost_limit_minutes,
         "priority": args.priority,
-        "environment": args.environment,
+        "environment": args.env,
         "scheduler": args.scheduler,
         "scheduler_spec": getattr(args, "scheduler_spec", args.scheduler),
         "user_id": args.user_id or 1,

@@ -47,21 +47,12 @@ def parse_args() -> argparse.Namespace:
         help="Retention step (0-1, rounded to 2 decimals).",
     )
     parser.add_argument(
-        "--environment",
-        default="lstm",
-        help="Environment name passed to simulate.py.",
-    )
-    parser.add_argument(
         "--env",
-        "--environments",
-        dest="environments",
-        default=None,
+        default="lstm",
         help="Comma-separated list of environments to sweep.",
     )
     parser.add_argument(
         "--sched",
-        "--schedulers",
-        dest="schedulers",
         default="fsrs6",
         help=(
             "Comma-separated list of schedulers to sweep "
@@ -493,8 +484,10 @@ def main() -> None:
     log_dir = args.log_dir or (
         repo_root / "logs" / "retention_sweep" / f"user_{user_id}"
     )
-    envs = _parse_csv(args.environments) or [args.environment]
-    schedulers = _parse_csv(args.schedulers) or ["fsrs6"]
+    envs = _parse_csv(args.env)
+    if not envs:
+        raise SystemExit("No environments specified. Use --env.")
+    schedulers = _parse_csv(args.sched) or ["fsrs6"]
     try:
         scheduler_specs = [parse_scheduler_spec(item) for item in schedulers]
     except ValueError as exc:
@@ -520,9 +513,7 @@ def main() -> None:
     run_fixed = bool(fixed_schedulers)
     run_non_dr = bool(non_dr_schedulers)
     if not run_dr and not run_sspmmc and not run_fixed and not run_non_dr:
-        raise SystemExit(
-            "No schedulers specified. Use --sched/--schedulers to select runs."
-        )
+        raise SystemExit("No schedulers specified. Use --sched to select runs.")
 
     sspmmc_policies = _resolve_policy_paths(args, repo_root, run_sspmmc)
     if run_sspmmc and not sspmmc_policies:
