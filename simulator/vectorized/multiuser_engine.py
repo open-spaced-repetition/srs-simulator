@@ -5,6 +5,8 @@ from typing import Callable, Optional
 import torch
 
 from simulator.core import SimulationStats
+from simulator.fuzz import resolve_max_interval
+from simulator.vectorized.fuzz import round_intervals, with_review_fuzz
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 from simulator.vectorized.types import VectorizedConfig
 
@@ -28,6 +30,7 @@ def simulate_multiuser(
     seed: int = 0,
     device: Optional[str | torch.device] = None,
     dtype: Optional[torch.dtype] = None,
+    fuzz: bool = False,
     progress: bool = False,
     progress_label: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
@@ -40,6 +43,7 @@ def simulate_multiuser(
     env_dtype = config.dtype or env_ops.dtype
     gen = torch.Generator(device=torch_device)
     gen.manual_seed(seed)
+    fuzz_max = resolve_max_interval(sched_ops)
 
     user_count = int(behavior.success_weights.shape[0])
     due = torch.zeros((user_count, deck_size), dtype=torch.int64, device=torch_device)
@@ -235,9 +239,18 @@ def simulate_multiuser(
                     exec_rating,
                     exec_prev,
                 )
-                interval_days = torch.clamp(
-                    torch.floor(intervals_next + 0.5), min=1.0
-                ).to(torch.int64)
+                if fuzz:
+                    fuzz_factors = torch.rand(
+                        intervals_next.shape, device=torch_device, generator=gen
+                    )
+                    interval_days = with_review_fuzz(
+                        intervals_next,
+                        fuzz_factors,
+                        minimum=1,
+                        maximum=fuzz_max,
+                    )
+                else:
+                    interval_days = round_intervals(intervals_next, minimum=1)
                 intervals[sel_user, sel_card] = interval_days
                 last_review[sel_user, sel_card] = day
                 due[sel_user, sel_card] = day + interval_days
@@ -298,9 +311,18 @@ def simulate_multiuser(
                 intervals_next = sched_ops.update_learn(
                     sched_state, sel_user, sel_card, exec_rating
                 )
-                interval_days = torch.clamp(
-                    torch.floor(intervals_next + 0.5), min=1.0
-                ).to(torch.int64)
+                if fuzz:
+                    fuzz_factors = torch.rand(
+                        intervals_next.shape, device=torch_device, generator=gen
+                    )
+                    interval_days = with_review_fuzz(
+                        intervals_next,
+                        fuzz_factors,
+                        minimum=1,
+                        maximum=fuzz_max,
+                    )
+                else:
+                    interval_days = round_intervals(intervals_next, minimum=1)
                 intervals[sel_user, sel_card] = interval_days
                 last_review[sel_user, sel_card] = day
                 due[sel_user, sel_card] = day + interval_days

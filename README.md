@@ -56,6 +56,7 @@ Flag notes:
 - `--log-dir` controls where JSONL logs are written.
 - `--button-usage` points at a button-usage JSONL file to override default costs and rating probabilities.
 - `--benchmark-result` and `--benchmark-partition` override which `srs-benchmark` result rows are loaded.
+- `--fuzz` applies Anki-style interval fuzzing to scheduler outputs.
 
 FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficulty`, `high_difficulty`.
 

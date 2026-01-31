@@ -148,6 +148,11 @@ def main() -> None:
         help="Disable plotting the dashboard.",
     )
     parser.add_argument(
+        "--fuzz",
+        action="store_true",
+        help="Apply scheduler interval fuzz (Anki-style).",
+    )
+    parser.add_argument(
         "--engine",
         choices=["event", "vectorized"],
         default="vectorized",
@@ -317,6 +322,7 @@ def main() -> None:
                 cost_model=cost_model,
                 seed=args.seed,
                 device=args.torch_device,
+                fuzz=args.fuzz,
                 progress=not args.no_progress,
             )
         except ValueError as exc:
@@ -329,6 +335,7 @@ def main() -> None:
             scheduler=agent,
             behavior=behavior,
             cost_model=cost_model,
+            fuzz=args.fuzz,
             seed_fn=rng.random,
             progress=not args.no_progress,
         )
@@ -441,8 +448,12 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     )
     cost_limit = format_float(args.cost_limit_minutes)
     review_limit = args.review_limit if args.review_limit is not None else "none"
-    env_name = getattr(args, "env", None) or getattr(args, "environment", None)
+    env_name = (
+        getattr(args, "env", None) or getattr(args, "environment", None) or "unknown"
+    )
     parts = [f"env={env_name}", f"sched={args.scheduler}"]
+    if getattr(args, "fuzz", False):
+        parts.append("fuzz=1")
     if fixed_interval is not None:
         parts.append(f"ivl={format_float(fixed_interval)}")
     if args.sspmmc_policy:
@@ -480,6 +491,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "sspmmc_policy": str(args.sspmmc_policy) if args.sspmmc_policy else None,
         "fixed_interval": fixed_interval,
         "seed": args.seed,
+        "fuzz": bool(getattr(args, "fuzz", False)),
     }
     with filename.open("w", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "meta", "data": meta}) + "\n")

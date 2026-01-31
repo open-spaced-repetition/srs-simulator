@@ -138,6 +138,11 @@ def parse_args() -> argparse.Namespace:
         help="Disable tqdm progress bars.",
     )
     parser.add_argument(
+        "--fuzz",
+        action="store_true",
+        help="Apply scheduler interval fuzz (Anki-style).",
+    )
+    parser.add_argument(
         "--torch-device",
         default=None,
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
@@ -413,6 +418,7 @@ def _run_batch_core(
                         seed=args.seed,
                         device=env_ops.device,
                         dtype=torch.float32,
+                        fuzz=args.fuzz,
                         priority_mode=args.priority,
                         progress=progress,
                         progress_label=f"{label_prefix} dr={dr:.2f}",
@@ -442,6 +448,7 @@ def _run_batch_core(
                                 sspmmc_policy=None,
                                 fixed_interval=fixed_interval,
                                 seed=args.seed,
+                                fuzz=args.fuzz,
                                 log_dir=user_log_dir,
                                 log_reviews=False,
                             )
@@ -481,6 +488,7 @@ def _run_batch_core(
                         seed=args.seed,
                         device=env_ops.device,
                         dtype=torch.float32,
+                        fuzz=args.fuzz,
                         priority_mode=args.priority,
                         progress=progress,
                         progress_label=f"{label_prefix} dr={dr:.2f}",
@@ -510,6 +518,7 @@ def _run_batch_core(
                                 sspmmc_policy=None,
                                 fixed_interval=fixed_interval,
                                 seed=args.seed,
+                                fuzz=args.fuzz,
                                 log_dir=user_log_dir,
                                 log_reviews=False,
                             )
@@ -546,6 +555,7 @@ def _run_batch_core(
                     seed=args.seed,
                     device=env_ops.device,
                     dtype=torch.float32,
+                    fuzz=args.fuzz,
                     priority_mode=args.priority,
                     progress=progress,
                     progress_label=label_prefix,
@@ -575,6 +585,7 @@ def _run_batch_core(
                             sspmmc_policy=None,
                             fixed_interval=fixed_interval,
                             seed=args.seed,
+                            fuzz=args.fuzz,
                             log_dir=user_log_dir,
                             log_reviews=False,
                         )
@@ -605,6 +616,7 @@ def _run_batch_core(
                     seed=args.seed,
                     device=env_ops.device,
                     dtype=torch.float32,
+                    fuzz=args.fuzz,
                     priority_mode=args.priority,
                     progress=progress,
                     progress_label=label_prefix,
@@ -634,6 +646,7 @@ def _run_batch_core(
                             sspmmc_policy=None,
                             fixed_interval=fixed_interval,
                             seed=args.seed,
+                            fuzz=args.fuzz,
                             log_dir=user_log_dir,
                             log_reviews=False,
                         )
@@ -664,6 +677,7 @@ def _run_batch_core(
                     seed=args.seed,
                     device=env_ops.device,
                     dtype=torch.float32,
+                    fuzz=args.fuzz,
                     priority_mode=args.priority,
                     progress=progress,
                     progress_label=f"{label_prefix} ivl={interval:.2f}",
@@ -693,6 +707,7 @@ def _run_batch_core(
                             sspmmc_policy=None,
                             fixed_interval=interval,
                             seed=args.seed,
+                            fuzz=args.fuzz,
                             log_dir=user_log_dir,
                             log_reviews=False,
                         )

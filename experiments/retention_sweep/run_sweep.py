@@ -171,6 +171,11 @@ def parse_args() -> argparse.Namespace:
         help="Show plots during the sweep (slower, opens windows).",
     )
     parser.add_argument(
+        "--fuzz",
+        action="store_true",
+        help="Apply scheduler interval fuzz (Anki-style).",
+    )
+    parser.add_argument(
         "--no-log",
         action="store_true",
         help="Disable writing logs to disk.",
@@ -411,6 +416,7 @@ def _run_once(
                 scheduler=agent,
                 behavior=behavior,
                 cost_model=cost_model,
+                fuzz=run_args.fuzz,
                 seed_fn=rng.random,
                 progress=False,
                 progress_callback=progress_callback,
@@ -443,6 +449,7 @@ def _run_vectorized(
             cost_model=cost_model,
             seed=run_args.seed,
             device=run_args.torch_device,
+            fuzz=run_args.fuzz,
             progress=False,
             progress_callback=progress_callback,
         )

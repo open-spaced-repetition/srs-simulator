@@ -9,6 +9,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 from tqdm import tqdm
 
+from simulator.fuzz import resolve_max_interval, with_review_fuzz
+
 
 @dataclass(slots=True)
 class ReviewLog:
@@ -242,6 +244,7 @@ class SimulationEngine:
         behavior: BehaviorModel,
         cost_model: CostModel,
         seed_fn: Optional[Callable[[], float]],
+        fuzz: bool = False,
         progress: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> None:
@@ -252,6 +255,7 @@ class SimulationEngine:
         self.behavior = behavior
         self.cost_model = cost_model
         self.rng = seed_fn or (lambda: __import__("random").random())
+        self.fuzz = fuzz
         self.progress = progress
         self.progress_callback = progress_callback
         self._progress_last = -1
@@ -471,7 +475,16 @@ class SimulationEngine:
         self, card: Card, interval: float, sched_state: Any, day: int
     ) -> None:
         card.scheduler_state = sched_state
-        interval_days = max(1, int(math.floor(float(interval) + 0.5)))
+        if self.fuzz:
+            max_interval = resolve_max_interval(self.scheduler)
+            interval_days = with_review_fuzz(
+                self.rng(),
+                float(interval),
+                1,
+                max_interval,
+            )
+        else:
+            interval_days = max(1, int(math.floor(float(interval) + 0.5)))
         card.interval = interval_days
         card.last_review = day
         card.due = day + interval_days
@@ -512,6 +525,7 @@ def simulate(
     behavior: BehaviorModel,
     cost_model: CostModel,
     seed_fn: Optional[Callable[[], float]] = None,
+    fuzz: bool = False,
     progress: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> SimulationStats:
@@ -525,6 +539,7 @@ def simulate(
         behavior=behavior,
         cost_model=cost_model,
         seed_fn=seed_fn,
+        fuzz=fuzz,
         progress=progress,
         progress_callback=progress_callback,
     )

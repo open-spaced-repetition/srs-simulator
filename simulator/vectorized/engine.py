@@ -9,6 +9,8 @@ from tqdm import tqdm
 from simulator.behavior import StochasticBehavior
 from simulator.core import SimulationStats, new_first_priority, review_first_priority
 from simulator.cost import StatefulCostModel
+from simulator.fuzz import resolve_max_interval
+from simulator.vectorized.fuzz import round_intervals, with_review_fuzz
 from simulator.vectorized.registry import resolve_env_ops, resolve_scheduler_ops
 from simulator.vectorized.types import VectorizedConfig
 
@@ -48,6 +50,7 @@ def simulate(
     seed: int = 0,
     device: Optional[str | torch.device] = None,
     dtype: Optional[torch.dtype] = None,
+    fuzz: bool = False,
     progress: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> SimulationStats:
@@ -70,6 +73,7 @@ def simulate(
     env_dtype = env_ops.dtype
     gen = torch.Generator(device=torch_device)
     gen.manual_seed(seed)
+    fuzz_max = resolve_max_interval(scheduler)
 
     review_costs = torch.tensor(
         cost_model.state_costs.review, device=torch_device, dtype=env_dtype
@@ -225,9 +229,18 @@ def simulate(
                     sched_state, exec_idx, exec_elapsed, exec_rating, prev_interval
                 )
 
-                interval_days = torch.clamp(
-                    torch.floor(intervals_next + 0.5), min=1.0
-                ).to(torch.int64)
+                if fuzz:
+                    fuzz_factors = torch.rand(
+                        intervals_next.shape, device=torch_device, generator=gen
+                    )
+                    interval_days = with_review_fuzz(
+                        intervals_next,
+                        fuzz_factors,
+                        minimum=1,
+                        maximum=fuzz_max,
+                    )
+                else:
+                    interval_days = round_intervals(intervals_next, minimum=1)
                 intervals[exec_idx] = interval_days
                 last_review[exec_idx] = day
                 due[exec_idx] = day + interval_days
@@ -270,9 +283,18 @@ def simulate(
                 intervals_next = sched_ops.update_learn(
                     sched_state, exec_idx, exec_rating
                 )
-                interval_days = torch.clamp(
-                    torch.floor(intervals_next + 0.5), min=1.0
-                ).to(torch.int64)
+                if fuzz:
+                    fuzz_factors = torch.rand(
+                        intervals_next.shape, device=torch_device, generator=gen
+                    )
+                    interval_days = with_review_fuzz(
+                        intervals_next,
+                        fuzz_factors,
+                        minimum=1,
+                        maximum=fuzz_max,
+                    )
+                else:
+                    interval_days = round_intervals(intervals_next, minimum=1)
                 intervals[exec_idx] = interval_days
                 last_review[exec_idx] = day
                 due[exec_idx] = day + interval_days
