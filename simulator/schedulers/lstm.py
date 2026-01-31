@@ -81,57 +81,36 @@ class LSTMScheduler(Scheduler):
         if not curves:
             return self.min_interval
         target = self.desired_retention
-        low = self.min_interval
-        high = max(low, float(view.interval or low))
+        min_int = max(1, int(math.ceil(self.min_interval)))
+        max_int = max(min_int, int(math.floor(self.max_interval)))
+        low = min_int
+        high = max(low, int(math.ceil(float(view.interval or low))))
 
-        r_low = self.model.predict_retention_from_curves(curves, low)
+        r_low = self.model.predict_retention_from_curves(curves, float(low))
         if r_low <= target:
-            return max(low, self.min_interval)
+            return float(low)
 
         t0 = self._effective_initial_guess(curves, target)
-        if t0 is not None and t0 > high:
-            high = min(self.max_interval, t0)
+        if t0 is not None and math.isfinite(t0):
+            high = max(high, int(math.ceil(t0)))
+        high = min(max_int, high)
 
         while (
-            high < self.max_interval
-            and self.model.predict_retention_from_curves(curves, high) > target
+            high < max_int
+            and self.model.predict_retention_from_curves(curves, float(high)) > target
         ):
-            high = min(self.max_interval, high * 2.0)
+            high = min(max_int, high * 2)
 
-        t = 0.5 * (low + high)
-        if t0 is not None and math.isfinite(t0):
-            t = min(high, max(low, t0))
-        tol = 1e-5
-        newton_steps = min(self.search_steps, 6)
-        remaining_steps = self.search_steps - newton_steps
-        for _ in range(newton_steps):
-            pred, deriv = self._retention_and_derivative(curves, t)
-            diff = pred - target
-            if abs(diff) < tol:
-                remaining_steps = 0
+        for _ in range(self.search_steps):
+            if low >= high:
                 break
-            if diff > 0.0:
-                low = t
-            else:
-                high = t
-            if deriv == 0.0:
-                t_new = 0.5 * (low + high)
-            else:
-                t_new = t - diff / deriv
-            if not math.isfinite(t_new) or t_new < low or t_new > high:
-                t = 0.5 * (low + high)
-            else:
-                t = t_new
-        for _ in range(remaining_steps):
-            mid = 0.5 * (low + high)
-            pred = self.model.predict_retention_from_curves(curves, mid)
+            mid = (low + high) // 2
+            pred = self.model.predict_retention_from_curves(curves, float(mid))
             if pred > target:
-                low = mid
+                low = mid + 1
             else:
                 high = mid
-        if remaining_steps > 0:
-            t = high
-        return max(self.min_interval, min(t, self.max_interval))
+        return float(max(min_int, min(high, max_int)))
 
     def _retention_and_derivative(
         self, curves: dict[str, list[float]], days: float
@@ -355,65 +334,50 @@ class LSTMVectorizedSchedulerOps:
         weights = state.mem_w[idx]
         stabilities = state.mem_s[idx]
         decays = state.mem_d[idx]
+        min_int = max(1, int(math.ceil(self.min_interval)))
+        max_int = max(min_int, int(math.floor(self.max_interval)))
         low = self._torch.full(
-            (idx.numel(),), self.min_interval, dtype=self.dtype, device=self.device
+            (idx.numel(),), min_int, dtype=self._torch.int64, device=self.device
         )
-        t0 = self._effective_initial_guess(weights, stabilities, decays)
         if prev_interval is None:
             high = low.clone()
         else:
-            high = self._torch.maximum(low, prev_interval.to(self.dtype))
-        high = self._torch.maximum(high, t0)
+            high = self._torch.maximum(
+                low,
+                self._torch.ceil(prev_interval.to(self.dtype)).to(self._torch.int64),
+            )
+        t0 = self._effective_initial_guess(weights, stabilities, decays)
+        high = self._torch.maximum(high, self._torch.ceil(t0).to(self._torch.int64))
+        high = self._torch.clamp(high, max=max_int)
 
-        pred_low = self._retention_at(low, weights, stabilities, decays)
-        high = self._torch.where(pred_low <= self._target, low, high)
-        needs_expand = pred_low > self._target
-        if needs_expand.any():
+        pred_low = self._retention_at(low.to(self.dtype), weights, stabilities, decays)
+        active = pred_low > self._target
+        if active.any():
+            max_tensor = self._torch.full_like(high, max_int)
             while True:
-                pred_high = self._retention_at(high, weights, stabilities, decays)
-                still = (pred_high > self._target) & (high < self._max_interval)
+                pred_high = self._retention_at(
+                    high.to(self.dtype), weights, stabilities, decays
+                )
+                still = (pred_high > self._target) & (high < max_tensor) & active
                 if not still.any():
                     break
                 high = self._torch.where(
-                    still, self._torch.minimum(high * 2.0, self._max_interval), high
+                    still, self._torch.minimum(high * 2, max_tensor), high
                 )
-                if not (high < self._max_interval).any():
-                    break
 
-        t = self._torch.clamp(t0, min=low, max=high)
-        tol = 1e-5
-        newton_steps = min(self.search_steps, 6)
-        remaining_steps = self.search_steps - newton_steps
-        for _ in range(newton_steps):
-            pred, deriv = self._retention_and_derivative(
-                t, weights, stabilities, decays
-            )
-            diff = pred - self._target
-            if self._torch.max(self._torch.abs(diff)).item() < tol:
-                remaining_steps = 0
-                break
-            go_low = diff > 0.0
-            low = self._torch.where(go_low, t, low)
-            high = self._torch.where(go_low, high, t)
-            mid = 0.5 * (low + high)
-            step = diff / deriv
-            t_new = t - step
-            invalid = (
-                (deriv == 0.0)
-                | ~self._torch.isfinite(t_new)
-                | (t_new < low)
-                | (t_new > high)
-            )
-            t = self._torch.where(invalid, mid, t_new)
-        for _ in range(remaining_steps):
-            mid = 0.5 * (low + high)
-            pred_mid = self._retention_at(mid, weights, stabilities, decays)
-            go_low = pred_mid > self._target
-            low = self._torch.where(go_low, mid, low)
-            high = self._torch.where(go_low, high, mid)
-        if remaining_steps > 0:
-            t = high
-        return self._torch.clamp(t, min=self.min_interval, max=self.max_interval)
+            for _ in range(self.search_steps):
+                if not (active & (low < high)).any():
+                    break
+                mid = (low + high) // 2
+                pred_mid = self._retention_at(
+                    mid.to(self.dtype), weights, stabilities, decays
+                )
+                go_high = pred_mid <= self._target
+                high = self._torch.where(active & go_high, mid, high)
+                low = self._torch.where(active & ~go_high, mid + 1, low)
+
+        result = self._torch.where(active, high, low).to(self.dtype)
+        return self._torch.clamp(result, min=self.min_interval, max=self.max_interval)
 
     def _retention_at(
         self,
@@ -633,65 +597,50 @@ class LSTMBatchSchedulerOps:
         weights = state.mem_w[user_idx, card_idx]
         stabilities = state.mem_s[user_idx, card_idx]
         decays = state.mem_d[user_idx, card_idx]
+        min_int = max(1, int(math.ceil(self.min_interval)))
+        max_int = max(min_int, int(math.floor(self.max_interval)))
         low = torch.full(
             (user_idx.numel(),),
-            self.min_interval,
-            dtype=self.dtype,
+            min_int,
+            dtype=torch.int64,
             device=self.device,
         )
-        t0 = self._effective_initial_guess(weights, stabilities, decays)
         if prev_interval is None:
             high = low.clone()
         else:
-            high = torch.maximum(low, prev_interval.to(self.dtype))
-        high = torch.maximum(high, t0)
+            high = torch.maximum(
+                low, torch.ceil(prev_interval.to(self.dtype)).to(torch.int64)
+            )
+        t0 = self._effective_initial_guess(weights, stabilities, decays)
+        high = torch.maximum(high, torch.ceil(t0).to(torch.int64))
+        high = torch.clamp(high, max=max_int)
 
-        pred_low = self._retention_at(low, weights, stabilities, decays)
-        high = torch.where(pred_low <= self._target, low, high)
-        needs_expand = pred_low > self._target
-        if needs_expand.any():
+        pred_low = self._retention_at(low.to(self.dtype), weights, stabilities, decays)
+        active = pred_low > self._target
+        if active.any():
+            max_tensor = torch.full_like(high, max_int)
             while True:
-                pred_high = self._retention_at(high, weights, stabilities, decays)
-                still = (pred_high > self._target) & (high < self._max_interval)
+                pred_high = self._retention_at(
+                    high.to(self.dtype), weights, stabilities, decays
+                )
+                still = (pred_high > self._target) & (high < max_tensor) & active
                 if not still.any():
                     break
-                high = torch.where(
-                    still, torch.minimum(high * 2.0, self._max_interval), high
-                )
-                if not (high < self._max_interval).any():
-                    break
+                high = torch.where(still, torch.minimum(high * 2, max_tensor), high)
 
-        t = torch.clamp(t0, min=low, max=high)
-        tol = 1e-5
-        newton_steps = min(self.search_steps, 6)
-        remaining_steps = self.search_steps - newton_steps
-        for _ in range(newton_steps):
-            pred, deriv = self._retention_and_derivative(
-                t, weights, stabilities, decays
-            )
-            diff = pred - self._target
-            if torch.max(torch.abs(diff)).item() < tol:
-                remaining_steps = 0
-                break
-            go_low = diff > 0.0
-            low = torch.where(go_low, t, low)
-            high = torch.where(go_low, high, t)
-            mid = 0.5 * (low + high)
-            step = diff / deriv
-            t_new = t - step
-            invalid = (
-                (deriv == 0.0) | ~torch.isfinite(t_new) | (t_new < low) | (t_new > high)
-            )
-            t = torch.where(invalid, mid, t_new)
-        for _ in range(remaining_steps):
-            mid = 0.5 * (low + high)
-            pred_mid = self._retention_at(mid, weights, stabilities, decays)
-            go_low = pred_mid > self._target
-            low = torch.where(go_low, mid, low)
-            high = torch.where(go_low, high, mid)
-        if remaining_steps > 0:
-            t = high
-        return torch.clamp(t, min=self.min_interval, max=self.max_interval)
+            for _ in range(self.search_steps):
+                if not (active & (low < high)).any():
+                    break
+                mid = (low + high) // 2
+                pred_mid = self._retention_at(
+                    mid.to(self.dtype), weights, stabilities, decays
+                )
+                go_high = pred_mid <= self._target
+                high = torch.where(active & go_high, mid, high)
+                low = torch.where(active & ~go_high, mid + 1, low)
+
+        result = torch.where(active, high, low).to(self.dtype)
+        return torch.clamp(result, min=self.min_interval, max=self.max_interval)
 
     def _retention_at(
         self,
