@@ -27,12 +27,14 @@ from simulator.math.fsrs import Bounds
 from simulator.models.lstm import _resolve_benchmark_weights
 from simulator.models.lstm_batch import LSTMBatchedEnvOps, PackedLSTMWeights
 from simulator.scheduler_spec import parse_scheduler_spec
+from simulator.scheduler_spec import normalize_fixed_interval
 from simulator.schedulers.anki_sm2 import AnkiSM2Scheduler
 from simulator.schedulers.memrise import MemriseScheduler
 from simulator.vectorized.multiuser import (
     AnkiSM2BatchSchedulerOps,
     FSRS6BatchEnvOps,
     FSRS6BatchSchedulerOps,
+    FixedBatchSchedulerOps,
     MemriseBatchSchedulerOps,
     MultiUserBehavior,
     MultiUserCost,
@@ -367,7 +369,7 @@ def _run_batch_core(
 
         for scheduler_spec in schedulers:
             name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
-            if name not in {"fsrs6", "anki_sm2", "memrise"}:
+            if name not in {"fsrs6", "anki_sm2", "memrise", "fixed"}:
                 raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
             label_prefix = f"{environment} u{batch[0]}-{batch[-1]} {name}"
 
@@ -567,6 +569,65 @@ def _run_batch_core(
                             scheduler_priority=args.scheduler_priority,
                             sspmmc_policy=None,
                             fixed_interval=fixed_interval,
+                            seed=args.seed,
+                            log_dir=user_log_dir,
+                            log_reviews=False,
+                        )
+                        simulate_cli._write_log(log_args, stats)
+                continue
+
+            if name == "fixed":
+                interval = normalize_fixed_interval(fixed_interval)
+                sched_ops = FixedBatchSchedulerOps(
+                    interval=interval,
+                    device=env_ops.device,
+                    dtype=torch.float32,
+                )
+                progress_callback = _progress_callback_from_queue(
+                    progress_queue,
+                    multiplier=len(batch),
+                    device_label=device_label,
+                    run_label=f"{label_prefix} ivl={interval:.2f}",
+                    total_days=args.days,
+                )
+                stats_list = simulate_multiuser(
+                    days=args.days,
+                    deck_size=args.deck,
+                    env_ops=env_ops,
+                    sched_ops=sched_ops,
+                    behavior=behavior,
+                    cost_model=cost_model,
+                    seed=args.seed,
+                    device=env_ops.device,
+                    dtype=torch.float32,
+                    priority_mode=args.priority,
+                    progress=progress,
+                    progress_label=f"{label_prefix} ivl={interval:.2f}",
+                    progress_callback=progress_callback,
+                )
+                if not args.no_log:
+                    for user_id, stats in zip(batch, stats_list):
+                        user_log_dir = log_root / f"user_{user_id}"
+                        user_log_dir.mkdir(parents=True, exist_ok=True)
+                        log_args = argparse.Namespace(
+                            engine="vectorized",
+                            days=args.days,
+                            deck=args.deck,
+                            learn_limit=args.learn_limit,
+                            review_limit=args.review_limit,
+                            cost_limit_minutes=args.cost_limit_minutes,
+                            priority=args.priority,
+                            environment=environment,
+                            scheduler=name,
+                            scheduler_spec=raw,
+                            user_id=user_id,
+                            button_usage=str(args.button_usage)
+                            if args.button_usage is not None
+                            else None,
+                            desired_retention=None,
+                            scheduler_priority=args.scheduler_priority,
+                            sspmmc_policy=None,
+                            fixed_interval=interval,
                             seed=args.seed,
                             log_dir=user_log_dir,
                             log_reviews=False,
