@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         "--min-retention",
         dest="start_retention",
         type=float,
-        default=0.70,
+        default=0.50,
         help="Minimum desired retention to include.",
     )
     parser.add_argument(
@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
         "--max-retention",
         dest="end_retention",
         type=float,
-        default=0.99,
+        default=0.98,
         help="Maximum desired retention to include.",
     )
     parser.add_argument(
