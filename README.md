@@ -92,6 +92,39 @@ uv run experiments/retention_sweep/dominance_sm2_memrise.py --environments lstm
 - Retention range flags use `--start-retention/--end-retention` (aliases: `--min-retention/--max-retention`) across the sweep, aggregate, and pareto tools.
 - To pass retention sweep overrides (e.g., `--start-retention/--end-retention/--step`, now 0-1 floats) to `run_sweep.py`, add them after `--` when invoking `run_sweep_users.py`.
 
+## Engine support matrix
+
+Legend: ✓ supported, — not supported.
+
+Event engine:
+
+| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| lstm | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs3 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| hlr | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| dash | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Vectorized engine:
+
+| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| lstm | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs6 | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Batched (multi-user vectorized in `run_sweep_users_batched.py`):
+
+| env \\ sched | fsrs6 | anki_sm2 | memrise |
+| --- | --- | --- | --- |
+| lstm | ✓ | ✓ | ✓ |
+| fsrs6 | ✓ | ✓ | ✓ |
+
+Notes:
+- Event engine is the reference implementation and supports all scheduler/environment combinations, even if some pairings are not meaningful.
+- Vectorized engine supports only LSTM and FSRS6 environments and does not implement DASHScheduler.
+- Batched mode is intended for retention sweeps; it is vectorized-only and currently limited to the schedulers listed above.
+
 ## Evaluation
 `experiments/retention_sweep/aggregate_users.py` compares scheduler efficiency by aggregating retention_sweep logs across users for each environment, scheduler, and target setting (desired retention or fixed interval) and restricting to the intersection of user IDs so each config is compared on the same users.
 
