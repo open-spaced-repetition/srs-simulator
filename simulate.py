@@ -418,12 +418,23 @@ def main() -> None:
         learning_rating_prob=usage["learning_rating_prob"],
         relearning_rating_prob=usage["relearning_rating_prob"],
     )
-    cost_model = StatefulCostModel(
-        state_costs=StateRatingCosts(
-            learning=usage["learn_costs"],
-            review=usage["review_costs"],
+    if short_term_source:
+        state_rating_costs = usage["state_rating_costs"]
+        cost_model = StatefulCostModel(
+            state_costs=StateRatingCosts(
+                learning=state_rating_costs[0],
+                review=state_rating_costs[1],
+                relearning=state_rating_costs[2],
+            )
         )
-    )
+    else:
+        cost_model = StatefulCostModel(
+            state_costs=StateRatingCosts(
+                learning=usage["learn_costs"],
+                review=usage["review_costs"],
+                relearning=usage["review_costs"],
+            )
+        )
     start_time = time.perf_counter()
     if args.engine == "vectorized":
         if args.log_reviews:

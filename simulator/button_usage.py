@@ -40,9 +40,32 @@ def _require_list(
     return [float(item) for item in value]
 
 
+def _require_matrix(
+    entry: Mapping[str, Any], key: str, *, expected_shape: tuple[int, int]
+) -> list[list[float]]:
+    value = entry.get(key)
+    if not isinstance(value, list):
+        raise ValueError(f"Invalid {key} in button usage config.")
+    if len(value) != expected_shape[0]:
+        raise ValueError(
+            f"Invalid {key} length in button usage config: "
+            f"expected {expected_shape[0]} rows, got {len(value)}."
+        )
+    matrix: list[list[float]] = []
+    for row in value:
+        if not isinstance(row, list):
+            raise ValueError(f"Invalid {key} entry in button usage config.")
+        if len(row) != expected_shape[1]:
+            raise ValueError(
+                f"Invalid {key} row length: expected {expected_shape[1]}, got {len(row)}."
+            )
+        matrix.append([float(item) for item in row])
+    return matrix
+
+
 def load_button_usage_config(
     button_usage_path: str | Path, user_id: int
-) -> dict[str, list[float] | float]:
+) -> dict[str, list[float] | list[list[float]] | float]:
     path = Path(button_usage_path)
     target_user_id = _coerce_user_id(user_id)
     if target_user_id is None:
@@ -50,7 +73,7 @@ def load_button_usage_config(
     if not path.exists():
         raise FileNotFoundError(f"Button usage data not found: {path}")
 
-    config: dict[str, list[float] | float] | None = None
+    config: dict[str, list[float] | list[list[float]] | float] | None = None
     with path.open("r", encoding="utf-8") as fh:
         for line_number, line in enumerate(fh, 1):
             line = line.strip()
@@ -93,6 +116,9 @@ def load_button_usage_config(
                 "review_rating_prob": review_rating_prob,
                 "learning_rating_prob": learning_rating_prob,
                 "relearning_rating_prob": relearning_rating_prob,
+                "state_rating_costs": _require_matrix(
+                    entry, "state_rating_costs", expected_shape=(3, 4)
+                ),
                 "first_rating_offsets": _require_list(
                     entry, "first_rating_offset", expected_len=4
                 ),
@@ -129,10 +155,35 @@ def _coerce_list(
     return [float(item) for item in value]
 
 
+def _coerce_state_costs(
+    value: Sequence[Sequence[float]] | None,
+    *,
+    learn_costs: Sequence[float],
+    review_costs: Sequence[float],
+) -> list[list[float]]:
+    if value is None:
+        return [
+            list(learn_costs),
+            list(review_costs),
+            list(review_costs),
+        ]
+    if len(value) != 3:
+        raise ValueError("state_rating_costs must have 3 rows.")
+    rows: list[list[float]] = []
+    for idx, row in enumerate(value):
+        rows.append(
+            _coerce_list(row, expected_len=4, name=f"state_rating_costs[{idx}]")
+        )
+    return rows
+
+
 def normalize_button_usage(
-    button_usage: Mapping[str, Sequence[float] | float] | None,
-) -> dict[str, list[float] | float]:
-    source: Mapping[str, Sequence[float] | float] = button_usage or {}
+    button_usage: Mapping[str, Sequence[float] | Sequence[Sequence[float]] | float]
+    | None,
+) -> dict[str, list[float] | list[list[float]] | float]:
+    source: Mapping[str, Sequence[float] | Sequence[Sequence[float]] | float] = (
+        button_usage or {}
+    )
 
     learn_costs = _coerce_list(
         source.get("learn_costs", DEFAULT_STATE_RATING_COSTS.learning),
@@ -143,6 +194,11 @@ def normalize_button_usage(
         source.get("review_costs", DEFAULT_STATE_RATING_COSTS.review),
         expected_len=4,
         name="review_costs",
+    )
+    state_rating_costs = _coerce_state_costs(
+        source.get("state_rating_costs"),
+        learn_costs=learn_costs,
+        review_costs=review_costs,
     )
     first_rating_prob = _normalize_prob(
         _coerce_list(
@@ -200,6 +256,7 @@ def normalize_button_usage(
         "review_rating_prob": review_rating_prob,
         "learning_rating_prob": learning_rating_prob,
         "relearning_rating_prob": relearning_rating_prob,
+        "state_rating_costs": state_rating_costs,
         "first_rating_offsets": first_rating_offsets,
         "first_session_lens": first_session_lens,
         "forget_rating_offset": forget_rating_offset,
