@@ -88,7 +88,7 @@ class Event:
             "phase": self.phase,
             "card_id": self.card_id,
             "rating": self.rating,
-            "retrievability": self.retrievability,
+            "retrievability": _format_retrievability(self.retrievability),
             "cost": self.cost,
             "interval": _format_interval_days(self.interval),
             "due": _format_due(self.due),
@@ -698,5 +698,14 @@ def _format_due(value: float | None) -> float | None:
         return None
     try:
         return round(float(value), 5)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_retrievability(value: float | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 4)
     except (TypeError, ValueError):
         return None
