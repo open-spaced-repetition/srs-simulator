@@ -182,11 +182,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--short-term-source",
-        choices=["steps", "scheduler"],
+        choices=["steps", "sched"],
         default=None,
         help=(
             "Short-term scheduling source: steps (Anki-style learning steps) "
-            "or scheduler (LSTM-only short-term intervals)."
+            "or sched (LSTM-only short-term intervals)."
         ),
     )
     parser.add_argument(
@@ -406,11 +406,11 @@ def _run_once(
     )
     run_args.short_term_source = short_term_source
     run_args.short_term = bool(short_term_source)
-    if short_term_source in {"steps", "scheduler"} and run_args.engine != "event":
+    if short_term_source in {"steps", "sched"} and run_args.engine != "event":
         raise SystemExit("Short-term scheduling requires --engine event.")
-    if short_term_source == "scheduler":
+    if short_term_source == "sched":
         if run_args.scheduler != "lstm":
-            raise SystemExit("--short-term-source=scheduler requires --sched lstm.")
+            raise SystemExit("--short-term-source=sched requires --sched lstm.")
         run_args.lstm_interval_mode = "float"
         run_args.lstm_min_interval = 0.0
 
@@ -426,7 +426,7 @@ def _run_once(
             threshold_days=getattr(run_args, "short_term_threshold", 0.5),
             allow_short_term_interval=False,
         )
-    elif short_term_source == "scheduler":
+    elif short_term_source == "sched":
         from simulator.short_term import ShortTermScheduler
 
         agent = ShortTermScheduler(
