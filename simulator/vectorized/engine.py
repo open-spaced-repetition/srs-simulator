@@ -341,7 +341,7 @@ def simulate(
             progress_bar.close()
 
     for i, r in enumerate(daily_reviews):
-        daily_retention[i] = 0.0 if r == 0 else 1.0 - daily_lapses[i] / r
+        daily_retention[i] = math.nan if r == 0 else 1.0 - daily_lapses[i] / r
 
     total_projected_retrievability = 0.0
     learned_mask = reps > 0

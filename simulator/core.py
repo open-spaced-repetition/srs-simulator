@@ -9,7 +9,21 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 from tqdm import tqdm
 
-from simulator.fuzz import resolve_max_interval, with_review_fuzz
+from simulator.fuzz import resolve_max_interval, with_learning_fuzz, with_review_fuzz
+
+
+@dataclass(frozen=True)
+class IntervalSpec:
+    unit: str
+    value: float
+
+    @staticmethod
+    def days(value: float) -> "IntervalSpec":
+        return IntervalSpec(unit="days", value=float(value))
+
+    @staticmethod
+    def secs(value: float) -> "IntervalSpec":
+        return IntervalSpec(unit="secs", value=float(value))
 
 
 @dataclass(slots=True)
@@ -26,9 +40,9 @@ class Card:
     """Internal card representation holding hidden and public state."""
 
     id: int
-    due: int = 0
-    last_review: int = -1
-    interval: int = 0
+    due: float = 0.0
+    last_review: float = -1.0
+    interval: float = 0.0
     reps: int = 0
     lapses: int = 0
     history: List[ReviewLog] = field(default_factory=list)
@@ -42,9 +56,9 @@ class CardView:
     """Scheduler-visible projection of a card."""
 
     id: int
-    due: int
-    last_review: int
-    interval: int
+    due: float
+    last_review: float
+    interval: float
     reps: int
     lapses: int
     history: Sequence[ReviewLog]
@@ -58,18 +72,20 @@ class Event:
     day: int
     action: Action
     card_id: int
+    phase: Optional[str] = None
     rating: Optional[int] = None
     retrievability: Optional[float] = None
     cost: float = 0.0
-    interval: Optional[int] = None
-    due: Optional[int] = None
-    last_review: Optional[int] = None
+    interval: Optional[float] = None
+    due: Optional[float] = None
+    last_review: Optional[float] = None
     elapsed: Optional[float] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "day": self.day,
             "action": self.action.value,
+            "phase": self.phase,
             "card_id": self.card_id,
             "rating": self.rating,
             "retrievability": self.retrievability,
@@ -163,6 +179,10 @@ class BehaviorModel(abc.ABC):
         """Return an `Action` (review/learn) or None to indicate the user is done for the day."""
 
     @abc.abstractmethod
+    def can_learn(self, day: int) -> bool:
+        """Return whether the user can introduce new cards on this day."""
+
+    @abc.abstractmethod
     def priority_key(self, card_view: CardView) -> Sequence[float]:
         """Return the ordering key for scheduling reviews (and synthetic new cards)."""
 
@@ -219,13 +239,13 @@ class Scheduler(abc.ABC):
     @abc.abstractmethod
     def init_card(
         self, card_view: CardView, rating: int, day: float
-    ) -> Tuple[float, Any]:
+    ) -> Tuple[float | IntervalSpec, Any]:
         """Return (next interval, scheduler_state) for newly learned cards."""
 
     @abc.abstractmethod
     def schedule(
         self, card_view: CardView, rating: int, elapsed: float, day: float
-    ) -> Tuple[float, Any]:
+    ) -> Tuple[float | IntervalSpec, Any]:
         """Return (next interval, scheduler_state) after a review."""
 
     def review_priority(self, card_view: CardView, day: float) -> Sequence[float]:
@@ -273,6 +293,8 @@ class SimulationEngine:
         self.daily_cost = [0.0 for _ in range(days)]
         self.daily_memorized = [0.0 for _ in range(days)]
         self.daily_lapses = [0 for _ in range(days)]
+        self.daily_phase_reviews = [0 for _ in range(days)]
+        self.daily_phase_lapses = [0 for _ in range(days)]
         self.total_reviews = 0
         self.total_lapses = 0
         self.total_cost = 0.0
@@ -342,9 +364,6 @@ class SimulationEngine:
 
     def _start_day(self, day: int) -> None:
         self.behavior.start_day(day, self.rng)
-        while self.future_queue and self.future_queue[0][0] <= day:
-            _, _, cid = heapq.heappop(self.future_queue)
-            self._push_ready(cid, day)
 
     def _compute_memorized(self, day: int) -> None:
         memorized = 0.0
@@ -356,53 +375,70 @@ class SimulationEngine:
         self.daily_memorized[day] = memorized
 
     def _process_day(self, day: int) -> None:
+        day_start = float(day)
+        day_end = day_start + 1.0
+        now = day_start
         while True:
+            self._drain_due(now)
             next_review_view = self._peek_ready_view()
-            next_new_view = self._next_new_view(day)
+            next_new_view = (
+                self._next_new_view(day) if self.behavior.can_learn(day) else None
+            )
+            if next_review_view is None and next_new_view is None:
+                next_due = self._peek_future_due()
+                if next_due is not None and next_due < day_end:
+                    now = max(now, next_due)
+                    continue
+                break
             action = self.behavior.choose_action(
                 day, next_review_view, next_new_view, self.rng
             )
             if action is None:
                 break
             if action == Action.REVIEW:
-                if not self._handle_review(day):
+                if not self._handle_review(day, now):
                     break
                 continue
             if action == Action.LEARN:
-                if not self._handle_learning(day):
+                if not self._handle_learning(day, now):
                     break
                 continue
             break
 
-    def _handle_review(self, day: int) -> bool:
+    def _handle_review(self, day: int, now: float) -> bool:
         cid = self.ready_queue.pop()
         if cid is None:
             return False
         card = self.cards[cid]
-        elapsed = float(day) - float(card.last_review)
+        elapsed = float(now) - float(card.last_review)
         retrievability = self.environment.predict_retention(card, elapsed)
         view = _card_view(card)
-        rating = self.behavior.review_rating(retrievability, view, float(day), self.rng)
+        rating = self.behavior.review_rating(retrievability, view, float(now), self.rng)
         if rating is None:
             self._schedule_card(card)
             return False
+        phase = _event_phase(card.scheduler_state, default="review")
         self.environment.update_card(card, rating, elapsed)
         interval, sched_state = self.scheduler.schedule(
-            view, rating, elapsed, float(day)
+            view, rating, elapsed, float(now)
         )
-        self._apply_schedule(card, interval, sched_state, day)
+        self._apply_schedule(card, interval, sched_state, now)
         card.reps += 1
-        card.history.append(ReviewLog(rating, elapsed, float(day)))
+        card.history.append(ReviewLog(rating, elapsed, float(now)))
         self._schedule_card(card)
 
         self.daily_reviews[day] += 1
         self.total_reviews += 1
+        if phase == "review":
+            self.daily_phase_reviews[day] += 1
         if rating == 1:
             card.lapses += 1
             self.daily_lapses[day] += 1
             self.total_lapses += 1
+            if phase == "review":
+                self.daily_phase_lapses[day] += 1
 
-        cost = self.cost_model.review_cost(retrievability, rating, view, float(day))
+        cost = self.cost_model.review_cost(retrievability, rating, view, float(now))
         self.daily_cost[day] += cost
         self.total_cost += cost
         self.behavior.record_review(cost)
@@ -410,6 +446,7 @@ class SimulationEngine:
             Event(
                 day=day,
                 action=Action.REVIEW,
+                phase=phase,
                 card_id=card.id,
                 rating=rating,
                 retrievability=retrievability,
@@ -422,15 +459,15 @@ class SimulationEngine:
         )
         return True
 
-    def _handle_learning(self, day: int) -> bool:
+    def _handle_learning(self, day: int, now: float) -> bool:
         if self._new_ptr >= self.deck_size:
             return False
         card = self.cards[self._new_ptr]
         self._new_ptr += 1
         card.scheduler_state = None
         card.memory_state = None
-        card.last_review = day
-        card.interval = 0
+        card.last_review = now
+        card.interval = 0.0
         card.reps = 0
         card.lapses = 0
         card.history.clear()
@@ -439,12 +476,13 @@ class SimulationEngine:
         self.environment.init_card(card, first_rating)
         view = _card_view(card)
         learn_cost = self.cost_model.learning_cost(
-            first_rating, view, float(day), self.rng
+            first_rating, view, float(now), self.rng
         )
-        interval, sched_state = self.scheduler.init_card(view, first_rating, float(day))
-        self._apply_schedule(card, interval, sched_state, day)
+        interval, sched_state = self.scheduler.init_card(view, first_rating, float(now))
+        self._apply_schedule(card, interval, sched_state, now)
+        phase = "new"
         card.reps = 1
-        card.history.append(ReviewLog(first_rating, 0.0, float(day)))
+        card.history.append(ReviewLog(first_rating, 0.0, float(now)))
         self.daily_new[day] += 1
         self.daily_cost[day] += learn_cost
         self.total_cost += learn_cost
@@ -453,6 +491,7 @@ class SimulationEngine:
             Event(
                 day=day,
                 action=Action.LEARN,
+                phase=phase,
                 card_id=card.id,
                 rating=first_rating,
                 retrievability=None,
@@ -460,7 +499,7 @@ class SimulationEngine:
                 interval=card.interval,
                 due=card.due,
                 last_review=card.last_review,
-                elapsed=float(day) - float(card.last_review),
+                elapsed=float(now) - float(card.last_review),
             )
         )
         self._schedule_card(card)
@@ -472,31 +511,42 @@ class SimulationEngine:
             self._schedule_card(card)
 
     def _apply_schedule(
-        self, card: Card, interval: float, sched_state: Any, day: int
+        self, card: Card, interval: float | IntervalSpec, sched_state: Any, now: float
     ) -> None:
         card.scheduler_state = sched_state
-        if self.fuzz:
-            max_interval = resolve_max_interval(self.scheduler)
-            interval_days = with_review_fuzz(
-                self.rng(),
-                float(interval),
-                1,
-                max_interval,
-            )
+        if isinstance(interval, IntervalSpec) and interval.unit == "secs":
+            interval_secs = max(1.0, float(interval.value))
+            if self.fuzz:
+                interval_secs = with_learning_fuzz(self.rng, interval_secs)
+            interval_days = interval_secs / 86_400.0
         else:
-            interval_days = max(1, int(math.floor(float(interval) + 0.5)))
+            interval_days = (
+                float(interval.value)
+                if isinstance(interval, IntervalSpec)
+                else float(interval)
+            )
+            if self.fuzz:
+                max_interval = resolve_max_interval(self.scheduler)
+                interval_days = float(
+                    with_review_fuzz(self.rng(), interval_days, 1, max_interval)
+                )
+            else:
+                interval_days = float(max(1, int(math.floor(interval_days + 0.5))))
         card.interval = interval_days
-        card.last_review = day
-        card.due = day + interval_days
+        card.last_review = now
+        if isinstance(interval, IntervalSpec) and interval.unit == "secs":
+            card.due = now + interval_days
+        else:
+            card.due = math.floor(now) + interval_days
 
     def _schedule_card(self, card: Card) -> None:
         heapq.heappush(self.future_queue, (card.due, self._future_counter, card.id))
         self._future_counter += 1
 
-    def _push_ready(self, cid: int, day: int) -> None:
+    def _push_ready(self, cid: int, now: float) -> None:
         card = self.cards[cid]
         view = _card_view(card)
-        priority = tuple(self.scheduler.review_priority(view, float(day)))
+        priority = tuple(self.scheduler.review_priority(view, float(now)))
         card.metadata["scheduler_priority"] = priority
         self.ready_queue.push(priority, cid)
 
@@ -511,9 +561,21 @@ class SimulationEngine:
             return None
         return _new_card_placeholder(day, self._new_ptr)
 
+    def _drain_due(self, now: float) -> None:
+        while self.future_queue and self.future_queue[0][0] <= now:
+            _, _, cid = heapq.heappop(self.future_queue)
+            self._push_ready(cid, now)
+
+    def _peek_future_due(self) -> Optional[float]:
+        if not self.future_queue:
+            return None
+        return float(self.future_queue[0][0])
+
     def _compute_retention(self) -> None:
-        for i, r in enumerate(self.daily_reviews):
-            self.daily_retention[i] = 0.0 if r == 0 else 1.0 - self.daily_lapses[i] / r
+        for i, r in enumerate(self.daily_phase_reviews):
+            self.daily_retention[i] = (
+                math.nan if r == 0 else 1.0 - self.daily_phase_lapses[i] / r
+            )
 
 
 def simulate(
@@ -565,9 +627,9 @@ def _new_card_placeholder(day: int, next_id: int) -> CardView:
     hint = (float(day), -float(next_id + 1))
     return CardView(
         id=-(next_id + 1),
-        due=day,
-        last_review=day,
-        interval=0,
+        due=float(day),
+        last_review=float(day),
+        interval=0.0,
         reps=0,
         lapses=0,
         history=(),
@@ -596,3 +658,10 @@ def new_first_priority(view: CardView) -> Sequence[float]:
     is_review = 1 if view.reps > 0 else 0
     base = _scheduler_priority_hint(view)
     return (is_review,) + base
+
+
+def _event_phase(state: Any, default: str) -> str:
+    phase = getattr(state, "phase", None)
+    if phase in {"learning", "relearning"}:
+        return phase
+    return default

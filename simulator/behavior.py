@@ -134,6 +134,18 @@ class StochasticBehavior(BehaviorModel):
             return Action.REVIEW
         return Action.LEARN if new_key < review_key else Action.REVIEW
 
+    def can_learn(self, day: int) -> bool:
+        if self._current_day != day or self._stop_for_day:
+            return False
+        if (
+            self.max_cost_per_day is not None
+            and self._cost_today >= self.max_cost_per_day
+        ):
+            return False
+        if self.max_new_per_day is None:
+            return True
+        return self._learned_today < self.max_new_per_day
+
     def priority_key(self, card_view: CardView) -> Sequence[float]:
         return self._priority_fn(card_view)
 

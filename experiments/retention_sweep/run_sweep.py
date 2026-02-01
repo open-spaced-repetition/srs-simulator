@@ -176,6 +176,36 @@ def parse_args() -> argparse.Namespace:
         help="Apply scheduler interval fuzz (Anki-style).",
     )
     parser.add_argument(
+        "--short-term",
+        action="store_true",
+        help="(Deprecated) Alias for --short-term-source=steps.",
+    )
+    parser.add_argument(
+        "--short-term-source",
+        choices=["steps", "scheduler"],
+        default=None,
+        help=(
+            "Short-term scheduling source: steps (Anki-style learning steps) "
+            "or scheduler (LSTM-only short-term intervals)."
+        ),
+    )
+    parser.add_argument(
+        "--learning-steps",
+        default=None,
+        help="Comma-separated learning steps (minutes) for short-term steps mode.",
+    )
+    parser.add_argument(
+        "--relearning-steps",
+        default=None,
+        help="Comma-separated relearning steps (minutes) for short-term steps mode.",
+    )
+    parser.add_argument(
+        "--short-term-threshold",
+        type=float,
+        default=0.5,
+        help="Short-term threshold (days) for LSTM interval conversion.",
+    )
+    parser.add_argument(
         "--no-log",
         action="store_true",
         help="Disable writing logs to disk.",
@@ -371,8 +401,41 @@ def _run_once(
 ) -> None:
     progress_callback, progress_close = _make_progress_callback(run_args)
     rng = random.Random(run_args.seed)
+    short_term_source, learning_steps, relearning_steps = (
+        simulate_cli._resolve_short_term_config(run_args)
+    )
+    run_args.short_term_source = short_term_source
+    run_args.short_term = bool(short_term_source)
+    if short_term_source in {"steps", "scheduler"} and run_args.engine != "event":
+        raise SystemExit("Short-term scheduling requires --engine event.")
+    if short_term_source == "scheduler":
+        if run_args.scheduler != "lstm":
+            raise SystemExit("--short-term-source=scheduler requires --sched lstm.")
+        run_args.lstm_interval_mode = "float"
+        run_args.lstm_min_interval = 0.0
+
     env = simulate_cli.ENVIRONMENT_FACTORIES[run_args.environment](run_args)
     agent = simulate_cli.SCHEDULER_FACTORIES[run_args.scheduler](run_args)
+    if short_term_source == "steps":
+        from simulator.short_term import ShortTermScheduler
+
+        agent = ShortTermScheduler(
+            agent,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+            threshold_days=getattr(run_args, "short_term_threshold", 0.5),
+            allow_short_term_interval=False,
+        )
+    elif short_term_source == "scheduler":
+        from simulator.short_term import ShortTermScheduler
+
+        agent = ShortTermScheduler(
+            agent,
+            learning_steps=[],
+            relearning_steps=[],
+            threshold_days=getattr(run_args, "short_term_threshold", 0.5),
+            allow_short_term_interval=True,
+        )
     cost_limit = (
         run_args.cost_limit_minutes * 60.0
         if run_args.cost_limit_minutes is not None

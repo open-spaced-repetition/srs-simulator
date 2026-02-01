@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import json
 import random
 import sys
@@ -39,6 +40,7 @@ from simulator.scheduler_spec import (
     scheduler_uses_desired_retention,
 )
 from simulator.vectorized import simulate as simulate_vectorized
+from simulator.short_term import ShortTermScheduler
 
 
 def _resolve_benchmark_weights(
@@ -58,6 +60,48 @@ def _resolve_benchmark_weights(
             f"{environment} expects {expected_len} weights, got {len(weights)}."
         )
     return tuple(float(x) for x in weights)
+
+
+def _parse_steps(value: str | None) -> list[float]:
+    if not value:
+        return []
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    return [float(item) for item in items]
+
+
+def _resolve_short_term_config(
+    args: argparse.Namespace,
+) -> tuple[str | None, list[float], list[float]]:
+    short_term_source = getattr(args, "short_term_source", None)
+    legacy_short_term = bool(getattr(args, "short_term", False))
+    if legacy_short_term:
+        if short_term_source and short_term_source != "steps":
+            raise SystemExit(
+                "Use --short-term-source=steps or drop --short-term "
+                "to avoid conflicting short-term options."
+            )
+        short_term_source = short_term_source or "steps"
+    learning_steps = _parse_steps(getattr(args, "learning_steps", None))
+    relearning_steps = _parse_steps(getattr(args, "relearning_steps", None))
+    if short_term_source is None:
+        if learning_steps or relearning_steps:
+            raise SystemExit("Learning steps require --short-term-source=steps.")
+        return None, learning_steps, relearning_steps
+    if short_term_source == "scheduler" and (learning_steps or relearning_steps):
+        raise SystemExit(
+            "--short-term-source=scheduler cannot be combined with "
+            "--learning-steps or --relearning-steps."
+        )
+    return short_term_source, learning_steps, relearning_steps
+
+
+def _lstm_interval_mode(args: argparse.Namespace) -> str:
+    return getattr(args, "lstm_interval_mode", None) or "integer"
+
+
+def _lstm_min_interval(args: argparse.Namespace) -> float:
+    value = getattr(args, "lstm_min_interval", None)
+    return 1.0 if value is None else float(value)
 
 
 ENVIRONMENT_FACTORIES = {
@@ -104,6 +148,8 @@ SCHEDULER_FACTORIES = {
         user_id=args.user_id or 1,
         benchmark_root=args.srs_benchmark_root,
         desired_retention=args.desired_retention,
+        interval_mode=_lstm_interval_mode(args),
+        min_interval=_lstm_min_interval(args),
     ),
     "fixed": lambda args: FixedIntervalScheduler(
         interval=normalize_fixed_interval(getattr(args, "fixed_interval", None))
@@ -151,6 +197,36 @@ def main() -> None:
         "--fuzz",
         action="store_true",
         help="Apply scheduler interval fuzz (Anki-style).",
+    )
+    parser.add_argument(
+        "--short-term",
+        action="store_true",
+        help="(Deprecated) Alias for --short-term-source=steps.",
+    )
+    parser.add_argument(
+        "--short-term-source",
+        choices=["steps", "scheduler"],
+        default=None,
+        help=(
+            "Short-term scheduling source: steps (Anki-style learning steps) "
+            "or scheduler (LSTM-only short-term intervals)."
+        ),
+    )
+    parser.add_argument(
+        "--learning-steps",
+        default=None,
+        help="Comma-separated learning steps (minutes) for short-term steps mode.",
+    )
+    parser.add_argument(
+        "--relearning-steps",
+        default=None,
+        help="Comma-separated relearning steps (minutes) for short-term steps mode.",
+    )
+    parser.add_argument(
+        "--short-term-threshold",
+        type=float,
+        default=0.5,
+        help="Short-term threshold (days) for LSTM interval conversion.",
     )
     parser.add_argument(
         "--engine",
@@ -273,6 +349,20 @@ def main() -> None:
     args.scheduler = scheduler_name
     args.fixed_interval = fixed_interval
 
+    short_term_source, learning_steps, relearning_steps = _resolve_short_term_config(
+        args
+    )
+    args.short_term_source = short_term_source
+    args.short_term = bool(short_term_source)
+
+    if short_term_source in {"steps", "scheduler"} and args.engine != "event":
+        raise SystemExit("Short-term scheduling requires --engine event.")
+    if short_term_source == "scheduler":
+        if args.scheduler != "lstm":
+            raise SystemExit("--short-term-source=scheduler requires --sched lstm.")
+        args.lstm_interval_mode = "float"
+        args.lstm_min_interval = 0.0
+
     priority_fn = (
         review_first_priority if args.priority == "review-first" else new_first_priority
     )
@@ -280,6 +370,22 @@ def main() -> None:
     rng = random.Random(args.seed)
     env = ENVIRONMENT_FACTORIES[args.env](args)
     agent = SCHEDULER_FACTORIES[args.scheduler](args)
+    if short_term_source == "steps":
+        agent = ShortTermScheduler(
+            agent,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+            threshold_days=args.short_term_threshold,
+            allow_short_term_interval=False,
+        )
+    elif short_term_source == "scheduler":
+        agent = ShortTermScheduler(
+            agent,
+            learning_steps=[],
+            relearning_steps=[],
+            threshold_days=args.short_term_threshold,
+            allow_short_term_interval=True,
+        )
     cost_limit = (
         args.cost_limit_minutes * 60.0 if args.cost_limit_minutes is not None else None
     )
@@ -361,9 +467,7 @@ def plot_simulation(stats) -> None:
     ax[0].legend()
     ax[0].set_title("Workload")
 
-    valid_retentions = [
-        r for r, cnt in zip(stats.daily_retention, stats.daily_reviews) if cnt > 0
-    ]
+    valid_retentions = [r for r in stats.daily_retention if not math.isnan(r)]
     mean_ret = (
         sum(valid_retentions) / len(valid_retentions) if valid_retentions else 0.0
     )
@@ -394,12 +498,21 @@ def plot_simulation(stats) -> None:
     event_y: list[int] = []
     event_colors: list[str] = []
     per_day_counts: dict[int, int] = {}
+    phase_colors = {
+        "new": "tab:blue",
+        "learning": "tab:orange",
+        "review": "tab:green",
+        "relearning": "tab:red",
+    }
     for event in stats.events:
         y = per_day_counts.get(event.day, 0)
         per_day_counts[event.day] = y + 1
         event_x.append(event.day)
         event_y.append(y)
-        event_colors.append("tab:blue" if event.action == Action.LEARN else "tab:green")
+        phase = getattr(event, "phase", None) or (
+            "new" if event.action == Action.LEARN else "review"
+        )
+        event_colors.append(phase_colors.get(phase, "tab:gray"))
     max_events = max(per_day_counts.values()) if per_day_counts else 0
 
     ax[3].scatter(event_x, event_y, c=event_colors, s=8)
@@ -414,7 +527,16 @@ def plot_simulation(stats) -> None:
             marker="o",
             color="w",
             label="New",
-            markerfacecolor="tab:blue",
+            markerfacecolor=phase_colors["new"],
+            markersize=6,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            label="Learning",
+            markerfacecolor=phase_colors["learning"],
             markersize=6,
         ),
         Line2D(
@@ -423,7 +545,16 @@ def plot_simulation(stats) -> None:
             marker="o",
             color="w",
             label="Review",
-            markerfacecolor="tab:green",
+            markerfacecolor=phase_colors["review"],
+            markersize=6,
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            label="Relearning",
+            markerfacecolor=phase_colors["relearning"],
             markersize=6,
         ),
     ]
@@ -454,6 +585,11 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     parts = [f"env={env_name}", f"sched={args.scheduler}"]
     if getattr(args, "fuzz", False):
         parts.append("fuzz=1")
+    short_term_source = getattr(args, "short_term_source", None)
+    if getattr(args, "short_term", False) and short_term_source is None:
+        short_term_source = "steps"
+    if short_term_source:
+        parts.append(f"st={short_term_source}")
     if fixed_interval is not None:
         parts.append(f"ivl={format_float(fixed_interval)}")
     if args.sspmmc_policy:
@@ -492,6 +628,11 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "fixed_interval": fixed_interval,
         "seed": args.seed,
         "fuzz": bool(getattr(args, "fuzz", False)),
+        "short_term": bool(short_term_source),
+        "short_term_source": short_term_source,
+        "learning_steps": _parse_steps(getattr(args, "learning_steps", None)),
+        "relearning_steps": _parse_steps(getattr(args, "relearning_steps", None)),
+        "short_term_threshold": getattr(args, "short_term_threshold", None),
     }
     with filename.open("w", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "meta", "data": meta}) + "\n")
