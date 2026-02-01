@@ -91,7 +91,7 @@ class Event:
             "retrievability": self.retrievability,
             "cost": self.cost,
             "interval": _format_interval_days(self.interval),
-            "due": self.due,
+            "due": _format_due(self.due),
             "last_review": self.last_review,
             "elapsed": _format_interval_days(self.elapsed),
         }
@@ -691,3 +691,12 @@ def _format_interval_days(value: float | None) -> str | None:
 def _format_unit(value: float, unit: str) -> str:
     text = f"{value:.2f}".rstrip("0").rstrip(".")
     return f"{text}{unit}"
+
+
+def _format_due(value: float | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 5)
+    except (TypeError, ValueError):
+        return None
