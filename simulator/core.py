@@ -91,6 +91,7 @@ class Event:
             "retrievability": self.retrievability,
             "cost": self.cost,
             "interval": self.interval,
+            "interval_human": _format_interval_days(self.interval),
             "due": self.due,
             "last_review": self.last_review,
             "elapsed": self.elapsed,
@@ -665,3 +666,29 @@ def _event_phase(state: Any, default: str) -> str:
     if phase in {"learning", "relearning"}:
         return phase
     return default
+
+
+def _format_interval_days(value: float | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        days = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(days):
+        return None
+    seconds = days * 86_400.0
+    if abs(seconds) < 60.0:
+        return _format_unit(seconds, "s")
+    minutes = seconds / 60.0
+    if abs(minutes) < 60.0:
+        return _format_unit(minutes, "m")
+    hours = minutes / 60.0
+    if abs(hours) < 24.0:
+        return _format_unit(hours, "h")
+    return _format_unit(days, "d")
+
+
+def _format_unit(value: float, unit: str) -> str:
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
+    return f"{text}{unit}"
