@@ -126,8 +126,7 @@ class ShortTermScheduler(Scheduler):
                 return interval, next_state
             base_view = _with_scheduler_state(card_view, state.base_state)
             interval, base_state = self.base.schedule(base_view, rating, elapsed, day)
-            phase = "relearning" if rating == 1 else "learning"
-            return self._convert_interval(interval, base_state, phase=phase)
+            return self._convert_interval(interval, base_state, phase=state.phase)
 
         if rating == 1 and not self.relearning_steps.is_empty():
             interval, next_state = self._schedule_learning(
@@ -140,7 +139,7 @@ class ShortTermScheduler(Scheduler):
             if interval is not None:
                 return interval, next_state
         interval, state = self.base.schedule(card_view, rating, elapsed, day)
-        phase = "relearning" if rating == 1 else "learning"
+        phase = "relearning" if rating == 1 else None
         return self._convert_interval(interval, state, phase=phase)
 
     def review_priority(self, card_view: CardView, day: float):
