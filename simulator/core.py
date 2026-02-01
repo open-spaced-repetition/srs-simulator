@@ -90,12 +90,10 @@ class Event:
             "rating": self.rating,
             "retrievability": self.retrievability,
             "cost": self.cost,
-            "interval": self.interval,
-            "interval_human": _format_interval_days(self.interval),
+            "interval": _format_interval_days(self.interval),
             "due": self.due,
             "last_review": self.last_review,
-            "elapsed": self.elapsed,
-            "elapsed_human": _format_interval_days(self.elapsed),
+            "elapsed": _format_interval_days(self.elapsed),
         }
 
 
