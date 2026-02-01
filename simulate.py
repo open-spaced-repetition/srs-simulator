@@ -81,8 +81,15 @@ def _resolve_short_term_config(
                 "to avoid conflicting short-term options."
             )
         short_term_source = short_term_source or "steps"
-    learning_steps = _parse_steps(getattr(args, "learning_steps", None))
-    relearning_steps = _parse_steps(getattr(args, "relearning_steps", None))
+    learning_raw = getattr(args, "learning_steps", None)
+    relearning_raw = getattr(args, "relearning_steps", None)
+    if short_term_source == "steps":
+        if learning_raw is None:
+            learning_raw = "1,10"
+        if relearning_raw is None:
+            relearning_raw = "10"
+    learning_steps = _parse_steps(learning_raw)
+    relearning_steps = _parse_steps(relearning_raw)
     if short_term_source is None:
         if learning_steps or relearning_steps:
             raise SystemExit("Learning steps require --short-term-source=steps.")
