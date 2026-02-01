@@ -10,13 +10,13 @@ from simulator.core import CardView, CostModel
 class StateRatingCosts:
     learning: Sequence[float]
     review: Sequence[float]
-    # relearning: Sequence[float]
+    relearning: Sequence[float]
 
 
 DEFAULT_STATE_RATING_COSTS = StateRatingCosts(
     learning=[33.79, 24.3, 13.68, 6.5],
     review=[23.0, 11.68, 7.33, 5.6],
-    # relearning=[16.44, 15.25, 12.32, 8.03],
+    relearning=[16.44, 15.25, 12.32, 8.03],
 )
 
 
@@ -50,10 +50,13 @@ class StatefulCostModel(CostModel):
         day: float,
     ) -> float:
         latency = self.base * (1.0 + self.penalty * max(0.0, 1.0 - retrievability))
-        review = self._lookup(self.state_costs.review, rating)
-        # relearning = (
-        #     self._lookup(self.state_costs.relearning, rating) if rating == 1 else 0.0
-        # )
+        phase = getattr(card_view.scheduler_state, "phase", None)
+        if phase == "learning":
+            review = self._lookup(self.state_costs.learning, rating)
+        elif phase == "relearning":
+            review = self._lookup(self.state_costs.relearning, rating)
+        else:
+            review = self._lookup(self.state_costs.review, rating)
         return latency + review
 
     @staticmethod
