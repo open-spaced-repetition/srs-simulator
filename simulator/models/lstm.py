@@ -18,11 +18,13 @@ def _default_benchmark_root() -> Path:
     return _REPO_ROOT.parent / "srs-benchmark"
 
 
-def _resolve_benchmark_weights(user_id: int, benchmark_root: Path) -> Path | None:
+def _resolve_benchmark_weights(
+    user_id: int, benchmark_root: Path, *, short_term: bool = False
+) -> Path | None:
     weights_dir = benchmark_root / "weights"
     if not weights_dir.exists():
         return None
-    preferred_dir = weights_dir / "LSTM"
+    preferred_dir = weights_dir / ("LSTM-short-secs" if short_term else "LSTM")
     candidate = preferred_dir / f"{user_id}.pth"
     if candidate.exists():
         return candidate
@@ -30,6 +32,10 @@ def _resolve_benchmark_weights(user_id: int, benchmark_root: Path) -> Path | Non
         if not sub_dir.is_dir():
             continue
         if not sub_dir.name.startswith("LSTM"):
+            continue
+        if short_term and "short-secs" not in sub_dir.name:
+            continue
+        if not short_term and "short-secs" in sub_dir.name:
             continue
         fallback_candidate = sub_dir / f"{user_id}.pth"
         if fallback_candidate.exists():
@@ -294,6 +300,7 @@ class LSTMModel(MemoryModel):
         weights_path: str | Path | None = None,
         user_id: int | None = None,
         benchmark_root: str | Path | None = None,
+        short_term: bool = False,
         use_duration_feature: bool = False,
         default_duration_ms: float = 2500.0,
         interval_scale: float = 1.0,
@@ -333,7 +340,11 @@ class LSTMModel(MemoryModel):
                 if benchmark_root is not None
                 else _default_benchmark_root()
             )
-            resolved_path = _resolve_benchmark_weights(int(user_id), root)
+            resolved_path = _resolve_benchmark_weights(
+                int(user_id),
+                root,
+                short_term=bool(short_term),
+            )
             if resolved_path is None:
                 weights_dir = root / "weights"
                 raise FileNotFoundError(
