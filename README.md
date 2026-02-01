@@ -72,7 +72,19 @@ uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6,s
 uv run experiments/retention_sweep/build_pareto.py --env fsrs6,lstm --sched fsrs6,sspmmc
 ```
 
-By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
+By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`, and Pareto plots are saved under `experiments/retention_sweep/plots/user_<id>`. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs or short-term scheduling (`--short-term-source steps` for Anki-style learning steps, or `--short-term-source scheduler` for LSTM-only short-term intervals).
+
+Short-term scheduling (event engine only):
+
+```bash
+uv run simulate.py --engine event --env lstm --sched lstm --short-term-source steps --learning-steps 1,10 --relearning-steps 10
+```
+
+Scheduler-driven short-term (LSTM only, no steps):
+
+```bash
+uv run simulate.py --engine event --env lstm --sched lstm --short-term-source scheduler
+```
 
 Additional retention sweep helpers:
 

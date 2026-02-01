@@ -366,7 +366,7 @@ def simulate_multiuser(
         if progress_bar is not None:
             progress_bar.close()
 
-    daily_retention = torch.zeros_like(daily_cost)
+    daily_retention = torch.full_like(daily_cost, float("nan"))
     review_mask = daily_reviews > 0
     daily_retention[review_mask] = 1.0 - (
         daily_lapses[review_mask].to(env_dtype)

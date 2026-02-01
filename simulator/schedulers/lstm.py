@@ -37,16 +37,24 @@ class LSTMScheduler(Scheduler):
         min_interval: float = 1.0,
         max_interval: float = 3650.0,
         search_steps: int = 24,
+        interval_mode: str = "integer",
         device: str | None = None,
     ) -> None:
         if desired_retention <= 0.0 or desired_retention >= 1.0:
             raise ValueError("desired_retention must be in (0, 1).")
         self.desired_retention = float(desired_retention)
+        if interval_mode not in {"integer", "float"}:
+            raise ValueError("interval_mode must be 'integer' or 'float'.")
+        self.interval_mode = interval_mode
         self.min_interval = float(min_interval)
         self.max_interval = float(max_interval)
         self.search_steps = int(search_steps)
-        if self.min_interval <= 0.0:
-            raise ValueError("min_interval must be > 0.")
+        if self.interval_mode == "integer":
+            if self.min_interval <= 0.0:
+                raise ValueError("min_interval must be > 0.")
+        else:
+            if self.min_interval < 0.0:
+                raise ValueError("min_interval must be >= 0.")
         if self.max_interval < self.min_interval:
             raise ValueError("max_interval must be >= min_interval.")
 
@@ -81,6 +89,8 @@ class LSTMScheduler(Scheduler):
         if not curves:
             return self.min_interval
         target = self.desired_retention
+        if self.interval_mode != "integer":
+            return self._target_interval_float(curves, view, target)
         min_int = max(1, int(math.ceil(self.min_interval)))
         max_int = max(min_int, int(math.floor(self.max_interval)))
         low = min_int
@@ -111,6 +121,44 @@ class LSTMScheduler(Scheduler):
             else:
                 high = mid
         return float(max(min_int, min(high, max_int)))
+
+    def _target_interval_float(
+        self,
+        curves: dict[str, list[float]],
+        view: CardView,
+        target: float,
+    ) -> float:
+        low = max(0.0, self.min_interval)
+        high = max(low, float(view.interval or low))
+        if high <= 0.0:
+            high = max(self.max_interval, 1e-6) if self.max_interval > 0 else 1e-6
+
+        r_low = self.model.predict_retention_from_curves(curves, low)
+        if r_low <= target:
+            return low
+
+        t0 = self._effective_initial_guess(curves, target)
+        if t0 is not None and math.isfinite(t0):
+            high = max(high, t0)
+        high = min(self.max_interval, high)
+
+        while (
+            high < self.max_interval
+            and self.model.predict_retention_from_curves(curves, high) > target
+        ):
+            high = min(self.max_interval, max(high * 2.0, high + 1e-6))
+
+        for _ in range(self.search_steps):
+            if low >= high:
+                break
+            mid = (low + high) / 2.0
+            pred = self.model.predict_retention_from_curves(curves, mid)
+            if pred > target:
+                low = mid
+            else:
+                high = mid
+
+        return max(self.min_interval, min(high, self.max_interval))
 
     def _retention_and_derivative(
         self, curves: dict[str, list[float]], days: float
@@ -185,6 +233,11 @@ class LSTMVectorizedSchedulerOps:
         dtype: "torch.dtype",
     ) -> None:
         import torch
+
+        if scheduler.interval_mode != "integer":
+            raise ValueError(
+                "Vectorized LSTM scheduler requires interval_mode='integer'."
+            )
 
         self._torch = torch
         self.device = device

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 FUZZ_RANGES: list[tuple[float, float, float]] = [
     (2.5, 7.0, 0.15),
@@ -57,6 +57,16 @@ def with_review_fuzz(
         return max(minimum, min(maximum, _round_half_up(interval)))
     lower, upper = constrained_fuzz_bounds(interval, minimum, maximum)
     return int(math.floor(lower + fuzz_factor * (1 + upper - lower)))
+
+
+def with_learning_fuzz(rng: Callable[[], float], secs: float) -> float:
+    """Apply Anki-style learning fuzz: up to +25% or +5 minutes, whichever is smaller."""
+    if secs <= 0:
+        return 0.0
+    extra = min(secs * 0.25, 300.0)
+    if extra <= 0:
+        return secs
+    return secs + rng() * extra
 
 
 def resolve_max_interval(
