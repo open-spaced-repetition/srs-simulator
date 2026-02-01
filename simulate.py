@@ -47,7 +47,7 @@ def _resolve_benchmark_weights(
     args, environment: str, expected_len: int
 ) -> tuple[float, ...] | None:
     overrides = parse_result_overrides(args.benchmark_result)
-    short_term = bool(getattr(args, "short_term_source", None) or args.short_term)
+    short_term = bool(getattr(args, "short_term_source", None))
     weights = load_benchmark_weights(
         repo_root=Path(__file__).resolve().parent,
         benchmark_root=args.srs_benchmark_root,
@@ -75,14 +75,6 @@ def _resolve_short_term_config(
     args: argparse.Namespace,
 ) -> tuple[str | None, list[float], list[float]]:
     short_term_source = getattr(args, "short_term_source", None)
-    legacy_short_term = bool(getattr(args, "short_term", False))
-    if legacy_short_term:
-        if short_term_source and short_term_source != "steps":
-            raise SystemExit(
-                "Use --short-term-source=steps or drop --short-term "
-                "to avoid conflicting short-term options."
-            )
-        short_term_source = short_term_source or "steps"
     learning_raw = getattr(args, "learning_steps", None)
     relearning_raw = getattr(args, "relearning_steps", None)
     if short_term_source == "steps":
@@ -117,7 +109,7 @@ ENVIRONMENT_FACTORIES = {
     "lstm": lambda args: LSTMModel(
         user_id=args.user_id or 1,
         benchmark_root=args.srs_benchmark_root,
-        short_term=bool(getattr(args, "short_term_source", None) or args.short_term),
+        short_term=bool(getattr(args, "short_term_source", None)),
     ),
     "fsrs6": lambda args: FSRS6Model(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21)
@@ -160,7 +152,7 @@ SCHEDULER_FACTORIES = {
         desired_retention=args.desired_retention,
         interval_mode=_lstm_interval_mode(args),
         min_interval=_lstm_min_interval(args),
-        short_term=bool(getattr(args, "short_term_source", None) or args.short_term),
+        short_term=bool(getattr(args, "short_term_source", None)),
     ),
     "fixed": lambda args: FixedIntervalScheduler(
         interval=normalize_fixed_interval(getattr(args, "fixed_interval", None))
@@ -208,11 +200,6 @@ def main() -> None:
         "--fuzz",
         action="store_true",
         help="Apply scheduler interval fuzz (Anki-style).",
-    )
-    parser.add_argument(
-        "--short-term",
-        action="store_true",
-        help="(Deprecated) Alias for --short-term-source=steps.",
     )
     parser.add_argument(
         "--short-term-source",
@@ -610,8 +597,6 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     if getattr(args, "fuzz", False):
         parts.append("fuzz=1")
     short_term_source = getattr(args, "short_term_source", None)
-    if getattr(args, "short_term", False) and short_term_source is None:
-        short_term_source = "steps"
     if short_term_source:
         parts.append(f"st={short_term_source}")
     if fixed_interval is not None:
