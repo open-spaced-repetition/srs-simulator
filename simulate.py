@@ -404,6 +404,8 @@ def main() -> None:
         priority_fn=priority_fn,
         first_rating_prob=usage["first_rating_prob"],
         review_rating_prob=usage["review_rating_prob"],
+        learning_rating_prob=usage["learning_rating_prob"],
+        relearning_rating_prob=usage["relearning_rating_prob"],
     )
     cost_model = StatefulCostModel(
         state_costs=StateRatingCosts(
