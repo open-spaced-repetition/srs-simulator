@@ -67,15 +67,32 @@ def load_button_usage_config(
             if entry_user_id != target_user_id:
                 continue
 
+            review_rating_prob = _require_list(
+                entry, "review_rating_prob", expected_len=3
+            )
+            learning_rating_prob = entry.get("learning_rating_prob")
+            if learning_rating_prob is None:
+                learning_rating_prob = review_rating_prob
+            else:
+                learning_rating_prob = _require_list(
+                    entry, "learning_rating_prob", expected_len=3
+                )
+            relearning_rating_prob = entry.get("relearning_rating_prob")
+            if relearning_rating_prob is None:
+                relearning_rating_prob = review_rating_prob
+            else:
+                relearning_rating_prob = _require_list(
+                    entry, "relearning_rating_prob", expected_len=3
+                )
             config = {
                 "learn_costs": _require_list(entry, "learn_costs", expected_len=4),
                 "review_costs": _require_list(entry, "review_costs", expected_len=4),
                 "first_rating_prob": _require_list(
                     entry, "first_rating_prob", expected_len=4
                 ),
-                "review_rating_prob": _require_list(
-                    entry, "review_rating_prob", expected_len=3
-                ),
+                "review_rating_prob": review_rating_prob,
+                "learning_rating_prob": learning_rating_prob,
+                "relearning_rating_prob": relearning_rating_prob,
                 "first_rating_offsets": _require_list(
                     entry, "first_rating_offset", expected_len=4
                 ),
@@ -143,6 +160,22 @@ def normalize_button_usage(
         ),
         "review_rating_prob",
     )
+    learning_rating_prob = _normalize_prob(
+        _coerce_list(
+            source.get("learning_rating_prob", review_rating_prob),
+            expected_len=3,
+            name="learning_rating_prob",
+        ),
+        "learning_rating_prob",
+    )
+    relearning_rating_prob = _normalize_prob(
+        _coerce_list(
+            source.get("relearning_rating_prob", review_rating_prob),
+            expected_len=3,
+            name="relearning_rating_prob",
+        ),
+        "relearning_rating_prob",
+    )
     first_rating_offsets = _coerce_list(
         source.get("first_rating_offsets", DEFAULT_FIRST_RATING_OFFSETS),
         expected_len=4,
@@ -165,6 +198,8 @@ def normalize_button_usage(
         "review_costs": review_costs,
         "first_rating_prob": first_rating_prob,
         "review_rating_prob": review_rating_prob,
+        "learning_rating_prob": learning_rating_prob,
+        "relearning_rating_prob": relearning_rating_prob,
         "first_rating_offsets": first_rating_offsets,
         "first_session_lens": first_session_lens,
         "forget_rating_offset": forget_rating_offset,

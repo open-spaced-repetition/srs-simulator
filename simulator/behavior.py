@@ -58,12 +58,24 @@ class StochasticBehavior(BehaviorModel):
         priority_fn: Optional[Callable[[CardView], Sequence[float]]] = None,
         first_rating_prob: Optional[Sequence[float]] = None,
         review_rating_prob: Optional[Sequence[float]] = None,
+        learning_rating_prob: Optional[Sequence[float]] = None,
+        relearning_rating_prob: Optional[Sequence[float]] = None,
     ) -> None:
         self.attendance_prob = attendance_prob
         self.lazy_good_bias = lazy_good_bias
         if review_rating_prob is not None:
             success_distribution = RatingDistribution(list(review_rating_prob))
         self.success_dist = success_distribution or RatingDistribution()
+        if learning_rating_prob is not None:
+            self.learning_success_dist = RatingDistribution(list(learning_rating_prob))
+        else:
+            self.learning_success_dist = self.success_dist
+        if relearning_rating_prob is not None:
+            self.relearning_success_dist = RatingDistribution(
+                list(relearning_rating_prob)
+            )
+        else:
+            self.relearning_success_dist = self.success_dist
         self.first_rating_prob = _normalize_weights(
             first_rating_prob or DEFAULT_FIRST_RATING_PROB,
             expected_len=4,
@@ -176,7 +188,7 @@ class StochasticBehavior(BehaviorModel):
             return 1
         if rng() < self.lazy_good_bias:
             return 3
-        return self._sample_success_rating(rng)
+        return self._sample_success_rating(rng, self._success_dist_for_view(card_view))
 
     def record_review(self, cost: float) -> None:
         self._reviews_today += 1
@@ -190,5 +202,15 @@ class StochasticBehavior(BehaviorModel):
         ):
             self._stop_for_day = True
 
-    def _sample_success_rating(self, rng: Callable[[], float]) -> int:
-        return _sample_weighted(rng, self.success_dist.success_weights, offset=2)
+    def _success_dist_for_view(self, card_view: CardView) -> RatingDistribution:
+        phase = getattr(card_view.scheduler_state, "phase", None)
+        if phase == "learning":
+            return self.learning_success_dist
+        if phase == "relearning":
+            return self.relearning_success_dist
+        return self.success_dist
+
+    def _sample_success_rating(
+        self, rng: Callable[[], float], dist: RatingDistribution
+    ) -> int:
+        return _sample_weighted(rng, dist.success_weights, offset=2)
