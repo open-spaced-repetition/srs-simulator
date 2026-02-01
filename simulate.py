@@ -47,6 +47,7 @@ def _resolve_benchmark_weights(
     args, environment: str, expected_len: int
 ) -> tuple[float, ...] | None:
     overrides = parse_result_overrides(args.benchmark_result)
+    short_term = bool(getattr(args, "short_term_source", None) or args.short_term)
     weights = load_benchmark_weights(
         repo_root=Path(__file__).resolve().parent,
         benchmark_root=args.srs_benchmark_root,
@@ -54,6 +55,7 @@ def _resolve_benchmark_weights(
         user_id=args.user_id or 1,
         partition_key=args.benchmark_partition,
         overrides=overrides,
+        short_term=short_term,
     )
     if len(weights) != expected_len:
         raise ValueError(
@@ -115,6 +117,7 @@ ENVIRONMENT_FACTORIES = {
     "lstm": lambda args: LSTMModel(
         user_id=args.user_id or 1,
         benchmark_root=args.srs_benchmark_root,
+        short_term=bool(getattr(args, "short_term_source", None) or args.short_term),
     ),
     "fsrs6": lambda args: FSRS6Model(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21)
@@ -157,6 +160,7 @@ SCHEDULER_FACTORIES = {
         desired_retention=args.desired_retention,
         interval_mode=_lstm_interval_mode(args),
         min_interval=_lstm_min_interval(args),
+        short_term=bool(getattr(args, "short_term_source", None) or args.short_term),
     ),
     "fixed": lambda args: FixedIntervalScheduler(
         interval=normalize_fixed_interval(getattr(args, "fixed_interval", None))

@@ -11,6 +11,13 @@ DEFAULT_RESULT_BASE = {
     "hlr": "HLR",
 }
 
+SHORT_TERM_RESULT_BASE = {
+    "dash": "DASH-short-secs",
+    "fsrs3": "FSRSv3-short-secs",
+    "fsrs6": "FSRS-6-short-secs-recency",
+    "hlr": "HLR-short-secs",
+}
+
 
 def parse_result_overrides(raw: str | None) -> dict[str, str]:
     if not raw:
@@ -81,10 +88,15 @@ def load_benchmark_weights(
     user_id: int,
     partition_key: str = "0",
     overrides: dict[str, str] | None = None,
+    short_term: bool = False,
 ) -> list[float]:
     env_key = environment.lower()
     overrides = overrides or {}
-    base_name = overrides.get(env_key) or DEFAULT_RESULT_BASE.get(env_key)
+    base_name = overrides.get(env_key)
+    if not base_name and short_term:
+        base_name = SHORT_TERM_RESULT_BASE.get(env_key)
+    if not base_name:
+        base_name = DEFAULT_RESULT_BASE.get(env_key)
     if not base_name:
         raise ValueError(
             f"No default benchmark result base name for environment '{environment}'. "
@@ -103,6 +115,7 @@ def load_benchmark_weights(
 
 __all__ = [
     "DEFAULT_RESULT_BASE",
+    "SHORT_TERM_RESULT_BASE",
     "load_benchmark_weights",
     "parse_result_overrides",
     "resolve_benchmark_root",
