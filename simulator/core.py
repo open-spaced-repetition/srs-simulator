@@ -95,6 +95,7 @@ class Event:
             "due": self.due,
             "last_review": self.last_review,
             "elapsed": self.elapsed,
+            "elapsed_human": _format_interval_days(self.elapsed),
         }
 
 
