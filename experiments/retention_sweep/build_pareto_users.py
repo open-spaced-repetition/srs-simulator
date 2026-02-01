@@ -32,6 +32,18 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Comma-separated schedulers passed to build_pareto.py.",
     )
     parser.add_argument(
+        "--short-term",
+        choices=["on", "off", "any"],
+        default="any",
+        help="Short-term filter passed to build_pareto.py.",
+    )
+    parser.add_argument(
+        "--short-term-source",
+        choices=["steps", "sched", "any"],
+        default="any",
+        help="Short-term source filter passed to build_pareto.py.",
+    )
+    parser.add_argument(
         "--uv-cmd",
         default="uv",
         help="Command to invoke uv (override if needed).",
@@ -76,6 +88,10 @@ def main() -> int:
             "--user-id",
             str(user_id),
         ]
+        if args.short_term != "any":
+            cmd.extend(["--short-term", args.short_term])
+        if args.short_term_source != "any":
+            cmd.extend(["--short-term-source", args.short_term_source])
         cmd.extend(extra_args)
         print(f"[{user_id}] {' '.join(cmd)}")
         if not args.dry_run:

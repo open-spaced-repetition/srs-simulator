@@ -72,6 +72,18 @@ def parse_args() -> argparse.Namespace:
         help="Filter logs by fuzz flag (ignored when --compare-fuzz is set).",
     )
     parser.add_argument(
+        "--short-term",
+        choices=["on", "off", "any"],
+        default="any",
+        help="Filter logs by short-term flag (ignored when --short-term-source is set).",
+    )
+    parser.add_argument(
+        "--short-term-source",
+        choices=["steps", "sched", "any"],
+        default="any",
+        help="Filter logs by short-term source (steps/sched).",
+    )
+    parser.add_argument(
         "--compare-fuzz",
         action="store_true",
         help="Plot fuzz on/off as separate series when logs include meta.fuzz.",
@@ -204,6 +216,8 @@ def _iter_log_entries(
     max_retention: float,
     base_dirs: Sequence[Path],
     fuzz_filter: Optional[bool],
+    short_term_filter: Optional[bool],
+    short_term_source_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
     for path in sorted(log_dir.glob("*.jsonl")):
@@ -221,6 +235,19 @@ def _iter_log_entries(
         fuzz_value = _normalize_bool(meta.get("fuzz"))
         if fuzz_filter is not None:
             if fuzz_value is None or fuzz_value != fuzz_filter:
+                continue
+
+        short_term_value = _normalize_bool(meta.get("short_term"))
+        if short_term_filter is True:
+            if short_term_value is not True:
+                continue
+        elif short_term_filter is False:
+            if short_term_value is True:
+                continue
+
+        if short_term_source_filter is not None:
+            source_value = meta.get("short_term_source")
+            if source_value != short_term_source_filter:
                 continue
 
         fixed_interval = None
@@ -293,6 +320,8 @@ def _build_results(
     max_retention: float,
     base_dirs: Sequence[Path],
     fuzz_filter: Optional[bool],
+    short_term_filter: Optional[bool],
+    short_term_source_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
     title_prefix: str | None = None,
     dedupe: bool = True,
@@ -308,6 +337,8 @@ def _build_results(
         max_retention,
         base_dirs,
         fuzz_filter,
+        short_term_filter,
+        short_term_source_filter,
         fixed_interval_filter,
     ):
         if title_prefix:
@@ -633,6 +664,13 @@ def main() -> None:
     fuzz_filter = None
     if not args.compare_fuzz and args.fuzz != "any":
         fuzz_filter = args.fuzz == "on"
+    short_term_filter = None
+    if args.short_term != "any":
+        short_term_filter = args.short_term == "on"
+    short_term_source_filter = None
+    if args.short_term_source != "any":
+        short_term_source_filter = args.short_term_source
+        short_term_filter = True
     fuzz_series = [None]
     if args.compare_fuzz:
         fuzz_series = [False, True]
@@ -648,6 +686,8 @@ def main() -> None:
                         args.end_retention,
                         base_dirs,
                         fuzz_value if args.compare_fuzz else fuzz_filter,
+                        short_term_filter,
+                        short_term_source_filter,
                         title_prefix=None,
                         dedupe_fuzz=args.compare_fuzz,
                     )
@@ -683,6 +723,8 @@ def main() -> None:
                     args.end_retention,
                     base_dirs,
                     fuzz_value if args.compare_fuzz else fuzz_filter,
+                    short_term_filter,
+                    short_term_source_filter,
                     fixed_interval_filter=interval_filter,
                     title_prefix=None,
                     dedupe_fuzz=args.compare_fuzz,
@@ -723,6 +765,8 @@ def main() -> None:
                     args.end_retention,
                     base_dirs,
                     fuzz_value if args.compare_fuzz else fuzz_filter,
+                    short_term_filter,
+                    short_term_source_filter,
                     title_prefix=None,
                     dedupe=False,
                 )
