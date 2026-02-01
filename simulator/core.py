@@ -92,7 +92,7 @@ class Event:
             "cost": self.cost,
             "interval": _format_interval_days(self.interval),
             "due": _format_due(self.due),
-            "last_review": self.last_review,
+            "last_review": _format_due(self.last_review),
             "elapsed": _format_interval_days(self.elapsed),
         }
 
