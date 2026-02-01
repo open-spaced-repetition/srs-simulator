@@ -176,11 +176,6 @@ def parse_args() -> argparse.Namespace:
         help="Apply scheduler interval fuzz (Anki-style).",
     )
     parser.add_argument(
-        "--short-term",
-        action="store_true",
-        help="(Deprecated) Alias for --short-term-source=steps.",
-    )
-    parser.add_argument(
         "--short-term-source",
         choices=["steps", "sched"],
         default=None,
