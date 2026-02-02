@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import os
+import sys
 import torch
 from pathlib import Path
 from typing import Sequence
@@ -69,6 +71,11 @@ class LSTMScheduler(Scheduler):
             interval_scale=interval_scale,
             device=device,
         )
+        self._debug_interval = bool(os.getenv("SRS_DEBUG_LSTM_INTERVAL"))
+        self._debug_interval_limit = int(
+            os.getenv("SRS_DEBUG_LSTM_INTERVAL_LIMIT", "50")
+        )
+        self._debug_interval_calls = 0
 
     def init_card(self, card_view: CardView, rating: int, day: float):
         curves = self._curves_with_event(card_view, rating, elapsed=0.0)
@@ -122,7 +129,20 @@ class LSTMScheduler(Scheduler):
                 low = mid + 1
             else:
                 high = mid
-        return float(max(min_int, min(high, max_int)))
+        result = float(max(min_int, min(high, max_int)))
+        if (
+            self._debug_interval
+            and self._debug_interval_calls < self._debug_interval_limit
+        ):
+            self._debug_interval_calls += 1
+            pred = self.model.predict_retention_from_curves(curves, result)
+            sys.stderr.write(
+                "[lstm interval] mode=integer card_id="
+                f"{view.id} reps={view.reps} target={target:.6f} "
+                f"min={min_int} max={max_int} low={low} high={high} "
+                f"result={result:.6f} pred={pred:.6f}\n"
+            )
+        return result
 
     def _target_interval_float(
         self,
@@ -160,7 +180,21 @@ class LSTMScheduler(Scheduler):
             else:
                 high = mid
 
-        return max(self.min_interval, min(high, self.max_interval))
+        result = max(self.min_interval, min(high, self.max_interval))
+        if (
+            self._debug_interval
+            and self._debug_interval_calls < self._debug_interval_limit
+        ):
+            self._debug_interval_calls += 1
+            pred = self.model.predict_retention_from_curves(curves, result)
+            sys.stderr.write(
+                "[lstm interval] mode=float card_id="
+                f"{view.id} reps={view.reps} target={target:.6f} "
+                f"min={self.min_interval:.6f} max={self.max_interval:.6f} "
+                f"low={low:.6f} high={high:.6f} result={result:.6f} "
+                f"pred={pred:.6f}\n"
+            )
+        return result
 
     def _retention_and_derivative(
         self, curves: dict[str, list[float]], days: float
