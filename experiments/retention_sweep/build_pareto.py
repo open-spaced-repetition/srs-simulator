@@ -612,6 +612,8 @@ def _plot_compare_frontier(
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
     if show_labels and texts:
+        import contextlib
+        import io
         import logging
         from matplotlib.patches import FancyArrowPatch
 
@@ -619,19 +621,23 @@ def _plot_compare_frontier(
         previous_level = adjust_logger.level
         adjust_logger.setLevel(logging.ERROR)
         try:
-            adjust_text(
-                texts,
-                x=avoid_x,
-                y=avoid_y,
-                target_x=label_points_x,
-                target_y=label_points_y,
-                expand=(1.02, 1.02),
-                force_static=(0.05, 0.05),
-                force_text=(0.1, 0.1),
-                force_pull=(0.06, 0.06),
-                max_move=(5, 5),
-                lim=200,
-            )
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                adjust_text(
+                    texts,
+                    x=avoid_x,
+                    y=avoid_y,
+                    target_x=label_points_x,
+                    target_y=label_points_y,
+                    expand=(1.02, 1.02),
+                    force_static=(0.05, 0.05),
+                    force_text=(0.1, 0.1),
+                    force_pull=(0.06, 0.06),
+                    max_move=(5, 5),
+                    lim=200,
+                )
         finally:
             adjust_logger.setLevel(previous_level)
         ax = plt.gca()
