@@ -802,15 +802,10 @@ def main() -> None:
 
     plot_dir.mkdir(parents=True, exist_ok=True)
     _setup_plot_style()
-    use_compare = run_sspmmc or len(series) != 1
-    output_name = (
-        "Pareto frontier env compare.png" if use_compare else "Pareto frontier.png"
-    )
-    title_base = "Pareto frontier comparison" if use_compare else "Pareto frontier"
     _plot_compare_frontier(
         series,
-        plot_dir / output_name,
-        title_base=title_base,
+        plot_dir / "Pareto frontier.png",
+        title_base="Pareto frontier",
         show_labels=not args.hide_labels,
     )
     print(f"Wrote {len(combined_results)} entries to {results_path}")
