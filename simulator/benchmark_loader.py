@@ -12,10 +12,10 @@ DEFAULT_RESULT_BASE = {
 }
 
 SHORT_TERM_RESULT_BASE = {
-    "dash": "DASH-short-secs",
-    "fsrs3": "FSRSv3-short-secs",
-    "fsrs6": "FSRS-6-short-secs-recency",
-    "hlr": "HLR-short-secs",
+    "dash": "DASH-short",
+    "fsrs3": "FSRSv3-short",
+    "fsrs6": "FSRS-6-short-recency",
+    "hlr": "HLR-short",
 }
 
 
