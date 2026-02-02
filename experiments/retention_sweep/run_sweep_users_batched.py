@@ -429,7 +429,7 @@ def _run_batch_core(
                             user_log_dir = log_root / f"user_{user_id}"
                             user_log_dir.mkdir(parents=True, exist_ok=True)
                             log_args = argparse.Namespace(
-                                engine="vectorized",
+                                engine="batched",
                                 days=args.days,
                                 deck=args.deck,
                                 learn_limit=args.learn_limit,
@@ -499,7 +499,7 @@ def _run_batch_core(
                             user_log_dir = log_root / f"user_{user_id}"
                             user_log_dir.mkdir(parents=True, exist_ok=True)
                             log_args = argparse.Namespace(
-                                engine="vectorized",
+                                engine="batched",
                                 days=args.days,
                                 deck=args.deck,
                                 learn_limit=args.learn_limit,
@@ -566,7 +566,7 @@ def _run_batch_core(
                         user_log_dir = log_root / f"user_{user_id}"
                         user_log_dir.mkdir(parents=True, exist_ok=True)
                         log_args = argparse.Namespace(
-                            engine="vectorized",
+                            engine="batched",
                             days=args.days,
                             deck=args.deck,
                             learn_limit=args.learn_limit,
@@ -627,7 +627,7 @@ def _run_batch_core(
                         user_log_dir = log_root / f"user_{user_id}"
                         user_log_dir.mkdir(parents=True, exist_ok=True)
                         log_args = argparse.Namespace(
-                            engine="vectorized",
+                            engine="batched",
                             days=args.days,
                             deck=args.deck,
                             learn_limit=args.learn_limit,
@@ -688,7 +688,7 @@ def _run_batch_core(
                         user_log_dir = log_root / f"user_{user_id}"
                         user_log_dir.mkdir(parents=True, exist_ok=True)
                         log_args = argparse.Namespace(
-                            engine="vectorized",
+                            engine="batched",
                             days=args.days,
                             deck=args.deck,
                             learn_limit=args.learn_limit,
