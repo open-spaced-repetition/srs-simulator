@@ -93,23 +93,27 @@ class ShortTermScheduler(Scheduler):
         self.allow_short_term_interval = bool(allow_short_term_interval)
 
     def init_card(self, card_view: CardView, rating: int, day: float):
+        base_interval, base_state = self.base.init_card(card_view, rating, day)
         if self.learning_steps.is_empty():
-            interval, state = self.base.init_card(card_view, rating, day)
-            return self._convert_interval(interval, state, phase="learning")
+            return self._convert_interval(base_interval, base_state, phase="learning")
         interval, state = self._schedule_learning(
             rating,
             phase="learning",
             steps=self.learning_steps,
             remaining=self.learning_steps.remaining_for_failed(),
+            base_state=base_state,
         )
         if interval is None:
-            interval, state = self.base.init_card(card_view, rating, day)
-            return self._convert_interval(interval, state, phase="learning")
+            return self._convert_interval(base_interval, base_state, phase="learning")
         return interval, state
 
     def schedule(self, card_view: CardView, rating: int, elapsed: float, day: float):
         state = card_view.scheduler_state
         if isinstance(state, ShortTermState):
+            base_view = _with_scheduler_state(card_view, state.base_state)
+            base_interval, base_state = self.base.schedule(
+                base_view, rating, elapsed, day
+            )
             steps = (
                 self.learning_steps
                 if state.phase == "learning"
@@ -120,24 +124,26 @@ class ShortTermScheduler(Scheduler):
                 phase=state.phase,
                 steps=steps,
                 remaining=state.remaining_steps,
-                base_state=state.base_state,
+                base_state=base_state,
             )
             if interval is not None:
                 return interval, next_state
-            base_view = _with_scheduler_state(card_view, state.base_state)
-            interval, base_state = self.base.schedule(base_view, rating, elapsed, day)
-            return self._convert_interval(interval, base_state, phase=state.phase)
+            return self._convert_interval(base_interval, base_state, phase=state.phase)
 
         if rating == 1 and not self.relearning_steps.is_empty():
+            base_interval, base_state = self.base.schedule(
+                card_view, rating, elapsed, day
+            )
             interval, next_state = self._schedule_learning(
                 rating,
                 phase="relearning",
                 steps=self.relearning_steps,
                 remaining=self.relearning_steps.remaining_for_failed(),
-                base_state=card_view.scheduler_state,
+                base_state=base_state,
             )
             if interval is not None:
                 return interval, next_state
+            return self._convert_interval(base_interval, base_state, phase="relearning")
         interval, state = self.base.schedule(card_view, rating, elapsed, day)
         phase = "relearning" if rating == 1 else None
         return self._convert_interval(interval, state, phase=phase)
