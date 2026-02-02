@@ -84,6 +84,12 @@ def parse_args() -> argparse.Namespace:
         help="Filter logs by short-term source (steps/sched).",
     )
     parser.add_argument(
+        "--engine",
+        choices=["event", "vectorized", "any"],
+        default="any",
+        help="Filter logs by simulation engine.",
+    )
+    parser.add_argument(
         "--compare-fuzz",
         action="store_true",
         help="Plot fuzz on/off as separate series when logs include meta.fuzz.",
@@ -92,6 +98,11 @@ def parse_args() -> argparse.Namespace:
         "--compare-short-term",
         action="store_true",
         help="Plot short-term on/off as separate series when logs include meta.short_term.",
+    )
+    parser.add_argument(
+        "--compare-engine",
+        action="store_true",
+        help="Plot event/vectorized as separate series when logs include meta.engine.",
     )
     parser.add_argument(
         "--results-path",
@@ -223,6 +234,7 @@ def _iter_log_entries(
     fuzz_filter: Optional[bool],
     short_term_filter: Optional[bool],
     short_term_source_filter: Optional[str],
+    engine_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
     for path in sorted(log_dir.glob("*.jsonl")):
@@ -253,6 +265,11 @@ def _iter_log_entries(
         if short_term_source_filter is not None:
             source_value = meta.get("short_term_source")
             if source_value != short_term_source_filter:
+                continue
+
+        engine_value = meta.get("engine")
+        if engine_filter is not None:
+            if engine_value != engine_filter:
                 continue
 
         fixed_interval = None
@@ -315,6 +332,7 @@ def _iter_log_entries(
             "fuzz": fuzz_value,
             "short_term": short_term_value,
             "short_term_source": meta.get("short_term_source"),
+            "engine": engine_value,
         }
         yield desired_value, entry
 
@@ -329,11 +347,13 @@ def _build_results(
     fuzz_filter: Optional[bool],
     short_term_filter: Optional[bool],
     short_term_source_filter: Optional[str],
+    engine_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
     title_prefix: str | None = None,
     dedupe: bool = True,
     dedupe_fuzz: bool = False,
     dedupe_short_term: bool = False,
+    dedupe_engine: bool = False,
 ) -> List[Dict[str, Any]]:
     by_retention: Dict[object, Dict[str, Any]] = {}
     results: List[Dict[str, Any]] = []
@@ -347,17 +367,19 @@ def _build_results(
         fuzz_filter,
         short_term_filter,
         short_term_source_filter,
+        engine_filter,
         fixed_interval_filter,
     ):
         if title_prefix:
             entry["title"] = f"{title_prefix} {entry['title']}"
         entry["environment"] = environment
         if dedupe and desired is not None:
-            if dedupe_fuzz or dedupe_short_term:
+            if dedupe_fuzz or dedupe_short_term or dedupe_engine:
                 key = (
                     desired,
                     entry.get("fuzz") if dedupe_fuzz else None,
                     entry.get("short_term") if dedupe_short_term else None,
+                    entry.get("engine") if dedupe_engine else None,
                 )
                 by_retention[key] = entry
             else:
@@ -432,28 +454,31 @@ def _plot_compare_frontier(
     scheduler_order: List[str] = []
     environment_order: List[str] = []
     env_fuzz_order: List[tuple[Optional[str], Optional[bool]]] = []
-    env_fuzz_short_order: List[
-        tuple[Optional[str], Optional[bool], Optional[bool]]
+    env_fuzz_short_engine_order: List[
+        tuple[Optional[str], Optional[bool], Optional[bool], Optional[str]]
     ] = []
     use_fuzz_linestyles = any(item.get("fuzz") is not None for item in series)
     use_short_term_linestyles = any(
         item.get("short_term") is not None for item in series
     )
+    use_engine_linestyles = any(item.get("engine") is not None for item in series)
     for item in series:
         scheduler = item.get("scheduler")
         environment = item.get("environment")
         fuzz_value = item.get("fuzz")
         short_term_value = item.get("short_term")
+        engine_value = item.get("engine")
         if scheduler and scheduler not in scheduler_order:
             scheduler_order.append(scheduler)
-        if use_fuzz_linestyles or use_short_term_linestyles:
+        if use_fuzz_linestyles or use_short_term_linestyles or use_engine_linestyles:
             key = (
                 environment,
                 fuzz_value if use_fuzz_linestyles else None,
                 short_term_value if use_short_term_linestyles else None,
+                engine_value if use_engine_linestyles else None,
             )
-            if key not in env_fuzz_short_order:
-                env_fuzz_short_order.append(key)
+            if key not in env_fuzz_short_engine_order:
+                env_fuzz_short_engine_order.append(key)
         elif use_fuzz_linestyles:
             key = (environment, fuzz_value)
             if key not in env_fuzz_order:
@@ -465,10 +490,10 @@ def _plot_compare_frontier(
         for idx, scheduler in enumerate(scheduler_order)
     }
     environment_linestyles: dict[object, object] = {}
-    if use_fuzz_linestyles or use_short_term_linestyles:
+    if use_fuzz_linestyles or use_short_term_linestyles or use_engine_linestyles:
         environment_linestyles = {
             key: linestyles[idx % len(linestyles)]
-            for idx, key in enumerate(env_fuzz_short_order)
+            for idx, key in enumerate(env_fuzz_short_engine_order)
         }
     elif use_fuzz_linestyles:
         environment_linestyles = {
@@ -514,11 +539,12 @@ def _plot_compare_frontier(
         scheduler = item.get("scheduler")
         environment = item.get("environment")
         fuzz_value = item.get("fuzz")
-        if use_fuzz_linestyles or use_short_term_linestyles:
+        if use_fuzz_linestyles or use_short_term_linestyles or use_engine_linestyles:
             style_key = (
                 environment,
                 fuzz_value if use_fuzz_linestyles else None,
                 item.get("short_term") if use_short_term_linestyles else None,
+                item.get("engine") if use_engine_linestyles else None,
             )
         else:
             style_key = environment
@@ -724,158 +750,195 @@ def main() -> None:
         raise SystemExit(
             "--compare-short-term cannot be combined with --short-term-source."
         )
+    engine_filter = None
+    if args.engine != "any":
+        engine_filter = args.engine
+    if args.compare_engine and engine_filter is not None:
+        raise SystemExit("--compare-engine cannot be combined with --engine.")
     fuzz_series = [None]
     if args.compare_fuzz:
         fuzz_series = [False, True]
     short_term_series = [short_term_filter]
     if args.compare_short_term:
         short_term_series = [False, True]
+    engine_series = [engine_filter]
+    if args.compare_engine:
+        engine_series = ["event", "vectorized"]
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:
                 for fuzz_value in fuzz_series:
                     for short_term_value in short_term_series:
-                        results = _build_results(
+                        for engine_value in engine_series:
+                            results = _build_results(
+                                log_dir,
+                                env,
+                                {scheduler},
+                                args.start_retention,
+                                args.end_retention,
+                                base_dirs,
+                                fuzz_value if args.compare_fuzz else fuzz_filter,
+                                short_term_value,
+                                short_term_source_filter,
+                                engine_value,
+                                title_prefix=None,
+                                dedupe_fuzz=args.compare_fuzz,
+                                dedupe_short_term=args.compare_short_term,
+                                dedupe_engine=args.compare_engine,
+                            )
+                            if not results:
+                                continue
+                            label_parts = []
+                            if len(envs) > 1:
+                                label_parts.append(f"env={env}")
+                            if len(dr_schedulers) > 1:
+                                label_parts.append(f"sched={scheduler}")
+                            if args.compare_fuzz:
+                                label_parts.append(
+                                    "fuzz=on" if fuzz_value else "fuzz=off"
+                                )
+                            if args.compare_short_term:
+                                label_parts.append(
+                                    "short-term=on"
+                                    if short_term_value
+                                    else "short-term=off"
+                                )
+                            if args.compare_engine:
+                                label_parts.append(f"engine={engine_value}")
+                            label = " ".join(label_parts) or scheduler
+                            series.append(
+                                {
+                                    "label": label,
+                                    "entries": results,
+                                    "style": "dr",
+                                    "scheduler": scheduler,
+                                    "environment": env,
+                                    "fuzz": fuzz_value if args.compare_fuzz else None,
+                                    "short_term": short_term_value
+                                    if args.compare_short_term
+                                    else None,
+                                    "engine": engine_value
+                                    if args.compare_engine
+                                    else None,
+                                }
+                            )
+                            combined_results.extend(results)
+        if run_fixed:
+            interval_filter = None if include_all_fixed else fixed_intervals
+            for fuzz_value in fuzz_series:
+                for short_term_value in short_term_series:
+                    for engine_value in engine_series:
+                        fixed_results = _build_results(
                             log_dir,
                             env,
-                            {scheduler},
+                            {"fixed"},
                             args.start_retention,
                             args.end_retention,
                             base_dirs,
                             fuzz_value if args.compare_fuzz else fuzz_filter,
                             short_term_value,
                             short_term_source_filter,
+                            engine_value,
+                            fixed_interval_filter=interval_filter,
                             title_prefix=None,
                             dedupe_fuzz=args.compare_fuzz,
                             dedupe_short_term=args.compare_short_term,
+                            dedupe_engine=args.compare_engine,
                         )
-                        if not results:
+                        if not fixed_results:
                             continue
-                        label_parts = []
+                        fixed_results.sort(
+                            key=lambda entry: entry.get("fixed_interval")
+                            if entry.get("fixed_interval") is not None
+                            else 0.0
+                        )
+                        fixed_label_parts = []
                         if len(envs) > 1:
-                            label_parts.append(f"env={env}")
-                        if len(dr_schedulers) > 1:
-                            label_parts.append(f"sched={scheduler}")
+                            fixed_label_parts.append(f"env={env}")
+                        if run_dr or run_sspmmc or len(envs) > 1:
+                            fixed_label_parts.append("sched=fixed")
                         if args.compare_fuzz:
-                            label_parts.append("fuzz=on" if fuzz_value else "fuzz=off")
+                            fixed_label_parts.append(
+                                "fuzz=on" if fuzz_value else "fuzz=off"
+                            )
                         if args.compare_short_term:
-                            label_parts.append(
+                            fixed_label_parts.append(
                                 "short-term=on"
                                 if short_term_value
                                 else "short-term=off"
                             )
-                        label = " ".join(label_parts) or scheduler
+                        if args.compare_engine:
+                            fixed_label_parts.append(f"engine={engine_value}")
+                        fixed_label = " ".join(fixed_label_parts) or "fixed"
                         series.append(
                             {
-                                "label": label,
-                                "entries": results,
+                                "label": fixed_label,
+                                "entries": fixed_results,
                                 "style": "dr",
-                                "scheduler": scheduler,
+                                "scheduler": "fixed",
                                 "environment": env,
                                 "fuzz": fuzz_value if args.compare_fuzz else None,
                                 "short_term": short_term_value
                                 if args.compare_short_term
                                 else None,
+                                "engine": engine_value if args.compare_engine else None,
                             }
                         )
-                        combined_results.extend(results)
-        if run_fixed:
-            interval_filter = None if include_all_fixed else fixed_intervals
-            for fuzz_value in fuzz_series:
-                for short_term_value in short_term_series:
-                    fixed_results = _build_results(
-                        log_dir,
-                        env,
-                        {"fixed"},
-                        args.start_retention,
-                        args.end_retention,
-                        base_dirs,
-                        fuzz_value if args.compare_fuzz else fuzz_filter,
-                        short_term_value,
-                        short_term_source_filter,
-                        fixed_interval_filter=interval_filter,
-                        title_prefix=None,
-                        dedupe_fuzz=args.compare_fuzz,
-                        dedupe_short_term=args.compare_short_term,
-                    )
-                    if not fixed_results:
-                        continue
-                    fixed_results.sort(
-                        key=lambda entry: entry.get("fixed_interval")
-                        if entry.get("fixed_interval") is not None
-                        else 0.0
-                    )
-                    fixed_label_parts = []
-                    if len(envs) > 1:
-                        fixed_label_parts.append(f"env={env}")
-                    if run_dr or run_sspmmc or len(envs) > 1:
-                        fixed_label_parts.append("sched=fixed")
-                    if args.compare_fuzz:
-                        fixed_label_parts.append(
-                            "fuzz=on" if fuzz_value else "fuzz=off"
-                        )
-                    if args.compare_short_term:
-                        fixed_label_parts.append(
-                            "short-term=on" if short_term_value else "short-term=off"
-                        )
-                    fixed_label = " ".join(fixed_label_parts) or "fixed"
-                    series.append(
-                        {
-                            "label": fixed_label,
-                            "entries": fixed_results,
-                            "style": "dr",
-                            "scheduler": "fixed",
-                            "environment": env,
-                            "fuzz": fuzz_value if args.compare_fuzz else None,
-                            "short_term": short_term_value
-                            if args.compare_short_term
-                            else None,
-                        }
-                    )
-                    combined_results.extend(fixed_results)
+                        combined_results.extend(fixed_results)
         if run_sspmmc:
             for fuzz_value in fuzz_series:
                 for short_term_value in short_term_series:
-                    sspmmc_results = _build_results(
-                        log_dir,
-                        env,
-                        {"sspmmc"},
-                        args.start_retention,
-                        args.end_retention,
-                        base_dirs,
-                        fuzz_value if args.compare_fuzz else fuzz_filter,
-                        short_term_value,
-                        short_term_source_filter,
-                        title_prefix=None,
-                        dedupe=False,
-                    )
-                    if not sspmmc_results:
-                        continue
-                    sspmmc_results.sort(key=lambda entry: entry["memorized_average"])
-                    ssp_label_parts = ["sched=sspmmc"]
-                    if len(envs) > 1:
-                        ssp_label_parts.insert(0, f"env={env}")
-                    if args.compare_fuzz:
-                        ssp_label_parts.append("fuzz=on" if fuzz_value else "fuzz=off")
-                    if args.compare_short_term:
-                        ssp_label_parts.append(
-                            "short-term=on" if short_term_value else "short-term=off"
+                    for engine_value in engine_series:
+                        sspmmc_results = _build_results(
+                            log_dir,
+                            env,
+                            {"sspmmc"},
+                            args.start_retention,
+                            args.end_retention,
+                            base_dirs,
+                            fuzz_value if args.compare_fuzz else fuzz_filter,
+                            short_term_value,
+                            short_term_source_filter,
+                            engine_value,
+                            title_prefix=None,
+                            dedupe=False,
                         )
-                    ssp_label = " ".join(ssp_label_parts)
-                    series.append(
-                        {
-                            "label": ssp_label,
-                            "entries": sspmmc_results,
-                            "style": "sspmmc",
-                            "scheduler": "sspmmc",
-                            "environment": env,
-                            "fuzz": fuzz_value if args.compare_fuzz else None,
-                            "short_term": short_term_value
-                            if args.compare_short_term
-                            else None,
-                        }
-                    )
-                    combined_results.extend(sspmmc_results)
+                        if not sspmmc_results:
+                            continue
+                        sspmmc_results.sort(
+                            key=lambda entry: entry["memorized_average"]
+                        )
+                        ssp_label_parts = ["sched=sspmmc"]
+                        if len(envs) > 1:
+                            ssp_label_parts.insert(0, f"env={env}")
+                        if args.compare_fuzz:
+                            ssp_label_parts.append(
+                                "fuzz=on" if fuzz_value else "fuzz=off"
+                            )
+                        if args.compare_short_term:
+                            ssp_label_parts.append(
+                                "short-term=on"
+                                if short_term_value
+                                else "short-term=off"
+                            )
+                        if args.compare_engine:
+                            ssp_label_parts.append(f"engine={engine_value}")
+                        ssp_label = " ".join(ssp_label_parts)
+                        series.append(
+                            {
+                                "label": ssp_label,
+                                "entries": sspmmc_results,
+                                "style": "sspmmc",
+                                "scheduler": "sspmmc",
+                                "environment": env,
+                                "fuzz": fuzz_value if args.compare_fuzz else None,
+                                "short_term": short_term_value
+                                if args.compare_short_term
+                                else None,
+                                "engine": engine_value if args.compare_engine else None,
+                            }
+                        )
+                        combined_results.extend(sspmmc_results)
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with results_path.open("w", encoding="utf-8") as fh:
         json.dump(combined_results, fh, indent=2, sort_keys=True)
