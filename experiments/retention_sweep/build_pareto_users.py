@@ -44,9 +44,20 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Short-term source filter passed to build_pareto.py.",
     )
     parser.add_argument(
+        "--engine",
+        choices=["event", "vectorized", "any"],
+        default="any",
+        help="Engine filter passed to build_pareto.py.",
+    )
+    parser.add_argument(
         "--compare-short-term",
         action="store_true",
         help="Pass --compare-short-term to build_pareto.py.",
+    )
+    parser.add_argument(
+        "--compare-engine",
+        action="store_true",
+        help="Pass --compare-engine to build_pareto.py.",
     )
     parser.add_argument(
         "--uv-cmd",
@@ -97,8 +108,12 @@ def main() -> int:
             cmd.extend(["--short-term", args.short_term])
         if args.short_term_source != "any":
             cmd.extend(["--short-term-source", args.short_term_source])
+        if args.engine != "any":
+            cmd.extend(["--engine", args.engine])
         if args.compare_short_term:
             cmd.append("--compare-short-term")
+        if args.compare_engine:
+            cmd.append("--compare-engine")
         cmd.extend(extra_args)
         print(f"[{user_id}] {' '.join(cmd)}")
         if not args.dry_run:
