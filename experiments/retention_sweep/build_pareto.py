@@ -224,6 +224,15 @@ def _format_scheduler_title(scheduler: str) -> str:
     return labels.get(scheduler, scheduler)
 
 
+def _engine_rank(engine: Optional[str]) -> int:
+    order = {
+        "batched": 0,
+        "vectorized": 1,
+        "event": 2,
+    }
+    return order.get(engine or "", len(order))
+
+
 def _iter_log_entries(
     log_dir: Path,
     environment: str,
@@ -356,7 +365,11 @@ def _build_results(
     dedupe_engine: bool = False,
 ) -> List[Dict[str, Any]]:
     by_retention: Dict[object, Dict[str, Any]] = {}
+    by_retention_rank: Dict[object, int] = {}
+    by_no_desired: Dict[object, Dict[str, Any]] = {}
+    by_no_desired_rank: Dict[object, int] = {}
     results: List[Dict[str, Any]] = []
+    prefer_engine = engine_filter is None and not dedupe_engine
     for desired, entry in _iter_log_entries(
         log_dir,
         environment,
@@ -373,6 +386,7 @@ def _build_results(
         if title_prefix:
             entry["title"] = f"{title_prefix} {entry['title']}"
         entry["environment"] = environment
+        rank = _engine_rank(entry.get("engine")) if prefer_engine else 0
         if dedupe and desired is not None:
             if dedupe_fuzz or dedupe_short_term or dedupe_engine:
                 key = (
@@ -381,15 +395,43 @@ def _build_results(
                     entry.get("short_term") if dedupe_short_term else None,
                     entry.get("engine") if dedupe_engine else None,
                 )
-                by_retention[key] = entry
+                if not prefer_engine:
+                    by_retention[key] = entry
+                else:
+                    existing = by_retention_rank.get(key)
+                    if existing is None or rank < existing:
+                        by_retention[key] = entry
+                        by_retention_rank[key] = rank
             else:
-                by_retention[desired] = entry
+                if not prefer_engine:
+                    by_retention[desired] = entry
+                else:
+                    existing = by_retention_rank.get(desired)
+                    if existing is None or rank < existing:
+                        by_retention[desired] = entry
+                        by_retention_rank[desired] = rank
         else:
-            results.append(entry)
+            if (
+                dedupe
+                and prefer_engine
+                and desired is None
+                and entry.get("scheduler") not in {"fixed", "sspmmc"}
+            ):
+                key = (entry.get("scheduler"), entry.get("title"))
+                existing = by_no_desired_rank.get(key)
+                if existing is None or rank < existing:
+                    by_no_desired[key] = entry
+                    by_no_desired_rank[key] = rank
+            else:
+                results.append(entry)
 
     if dedupe:
         deduped = [by_retention[ret] for ret in sorted(by_retention)]
+        if by_no_desired:
+            results.extend(by_no_desired[key] for key in sorted(by_no_desired))
         return deduped + results
+    if by_no_desired:
+        results.extend(by_no_desired[key] for key in sorted(by_no_desired))
     return results
 
 
