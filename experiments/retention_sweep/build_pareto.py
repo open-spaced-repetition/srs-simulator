@@ -769,7 +769,7 @@ def main() -> None:
         short_term_series = [False, True]
     engine_series = [engine_filter]
     if args.compare_engine:
-        engine_series = ["event", "vectorized"]
+        engine_series = ["event", "vectorized", "batched"]
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:
