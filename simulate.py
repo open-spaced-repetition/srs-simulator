@@ -464,10 +464,75 @@ def main() -> None:
     if args.no_plot:
         return
 
-    plot_simulation(stats)
+    plot_simulation(stats, args)
 
 
-def plot_simulation(stats) -> None:
+def _format_plot_footer(args: argparse.Namespace) -> str:
+    env_name = (
+        getattr(args, "env", None) or getattr(args, "environment", None) or "unknown"
+    )
+    sched_label = (
+        getattr(args, "scheduler_spec", None)
+        or getattr(args, "sched", None)
+        or getattr(args, "scheduler", None)
+        or "unknown"
+    )
+    review_limit = args.review_limit if args.review_limit is not None else "none"
+    cost_limit = format_float(args.cost_limit_minutes)
+    desired_retention = (
+        format_float(args.desired_retention)
+        if scheduler_uses_desired_retention(args.scheduler)
+        else "n/a"
+    )
+    resolved_short_term, learning_steps, relearning_steps = _resolve_short_term_config(
+        args
+    )
+    short_term_source = resolved_short_term or "off"
+    short_term_threshold = getattr(args, "short_term_threshold", None)
+    fixed_interval = (
+        normalize_fixed_interval(getattr(args, "fixed_interval", None))
+        if args.scheduler == "fixed"
+        else None
+    )
+    header = [
+        f"environment={env_name}",
+        f"scheduler={sched_label}",
+        f"engine={args.engine}",
+        f"short-term-source={short_term_source}",
+    ]
+    core = [
+        f"user={args.user_id or 1}",
+        f"days={args.days}",
+        f"deck={args.deck}",
+        f"learn-limit={args.learn_limit}",
+        f"review-limit={review_limit}",
+        f"cost-limit-minutes={cost_limit}",
+        f"desired-retention={desired_retention}",
+        f"priority={args.priority}",
+        f"scheduler-priority={args.scheduler_priority}",
+        f"seed={args.seed}",
+    ]
+    if getattr(args, "fuzz", False):
+        core.append("fuzz=on")
+    extra: list[str] = []
+    if fixed_interval is not None:
+        extra.append(f"fixed-interval={format_float(fixed_interval)}")
+    if args.sspmmc_policy:
+        extra.append(f"sspmmc-policy={args.sspmmc_policy.stem}")
+    if short_term_source != "off":
+        extra.append(f"learning-steps={','.join(str(step) for step in learning_steps)}")
+        extra.append(
+            f"relearning-steps={','.join(str(step) for step in relearning_steps)}"
+        )
+        if short_term_threshold is not None:
+            extra.append(f"short-term-threshold={format_float(short_term_threshold)}")
+    lines = [" ".join(header), " ".join(core)]
+    if extra:
+        lines.append(" ".join(extra))
+    return "\n".join(lines)
+
+
+def plot_simulation(stats, args: argparse.Namespace) -> None:
     days = list(range(len(stats.daily_reviews)))
 
     fig, ax = plt.subplots(4, 1, figsize=(12, 11), sharex=True)
@@ -571,7 +636,9 @@ def plot_simulation(stats) -> None:
     ]
     ax[3].legend(handles=legend_handles, loc="upper right")
 
-    plt.tight_layout()
+    footer = _format_plot_footer(args)
+    fig.text(0.5, 0.01, footer, ha="center", va="bottom", fontsize=8)
+    plt.tight_layout(rect=(0.0, 0.04, 1.0, 1.0))
     plt.show()
 
 
