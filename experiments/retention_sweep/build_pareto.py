@@ -535,6 +535,13 @@ def _plot_compare_frontier(
             marker = "o"
             linewidth = 2
             markersize = 6
+        markerfacecolor = None
+        markeredgecolor = None
+        if is_single_point and use_short_term_linestyles:
+            short_term_value = item.get("short_term")
+            if short_term_value is not None:
+                markerfacecolor = color if short_term_value else "none"
+                markeredgecolor = color
         x_vals = [entry["memorized_average"] for entry in entries]
         y_vals = [entry["memorized_per_minute"] for entry in entries]
         avoid_x.extend(x_vals)
@@ -552,6 +559,8 @@ def _plot_compare_frontier(
             linestyle=linestyle,
             marker=marker,
             color=color,
+            markerfacecolor=markerfacecolor,
+            markeredgecolor=markeredgecolor,
             linewidth=linewidth,
             markersize=markersize,
         )
