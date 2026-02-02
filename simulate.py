@@ -593,7 +593,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     env_name = (
         getattr(args, "env", None) or getattr(args, "environment", None) or "unknown"
     )
-    parts = [f"env={env_name}", f"sched={args.scheduler}"]
+    parts = [f"env={env_name}", f"engine={args.engine}", f"sched={args.scheduler}"]
     if getattr(args, "fuzz", False):
         parts.append("fuzz=1")
     short_term_source = getattr(args, "short_term_source", None)
