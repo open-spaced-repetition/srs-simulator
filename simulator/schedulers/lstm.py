@@ -164,23 +164,45 @@ class LSTMScheduler(Scheduler):
             high = max(high, t0)
         high = min(self.max_interval, high)
 
-        while (
-            high < self.max_interval
-            and self.model.predict_retention_from_curves(curves, high) > target
-        ):
+        r_high = self.model.predict_retention_from_curves(curves, high)
+        while high < self.max_interval and r_high > target:
             high = min(self.max_interval, max(high * 2.0, high + 1e-6))
+            r_high = self.model.predict_retention_from_curves(curves, high)
 
-        for _ in range(self.search_steps):
-            if low >= high:
-                break
-            mid = (low + high) / 2.0
-            pred = self.model.predict_retention_from_curves(curves, mid)
-            if pred > target:
-                low = mid
-            else:
-                high = mid
+        if r_high > target:
+            result = self.max_interval
+        else:
+            f_low = r_low - target
+            f_high = r_high - target
+            result = None
+            for _ in range(self.search_steps):
+                if low >= high:
+                    break
+                denom = f_high - f_low
+                if abs(denom) < 1e-12 or not math.isfinite(denom):
+                    guess = (low + high) / 2.0
+                else:
+                    guess = high - f_high * (high - low) / denom
+                if not (low < guess < high) or not math.isfinite(guess):
+                    guess = (low + high) / 2.0
+                pred = self.model.predict_retention_from_curves(curves, guess)
+                f_guess = pred - target
+                if abs(f_guess) <= 0.001:
+                    result = guess
+                    break
+                if f_guess > 0.0:
+                    low = guess
+                    f_low = f_guess
+                    f_high *= 0.5
+                else:
+                    high = guess
+                    f_high = f_guess
+                    f_low *= 0.5
 
-        result = max(self.min_interval, min(high, self.max_interval))
+            if result is None:
+                result = high
+
+        result = max(self.min_interval, min(result, self.max_interval))
         if (
             self._debug_interval
             and self._debug_interval_calls < self._debug_interval_limit
