@@ -270,32 +270,17 @@ def simulate(
                 continue
 
             cost_today = 0.0
-            reviews_today = 0
+            cost_for_limits = 0.0
+            long_reviews_today = 0
+            short_reviews_today = 0
             lapses_today = 0
             learned_today = 0
             phase_reviews_today = 0
             phase_lapses_today = 0
 
-            def run_reviews(
-                now_tensor: torch.Tensor,
-                remaining_limit: Optional[float],
-                remaining_reviews: int,
-            ) -> tuple[int, int, int, int, float]:
-                if remaining_reviews <= 0 or max_reviews <= 0:
-                    return 0, 0, 0, 0, 0.0
-                need_review = (reps > 0) & (due <= now_tensor)
-                if not need_review.any():
-                    return 0, 0, 0, 0, 0.0
-
-                review_idx = torch.nonzero(need_review, as_tuple=False).squeeze(1)
-                elapsed = now_tensor - last_review[review_idx]
-                r_env = env_ops.retrievability(env_state, review_idx, elapsed)
-                phase = (
-                    short_phase[review_idx]
-                    if steps_mode or sched_mode
-                    else torch.zeros_like(review_idx, dtype=torch.int8)
-                )
-
+            def _sample_ratings(
+                r_env: torch.Tensor, phase: torch.Tensor
+            ) -> torch.Tensor:
                 rand = torch.rand(r_env.shape, device=torch_device, generator=gen)
                 fail = rand > r_env
                 if lazy_good_bias > 0.0:
@@ -339,12 +324,15 @@ def simulate(
                             + 2
                         )
                 lazy_rating = torch.full_like(samples, 3)
-                rating = torch.where(
+                return torch.where(
                     fail,
                     torch.ones_like(samples),
                     torch.where(lazy, lazy_rating, samples),
                 )
 
+            def _review_cost_for(
+                r_env: torch.Tensor, rating: torch.Tensor, phase: torch.Tensor
+            ) -> torch.Tensor:
                 base_latency = cost_model.base * (
                     1.0 + cost_model.penalty * torch.clamp(1.0 - r_env, min=0.0)
                 )
@@ -360,7 +348,27 @@ def simulate(
                         review_cost_component[relearning_mask] = (
                             relearning_review_costs[rating[relearning_mask] - 1]
                         )
-                review_cost = base_latency + review_cost_component
+                return base_latency + review_cost_component
+
+            def run_long_reviews(
+                now_tensor: torch.Tensor,
+                remaining_limit: Optional[float],
+                remaining_reviews: int,
+            ) -> tuple[int, int, int, int, float]:
+                if remaining_reviews <= 0 or max_reviews <= 0:
+                    return 0, 0, 0, 0, 0.0
+                need_review = (reps > 0) & (due <= now_tensor)
+                if steps_mode or sched_mode:
+                    need_review &= short_phase == phase_none
+                if not need_review.any():
+                    return 0, 0, 0, 0, 0.0
+
+                review_idx = torch.nonzero(need_review, as_tuple=False).squeeze(1)
+                elapsed = now_tensor - last_review[review_idx]
+                r_env = env_ops.retrievability(env_state, review_idx, elapsed)
+                phase = torch.zeros_like(review_idx, dtype=torch.int8)
+                rating = _sample_ratings(r_env, phase)
+                review_cost = _review_cost_for(r_env, rating, phase)
 
                 primary = sched_ops.review_priority(sched_state, review_idx, elapsed)
                 if steps_mode and (learning_steps_len > 0 or relearning_steps_len > 0):
@@ -697,82 +705,260 @@ def simulate(
                 new_ptr += count
                 return count, float(exec_cost.sum().item())
 
-            now = day_start
-            while True:
-                if max_cost is not None and cost_today >= max_cost:
-                    break
-                reviews_left = max_reviews - reviews_today
+            def run_short_reviews(
+                day_end_tensor: torch.Tensor,
+            ) -> tuple[int, int, float]:
+                if not (steps_mode or sched_mode):
+                    return 0, 0, 0.0
+                short_reviews = 0
+                short_lapses = 0
+                short_cost = 0.0
+                while True:
+                    short_mask = (short_phase != phase_none) & (due < day_end_tensor)
+                    if not short_mask.any():
+                        break
+                    exec_idx = torch.nonzero(short_mask, as_tuple=False).squeeze(1)
+                    now_tensor = due[exec_idx]
+                    exec_elapsed = now_tensor - last_review[exec_idx]
+                    r_env = env_ops.retrievability(env_state, exec_idx, exec_elapsed)
+                    exec_phase = short_phase[exec_idx]
+                    exec_rating = _sample_ratings(r_env, exec_phase)
+                    exec_cost = _review_cost_for(r_env, exec_rating, exec_phase)
+                    prev_interval = intervals[exec_idx]
+
+                    env_ops.update_review(
+                        env_state, exec_idx, exec_elapsed, exec_rating, r_env
+                    )
+                    intervals_next = sched_ops.update_review(
+                        sched_state, exec_idx, exec_elapsed, exec_rating, prev_interval
+                    )
+
+                    interval_days = intervals_next.to(env_dtype)
+                    next_short_mask = torch.zeros_like(exec_rating, dtype=torch.bool)
+                    if steps_mode and (
+                        learning_steps_len > 0 or relearning_steps_len > 0
+                    ):
+                        new_phase = exec_phase.clone()
+                        new_remaining = short_remaining[exec_idx].clone()
+
+                        if learning_steps_len > 0:
+                            mask_learning = exec_phase == phase_learning
+                            if mask_learning.any():
+                                delay_secs, next_remaining, use_steps = _schedule_steps(
+                                    new_remaining[mask_learning],
+                                    exec_rating[mask_learning],
+                                    learning_steps_secs,
+                                    learning_steps_len,
+                                )
+                                interval_days[mask_learning] = torch.where(
+                                    use_steps,
+                                    delay_secs / day_secs,
+                                    interval_days[mask_learning],
+                                )
+                                next_short_mask[mask_learning] = use_steps
+                                new_phase[mask_learning] = torch.where(
+                                    use_steps,
+                                    torch.full_like(
+                                        new_phase[mask_learning], phase_learning
+                                    ),
+                                    torch.full_like(
+                                        new_phase[mask_learning], phase_none
+                                    ),
+                                )
+                                new_remaining[mask_learning] = torch.where(
+                                    use_steps,
+                                    next_remaining,
+                                    torch.zeros_like(next_remaining),
+                                )
+
+                        if relearning_steps_len > 0:
+                            mask_relearning = exec_phase == phase_relearning
+                            if mask_relearning.any():
+                                delay_secs, next_remaining, use_steps = _schedule_steps(
+                                    new_remaining[mask_relearning],
+                                    exec_rating[mask_relearning],
+                                    relearning_steps_secs,
+                                    relearning_steps_len,
+                                )
+                                interval_days[mask_relearning] = torch.where(
+                                    use_steps,
+                                    delay_secs / day_secs,
+                                    interval_days[mask_relearning],
+                                )
+                                next_short_mask[mask_relearning] = use_steps
+                                new_phase[mask_relearning] = torch.where(
+                                    use_steps,
+                                    torch.full_like(
+                                        new_phase[mask_relearning], phase_relearning
+                                    ),
+                                    torch.full_like(
+                                        new_phase[mask_relearning], phase_none
+                                    ),
+                                )
+                                new_remaining[mask_relearning] = torch.where(
+                                    use_steps,
+                                    next_remaining,
+                                    torch.zeros_like(next_remaining),
+                                )
+
+                        short_phase[exec_idx] = new_phase
+                        short_remaining[exec_idx] = new_remaining
+
+                    elif sched_mode:
+                        next_short_mask = interval_days < short_term_threshold
+                        interval_days = torch.where(
+                            next_short_mask,
+                            torch.clamp(interval_days, min=min_short_days),
+                            interval_days,
+                        )
+                        new_phase = torch.where(
+                            next_short_mask,
+                            torch.where(
+                                exec_phase != phase_none,
+                                exec_phase,
+                                torch.where(
+                                    exec_rating == 1,
+                                    torch.full_like(exec_phase, phase_relearning),
+                                    torch.full_like(exec_phase, phase_learning),
+                                ),
+                            ),
+                            torch.full_like(exec_phase, phase_none),
+                        )
+                        short_phase[exec_idx] = new_phase
+                        short_remaining[exec_idx] = 0
+
+                    if next_short_mask.any():
+                        if fuzz:
+                            fuzz_factors = torch.rand(
+                                next_short_mask.sum(),
+                                device=torch_device,
+                                generator=gen,
+                            )
+                            secs = interval_days[next_short_mask] * day_secs
+                            secs = with_learning_fuzz(secs, fuzz_factors)
+                            interval_days[next_short_mask] = torch.clamp(
+                                secs / day_secs, min=min_short_days
+                            )
+                        else:
+                            interval_days[next_short_mask] = torch.clamp(
+                                interval_days[next_short_mask], min=min_short_days
+                            )
+
+                    long_mask = ~next_short_mask
+                    if long_mask.any():
+                        if fuzz:
+                            fuzz_factors = torch.rand(
+                                long_mask.sum(), device=torch_device, generator=gen
+                            )
+                            interval_long = with_review_fuzz(
+                                interval_days[long_mask],
+                                fuzz_factors,
+                                minimum=1,
+                                maximum=fuzz_max,
+                            )
+                        else:
+                            interval_long = round_intervals(
+                                interval_days[long_mask], minimum=1
+                            )
+                        interval_days[long_mask] = interval_long.to(env_dtype)
+
+                    intervals[exec_idx] = interval_days
+                    last_review[exec_idx] = now_tensor
+                    floor_now = torch.floor(now_tensor)
+                    due[exec_idx] = torch.where(
+                        next_short_mask,
+                        now_tensor + interval_days,
+                        floor_now + interval_days,
+                    )
+
+                    reps[exec_idx] += 1
+                    lapses[exec_idx] += (exec_rating == 1).to(torch.int64)
+
+                    short_reviews += exec_idx.numel()
+                    short_lapses += int((exec_rating == 1).sum().item())
+                    short_cost += float(exec_cost.sum().item())
+
+                return short_reviews, short_lapses, short_cost
+
+            day_start_tensor = torch.tensor(
+                day_start, device=torch_device, dtype=env_dtype
+            )
+            day_end_tensor = torch.tensor(day_end, device=torch_device, dtype=env_dtype)
+
+            if priority_mode == "review-first":
+                remaining_cost = (
+                    max_cost - cost_for_limits if max_cost is not None else None
+                )
+                reviews_left = max_reviews - long_reviews_today
+                (
+                    review_count,
+                    review_lapses,
+                    review_phase_count,
+                    review_phase_lapses,
+                    review_cost,
+                ) = run_long_reviews(day_start_tensor, remaining_cost, reviews_left)
+                cost_today += review_cost
+                cost_for_limits += review_cost
+                long_reviews_today += review_count
+                lapses_today += review_lapses
+                phase_reviews_today += review_phase_count
+                phase_lapses_today += review_phase_lapses
+
+                remaining_cost = (
+                    max_cost - cost_for_limits if max_cost is not None else None
+                )
                 new_left = max_new - learned_today
-                can_learn = new_left > 0
+                learn_count, learn_cost = run_learning(
+                    day_start_tensor, remaining_cost, new_left
+                )
+                cost_today += learn_cost
+                cost_for_limits += learn_cost
+                learned_today += learn_count
 
-                now_tensor = torch.tensor(now, device=torch_device, dtype=env_dtype)
-                need_review = (reps > 0) & (due <= now_tensor)
-                if not need_review.any() and not can_learn:
-                    if reviews_left > 0:
-                        future_mask = (reps > 0) & (due > now_tensor) & (due < day_end)
-                        if future_mask.any():
-                            now = float(due[future_mask].min().item())
-                            continue
-                    break
+                short_count, short_lapses, short_cost = run_short_reviews(
+                    day_end_tensor
+                )
+                cost_today += short_cost
+                short_reviews_today += short_count
+                lapses_today += short_lapses
+            else:
+                remaining_cost = (
+                    max_cost - cost_for_limits if max_cost is not None else None
+                )
+                new_left = max_new - learned_today
+                learn_count, learn_cost = run_learning(
+                    day_start_tensor, remaining_cost, new_left
+                )
+                cost_today += learn_cost
+                cost_for_limits += learn_cost
+                learned_today += learn_count
 
-                if priority_mode == "review-first":
-                    remaining_cost = (
-                        max_cost - cost_today if max_cost is not None else None
-                    )
-                    (
-                        review_count,
-                        review_lapses,
-                        review_phase_count,
-                        review_phase_lapses,
-                        review_cost,
-                    ) = run_reviews(now_tensor, remaining_cost, reviews_left)
-                    cost_today += review_cost
-                    reviews_today += review_count
-                    lapses_today += review_lapses
-                    phase_reviews_today += review_phase_count
-                    phase_lapses_today += review_phase_lapses
+                remaining_cost = (
+                    max_cost - cost_for_limits if max_cost is not None else None
+                )
+                reviews_left = max_reviews - long_reviews_today
+                (
+                    review_count,
+                    review_lapses,
+                    review_phase_count,
+                    review_phase_lapses,
+                    review_cost,
+                ) = run_long_reviews(day_start_tensor, remaining_cost, reviews_left)
+                cost_today += review_cost
+                cost_for_limits += review_cost
+                long_reviews_today += review_count
+                lapses_today += review_lapses
+                phase_reviews_today += review_phase_count
+                phase_lapses_today += review_phase_lapses
 
-                    remaining_cost = (
-                        max_cost - cost_today if max_cost is not None else None
-                    )
-                    learn_count, learn_cost = run_learning(
-                        now_tensor, remaining_cost, new_left
-                    )
-                    cost_today += learn_cost
-                    learned_today += learn_count
-                else:
-                    remaining_cost = (
-                        max_cost - cost_today if max_cost is not None else None
-                    )
-                    learn_count, learn_cost = run_learning(
-                        now_tensor, remaining_cost, new_left
-                    )
-                    cost_today += learn_cost
-                    learned_today += learn_count
+                short_count, short_lapses, short_cost = run_short_reviews(
+                    day_end_tensor
+                )
+                cost_today += short_cost
+                short_reviews_today += short_count
+                lapses_today += short_lapses
 
-                    remaining_cost = (
-                        max_cost - cost_today if max_cost is not None else None
-                    )
-                    (
-                        review_count,
-                        review_lapses,
-                        review_phase_count,
-                        review_phase_lapses,
-                        review_cost,
-                    ) = run_reviews(now_tensor, remaining_cost, reviews_left)
-                    cost_today += review_cost
-                    reviews_today += review_count
-                    lapses_today += review_lapses
-                    phase_reviews_today += review_phase_count
-                    phase_lapses_today += review_phase_lapses
-
-                future_mask = (reps > 0) & (due > now_tensor) & (due < day_end)
-                if not future_mask.any():
-                    break
-                next_due = float(due[future_mask].min().item())
-                if next_due <= now:
-                    break
-                now = next_due
+            reviews_today = long_reviews_today + short_reviews_today
 
             daily_reviews[day] = reviews_today
             daily_new[day] = learned_today
