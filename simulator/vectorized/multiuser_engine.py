@@ -442,6 +442,7 @@ def simulate_multiuser(
                 cost_sums.scatter_add_(
                     0, sel_user, review_cost_full[sel_user, sel_card]
                 )
+                # Long reviews only include phase_none cards, so phase counts == totals.
                 return (
                     review_counts,
                     lapse_counts,
