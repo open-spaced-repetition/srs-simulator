@@ -367,13 +367,11 @@ class LSTMBatchedEnvOps:
         *,
         device: torch.device,
         dtype: torch.dtype,
-        interval_scale: float = 1.0,
         default_duration_ms: float = 2500.0,
     ) -> None:
         self.weights = weights
         self.device = device
         self.dtype = dtype
-        self.interval_scale = float(interval_scale)
         self.default_retention = 0.85
         self.use_duration_feature = weights.use_duration_feature
         self.n_hidden = weights.n_hidden
@@ -412,9 +410,9 @@ class LSTMBatchedEnvOps:
         )
 
     def retrievability(self, state: LSTMBatchedEnvState, elapsed: Tensor) -> Tensor:
-        elapsed_scaled = torch.clamp(elapsed, min=0.0) * self.interval_scale
+        elapsed_clamped = torch.clamp(elapsed, min=0.0)
         memorized = torch.full(
-            elapsed_scaled.shape,
+            elapsed_clamped.shape,
             self.default_retention,
             dtype=self.dtype,
             device=self.device,
@@ -422,7 +420,7 @@ class LSTMBatchedEnvOps:
         curves_mask = state.has_curves
         if curves_mask.any():
             memorized[curves_mask] = self._lstm_retention(
-                elapsed_scaled[curves_mask],
+                elapsed_clamped[curves_mask],
                 state.mem_w[curves_mask],
                 state.mem_s[curves_mask],
                 state.mem_d[curves_mask],
@@ -438,10 +436,10 @@ class LSTMBatchedEnvOps:
     ) -> Tensor:
         if user_idx.numel() == 0:
             return torch.zeros(0, device=self.device, dtype=self.dtype)
-        elapsed_scaled = torch.clamp(elapsed, min=0.0) * self.interval_scale
+        elapsed_clamped = torch.clamp(elapsed, min=0.0)
         curves_mask = state.has_curves[user_idx, card_idx]
         memorized = torch.full(
-            elapsed_scaled.shape,
+            elapsed_clamped.shape,
             self.default_retention,
             dtype=self.dtype,
             device=self.device,
@@ -451,7 +449,7 @@ class LSTMBatchedEnvOps:
             u_sel = user_idx[idx]
             c_sel = card_idx[idx]
             memorized[idx] = self._lstm_retention(
-                elapsed_scaled[idx],
+                elapsed_clamped[idx],
                 state.mem_w[u_sel, c_sel],
                 state.mem_s[u_sel, c_sel],
                 state.mem_d[u_sel, c_sel],
@@ -488,9 +486,9 @@ class LSTMBatchedEnvOps:
     ) -> None:
         if user_idx.numel() == 0:
             return
-        delay_scaled = torch.clamp(delays, min=0.0) * self.interval_scale
+        delay_clamped = torch.clamp(delays, min=0.0)
         rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_scaled.unsqueeze(-1)
+        delay_feature = delay_clamped.unsqueeze(-1)
         rating_feature = rating_clamped.unsqueeze(-1)
         if self.use_duration_feature:
             duration_feature = self.duration_value.expand_as(delay_feature)

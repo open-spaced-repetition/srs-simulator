@@ -303,7 +303,6 @@ class LSTMModel(MemoryModel):
         short_term: bool = False,
         use_duration_feature: bool = False,
         default_duration_ms: float = 2500.0,
-        interval_scale: float = 1.0,
         max_events: int = 64,
         input_mean: Tensor | Sequence[float] | float | None = None,
         input_std: Tensor | Sequence[float] | float | None = None,
@@ -318,7 +317,6 @@ class LSTMModel(MemoryModel):
         self.dtype = dtype
         self.use_duration_feature = use_duration_feature
         self.default_duration_ms = float(default_duration_ms)
-        self.interval_scale = float(interval_scale)
         self.max_events = max_events
         self.default_retention = 0.85
 
@@ -393,16 +391,16 @@ class LSTMModel(MemoryModel):
         curves = state.get("curves")
         if not curves:
             return self.default_retention
-        elapsed_scaled = max(0.0, float(elapsed)) * self.interval_scale
-        return self._forgetting_curve(elapsed_scaled, curves)
+        elapsed_clamped = max(0.0, float(elapsed))
+        return self._forgetting_curve(elapsed_clamped, curves)
 
     def predict_retention_from_curves(
         self, curves: dict[str, list[float]], elapsed: float
     ) -> float:
         if not curves:
             return self.default_retention
-        elapsed_scaled = max(0.0, float(elapsed)) * self.interval_scale
-        return self._forgetting_curve(elapsed_scaled, curves)
+        elapsed_clamped = max(0.0, float(elapsed))
+        return self._forgetting_curve(elapsed_clamped, curves)
 
     def curves_from_events(
         self, events: Sequence[tuple[float, int]]
@@ -452,7 +450,7 @@ class LSTMModel(MemoryModel):
         return h, c
 
     def _build_step_tensor(self, elapsed: float, rating: int) -> Tensor:
-        delay = max(float(elapsed), 0.0) * self.interval_scale
+        delay = max(float(elapsed), 0.0)
         rating_clamped = max(1, min(4, int(rating)))
         features: list[float] = [delay]
         if self.use_duration_feature:
@@ -465,7 +463,7 @@ class LSTMModel(MemoryModel):
             return None
         rows: list[list[float]] = []
         for elapsed, rating in events:
-            delay = max(float(elapsed), 0.0) * self.interval_scale
+            delay = max(float(elapsed), 0.0)
             features = [delay]
             if self.use_duration_feature:
                 features.append(self.default_duration_ms)
@@ -537,7 +535,6 @@ class LSTMVectorizedEnvOps:
         self.n_rnns = int(environment.network.n_rnns)
         self.n_hidden = int(environment.network.n_hidden)
         self.n_curves = int(environment.network.n_curves)
-        self.interval_scale = float(environment.interval_scale)
         self.use_duration_feature = environment.use_duration_feature
         self.default_retention = float(environment.default_retention)
         self.duration_value = None
@@ -575,9 +572,9 @@ class LSTMVectorizedEnvOps:
     def retrievability(
         self, state: LSTMVectorizedEnvState, idx: Tensor, elapsed: Tensor
     ) -> Tensor:
-        elapsed_scaled = torch.clamp(elapsed, min=0.0) * self.interval_scale
+        elapsed_clamped = torch.clamp(elapsed, min=0.0)
         memorized = torch.full(
-            elapsed_scaled.shape,
+            elapsed_clamped.shape,
             self.default_retention,
             dtype=self.dtype,
             device=self.device,
@@ -586,7 +583,7 @@ class LSTMVectorizedEnvOps:
         if curves_mask.any():
             curves_idx = idx[curves_mask]
             memorized[curves_mask] = self._lstm_retention(
-                elapsed_scaled[curves_mask],
+                elapsed_clamped[curves_mask],
                 state.mem_w[curves_idx],
                 state.mem_s[curves_idx],
                 state.mem_d[curves_idx],
@@ -622,9 +619,9 @@ class LSTMVectorizedEnvOps:
     ) -> None:
         if idx.numel() == 0:
             return
-        delay_scaled = torch.clamp(delays, min=0.0) * self.interval_scale
+        delay_clamped = torch.clamp(delays, min=0.0)
         rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_scaled.unsqueeze(-1)
+        delay_feature = delay_clamped.unsqueeze(-1)
         rating_feature = rating_clamped.unsqueeze(-1)
         if self.use_duration_feature:
             duration_feature = self.duration_value.expand_as(delay_feature)

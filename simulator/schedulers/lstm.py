@@ -36,7 +36,6 @@ class LSTMScheduler(Scheduler):
         desired_retention: float = 0.9,
         use_duration_feature: bool = False,
         default_duration_ms: float = 2500.0,
-        interval_scale: float = 1.0,
         min_interval: float = 1.0,
         max_interval: float = 3650.0,
         search_steps: int = 24,
@@ -68,7 +67,6 @@ class LSTMScheduler(Scheduler):
             short_term=short_term,
             use_duration_feature=use_duration_feature,
             default_duration_ms=default_duration_ms,
-            interval_scale=interval_scale,
             device=device,
         )
         self._debug_interval = bool(os.getenv("SRS_DEBUG_LSTM_INTERVAL"))
@@ -314,7 +312,6 @@ class LSTMVectorizedSchedulerOps:
         self.n_rnns = int(self.model.network.n_rnns)
         self.n_hidden = int(self.model.network.n_hidden)
         self.n_curves = int(self.model.network.n_curves)
-        self.interval_scale = float(self.model.interval_scale)
         self.default_retention = float(self.model.default_retention)
         self.use_duration_feature = self.model.use_duration_feature
         self.duration_value = None
@@ -362,9 +359,9 @@ class LSTMVectorizedSchedulerOps:
     ) -> "torch.Tensor":
         if idx.numel() == 0:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
-        elapsed_scaled = self._torch.clamp(elapsed, min=0.0) * self.interval_scale
+        elapsed_clamped = self._torch.clamp(elapsed, min=0.0)
         scores = self._torch.full(
-            elapsed_scaled.shape,
+            elapsed_clamped.shape,
             self.default_retention,
             dtype=self.dtype,
             device=self.device,
@@ -373,7 +370,7 @@ class LSTMVectorizedSchedulerOps:
         if curves_mask.any():
             curves_idx = idx[curves_mask]
             scores[curves_mask] = self._lstm_retention(
-                elapsed_scaled[curves_mask],
+                elapsed_clamped[curves_mask],
                 state.mem_w[curves_idx],
                 state.mem_s[curves_idx],
                 state.mem_d[curves_idx],
@@ -412,9 +409,9 @@ class LSTMVectorizedSchedulerOps:
         delays: "torch.Tensor",
         ratings: "torch.Tensor",
     ) -> None:
-        delay_scaled = self._torch.clamp(delays, min=0.0) * self.interval_scale
+        delay_clamped = self._torch.clamp(delays, min=0.0)
         rating_clamped = self._torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_scaled.unsqueeze(-1)
+        delay_feature = delay_clamped.unsqueeze(-1)
         rating_feature = rating_clamped.unsqueeze(-1)
         if self.use_duration_feature and self.duration_value is not None:
             duration_feature = self.duration_value.expand_as(delay_feature)
@@ -497,8 +494,8 @@ class LSTMVectorizedSchedulerOps:
         stabilities: "torch.Tensor",
         decays: "torch.Tensor",
     ) -> "torch.Tensor":
-        elapsed_scaled = self._torch.clamp(days, min=0.0) * self.interval_scale
-        return self._lstm_retention(elapsed_scaled, weights, stabilities, decays)
+        elapsed_clamped = self._torch.clamp(days, min=0.0)
+        return self._lstm_retention(elapsed_clamped, weights, stabilities, decays)
 
     def _retention_and_derivative(
         self,
@@ -507,15 +504,12 @@ class LSTMVectorizedSchedulerOps:
         stabilities: "torch.Tensor",
         decays: "torch.Tensor",
     ) -> tuple["torch.Tensor", "torch.Tensor"]:
-        elapsed_scaled = self._torch.clamp(days, min=0.0) * self.interval_scale
+        elapsed_clamped = self._torch.clamp(days, min=0.0)
         denom = stabilities + EPS
-        x = 1.0 + elapsed_scaled.unsqueeze(-1) / denom
+        x = 1.0 + elapsed_clamped.unsqueeze(-1) / denom
         x_pow = x ** (-decays)
         total = self._torch.sum(weights * x_pow, dim=-1)
-        deriv = (
-            self._torch.sum(weights * (-decays / denom) * x_pow / x, dim=-1)
-            * self.interval_scale
-        )
+        deriv = self._torch.sum(weights * (-decays / denom) * x_pow / x, dim=-1)
         total = self._torch.clamp(total, min=0.0, max=1.0)
         return (1.0 - EPS) * total, (1.0 - EPS) * deriv
 
@@ -570,7 +564,6 @@ class LSTMBatchSchedulerOps:
         min_interval: float = 1.0,
         max_interval: float = 3650.0,
         search_steps: int = 24,
-        interval_scale: float = 1.0,
         default_retention: float = 0.85,
         default_duration_ms: float = 2500.0,
         device: "torch.device",
@@ -583,7 +576,6 @@ class LSTMBatchSchedulerOps:
         self.min_interval = float(min_interval)
         self.max_interval = float(max_interval)
         self.search_steps = int(search_steps)
-        self.interval_scale = float(interval_scale)
         self.default_retention = float(default_retention)
         self.use_duration_feature = bool(weights.use_duration_feature)
         self.duration_value = None
@@ -624,9 +616,9 @@ class LSTMBatchSchedulerOps:
     def review_priority(
         self, state: LSTMBatchSchedulerState, elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
-        elapsed_scaled = torch.clamp(elapsed, min=0.0) * self.interval_scale
+        elapsed_clamped = torch.clamp(elapsed, min=0.0)
         scores = torch.full(
-            elapsed_scaled.shape,
+            elapsed_clamped.shape,
             self.default_retention,
             dtype=self.dtype,
             device=self.device,
@@ -634,7 +626,7 @@ class LSTMBatchSchedulerOps:
         curves_mask = state.has_curves
         if curves_mask.any():
             scores[curves_mask] = self._lstm_retention(
-                elapsed_scaled[curves_mask],
+                elapsed_clamped[curves_mask],
                 state.mem_w[curves_mask],
                 state.mem_s[curves_mask],
                 state.mem_d[curves_mask],
@@ -676,9 +668,9 @@ class LSTMBatchSchedulerOps:
         delays: "torch.Tensor",
         ratings: "torch.Tensor",
     ) -> None:
-        delay_scaled = torch.clamp(delays, min=0.0) * self.interval_scale
+        delay_clamped = torch.clamp(delays, min=0.0)
         rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_scaled.unsqueeze(-1)
+        delay_feature = delay_clamped.unsqueeze(-1)
         rating_feature = rating_clamped.unsqueeze(-1)
         if self.use_duration_feature and self.duration_value is not None:
             duration_feature = self.duration_value.expand_as(delay_feature)
@@ -760,8 +752,8 @@ class LSTMBatchSchedulerOps:
         stabilities: "torch.Tensor",
         decays: "torch.Tensor",
     ) -> "torch.Tensor":
-        elapsed_scaled = torch.clamp(days, min=0.0) * self.interval_scale
-        return self._lstm_retention(elapsed_scaled, weights, stabilities, decays)
+        elapsed_clamped = torch.clamp(days, min=0.0)
+        return self._lstm_retention(elapsed_clamped, weights, stabilities, decays)
 
     def _retention_and_derivative(
         self,
@@ -770,15 +762,12 @@ class LSTMBatchSchedulerOps:
         stabilities: "torch.Tensor",
         decays: "torch.Tensor",
     ) -> tuple["torch.Tensor", "torch.Tensor"]:
-        elapsed_scaled = torch.clamp(days, min=0.0) * self.interval_scale
+        elapsed_clamped = torch.clamp(days, min=0.0)
         denom = stabilities + EPS
-        x = 1.0 + elapsed_scaled.unsqueeze(-1) / denom
+        x = 1.0 + elapsed_clamped.unsqueeze(-1) / denom
         x_pow = x ** (-decays)
         total = torch.sum(weights * x_pow, dim=-1)
-        deriv = (
-            torch.sum(weights * (-decays / denom) * x_pow / x, dim=-1)
-            * self.interval_scale
-        )
+        deriv = torch.sum(weights * (-decays / denom) * x_pow / x, dim=-1)
         total = torch.clamp(total, min=0.0, max=1.0)
         return (1.0 - EPS) * total, (1.0 - EPS) * deriv
 
