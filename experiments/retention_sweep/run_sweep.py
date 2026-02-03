@@ -415,25 +415,17 @@ def _run_once(
     env = simulate_cli.ENVIRONMENT_FACTORIES[run_args.environment](run_args)
     agent = simulate_cli.SCHEDULER_FACTORIES[run_args.scheduler](run_args)
     if run_args.engine == "event":
-        if short_term_source == "steps":
+        if short_term_source in {"steps", "sched"}:
             from simulator.short_term import ShortTermScheduler
 
             agent = ShortTermScheduler(
                 agent,
-                learning_steps=learning_steps,
-                relearning_steps=relearning_steps,
+                learning_steps=learning_steps if short_term_source == "steps" else [],
+                relearning_steps=relearning_steps
+                if short_term_source == "steps"
+                else [],
                 threshold_days=getattr(run_args, "short_term_threshold", 0.5),
-                allow_short_term_interval=False,
-            )
-        elif short_term_source == "sched":
-            from simulator.short_term import ShortTermScheduler
-
-            agent = ShortTermScheduler(
-                agent,
-                learning_steps=[],
-                relearning_steps=[],
-                threshold_days=getattr(run_args, "short_term_threshold", 0.5),
-                allow_short_term_interval=True,
+                allow_short_term_interval=short_term_source == "sched",
             )
     cost_limit = (
         run_args.cost_limit_minutes * 60.0

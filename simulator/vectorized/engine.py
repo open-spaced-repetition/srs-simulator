@@ -416,98 +416,34 @@ def simulate(
 
                 interval_days = intervals_next.to(env_dtype)
                 short_mask = torch.zeros_like(exec_rating, dtype=torch.bool)
-                if steps_mode and (learning_steps_len > 0 or relearning_steps_len > 0):
-                    new_phase = exec_phase.clone()
-                    new_remaining = short_remaining[exec_idx].clone()
-
-                    if learning_steps_len > 0:
-                        mask_learning = exec_phase == phase_learning
-                        if mask_learning.any():
-                            delay_secs, next_remaining, use_steps = _schedule_steps(
-                                new_remaining[mask_learning],
-                                exec_rating[mask_learning],
-                                learning_steps_secs,
-                                learning_steps_len,
-                            )
-                            interval_days[mask_learning] = torch.where(
-                                use_steps,
-                                delay_secs / day_secs,
-                                interval_days[mask_learning],
-                            )
-                            short_mask[mask_learning] = use_steps
-                            new_phase[mask_learning] = torch.where(
-                                use_steps,
-                                torch.full_like(
-                                    new_phase[mask_learning], phase_learning
-                                ),
-                                torch.full_like(new_phase[mask_learning], phase_none),
-                            )
-                            new_remaining[mask_learning] = torch.where(
-                                use_steps,
-                                next_remaining,
-                                torch.zeros_like(next_remaining),
-                            )
-
-                    if relearning_steps_len > 0:
-                        mask_relearning = exec_phase == phase_relearning
-                        if mask_relearning.any():
-                            delay_secs, next_remaining, use_steps = _schedule_steps(
-                                new_remaining[mask_relearning],
-                                exec_rating[mask_relearning],
-                                relearning_steps_secs,
-                                relearning_steps_len,
-                            )
-                            interval_days[mask_relearning] = torch.where(
-                                use_steps,
-                                delay_secs / day_secs,
-                                interval_days[mask_relearning],
-                            )
-                            short_mask[mask_relearning] = use_steps
-                            new_phase[mask_relearning] = torch.where(
-                                use_steps,
-                                torch.full_like(
-                                    new_phase[mask_relearning], phase_relearning
-                                ),
-                                torch.full_like(new_phase[mask_relearning], phase_none),
-                            )
-                            new_remaining[mask_relearning] = torch.where(
-                                use_steps,
-                                next_remaining,
-                                torch.zeros_like(next_remaining),
-                            )
-
-                        mask_enter = (exec_phase == phase_none) & (exec_rating == 1)
-                        if mask_enter.any():
-                            start_remaining = torch.full_like(
-                                exec_rating[mask_enter], relearning_steps_len
-                            )
-                            delay_secs, next_remaining, use_steps = _schedule_steps(
-                                start_remaining,
-                                exec_rating[mask_enter],
-                                relearning_steps_secs,
-                                relearning_steps_len,
-                            )
-                            interval_days[mask_enter] = torch.where(
-                                use_steps,
-                                delay_secs / day_secs,
-                                interval_days[mask_enter],
-                            )
-                            short_mask[mask_enter] = use_steps
-                            new_phase[mask_enter] = torch.where(
-                                use_steps,
-                                torch.full_like(
-                                    new_phase[mask_enter], phase_relearning
-                                ),
-                                torch.full_like(new_phase[mask_enter], phase_none),
-                            )
-                            new_remaining[mask_enter] = torch.where(
-                                use_steps,
-                                next_remaining,
-                                torch.zeros_like(next_remaining),
-                            )
-
-                    short_phase[exec_idx] = new_phase
-                    short_remaining[exec_idx] = new_remaining
+                if steps_mode and relearning_steps_len > 0:
+                    mask_enter = exec_rating == 1
+                    if mask_enter.any():
+                        start_remaining = torch.full_like(
+                            exec_rating[mask_enter], relearning_steps_len
+                        )
+                        delay_secs, next_remaining, use_steps = _schedule_steps(
+                            start_remaining,
+                            exec_rating[mask_enter],
+                            relearning_steps_secs,
+                            relearning_steps_len,
+                        )
+                        interval_days[mask_enter] = torch.where(
+                            use_steps,
+                            delay_secs / day_secs,
+                            interval_days[mask_enter],
+                        )
+                        short_mask[mask_enter] = use_steps
+                        short_phase[exec_idx[mask_enter]] = torch.where(
+                            use_steps,
+                            torch.full_like(exec_rating[mask_enter], phase_relearning),
+                            torch.full_like(exec_rating[mask_enter], phase_none),
+                        ).to(torch.int8)
+                        short_remaining[exec_idx[mask_enter]] = torch.where(
+                            use_steps,
+                            next_remaining,
+                            torch.zeros_like(next_remaining),
+                        )
 
                 elif sched_mode:
                     short_mask = interval_days < short_term_threshold

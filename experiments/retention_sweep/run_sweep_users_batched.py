@@ -385,6 +385,93 @@ def _progress_callback_from_queue(
     return _update
 
 
+def _simulate_and_log(
+    *,
+    args: argparse.Namespace,
+    batch: list[int],
+    env_ops,
+    sched_ops,
+    behavior: MultiUserBehavior,
+    cost_model: MultiUserCost,
+    progress: bool,
+    progress_queue,
+    device_label: str,
+    run_label: str,
+    environment: str,
+    scheduler_name: str,
+    scheduler_spec: str,
+    desired_retention: float | None,
+    fixed_interval: float | None,
+    short_term_source: str | None,
+    learning_steps: list[float],
+    relearning_steps: list[float],
+    learning_steps_arg: str | None,
+    relearning_steps_arg: str | None,
+    log_root: Path,
+) -> None:
+    progress_callback = _progress_callback_from_queue(
+        progress_queue,
+        multiplier=len(batch),
+        device_label=device_label,
+        run_label=run_label,
+        total_days=args.days,
+    )
+    stats_list = simulate_multiuser(
+        days=args.days,
+        deck_size=args.deck,
+        env_ops=env_ops,
+        sched_ops=sched_ops,
+        behavior=behavior,
+        cost_model=cost_model,
+        seed=args.seed,
+        device=env_ops.device,
+        dtype=torch.float32,
+        fuzz=args.fuzz,
+        priority_mode=args.priority,
+        progress=progress,
+        progress_label=run_label,
+        progress_callback=progress_callback,
+        short_term_source=short_term_source,
+        learning_steps=learning_steps,
+        relearning_steps=relearning_steps,
+        short_term_threshold=args.short_term_threshold,
+    )
+    if args.no_log:
+        return
+    for user_id, stats in zip(batch, stats_list):
+        user_log_dir = log_root / f"user_{user_id}"
+        user_log_dir.mkdir(parents=True, exist_ok=True)
+        log_args = argparse.Namespace(
+            engine="batched",
+            days=args.days,
+            deck=args.deck,
+            learn_limit=args.learn_limit,
+            review_limit=args.review_limit,
+            cost_limit_minutes=args.cost_limit_minutes,
+            priority=args.priority,
+            environment=environment,
+            scheduler=scheduler_name,
+            scheduler_spec=scheduler_spec,
+            user_id=user_id,
+            button_usage=str(args.button_usage)
+            if args.button_usage is not None
+            else None,
+            desired_retention=desired_retention,
+            scheduler_priority=args.scheduler_priority,
+            sspmmc_policy=None,
+            fixed_interval=fixed_interval,
+            seed=args.seed,
+            fuzz=args.fuzz,
+            short_term_source=short_term_source,
+            learning_steps=learning_steps_arg,
+            relearning_steps=relearning_steps_arg,
+            short_term_threshold=args.short_term_threshold,
+            log_dir=user_log_dir,
+            log_reviews=False,
+        )
+        simulate_cli._write_log(log_args, stats)
+
+
 def _run_batch_core(
     *,
     args: argparse.Namespace,
@@ -516,13 +603,6 @@ def _run_batch_core(
                     dim=0,
                 ).to(env_ops.device)
                 for dr in dr_values:
-                    progress_callback = _progress_callback_from_queue(
-                        progress_queue,
-                        multiplier=len(batch),
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr={dr:.2f}",
-                        total_days=args.days,
-                    )
                     scheduler_ops = FSRS6BatchSchedulerOps(
                         weights=weights,
                         desired_retention=dr,
@@ -531,59 +611,29 @@ def _run_batch_core(
                         device=env_ops.device,
                         dtype=torch.float32,
                     )
-                    stats_list = simulate_multiuser(
-                        days=args.days,
-                        deck_size=args.deck,
+                    _simulate_and_log(
+                        args=args,
+                        batch=batch,
                         env_ops=env_ops,
                         sched_ops=scheduler_ops,
                         behavior=behavior,
                         cost_model=cost_model,
-                        seed=args.seed,
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                        fuzz=args.fuzz,
-                        priority_mode=args.priority,
                         progress=progress,
-                        progress_label=f"{label_prefix} dr={dr:.2f}",
-                        progress_callback=progress_callback,
+                        progress_queue=progress_queue,
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr={dr:.2f}",
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=dr,
+                        fixed_interval=fixed_interval,
                         short_term_source=short_term_source,
                         learning_steps=learning_steps,
                         relearning_steps=relearning_steps,
-                        short_term_threshold=args.short_term_threshold,
+                        learning_steps_arg=learning_steps_arg,
+                        relearning_steps_arg=relearning_steps_arg,
+                        log_root=log_root,
                     )
-                    if not args.no_log:
-                        for user_id, stats in zip(batch, stats_list):
-                            user_log_dir = log_root / f"user_{user_id}"
-                            user_log_dir.mkdir(parents=True, exist_ok=True)
-                            log_args = argparse.Namespace(
-                                engine="batched",
-                                days=args.days,
-                                deck=args.deck,
-                                learn_limit=args.learn_limit,
-                                review_limit=args.review_limit,
-                                cost_limit_minutes=args.cost_limit_minutes,
-                                priority=args.priority,
-                                environment=environment,
-                                scheduler=name,
-                                scheduler_spec=raw,
-                                user_id=user_id,
-                                button_usage=str(args.button_usage)
-                                if args.button_usage is not None
-                                else None,
-                                desired_retention=dr,
-                                scheduler_priority=args.scheduler_priority,
-                                sspmmc_policy=None,
-                                fixed_interval=fixed_interval,
-                                seed=args.seed,
-                                fuzz=args.fuzz,
-                                short_term_source=short_term_source,
-                                learning_steps=learning_steps_arg,
-                                relearning_steps=relearning_steps_arg,
-                                short_term_threshold=args.short_term_threshold,
-                                log_dir=user_log_dir,
-                                log_reviews=False,
-                            )
-                            simulate_cli._write_log(log_args, stats)
                 continue
 
             if name == "lstm":
@@ -598,72 +648,35 @@ def _run_batch_core(
                         dtype=torch.float32,
                     )
                 for dr in dr_values:
-                    progress_callback = _progress_callback_from_queue(
-                        progress_queue,
-                        multiplier=len(batch),
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr={dr:.2f}",
-                        total_days=args.days,
-                    )
                     sched_ops = LSTMBatchSchedulerOps(
                         lstm_packed,
                         desired_retention=dr,
                         device=env_ops.device,
                         dtype=torch.float32,
                     )
-                    stats_list = simulate_multiuser(
-                        days=args.days,
-                        deck_size=args.deck,
+                    _simulate_and_log(
+                        args=args,
+                        batch=batch,
                         env_ops=env_ops,
                         sched_ops=sched_ops,
                         behavior=behavior,
                         cost_model=cost_model,
-                        seed=args.seed,
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                        fuzz=args.fuzz,
-                        priority_mode=args.priority,
                         progress=progress,
-                        progress_label=f"{label_prefix} dr={dr:.2f}",
-                        progress_callback=progress_callback,
+                        progress_queue=progress_queue,
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr={dr:.2f}",
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=dr,
+                        fixed_interval=fixed_interval,
                         short_term_source=short_term_source,
                         learning_steps=learning_steps,
                         relearning_steps=relearning_steps,
-                        short_term_threshold=args.short_term_threshold,
+                        learning_steps_arg=learning_steps_arg,
+                        relearning_steps_arg=relearning_steps_arg,
+                        log_root=log_root,
                     )
-                    if not args.no_log:
-                        for user_id, stats in zip(batch, stats_list):
-                            user_log_dir = log_root / f"user_{user_id}"
-                            user_log_dir.mkdir(parents=True, exist_ok=True)
-                            log_args = argparse.Namespace(
-                                engine="batched",
-                                days=args.days,
-                                deck=args.deck,
-                                learn_limit=args.learn_limit,
-                                review_limit=args.review_limit,
-                                cost_limit_minutes=args.cost_limit_minutes,
-                                priority=args.priority,
-                                environment=environment,
-                                scheduler=name,
-                                scheduler_spec=raw,
-                                user_id=user_id,
-                                button_usage=str(args.button_usage)
-                                if args.button_usage is not None
-                                else None,
-                                desired_retention=dr,
-                                scheduler_priority=args.scheduler_priority,
-                                sspmmc_policy=None,
-                                fixed_interval=fixed_interval,
-                                seed=args.seed,
-                                fuzz=args.fuzz,
-                                short_term_source=short_term_source,
-                                learning_steps=learning_steps_arg,
-                                relearning_steps=relearning_steps_arg,
-                                short_term_threshold=args.short_term_threshold,
-                                log_dir=user_log_dir,
-                                log_reviews=False,
-                            )
-                            simulate_cli._write_log(log_args, stats)
                 continue
 
             if name == "anki_sm2":
@@ -679,66 +692,29 @@ def _run_batch_core(
                     device=env_ops.device,
                     dtype=torch.float32,
                 )
-                progress_callback = _progress_callback_from_queue(
-                    progress_queue,
-                    multiplier=len(batch),
-                    device_label=device_label,
-                    run_label=label_prefix,
-                    total_days=args.days,
-                )
-                stats_list = simulate_multiuser(
-                    days=args.days,
-                    deck_size=args.deck,
+                _simulate_and_log(
+                    args=args,
+                    batch=batch,
                     env_ops=env_ops,
                     sched_ops=sched_ops,
                     behavior=behavior,
                     cost_model=cost_model,
-                    seed=args.seed,
-                    device=env_ops.device,
-                    dtype=torch.float32,
-                    fuzz=args.fuzz,
-                    priority_mode=args.priority,
                     progress=progress,
-                    progress_label=label_prefix,
-                    progress_callback=progress_callback,
+                    progress_queue=progress_queue,
+                    device_label=device_label,
+                    run_label=label_prefix,
+                    environment=environment,
+                    scheduler_name=name,
+                    scheduler_spec=raw,
+                    desired_retention=None,
+                    fixed_interval=fixed_interval,
                     short_term_source=short_term_source,
                     learning_steps=learning_steps,
                     relearning_steps=relearning_steps,
-                    short_term_threshold=args.short_term_threshold,
+                    learning_steps_arg=learning_steps_arg,
+                    relearning_steps_arg=relearning_steps_arg,
+                    log_root=log_root,
                 )
-                if not args.no_log:
-                    for user_id, stats in zip(batch, stats_list):
-                        user_log_dir = log_root / f"user_{user_id}"
-                        user_log_dir.mkdir(parents=True, exist_ok=True)
-                        log_args = argparse.Namespace(
-                            engine="batched",
-                            days=args.days,
-                            deck=args.deck,
-                            learn_limit=args.learn_limit,
-                            review_limit=args.review_limit,
-                            cost_limit_minutes=args.cost_limit_minutes,
-                            priority=args.priority,
-                            environment=environment,
-                            scheduler=name,
-                            scheduler_spec=raw,
-                            user_id=user_id,
-                            button_usage=str(args.button_usage)
-                            if args.button_usage is not None
-                            else None,
-                            desired_retention=None,
-                            scheduler_priority=args.scheduler_priority,
-                            sspmmc_policy=None,
-                            fixed_interval=fixed_interval,
-                            seed=args.seed,
-                            fuzz=args.fuzz,
-                            short_term_source=short_term_source,
-                            learning_steps=learning_steps_arg,
-                            relearning_steps=relearning_steps_arg,
-                            short_term_threshold=args.short_term_threshold,
-                            log_dir=user_log_dir,
-                            log_reviews=False,
-                        )
-                        simulate_cli._write_log(log_args, stats)
                 continue
 
             if name == "memrise":
@@ -748,66 +724,29 @@ def _run_batch_core(
                     device=env_ops.device,
                     dtype=torch.float32,
                 )
-                progress_callback = _progress_callback_from_queue(
-                    progress_queue,
-                    multiplier=len(batch),
-                    device_label=device_label,
-                    run_label=label_prefix,
-                    total_days=args.days,
-                )
-                stats_list = simulate_multiuser(
-                    days=args.days,
-                    deck_size=args.deck,
+                _simulate_and_log(
+                    args=args,
+                    batch=batch,
                     env_ops=env_ops,
                     sched_ops=sched_ops,
                     behavior=behavior,
                     cost_model=cost_model,
-                    seed=args.seed,
-                    device=env_ops.device,
-                    dtype=torch.float32,
-                    fuzz=args.fuzz,
-                    priority_mode=args.priority,
                     progress=progress,
-                    progress_label=label_prefix,
-                    progress_callback=progress_callback,
+                    progress_queue=progress_queue,
+                    device_label=device_label,
+                    run_label=label_prefix,
+                    environment=environment,
+                    scheduler_name=name,
+                    scheduler_spec=raw,
+                    desired_retention=None,
+                    fixed_interval=fixed_interval,
                     short_term_source=short_term_source,
                     learning_steps=learning_steps,
                     relearning_steps=relearning_steps,
-                    short_term_threshold=args.short_term_threshold,
+                    learning_steps_arg=learning_steps_arg,
+                    relearning_steps_arg=relearning_steps_arg,
+                    log_root=log_root,
                 )
-                if not args.no_log:
-                    for user_id, stats in zip(batch, stats_list):
-                        user_log_dir = log_root / f"user_{user_id}"
-                        user_log_dir.mkdir(parents=True, exist_ok=True)
-                        log_args = argparse.Namespace(
-                            engine="batched",
-                            days=args.days,
-                            deck=args.deck,
-                            learn_limit=args.learn_limit,
-                            review_limit=args.review_limit,
-                            cost_limit_minutes=args.cost_limit_minutes,
-                            priority=args.priority,
-                            environment=environment,
-                            scheduler=name,
-                            scheduler_spec=raw,
-                            user_id=user_id,
-                            button_usage=str(args.button_usage)
-                            if args.button_usage is not None
-                            else None,
-                            desired_retention=None,
-                            scheduler_priority=args.scheduler_priority,
-                            sspmmc_policy=None,
-                            fixed_interval=fixed_interval,
-                            seed=args.seed,
-                            fuzz=args.fuzz,
-                            short_term_source=short_term_source,
-                            learning_steps=learning_steps_arg,
-                            relearning_steps=relearning_steps_arg,
-                            short_term_threshold=args.short_term_threshold,
-                            log_dir=user_log_dir,
-                            log_reviews=False,
-                        )
-                        simulate_cli._write_log(log_args, stats)
                 continue
 
             if name == "fixed":
@@ -817,66 +756,29 @@ def _run_batch_core(
                     device=env_ops.device,
                     dtype=torch.float32,
                 )
-                progress_callback = _progress_callback_from_queue(
-                    progress_queue,
-                    multiplier=len(batch),
-                    device_label=device_label,
-                    run_label=f"{label_prefix} ivl={interval:.2f}",
-                    total_days=args.days,
-                )
-                stats_list = simulate_multiuser(
-                    days=args.days,
-                    deck_size=args.deck,
+                _simulate_and_log(
+                    args=args,
+                    batch=batch,
                     env_ops=env_ops,
                     sched_ops=sched_ops,
                     behavior=behavior,
                     cost_model=cost_model,
-                    seed=args.seed,
-                    device=env_ops.device,
-                    dtype=torch.float32,
-                    fuzz=args.fuzz,
-                    priority_mode=args.priority,
                     progress=progress,
-                    progress_label=f"{label_prefix} ivl={interval:.2f}",
-                    progress_callback=progress_callback,
+                    progress_queue=progress_queue,
+                    device_label=device_label,
+                    run_label=f"{label_prefix} ivl={interval:.2f}",
+                    environment=environment,
+                    scheduler_name=name,
+                    scheduler_spec=raw,
+                    desired_retention=None,
+                    fixed_interval=interval,
                     short_term_source=short_term_source,
                     learning_steps=learning_steps,
                     relearning_steps=relearning_steps,
-                    short_term_threshold=args.short_term_threshold,
+                    learning_steps_arg=learning_steps_arg,
+                    relearning_steps_arg=relearning_steps_arg,
+                    log_root=log_root,
                 )
-                if not args.no_log:
-                    for user_id, stats in zip(batch, stats_list):
-                        user_log_dir = log_root / f"user_{user_id}"
-                        user_log_dir.mkdir(parents=True, exist_ok=True)
-                        log_args = argparse.Namespace(
-                            engine="batched",
-                            days=args.days,
-                            deck=args.deck,
-                            learn_limit=args.learn_limit,
-                            review_limit=args.review_limit,
-                            cost_limit_minutes=args.cost_limit_minutes,
-                            priority=args.priority,
-                            environment=environment,
-                            scheduler=name,
-                            scheduler_spec=raw,
-                            user_id=user_id,
-                            button_usage=str(args.button_usage)
-                            if args.button_usage is not None
-                            else None,
-                            desired_retention=None,
-                            scheduler_priority=args.scheduler_priority,
-                            sspmmc_policy=None,
-                            fixed_interval=interval,
-                            seed=args.seed,
-                            fuzz=args.fuzz,
-                            short_term_source=short_term_source,
-                            learning_steps=learning_steps_arg,
-                            relearning_steps=relearning_steps_arg,
-                            short_term_threshold=args.short_term_threshold,
-                            log_dir=user_log_dir,
-                            log_reviews=False,
-                        )
-                        simulate_cli._write_log(log_args, stats)
                 continue
 
 
