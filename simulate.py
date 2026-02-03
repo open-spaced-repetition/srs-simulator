@@ -471,6 +471,17 @@ def main() -> None:
         long_s = timing.get("long_reviews_s", 0.0)
         short_s = timing.get("short_reviews_s", 0.0)
         sys.stderr.write(f"Review timing: long={long_s:.2f}s, short={short_s:.2f}s\n")
+        short_loops = timing.get("short_review_loops")
+        loop_days = timing.get("short_review_loop_days")
+        if short_loops is not None and loop_days is not None:
+            avg_per_day = short_loops / args.days if args.days else 0.0
+            avg_active = short_loops / loop_days if loop_days > 0 else 0.0
+            sys.stderr.write(
+                "Short-term loops: "
+                f"total={int(short_loops)}, "
+                f"avg/day={avg_per_day:.2f}, "
+                f"avg/active-day={avg_active:.2f}\n"
+            )
     _print_review_summary(stats)
     if not args.no_log:
         _write_log(args, stats)
