@@ -55,6 +55,15 @@ def with_review_fuzz(
     return fuzzed.to(torch.int64)
 
 
+def with_learning_fuzz(secs: torch.Tensor, fuzz_factors: torch.Tensor) -> torch.Tensor:
+    """Apply Anki-style learning fuzz: up to +25% or +5 minutes (300s)."""
+    extra = torch.minimum(
+        secs * 0.25, torch.tensor(300.0, device=secs.device, dtype=secs.dtype)
+    )
+    extra = torch.clamp(extra, min=0.0)
+    return torch.where(secs <= 0.0, torch.zeros_like(secs), secs + fuzz_factors * extra)
+
+
 def round_intervals(
     intervals: torch.Tensor, minimum: int, maximum: int | None = None
 ) -> torch.Tensor:

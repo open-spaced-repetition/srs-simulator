@@ -353,8 +353,11 @@ def main() -> None:
     args.short_term_source = short_term_source
     args.short_term = bool(short_term_source)
 
-    if short_term_source in {"steps", "sched"} and args.engine != "event":
-        raise SystemExit("Short-term scheduling requires --engine event.")
+    if short_term_source in {"steps", "sched"} and args.engine not in {
+        "event",
+        "vectorized",
+    }:
+        raise SystemExit("Short-term scheduling requires --engine event or vectorized.")
     if short_term_source == "sched":
         if args.scheduler != "lstm":
             raise SystemExit("--short-term-source=sched requires --sched lstm.")
@@ -368,22 +371,23 @@ def main() -> None:
     rng = random.Random(args.seed)
     env = ENVIRONMENT_FACTORIES[args.env](args)
     agent = SCHEDULER_FACTORIES[args.scheduler](args)
-    if short_term_source == "steps":
-        agent = ShortTermScheduler(
-            agent,
-            learning_steps=learning_steps,
-            relearning_steps=relearning_steps,
-            threshold_days=args.short_term_threshold,
-            allow_short_term_interval=False,
-        )
-    elif short_term_source == "sched":
-        agent = ShortTermScheduler(
-            agent,
-            learning_steps=[],
-            relearning_steps=[],
-            threshold_days=args.short_term_threshold,
-            allow_short_term_interval=True,
-        )
+    if args.engine == "event":
+        if short_term_source == "steps":
+            agent = ShortTermScheduler(
+                agent,
+                learning_steps=learning_steps,
+                relearning_steps=relearning_steps,
+                threshold_days=args.short_term_threshold,
+                allow_short_term_interval=False,
+            )
+        elif short_term_source == "sched":
+            agent = ShortTermScheduler(
+                agent,
+                learning_steps=[],
+                relearning_steps=[],
+                threshold_days=args.short_term_threshold,
+                allow_short_term_interval=True,
+            )
     cost_limit = (
         args.cost_limit_minutes * 60.0 if args.cost_limit_minutes is not None else None
     )
@@ -441,6 +445,10 @@ def main() -> None:
                 device=args.torch_device,
                 fuzz=args.fuzz,
                 progress=not args.no_progress,
+                short_term_source=short_term_source,
+                learning_steps=learning_steps,
+                relearning_steps=relearning_steps,
+                short_term_threshold=args.short_term_threshold,
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
@@ -458,6 +466,7 @@ def main() -> None:
         )
     elapsed = time.perf_counter() - start_time
     sys.stderr.write(f"Simulation time: {elapsed:.2f}s\n")
+    _print_review_summary(stats)
     if not args.no_log:
         _write_log(args, stats)
 
@@ -640,6 +649,27 @@ def plot_simulation(stats, args: argparse.Namespace) -> None:
     fig.text(0.5, 0.01, footer, ha="center", va="bottom", fontsize=8)
     plt.tight_layout(rect=(0.0, 0.04, 1.0, 1.0))
     plt.show()
+
+
+def _print_review_summary(stats) -> None:
+    daily = list(stats.daily_reviews or [])
+    if not daily:
+        return
+    total = int(stats.total_reviews)
+    days = len(daily)
+    mean_daily = total / days if days else 0.0
+    max_daily = max(daily)
+    nonzero = [count for count in daily if count > 0]
+    days_with_reviews = len(nonzero)
+    mean_on_review_days = sum(nonzero) / days_with_reviews if days_with_reviews else 0.0
+    sys.stderr.write(
+        "Review volume: "
+        f"total={total}, "
+        f"mean/day={mean_daily:.2f}, "
+        f"max/day={max_daily}, "
+        f"days-with-reviews={days_with_reviews}, "
+        f"mean-on-review-days={mean_on_review_days:.2f}\n"
+    )
 
 
 def _write_log(args: argparse.Namespace, stats) -> None:
