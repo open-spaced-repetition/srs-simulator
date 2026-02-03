@@ -247,6 +247,8 @@ def simulate(
     try:
         time_long_reviews = 0.0
         time_short_reviews = 0.0
+        short_review_loops = 0
+        short_review_days = 0
         for day in range(days):
             if progress_callback is not None:
                 progress_callback(day + 1, days)
@@ -710,16 +712,18 @@ def simulate(
 
             def run_short_reviews(
                 day_end_tensor: torch.Tensor,
-            ) -> tuple[int, int, float]:
+            ) -> tuple[int, int, float, int]:
                 if not (steps_mode or sched_mode):
-                    return 0, 0, 0.0
+                    return 0, 0, 0.0, 0
                 short_reviews = 0
                 short_lapses = 0
                 short_cost = 0.0
+                short_loops = 0
                 while True:
                     short_mask = (short_phase != phase_none) & (due < day_end_tensor)
                     if not short_mask.any():
                         break
+                    short_loops += 1
                     exec_idx = torch.nonzero(short_mask, as_tuple=False).squeeze(1)
                     now_tensor = due[exec_idx]
                     exec_elapsed = now_tensor - last_review[exec_idx]
@@ -881,7 +885,7 @@ def simulate(
                     short_lapses += int((exec_rating == 1).sum().item())
                     short_cost += float(exec_cost.sum().item())
 
-                return short_reviews, short_lapses, short_cost
+                return short_reviews, short_lapses, short_cost, short_loops
 
             day_start_tensor = torch.tensor(
                 day_start, device=torch_device, dtype=env_dtype
@@ -921,13 +925,16 @@ def simulate(
                 learned_today += learn_count
 
                 t0 = time.perf_counter()
-                short_count, short_lapses, short_cost = run_short_reviews(
+                short_count, short_lapses, short_cost, short_loops = run_short_reviews(
                     day_end_tensor
                 )
                 time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 short_reviews_today += short_count
                 lapses_today += short_lapses
+                if short_loops:
+                    short_review_loops += short_loops
+                    short_review_days += 1
             else:
                 remaining_cost = (
                     max_cost - cost_for_limits if max_cost is not None else None
@@ -961,13 +968,16 @@ def simulate(
                 phase_lapses_today += review_phase_lapses
 
                 t0 = time.perf_counter()
-                short_count, short_lapses, short_cost = run_short_reviews(
+                short_count, short_lapses, short_cost, short_loops = run_short_reviews(
                     day_end_tensor
                 )
                 time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 short_reviews_today += short_count
                 lapses_today += short_lapses
+                if short_loops:
+                    short_review_loops += short_loops
+                    short_review_days += 1
 
             reviews_today = long_reviews_today + short_reviews_today
 
@@ -1010,6 +1020,8 @@ def simulate(
         timing={
             "long_reviews_s": time_long_reviews,
             "short_reviews_s": time_short_reviews,
+            "short_review_loops": float(short_review_loops),
+            "short_review_loop_days": float(short_review_days),
         },
     )
     return stats
