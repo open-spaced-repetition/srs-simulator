@@ -401,8 +401,11 @@ def _run_once(
     )
     run_args.short_term_source = short_term_source
     run_args.short_term = bool(short_term_source)
-    if short_term_source in {"steps", "sched"} and run_args.engine != "event":
-        raise SystemExit("Short-term scheduling requires --engine event.")
+    if short_term_source in {"steps", "sched"} and run_args.engine not in {
+        "event",
+        "vectorized",
+    }:
+        raise SystemExit("Short-term scheduling requires --engine event or vectorized.")
     if short_term_source == "sched":
         if run_args.scheduler != "lstm":
             raise SystemExit("--short-term-source=sched requires --sched lstm.")
@@ -411,26 +414,27 @@ def _run_once(
 
     env = simulate_cli.ENVIRONMENT_FACTORIES[run_args.environment](run_args)
     agent = simulate_cli.SCHEDULER_FACTORIES[run_args.scheduler](run_args)
-    if short_term_source == "steps":
-        from simulator.short_term import ShortTermScheduler
+    if run_args.engine == "event":
+        if short_term_source == "steps":
+            from simulator.short_term import ShortTermScheduler
 
-        agent = ShortTermScheduler(
-            agent,
-            learning_steps=learning_steps,
-            relearning_steps=relearning_steps,
-            threshold_days=getattr(run_args, "short_term_threshold", 0.5),
-            allow_short_term_interval=False,
-        )
-    elif short_term_source == "sched":
-        from simulator.short_term import ShortTermScheduler
+            agent = ShortTermScheduler(
+                agent,
+                learning_steps=learning_steps,
+                relearning_steps=relearning_steps,
+                threshold_days=getattr(run_args, "short_term_threshold", 0.5),
+                allow_short_term_interval=False,
+            )
+        elif short_term_source == "sched":
+            from simulator.short_term import ShortTermScheduler
 
-        agent = ShortTermScheduler(
-            agent,
-            learning_steps=[],
-            relearning_steps=[],
-            threshold_days=getattr(run_args, "short_term_threshold", 0.5),
-            allow_short_term_interval=True,
-        )
+            agent = ShortTermScheduler(
+                agent,
+                learning_steps=[],
+                relearning_steps=[],
+                threshold_days=getattr(run_args, "short_term_threshold", 0.5),
+                allow_short_term_interval=True,
+            )
     cost_limit = (
         run_args.cost_limit_minutes * 60.0
         if run_args.cost_limit_minutes is not None
@@ -477,7 +481,15 @@ def _run_once(
     try:
         if run_args.engine == "vectorized":
             stats = _run_vectorized(
-                run_args, env, agent, behavior, cost_model, progress_callback
+                run_args,
+                env,
+                agent,
+                behavior,
+                cost_model,
+                progress_callback,
+                short_term_source,
+                learning_steps,
+                relearning_steps,
             )
         else:
             stats = run_simulation(
@@ -507,6 +519,9 @@ def _run_vectorized(
     behavior,
     cost_model,
     progress_callback,
+    short_term_source,
+    learning_steps,
+    relearning_steps,
 ):
     from simulator.vectorized import simulate as simulate_vectorized
 
@@ -523,6 +538,10 @@ def _run_vectorized(
             fuzz=run_args.fuzz,
             progress=False,
             progress_callback=progress_callback,
+            short_term_source=short_term_source,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+            short_term_threshold=getattr(run_args, "short_term_threshold", 0.5),
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
