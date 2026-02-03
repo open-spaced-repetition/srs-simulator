@@ -143,6 +143,31 @@ def parse_args() -> argparse.Namespace:
         help="Apply scheduler interval fuzz (Anki-style).",
     )
     parser.add_argument(
+        "--short-term-source",
+        choices=["steps", "sched"],
+        default=None,
+        help=(
+            "Short-term scheduling source: steps (Anki-style learning steps) "
+            "or sched (LSTM-only short-term intervals; not yet supported in batched)."
+        ),
+    )
+    parser.add_argument(
+        "--learning-steps",
+        default=None,
+        help="Comma-separated learning steps (minutes) for short-term steps mode.",
+    )
+    parser.add_argument(
+        "--relearning-steps",
+        default=None,
+        help="Comma-separated relearning steps (minutes) for short-term steps mode.",
+    )
+    parser.add_argument(
+        "--short-term-threshold",
+        type=float,
+        default=0.5,
+        help="Short-term cutoff in days (used by sched mode).",
+    )
+    parser.add_argument(
         "--torch-device",
         default=None,
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
@@ -168,6 +193,40 @@ def _parse_cuda_devices(raw: str | None) -> list[str]:
                 f"Invalid --cuda-devices entry '{device}'. Expected numeric indices."
             )
     return devices
+
+
+def _parse_steps(value: str | None) -> list[float]:
+    if value is None:
+        return []
+    if not value.strip():
+        return []
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    return [float(item) for item in items]
+
+
+def _resolve_short_term_config(
+    args: argparse.Namespace,
+) -> tuple[str | None, list[float], list[float]]:
+    short_term_source = getattr(args, "short_term_source", None)
+    learning_raw = getattr(args, "learning_steps", None)
+    relearning_raw = getattr(args, "relearning_steps", None)
+    if short_term_source == "steps":
+        if learning_raw is None:
+            learning_raw = "1,10"
+        if relearning_raw is None:
+            relearning_raw = "10"
+    learning_steps = _parse_steps(learning_raw)
+    relearning_steps = _parse_steps(relearning_raw)
+    if short_term_source is None:
+        if learning_steps or relearning_steps:
+            raise SystemExit("Learning steps require --short-term-source=steps.")
+        return None, learning_steps, relearning_steps
+    if short_term_source == "sched" and (learning_steps or relearning_steps):
+        raise SystemExit(
+            "--short-term-source=sched cannot be combined with "
+            "--learning-steps or --relearning-steps."
+        )
+    return short_term_source, learning_steps, relearning_steps
 
 
 def _chunked(values: list[int], batch_size: int) -> Iterable[list[int]]:
@@ -202,11 +261,22 @@ def _dr_values(start: float, end: float, step: float) -> list[float]:
 
 def _load_usage(
     user_ids: list[int], button_usage: Path | None
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
     learn_costs = []
     review_costs = []
     first_rating_prob = []
     review_rating_prob = []
+    learning_rating_prob = []
+    relearning_rating_prob = []
+    state_rating_costs = []
     for user_id in user_ids:
         config = (
             load_button_usage_config(button_usage, user_id)
@@ -218,18 +288,28 @@ def _load_usage(
         review_costs.append(usage["review_costs"])
         first_rating_prob.append(usage["first_rating_prob"])
         review_rating_prob.append(usage["review_rating_prob"])
+        learning_rating_prob.append(usage["learning_rating_prob"])
+        relearning_rating_prob.append(usage["relearning_rating_prob"])
+        state_rating_costs.append(usage["state_rating_costs"])
     return (
         torch.tensor(learn_costs, dtype=torch.float32),
         torch.tensor(review_costs, dtype=torch.float32),
         torch.tensor(first_rating_prob, dtype=torch.float32),
         torch.tensor(review_rating_prob, dtype=torch.float32),
+        torch.tensor(learning_rating_prob, dtype=torch.float32),
+        torch.tensor(relearning_rating_prob, dtype=torch.float32),
+        torch.tensor(state_rating_costs, dtype=torch.float32),
     )
 
 
-def _resolve_lstm_paths(user_ids: list[int], benchmark_root: Path) -> list[Path]:
+def _resolve_lstm_paths(
+    user_ids: list[int], benchmark_root: Path, *, short_term: bool
+) -> list[Path]:
     paths = []
     for user_id in user_ids:
-        path = _resolve_benchmark_weights(user_id, benchmark_root)
+        path = _resolve_benchmark_weights(
+            user_id, benchmark_root, short_term=short_term
+        )
         if path is None:
             raise FileNotFoundError(f"LSTM weights not found for user {user_id}.")
         paths.append(path)
@@ -247,9 +327,16 @@ def _build_behavior_cost(
     review_costs: torch.Tensor,
     first_rating_prob: torch.Tensor,
     review_rating_prob: torch.Tensor,
+    learning_rating_prob: torch.Tensor,
+    relearning_rating_prob: torch.Tensor,
+    state_rating_costs: torch.Tensor,
+    short_term: bool,
 ) -> tuple[MultiUserBehavior, MultiUserCost]:
     max_reviews = review_limit if review_limit is not None else deck_size
     max_cost = cost_limit_minutes * 60.0 if cost_limit_minutes is not None else math.inf
+    if short_term:
+        learn_costs = state_rating_costs[:, 0]
+        review_costs = state_rating_costs[:, 1]
     behavior = MultiUserBehavior(
         attendance_prob=torch.full((user_count,), 1.0),
         lazy_good_bias=torch.zeros(user_count),
@@ -257,6 +344,8 @@ def _build_behavior_cost(
         max_reviews_per_day=torch.full((user_count,), max_reviews, dtype=torch.int64),
         max_cost_per_day=torch.full((user_count,), max_cost),
         success_weights=review_rating_prob,
+        learning_success_weights=learning_rating_prob,
+        relearning_success_weights=relearning_rating_prob,
         first_rating_prob=first_rating_prob,
     )
     cost = MultiUserCost(
@@ -264,6 +353,8 @@ def _build_behavior_cost(
         penalty=torch.zeros(user_count),
         learn_costs=learn_costs,
         review_costs=review_costs,
+        learning_review_costs=state_rating_costs[:, 0],
+        relearning_review_costs=state_rating_costs[:, 2],
     )
     return behavior, cost
 
@@ -307,8 +398,32 @@ def _run_batch_core(
     progress_queue,
     device_label: str,
 ) -> None:
-    learn_costs, review_costs, first_rating_prob, review_rating_prob = _load_usage(
-        batch, args.button_usage
+    (
+        learn_costs,
+        review_costs,
+        first_rating_prob,
+        review_rating_prob,
+        learning_rating_prob,
+        relearning_rating_prob,
+        state_rating_costs,
+    ) = _load_usage(batch, args.button_usage)
+    short_term_source, learning_steps, relearning_steps = _resolve_short_term_config(
+        args
+    )
+    short_term_enabled = bool(short_term_source)
+    if short_term_source not in {None, "steps"}:
+        raise SystemExit(
+            "Batched short-term currently supports --short-term-source steps only."
+        )
+    learning_steps_arg = (
+        ",".join(str(step) for step in learning_steps)
+        if short_term_source == "steps"
+        else None
+    )
+    relearning_steps_arg = (
+        ",".join(str(step) for step in relearning_steps)
+        if short_term_source == "steps"
+        else None
     )
     schedulers = parse_csv(args.sched)
     envs = parse_csv(args.env)
@@ -317,7 +432,9 @@ def _run_batch_core(
     for environment in envs:
         lstm_packed: PackedLSTMWeights | None = None
         if environment == "lstm":
-            lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
+            lstm_paths = _resolve_lstm_paths(
+                batch, benchmark_root, short_term=short_term_enabled
+            )
             lstm_packed = PackedLSTMWeights.from_paths(
                 lstm_paths,
                 use_duration_feature=False,
@@ -340,6 +457,7 @@ def _run_batch_core(
                             user_id=user_id,
                             partition_key=args.benchmark_partition,
                             overrides=overrides,
+                            short_term=short_term_enabled,
                         ),
                         dtype=torch.float32,
                     )
@@ -366,6 +484,10 @@ def _run_batch_core(
             review_costs=review_costs.to(env_ops.device),
             first_rating_prob=first_rating_prob.to(env_ops.device),
             review_rating_prob=review_rating_prob.to(env_ops.device),
+            learning_rating_prob=learning_rating_prob.to(env_ops.device),
+            relearning_rating_prob=relearning_rating_prob.to(env_ops.device),
+            state_rating_costs=state_rating_costs.to(env_ops.device),
+            short_term=short_term_enabled,
         )
 
         for scheduler_spec in schedulers:
@@ -385,6 +507,7 @@ def _run_batch_core(
                                 user_id=user_id,
                                 partition_key=args.benchmark_partition,
                                 overrides=overrides,
+                                short_term=short_term_enabled,
                             ),
                             dtype=torch.float32,
                         )
@@ -423,6 +546,10 @@ def _run_batch_core(
                         progress=progress,
                         progress_label=f"{label_prefix} dr={dr:.2f}",
                         progress_callback=progress_callback,
+                        short_term_source=short_term_source,
+                        learning_steps=learning_steps,
+                        relearning_steps=relearning_steps,
+                        short_term_threshold=args.short_term_threshold,
                     )
                     if not args.no_log:
                         for user_id, stats in zip(batch, stats_list):
@@ -449,6 +576,10 @@ def _run_batch_core(
                                 fixed_interval=fixed_interval,
                                 seed=args.seed,
                                 fuzz=args.fuzz,
+                                short_term_source=short_term_source,
+                                learning_steps=learning_steps_arg,
+                                relearning_steps=relearning_steps_arg,
+                                short_term_threshold=args.short_term_threshold,
                                 log_dir=user_log_dir,
                                 log_reviews=False,
                             )
@@ -457,7 +588,9 @@ def _run_batch_core(
 
             if name == "lstm":
                 if lstm_packed is None:
-                    lstm_paths = _resolve_lstm_paths(batch, benchmark_root)
+                    lstm_paths = _resolve_lstm_paths(
+                        batch, benchmark_root, short_term=short_term_enabled
+                    )
                     lstm_packed = PackedLSTMWeights.from_paths(
                         lstm_paths,
                         use_duration_feature=False,
@@ -493,6 +626,10 @@ def _run_batch_core(
                         progress=progress,
                         progress_label=f"{label_prefix} dr={dr:.2f}",
                         progress_callback=progress_callback,
+                        short_term_source=short_term_source,
+                        learning_steps=learning_steps,
+                        relearning_steps=relearning_steps,
+                        short_term_threshold=args.short_term_threshold,
                     )
                     if not args.no_log:
                         for user_id, stats in zip(batch, stats_list):
@@ -519,6 +656,10 @@ def _run_batch_core(
                                 fixed_interval=fixed_interval,
                                 seed=args.seed,
                                 fuzz=args.fuzz,
+                                short_term_source=short_term_source,
+                                learning_steps=learning_steps_arg,
+                                relearning_steps=relearning_steps_arg,
+                                short_term_threshold=args.short_term_threshold,
                                 log_dir=user_log_dir,
                                 log_reviews=False,
                             )
@@ -560,6 +701,10 @@ def _run_batch_core(
                     progress=progress,
                     progress_label=label_prefix,
                     progress_callback=progress_callback,
+                    short_term_source=short_term_source,
+                    learning_steps=learning_steps,
+                    relearning_steps=relearning_steps,
+                    short_term_threshold=args.short_term_threshold,
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -586,6 +731,10 @@ def _run_batch_core(
                             fixed_interval=fixed_interval,
                             seed=args.seed,
                             fuzz=args.fuzz,
+                            short_term_source=short_term_source,
+                            learning_steps=learning_steps_arg,
+                            relearning_steps=relearning_steps_arg,
+                            short_term_threshold=args.short_term_threshold,
                             log_dir=user_log_dir,
                             log_reviews=False,
                         )
@@ -621,6 +770,10 @@ def _run_batch_core(
                     progress=progress,
                     progress_label=label_prefix,
                     progress_callback=progress_callback,
+                    short_term_source=short_term_source,
+                    learning_steps=learning_steps,
+                    relearning_steps=relearning_steps,
+                    short_term_threshold=args.short_term_threshold,
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -647,6 +800,10 @@ def _run_batch_core(
                             fixed_interval=fixed_interval,
                             seed=args.seed,
                             fuzz=args.fuzz,
+                            short_term_source=short_term_source,
+                            learning_steps=learning_steps_arg,
+                            relearning_steps=relearning_steps_arg,
+                            short_term_threshold=args.short_term_threshold,
                             log_dir=user_log_dir,
                             log_reviews=False,
                         )
@@ -682,6 +839,10 @@ def _run_batch_core(
                     progress=progress,
                     progress_label=f"{label_prefix} ivl={interval:.2f}",
                     progress_callback=progress_callback,
+                    short_term_source=short_term_source,
+                    learning_steps=learning_steps,
+                    relearning_steps=relearning_steps,
+                    short_term_threshold=args.short_term_threshold,
                 )
                 if not args.no_log:
                     for user_id, stats in zip(batch, stats_list):
@@ -708,6 +869,10 @@ def _run_batch_core(
                             fixed_interval=interval,
                             seed=args.seed,
                             fuzz=args.fuzz,
+                            short_term_source=short_term_source,
+                            learning_steps=learning_steps_arg,
+                            relearning_steps=relearning_steps_arg,
+                            short_term_threshold=args.short_term_threshold,
                             log_dir=user_log_dir,
                             log_reviews=False,
                         )

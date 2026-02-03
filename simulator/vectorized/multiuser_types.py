@@ -13,6 +13,8 @@ class MultiUserBehavior:
     max_reviews_per_day: torch.Tensor
     max_cost_per_day: torch.Tensor
     success_weights: torch.Tensor
+    learning_success_weights: torch.Tensor
+    relearning_success_weights: torch.Tensor
     first_rating_prob: torch.Tensor
 
 
@@ -22,3 +24,5 @@ class MultiUserCost:
     penalty: torch.Tensor
     learn_costs: torch.Tensor
     review_costs: torch.Tensor
+    learning_review_costs: torch.Tensor
+    relearning_review_costs: torch.Tensor
