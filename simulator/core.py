@@ -109,6 +109,7 @@ class SimulationStats:
     total_cost: float
     events: List[Event]
     total_projected_retrievability: float
+    timing: dict[str, float] | None = None
 
 
 class Action(Enum):

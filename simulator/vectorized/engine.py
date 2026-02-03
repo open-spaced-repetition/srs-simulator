@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Callable, Optional, Sequence
 
 import torch
@@ -244,6 +245,8 @@ def simulate(
         return delay_secs, next_remaining, use_steps
 
     try:
+        time_long_reviews = 0.0
+        time_short_reviews = 0.0
         for day in range(days):
             if progress_callback is not None:
                 progress_callback(day + 1, days)
@@ -890,6 +893,7 @@ def simulate(
                     max_cost - cost_for_limits if max_cost is not None else None
                 )
                 reviews_left = max_reviews - long_reviews_today
+                t0 = time.perf_counter()
                 (
                     review_count,
                     review_lapses,
@@ -897,6 +901,7 @@ def simulate(
                     review_phase_lapses,
                     review_cost,
                 ) = run_long_reviews(day_start_tensor, remaining_cost, reviews_left)
+                time_long_reviews += time.perf_counter() - t0
                 cost_today += review_cost
                 cost_for_limits += review_cost
                 long_reviews_today += review_count
@@ -915,9 +920,11 @@ def simulate(
                 cost_for_limits += learn_cost
                 learned_today += learn_count
 
+                t0 = time.perf_counter()
                 short_count, short_lapses, short_cost = run_short_reviews(
                     day_end_tensor
                 )
+                time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 short_reviews_today += short_count
                 lapses_today += short_lapses
@@ -937,6 +944,7 @@ def simulate(
                     max_cost - cost_for_limits if max_cost is not None else None
                 )
                 reviews_left = max_reviews - long_reviews_today
+                t0 = time.perf_counter()
                 (
                     review_count,
                     review_lapses,
@@ -944,6 +952,7 @@ def simulate(
                     review_phase_lapses,
                     review_cost,
                 ) = run_long_reviews(day_start_tensor, remaining_cost, reviews_left)
+                time_long_reviews += time.perf_counter() - t0
                 cost_today += review_cost
                 cost_for_limits += review_cost
                 long_reviews_today += review_count
@@ -951,9 +960,11 @@ def simulate(
                 phase_reviews_today += review_phase_count
                 phase_lapses_today += review_phase_lapses
 
+                t0 = time.perf_counter()
                 short_count, short_lapses, short_cost = run_short_reviews(
                     day_end_tensor
                 )
+                time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 short_reviews_today += short_count
                 lapses_today += short_lapses
@@ -985,7 +996,7 @@ def simulate(
         projected = env_ops.retrievability(env_state, learned_idx, elapsed_final)
         total_projected_retrievability = float(projected.sum().item())
 
-    return SimulationStats(
+    stats = SimulationStats(
         daily_reviews=daily_reviews,
         daily_new=daily_new,
         daily_retention=daily_retention,
@@ -996,4 +1007,9 @@ def simulate(
         total_cost=total_cost,
         events=events,
         total_projected_retrievability=total_projected_retrievability,
+        timing={
+            "long_reviews_s": time_long_reviews,
+            "short_reviews_s": time_short_reviews,
+        },
     )
+    return stats

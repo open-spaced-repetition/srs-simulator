@@ -466,6 +466,11 @@ def main() -> None:
         )
     elapsed = time.perf_counter() - start_time
     sys.stderr.write(f"Simulation time: {elapsed:.2f}s\n")
+    timing = getattr(stats, "timing", None)
+    if timing:
+        long_s = timing.get("long_reviews_s", 0.0)
+        short_s = timing.get("short_reviews_s", 0.0)
+        sys.stderr.write(f"Review timing: long={long_s:.2f}s, short={short_s:.2f}s\n")
     _print_review_summary(stats)
     if not args.no_log:
         _write_log(args, stats)

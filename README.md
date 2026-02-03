@@ -80,6 +80,12 @@ Short-term scheduling (event or vectorized engines):
 uv run simulate.py --engine event --env lstm --sched lstm --short-term-source steps --learning-steps 1,10 --relearning-steps 10
 ```
 
+To explicitly disable learning/relearning steps while using `--short-term-source steps`, pass empty strings:
+
+```bash
+uv run simulate.py --engine event --env lstm --sched lstm --short-term-source steps --learning-steps "" --relearning-steps ""
+```
+
 Scheduler-driven short-term (LSTM only, no steps):
 
 ```bash
