@@ -4,29 +4,15 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
-import os
 
 from simulator.core import Card, MemoryModel
+from simulator.lstm_utils import resolve_lstm_max_batch_size
 
 import torch
 from torch import Tensor, nn
 
 EPS = 1e-7
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _resolve_max_batch_size(value: int | None) -> int | None:
-    if value is not None:
-        if value < 1:
-            raise ValueError("max_batch_size must be >= 1 when set.")
-        return value
-    raw = os.getenv("SRS_LSTM_MAX_BATCH", "").strip().lower()
-    if not raw or raw in {"0", "none", "off"}:
-        return None
-    parsed = int(raw)
-    if parsed < 1:
-        raise ValueError("SRS_LSTM_MAX_BATCH must be >= 1 when set.")
-    return parsed
 
 
 def _default_benchmark_root() -> Path:
@@ -553,7 +539,7 @@ class LSTMVectorizedEnvOps:
         self.n_curves = int(environment.network.n_curves)
         self.use_duration_feature = environment.use_duration_feature
         self.default_retention = float(environment.default_retention)
-        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
+        self.max_batch_size = resolve_lstm_max_batch_size(max_batch_size)
         self.duration_value = None
         if self.use_duration_feature:
             self.duration_value = torch.tensor(
