@@ -594,13 +594,14 @@ def simulate_multiuser(
 
             def run_short_reviews(
                 day_end: torch.Tensor,
-            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
                 if not steps_mode:
                     return (
                         torch.zeros_like(total_reviews),
                         torch.zeros_like(total_reviews),
                         torch.zeros_like(total_cost),
                         0,
+                        torch.zeros_like(total_reviews),
                     )
                 short_mask = (short_phase != phase_none) & attending[:, None]
                 if not short_mask.any():
@@ -609,6 +610,7 @@ def simulate_multiuser(
                         torch.zeros_like(total_reviews),
                         torch.zeros_like(total_cost),
                         0,
+                        torch.zeros_like(total_reviews),
                     )
                 short_user, short_card = short_mask.nonzero(as_tuple=True)
                 if short_user.numel() == 0:
@@ -617,6 +619,7 @@ def simulate_multiuser(
                         torch.zeros_like(total_reviews),
                         torch.zeros_like(total_cost),
                         0,
+                        torch.zeros_like(total_reviews),
                     )
                 short_counts = torch.zeros_like(total_reviews)
                 short_lapses = torch.zeros_like(total_reviews)
