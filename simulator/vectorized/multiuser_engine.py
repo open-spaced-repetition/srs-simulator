@@ -99,6 +99,7 @@ def simulate_multiuser(
     daily_gpu_peak_bytes: list[int] | None = None
     if torch_device.type == "cuda":
         daily_gpu_peak_bytes = [0 for _ in range(days)]
+    daily_short_loops = [0 for _ in range(days)] if steps_mode else None
 
     total_reviews = torch.zeros(user_count, dtype=torch.int64, device=torch_device)
     total_lapses = torch.zeros_like(total_reviews)
@@ -846,6 +847,8 @@ def simulate_multiuser(
                 if short_loops:
                     short_review_loops += short_loops
                     short_review_loop_days += 1
+                if daily_short_loops is not None:
+                    daily_short_loops[day] = short_loops
             else:
                 t0 = time.perf_counter()
                 learn_counts, learn_cost = run_learning(max_cost)
@@ -878,6 +881,8 @@ def simulate_multiuser(
                 if short_loops:
                     short_review_loops += short_loops
                     short_review_loop_days += 1
+                if daily_short_loops is not None:
+                    daily_short_loops[day] = short_loops
 
             daily_reviews[:, day] = reviews_today
             daily_new[:, day] = learned_today
@@ -933,6 +938,7 @@ def simulate_multiuser(
                 daily_gpu_peak_bytes=daily_gpu_peak_bytes,
                 daily_phase_reviews=daily_phase_reviews[user].tolist(),
                 daily_phase_lapses=daily_phase_lapses[user].tolist(),
+                daily_short_loops=daily_short_loops,
                 timing={
                     "long_reviews_s": time_long_reviews,
                     "short_reviews_s": time_short_reviews,
