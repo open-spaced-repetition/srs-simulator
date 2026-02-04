@@ -43,6 +43,7 @@ def simulate_multiuser(
     learning_steps: Optional[list[float]] = None,
     relearning_steps: Optional[list[float]] = None,
     short_term_threshold: float = 0.5,
+    short_term_max_loops_per_day: Optional[int] = None,
     batch_stats: Optional[dict[str, list[int]]] = None,
 ) -> list[SimulationStats]:
     config = VectorizedConfig(
@@ -57,6 +58,8 @@ def simulate_multiuser(
 
     if short_term_source not in {None, "steps"}:
         raise ValueError("short_term_source must be None or 'steps'.")
+    if short_term_max_loops_per_day is not None and short_term_max_loops_per_day < 0:
+        raise ValueError("short_term_max_loops_per_day must be >= 0.")
     steps_mode = short_term_source == "steps"
     learning_steps = list(learning_steps or [])
     relearning_steps = list(relearning_steps or [])
@@ -626,15 +629,27 @@ def simulate_multiuser(
                     active_mask = (phase_short != phase_none) & (due_short < day_end)
                     if not active_mask.any():
                         break
-                    loops += 1
                     exec_user = short_user[active_mask]
                     exec_card = short_card[active_mask]
+                    exec_phase = phase_short[active_mask]
                     now_tensor = due_short[active_mask]
+                    if short_term_max_loops_per_day is not None:
+                        eligible = (
+                            loops_by_user[exec_user] < short_term_max_loops_per_day
+                        )
+                        if not eligible.any():
+                            break
+                        exec_user = exec_user[eligible]
+                        exec_card = exec_card[eligible]
+                        exec_phase = exec_phase[eligible]
+                        now_tensor = now_tensor[eligible]
+                    if exec_user.numel() == 0:
+                        break
+                    loops += 1
                     exec_elapsed = now_tensor - last_review[exec_user, exec_card]
                     r_due = env_ops.retrievability_entries(
                         env_state, exec_user, exec_card, exec_elapsed
                     )
-                    exec_phase = phase_short[active_mask]
 
                     rand = torch.rand(r_due.shape, device=torch_device, generator=gen)
                     fail = rand > r_due
@@ -819,7 +834,8 @@ def simulate_multiuser(
                     reps[exec_user, exec_card] += 1
                     lapses[exec_user, exec_card] += (exec_rating == 1).to(torch.int64)
 
-                    short_counts += torch.bincount(exec_user, minlength=user_count)
+                    loop_counts = torch.bincount(exec_user, minlength=user_count)
+                    short_counts += loop_counts
                     short_lapses += torch.bincount(
                         exec_user[exec_rating == 1], minlength=user_count
                     )
@@ -828,11 +844,7 @@ def simulate_multiuser(
                     )
                     cost_sums.scatter_add_(0, exec_user, review_cost_due)
                     short_cost += cost_sums
-                    loops_by_user.scatter_add_(
-                        0,
-                        exec_user,
-                        torch.ones_like(exec_user, dtype=loops_by_user.dtype),
-                    )
+                    loops_by_user += (loop_counts > 0).to(loops_by_user.dtype)
 
                 return short_counts, short_lapses, short_cost, loops, loops_by_user
 

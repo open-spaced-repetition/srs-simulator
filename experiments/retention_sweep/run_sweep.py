@@ -201,6 +201,12 @@ def parse_args() -> argparse.Namespace:
         help="Short-term threshold (days) for LSTM interval conversion.",
     )
     parser.add_argument(
+        "--short-term-max-loops-per-day",
+        type=int,
+        default=None,
+        help="Max short-term review loops per day (per user).",
+    )
+    parser.add_argument(
         "--no-log",
         action="store_true",
         help="Disable writing logs to disk.",
@@ -534,6 +540,9 @@ def _run_vectorized(
             learning_steps=learning_steps,
             relearning_steps=relearning_steps,
             short_term_threshold=getattr(run_args, "short_term_threshold", 0.5),
+            short_term_max_loops_per_day=getattr(
+                run_args, "short_term_max_loops_per_day", None
+            ),
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc

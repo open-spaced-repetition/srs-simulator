@@ -63,6 +63,7 @@ def simulate(
     learning_steps: Optional[Sequence[float]] = None,
     relearning_steps: Optional[Sequence[float]] = None,
     short_term_threshold: float = 0.5,
+    short_term_max_loops_per_day: Optional[int] = None,
 ) -> SimulationStats:
     if not isinstance(behavior, StochasticBehavior):
         raise ValueError("Vectorized engine requires StochasticBehavior.")
@@ -72,6 +73,8 @@ def simulate(
         raise ValueError("short_term_source must be None, 'steps', or 'sched'.")
     if short_term_source == "sched" and not isinstance(scheduler, LSTMScheduler):
         raise ValueError("--short-term-source=sched requires --sched lstm.")
+    if short_term_max_loops_per_day is not None and short_term_max_loops_per_day < 0:
+        raise ValueError("short_term_max_loops_per_day must be >= 0.")
     steps_mode = short_term_source == "steps"
     sched_mode = short_term_source == "sched"
     learning_steps = list(learning_steps or [])
@@ -657,6 +660,11 @@ def simulate(
                 short_cost = 0.0
                 short_loops = 0
                 while True:
+                    if (
+                        short_term_max_loops_per_day is not None
+                        and short_loops >= short_term_max_loops_per_day
+                    ):
+                        break
                     short_mask = (short_phase != phase_none) & (due < day_end_tensor)
                     if not short_mask.any():
                         break
