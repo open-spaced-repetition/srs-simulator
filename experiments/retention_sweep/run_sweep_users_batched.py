@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import sys
 from concurrent import futures
@@ -375,6 +376,7 @@ def _simulate_and_log(
     learning_steps_arg: str | None,
     relearning_steps_arg: str | None,
     log_root: Path,
+    batch_log_root: Path,
 ) -> None:
     progress_callback = _progress_callback_from_queue(
         progress_queue,
@@ -383,6 +385,7 @@ def _simulate_and_log(
         run_label=run_label,
         total_days=args.days,
     )
+    batch_stats: dict[str, list[int]] = {}
     stats_list = simulate_multiuser(
         days=args.days,
         deck_size=args.deck,
@@ -402,7 +405,38 @@ def _simulate_and_log(
         learning_steps=learning_steps,
         relearning_steps=relearning_steps,
         short_term_threshold=args.short_term_threshold,
+        batch_stats=batch_stats,
     )
+    if batch_stats:
+        batch_log_root.mkdir(parents=True, exist_ok=True)
+        start_user = batch[0]
+        end_user = batch[-1]
+        parts = [
+            f"env={environment}",
+            "engine=batched",
+            f"sched={scheduler_name}",
+            f"users={start_user}-{end_user}",
+        ]
+        if desired_retention is not None:
+            parts.append(f"ret={desired_retention:.2f}")
+        if fixed_interval is not None:
+            parts.append(f"ivl={fixed_interval:.2f}")
+        if short_term_source:
+            parts.append(f"st={short_term_source}")
+        parts.append(f"seed={args.seed}")
+        filename = batch_log_root / f"batch_{'_'.join(parts)}.csv"
+        with filename.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(
+                ["day", "gpu_peak_allocated_bytes", "gpu_peak_reserved_bytes"]
+            )
+            allocated = batch_stats.get("gpu_peak_allocated_bytes")
+            reserved = batch_stats.get("gpu_peak_reserved_bytes")
+            total_days = args.days
+            for day in range(total_days):
+                alloc = allocated[day] if allocated is not None else ""
+                resv = reserved[day] if reserved is not None else ""
+                writer.writerow([day, alloc, resv])
     if args.no_log:
         return
     for user_id, stats in zip(batch, stats_list):
@@ -446,6 +480,7 @@ def _run_batch_core(
     benchmark_root: Path,
     overrides: dict[str, str],
     log_root: Path,
+    batch_log_root: Path,
     dr_values: list[float],
     device: torch.device | None,
     progress: bool,
@@ -600,6 +635,7 @@ def _run_batch_core(
                         learning_steps_arg=learning_steps_arg,
                         relearning_steps_arg=relearning_steps_arg,
                         log_root=log_root,
+                        batch_log_root=batch_log_root,
                     )
                 continue
 
@@ -643,6 +679,7 @@ def _run_batch_core(
                         learning_steps_arg=learning_steps_arg,
                         relearning_steps_arg=relearning_steps_arg,
                         log_root=log_root,
+                        batch_log_root=batch_log_root,
                     )
                 continue
 
@@ -681,6 +718,7 @@ def _run_batch_core(
                     learning_steps_arg=learning_steps_arg,
                     relearning_steps_arg=relearning_steps_arg,
                     log_root=log_root,
+                    batch_log_root=batch_log_root,
                 )
                 continue
 
@@ -713,6 +751,7 @@ def _run_batch_core(
                     learning_steps_arg=learning_steps_arg,
                     relearning_steps_arg=relearning_steps_arg,
                     log_root=log_root,
+                    batch_log_root=batch_log_root,
                 )
                 continue
 
@@ -745,6 +784,7 @@ def _run_batch_core(
                     learning_steps_arg=learning_steps_arg,
                     relearning_steps_arg=relearning_steps_arg,
                     log_root=log_root,
+                    batch_log_root=batch_log_root,
                 )
                 continue
 
@@ -756,6 +796,7 @@ def _run_batch_worker(
     benchmark_root: Path,
     overrides: dict[str, str],
     log_root: Path,
+    batch_log_root: Path,
     dr_values: list[float],
     device_str: str,
     progress_queue,
@@ -769,6 +810,7 @@ def _run_batch_worker(
         benchmark_root=benchmark_root,
         overrides=overrides,
         log_root=log_root,
+        batch_log_root=batch_log_root,
         dr_values=dr_values,
         device=device,
         progress=False,
@@ -817,6 +859,8 @@ def main() -> int:
 
     log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
     log_root.mkdir(parents=True, exist_ok=True)
+    batch_log_root = log_root / "batch_logs"
+    batch_log_root.mkdir(parents=True, exist_ok=True)
 
     dr_values = _dr_values(args.start_retention, args.end_retention, args.step)
     devices = _parse_cuda_devices(args.cuda_devices)
@@ -911,6 +955,7 @@ def main() -> int:
                             benchmark_root=benchmark_root,
                             overrides=overrides,
                             log_root=log_root,
+                            batch_log_root=batch_log_root,
                             dr_values=dr_values,
                             device_str=device_str,
                             progress_queue=progress_queue,
@@ -941,6 +986,7 @@ def main() -> int:
                 benchmark_root=benchmark_root,
                 overrides=overrides,
                 log_root=log_root,
+                batch_log_root=batch_log_root,
                 dr_values=dr_values,
                 device=batch_device,
                 progress=not args.no_progress,
