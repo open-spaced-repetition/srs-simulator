@@ -13,6 +13,7 @@ from simulator.defaults import (
     DEFAULT_REVIEW_LIMIT,
     DEFAULT_SCHEDULER_PRIORITY,
     DEFAULT_SEED,
+    DEFAULT_SHORT_TERM_LOOPS_LIMIT,
 )
 
 
@@ -207,6 +208,7 @@ def add_short_term_args(
     threshold_help: str,
     threshold_default: float = 0.5,
     loops_limit_help: str = "Max short-term review loops per day (per user).",
+    loops_limit_default: int | None = None,
 ) -> None:
     parser.add_argument(
         "--short-term-source",
@@ -225,7 +227,11 @@ def add_short_term_args(
     parser.add_argument(
         "--short-term-loops-limit",
         type=int,
-        default=None,
+        default=(
+            DEFAULT_SHORT_TERM_LOOPS_LIMIT
+            if loops_limit_default is None
+            else loops_limit_default
+        ),
         help=loops_limit_help,
     )
 
