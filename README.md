@@ -37,7 +37,7 @@ uv run script.py --algo LSTM --weights
 - SSP-MMC policies require precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
 
 ## CLI usage
-Simulation logs store metadata and totals by default; add `--log-reviews` to include per-event logs (can be large). The vectorized engine ignores `--log-reviews` and only returns aggregate stats.
+Simulation logs store metadata and totals by default; add `--log-reviews` to include per-event logs (can be large). Daily time series are written to a sidecar CSV file with the same basename as the JSONL log. The vectorized engine ignores `--log-reviews` and only returns aggregate stats.
 
 Common examples:
 
@@ -53,7 +53,7 @@ uv run simulate.py --sched sspmmc --sspmmc-policy ../SSP-MMC-FSRS/outputs/polici
 
 Flag notes:
 - `--no-plot` and `--no-progress` disable the Matplotlib dashboard and progress bar.
-- `--log-dir` controls where JSONL logs are written.
+- `--log-dir` controls where JSONL logs and daily CSVs are written.
 - `--button-usage` points at a button-usage JSONL file to override default costs and rating probabilities.
 - `--benchmark-result` and `--benchmark-partition` override which `srs-benchmark` result rows are loaded.
 - `--fuzz` applies Anki-style interval fuzzing to scheduler outputs.
