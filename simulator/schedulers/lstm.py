@@ -9,22 +9,9 @@ from pathlib import Path
 from typing import Sequence
 
 from simulator.core import CardView, Scheduler
+from simulator.lstm_utils import resolve_lstm_max_batch_size
 from simulator.models.lstm import EPS, LSTMModel
 from simulator.models.lstm_batch import PackedLSTMWeights, forward_step
-
-
-def _resolve_max_batch_size(value: int | None) -> int | None:
-    if value is not None:
-        if value < 1:
-            raise ValueError("max_batch_size must be >= 1 when set.")
-        return value
-    raw = os.getenv("SRS_LSTM_MAX_BATCH", "").strip().lower()
-    if not raw or raw in {"0", "none", "off"}:
-        return None
-    parsed = int(raw)
-    if parsed < 1:
-        raise ValueError("SRS_LSTM_MAX_BATCH must be >= 1 when set.")
-    return parsed
 
 
 @dataclass
@@ -318,7 +305,7 @@ class LSTMVectorizedSchedulerOps:
         self.min_interval = float(scheduler.min_interval)
         self.max_interval = float(scheduler.max_interval)
         self.search_steps = int(scheduler.search_steps)
-        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
+        self.max_batch_size = resolve_lstm_max_batch_size(max_batch_size)
 
         self.model.device = device
         self.model.dtype = dtype
@@ -712,7 +699,7 @@ class LSTMBatchSchedulerOps:
         self.search_steps = int(search_steps)
         self.default_retention = float(default_retention)
         self.interval_mode = interval_mode
-        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
+        self.max_batch_size = resolve_lstm_max_batch_size(max_batch_size)
         self.use_duration_feature = bool(weights.use_duration_feature)
         self.duration_value = None
         if self.use_duration_feature:

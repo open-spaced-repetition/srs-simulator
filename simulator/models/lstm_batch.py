@@ -3,28 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
-import os
 
 import torch
 from torch import Tensor
 
+from simulator.lstm_utils import resolve_lstm_max_batch_size
 from simulator.models.lstm import EPS, _normalize_state_dict, _resolve_weight_file
 
 _LN_EPS = 1e-5
-
-
-def _resolve_max_batch_size(value: int | None) -> int | None:
-    if value is not None:
-        if value < 1:
-            raise ValueError("max_batch_size must be >= 1 when set.")
-        return value
-    raw = os.getenv("SRS_LSTM_MAX_BATCH", "").strip().lower()
-    if not raw or raw in {"0", "none", "off"}:
-        return None
-    parsed = int(raw)
-    if parsed < 1:
-        raise ValueError("SRS_LSTM_MAX_BATCH must be >= 1 when set.")
-    return parsed
 
 
 @dataclass
@@ -389,7 +375,7 @@ class LSTMBatchedEnvOps:
         self.device = device
         self.dtype = dtype
         self.default_retention = 0.85
-        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
+        self.max_batch_size = resolve_lstm_max_batch_size(max_batch_size)
         self.use_duration_feature = weights.use_duration_feature
         self.n_hidden = weights.n_hidden
         self.n_curves = weights.n_curves
