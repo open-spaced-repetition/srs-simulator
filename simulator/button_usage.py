@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -135,12 +136,19 @@ def load_button_usage_config(
     return config
 
 
-def _normalize_prob(values: Sequence[float], key: str) -> list[float]:
-    if any(value < 0 for value in values):
-        raise ValueError(f"{key} contains negative probabilities: {values}")
+def _normalize_prob(
+    values: Sequence[float], key: str, *, fallback: Sequence[float]
+) -> list[float]:
+    if any((not math.isfinite(value)) or value < 0 for value in values):
+        logging.warning(
+            "%s contains invalid probabilities %s; using fallback.", key, values
+        )
+        values = fallback
     total = float(sum(values))
-    if total <= 0:
-        raise ValueError(f"{key} sums to zero: {values}")
+    if not math.isfinite(total) or total <= 0:
+        logging.warning("%s sums to invalid value %.6f; using fallback.", key, total)
+        values = fallback
+        total = float(sum(values))
     if abs(total - 1.0) > 0.01:
         logging.warning("%s does not sum to 1 (%.6f); normalizing.", key, total)
         return [float(value) / total for value in values]
@@ -207,6 +215,7 @@ def normalize_button_usage(
             name="first_rating_prob",
         ),
         "first_rating_prob",
+        fallback=DEFAULT_FIRST_RATING_PROB,
     )
     review_rating_prob = _normalize_prob(
         _coerce_list(
@@ -215,6 +224,7 @@ def normalize_button_usage(
             name="review_rating_prob",
         ),
         "review_rating_prob",
+        fallback=DEFAULT_REVIEW_RATING_PROB,
     )
     learning_rating_prob = _normalize_prob(
         _coerce_list(
@@ -223,6 +233,7 @@ def normalize_button_usage(
             name="learning_rating_prob",
         ),
         "learning_rating_prob",
+        fallback=review_rating_prob,
     )
     relearning_rating_prob = _normalize_prob(
         _coerce_list(
@@ -231,6 +242,7 @@ def normalize_button_usage(
             name="relearning_rating_prob",
         ),
         "relearning_rating_prob",
+        fallback=review_rating_prob,
     )
     first_rating_offsets = _coerce_list(
         source.get("first_rating_offsets", DEFAULT_FIRST_RATING_OFFSETS),
