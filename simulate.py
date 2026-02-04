@@ -43,6 +43,7 @@ from simulator.defaults import (
     DEFAULT_REVIEW_LIMIT,
     DEFAULT_SCHEDULER_PRIORITY,
     DEFAULT_SEED,
+    DEFAULT_SHORT_TERM_LOOPS_LIMIT,
 )
 from simulator.scheduler_spec import (
     format_float,
@@ -212,7 +213,7 @@ def main() -> None:
     parser.add_argument(
         "--short-term-loops-limit",
         type=int,
-        default=None,
+        default=DEFAULT_SHORT_TERM_LOOPS_LIMIT,
         help=(
             "Max short-term review loops per day (per user). "
             "Applies to vectorized short-term simulation."
