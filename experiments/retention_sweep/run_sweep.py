@@ -411,7 +411,7 @@ def _run_once(
     if not run_args.no_log:
         simulate_cli._write_log(run_args, stats)
     if run_args.plot:
-        simulate_cli.plot_simulation(stats)
+        simulate_cli.plot_simulation(stats, run_args)
 
 
 def _run_vectorized(
