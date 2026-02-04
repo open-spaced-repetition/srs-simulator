@@ -40,7 +40,19 @@ from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 
-from experiments.retention_sweep.cli_utils import add_user_range_args, parse_csv
+from experiments.retention_sweep.cli_utils import (
+    add_benchmark_args,
+    add_button_usage_arg,
+    add_common_sim_args,
+    add_env_sched_args,
+    add_fuzz_arg,
+    add_log_args,
+    add_retention_range_args,
+    add_short_term_args,
+    add_torch_device_arg,
+    add_user_range_args,
+    parse_csv,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,131 +67,46 @@ def parse_args() -> argparse.Namespace:
         default=100,
         help="Number of users to simulate in parallel per batch.",
     )
-    parser.add_argument(
-        "--env",
-        dest="env",
-        default="lstm",
-        help="Comma-separated environments to sweep (lstm, fsrs6).",
+    add_env_sched_args(
+        parser,
+        env_default="lstm",
+        sched_default="fsrs6,anki_sm2,memrise",
+        env_help="Comma-separated environments to sweep (lstm, fsrs6).",
+        sched_help=(
+            "Comma-separated schedulers to sweep "
+            "(fsrs6, lstm, anki_sm2, memrise, fixed)."
+        ),
     )
-    parser.add_argument(
-        "--sched",
-        dest="sched",
-        default="fsrs6,anki_sm2,memrise",
-        help="Comma-separated schedulers to sweep (fsrs6, lstm, anki_sm2, memrise, fixed).",
+    add_retention_range_args(parser)
+    add_common_sim_args(
+        parser,
+        days_default=1825,
+        deck_default=10000,
+        learn_limit_default=10,
+        review_limit_default=9999,
+        cost_limit_default=720.0,
+        seed_default=42,
+        priority_default="review-first",
+        scheduler_priority_default="low_retrievability",
     )
-    parser.add_argument(
-        "--start-retention",
-        type=float,
-        default=0.50,
-        help="Start retention (0-1, rounded to 2 decimals).",
+    add_button_usage_arg(parser, default_path=DEFAULT_BUTTON_USAGE_PATH)
+    add_benchmark_args(parser)
+    add_log_args(
+        parser, log_dir_default=None, include_no_log=True, include_no_progress=True
     )
-    parser.add_argument(
-        "--end-retention",
-        type=float,
-        default=0.98,
-        help="End retention (0-1, rounded to 2 decimals).",
-    )
-    parser.add_argument(
-        "--step",
-        type=float,
-        default=0.02,
-        help="Retention step (0-1, rounded to 2 decimals).",
-    )
-    parser.add_argument("--days", type=int, default=1825)
-    parser.add_argument("--deck", type=int, default=10000)
-    parser.add_argument("--learn-limit", type=int, default=10)
-    parser.add_argument("--review-limit", type=int, default=9999)
-    parser.add_argument("--cost-limit-minutes", type=float, default=720.0)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument(
-        "--priority",
-        choices=["review-first", "new-first"],
-        default="review-first",
-    )
-    parser.add_argument(
-        "--scheduler-priority",
-        default="low_retrievability",
-        help="FSRS6 priority hint (ignored by other schedulers).",
-    )
-    parser.add_argument(
-        "--button-usage",
-        type=Path,
-        default=DEFAULT_BUTTON_USAGE_PATH,
-        help="Path to Anki button usage JSONL for per-user costs/probabilities.",
-    )
-    parser.add_argument(
-        "--benchmark-result",
-        default=None,
-        help="Override benchmark result files (key=value, comma-separated).",
-    )
-    parser.add_argument(
-        "--benchmark-partition",
-        default="0",
-        help="Benchmark parameter partition key.",
-    )
-    parser.add_argument(
-        "--srs-benchmark-root",
-        type=Path,
-        default=None,
-        help="Path to the srs-benchmark repo (used for weights).",
-    )
-    parser.add_argument(
-        "--log-dir",
-        type=Path,
-        default=None,
-        help="Directory to store logs (defaults to logs/retention_sweep).",
-    )
-    parser.add_argument(
-        "--no-log",
-        action="store_true",
-        help="Disable writing logs to disk.",
-    )
-    parser.add_argument(
-        "--no-progress",
-        action="store_true",
-        help="Disable tqdm progress bars.",
-    )
-    parser.add_argument(
-        "--fuzz",
-        action="store_true",
-        help="Apply scheduler interval fuzz (Anki-style).",
-    )
-    parser.add_argument(
-        "--short-term-source",
+    add_fuzz_arg(parser)
+    add_short_term_args(
+        parser,
         choices=["steps", "sched"],
-        default=None,
-        help=(
+        source_help=(
             "Short-term scheduling source: steps (Anki-style learning steps) "
             "or sched (LSTM-only short-term intervals; not yet supported in batched)."
         ),
+        learning_help="Comma-separated learning steps (minutes) for short-term steps mode.",
+        relearning_help="Comma-separated relearning steps (minutes) for short-term steps mode.",
+        threshold_help="Short-term cutoff in days (used by sched mode).",
     )
-    parser.add_argument(
-        "--learning-steps",
-        default=None,
-        help="Comma-separated learning steps (minutes) for short-term steps mode.",
-    )
-    parser.add_argument(
-        "--relearning-steps",
-        default=None,
-        help="Comma-separated relearning steps (minutes) for short-term steps mode.",
-    )
-    parser.add_argument(
-        "--short-term-threshold",
-        type=float,
-        default=0.5,
-        help="Short-term cutoff in days (used by sched mode).",
-    )
-    parser.add_argument(
-        "--short-term-loops-limit",
-        type=int,
-        default=None,
-        help="Max short-term review loops per day (per user).",
-    )
-    parser.add_argument(
-        "--torch-device",
-        default=None,
-        help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
-    )
+    add_torch_device_arg(parser)
     parser.add_argument(
         "--cuda-devices",
         default=None,

@@ -7,7 +7,7 @@ from pathlib import Path
 import random
 import sys
 import time
-from typing import Callable, List, Optional
+from typing import Callable, List
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +21,18 @@ from simulator.scheduler_spec import (
     scheduler_uses_desired_retention,
 )
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
+from experiments.retention_sweep.cli_utils import (
+    add_benchmark_args,
+    add_button_usage_arg,
+    add_common_sim_args,
+    add_env_sched_args,
+    add_fuzz_arg,
+    add_log_args,
+    add_retention_range_args,
+    add_short_term_args,
+    add_torch_device_arg,
+    parse_csv,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,100 +40,44 @@ def parse_args() -> argparse.Namespace:
         description="Run a desired-retention sweep for simulate.py.",
         allow_abbrev=False,
     )
-    parser.add_argument(
-        "--start-retention",
-        type=float,
-        default=0.50,
-        help="Start retention (0-1, rounded to 2 decimals).",
-    )
-    parser.add_argument(
-        "--end-retention",
-        type=float,
-        default=0.98,
-        help="End retention (0-1, rounded to 2 decimals).",
-    )
-    parser.add_argument(
-        "--step",
-        type=float,
-        default=0.02,
-        help="Retention step (0-1, rounded to 2 decimals).",
-    )
-    parser.add_argument(
-        "--env",
-        default="lstm",
-        help="Comma-separated list of environments to sweep.",
-    )
-    parser.add_argument(
-        "--sched",
-        default="fsrs6",
-        help=(
+    add_retention_range_args(parser)
+    add_env_sched_args(
+        parser,
+        env_default="lstm",
+        sched_default="fsrs6",
+        env_help="Comma-separated list of environments to sweep.",
+        sched_help=(
             "Comma-separated list of schedulers to sweep "
             "(include sspmmc to run policies; use fixed@<days> for fixed intervals)."
         ),
     )
-    parser.add_argument("--days", type=int, default=1825, help="Simulation days.")
-    parser.add_argument("--deck", type=int, default=10000, help="Deck size.")
-    parser.add_argument(
-        "--learn-limit",
-        type=int,
-        default=10,
-        help="Max new cards per day (behavior limit).",
+    add_common_sim_args(
+        parser,
+        days_default=1825,
+        deck_default=10000,
+        learn_limit_default=10,
+        review_limit_default=9999,
+        cost_limit_default=720,
+        seed_default=42,
+        priority_default="review-first",
+        scheduler_priority_default="low_retrievability",
     )
-    parser.add_argument(
-        "--review-limit",
-        type=int,
-        default=9999,
-        help="Max reviews per day (behavior limit).",
-    )
-    parser.add_argument(
-        "--cost-limit-minutes",
-        type=float,
-        default=720,
-        help="Daily study time limit in minutes (behavior limit).",
-    )
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument(
         "--user-id",
         type=int,
         default=None,
         help="Load benchmark weights for this user ID.",
     )
-    parser.add_argument(
-        "--benchmark-partition",
-        default="0",
-        help="Partition key inside benchmark result parameters.",
-    )
-    parser.add_argument(
-        "--benchmark-result",
-        default=None,
-        help=(
+    add_benchmark_args(
+        parser,
+        benchmark_result_help=(
             "Override benchmark result base names, e.g. "
             "fsrs6=FSRS-6-short,fsrs3=FSRSv3."
         ),
+        benchmark_partition_help="Partition key inside benchmark result parameters.",
+        srs_benchmark_help="Path to the srs-benchmark repo (used for LSTM weights).",
     )
-    parser.add_argument(
-        "--srs-benchmark-root",
-        type=Path,
-        default=None,
-        help="Path to the srs-benchmark repo (used for LSTM weights).",
-    )
-    parser.add_argument(
-        "--button-usage",
-        type=Path,
-        default=DEFAULT_BUTTON_USAGE_PATH,
-        help="Path to Anki button usage JSONL for per-user costs/probabilities.",
-    )
-    parser.add_argument(
-        "--priority",
-        choices=["review-first", "new-first"],
-        default="review-first",
-        help="Action priority passed to simulate.py.",
-    )
-    parser.add_argument(
-        "--scheduler-priority",
-        default="low_retrievability",
-        help="FSRS6 priority hint passed to simulate.py.",
-    )
+    add_button_usage_arg(parser, default_path=DEFAULT_BUTTON_USAGE_PATH)
     parser.add_argument(
         "--sspmmc-policy",
         type=Path,
@@ -159,57 +115,25 @@ def parse_args() -> argparse.Namespace:
         default=0.9,
         help="Desired retention value logged for SSP-MMC runs.",
     )
-    parser.add_argument(
-        "--log-dir",
-        type=Path,
-        default=None,
-        help="Directory to store logs (defaults to logs/retention_sweep).",
+    add_log_args(
+        parser, log_dir_default=None, include_no_log=True, include_no_progress=True
     )
     parser.add_argument(
         "--plot",
         action="store_true",
         help="Show plots during the sweep (slower, opens windows).",
     )
-    parser.add_argument(
-        "--fuzz",
-        action="store_true",
-        help="Apply scheduler interval fuzz (Anki-style).",
-    )
-    parser.add_argument(
-        "--short-term-source",
+    add_fuzz_arg(parser)
+    add_short_term_args(
+        parser,
         choices=["steps", "sched"],
-        default=None,
-        help=(
+        source_help=(
             "Short-term scheduling source: steps (Anki-style learning steps) "
             "or sched (LSTM-only short-term intervals)."
         ),
-    )
-    parser.add_argument(
-        "--learning-steps",
-        default=None,
-        help="Comma-separated learning steps (minutes) for short-term steps mode.",
-    )
-    parser.add_argument(
-        "--relearning-steps",
-        default=None,
-        help="Comma-separated relearning steps (minutes) for short-term steps mode.",
-    )
-    parser.add_argument(
-        "--short-term-threshold",
-        type=float,
-        default=0.5,
-        help="Short-term threshold (days) for LSTM interval conversion.",
-    )
-    parser.add_argument(
-        "--short-term-loops-limit",
-        type=int,
-        default=None,
-        help="Max short-term review loops per day (per user).",
-    )
-    parser.add_argument(
-        "--no-log",
-        action="store_true",
-        help="Disable writing logs to disk.",
+        learning_help="Comma-separated learning steps (minutes) for short-term steps mode.",
+        relearning_help="Comma-separated relearning steps (minutes) for short-term steps mode.",
+        threshold_help="Short-term threshold (days) for LSTM interval conversion.",
     )
     parser.add_argument(
         "--log-reviews",
@@ -226,11 +150,7 @@ def parse_args() -> argparse.Namespace:
             "FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC/LSTM schedulers)."
         ),
     )
-    parser.add_argument(
-        "--torch-device",
-        default=None,
-        help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
-    )
+    add_torch_device_arg(parser)
     parser.add_argument(
         "--no-summary",
         action="store_true",
@@ -241,18 +161,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Emit JSON progress events to stdout (for parent aggregation).",
     )
-    parser.add_argument(
-        "--no-progress",
-        action="store_true",
-        help="Disable tqdm progress bars (useful for parallel runs).",
-    )
     return parser.parse_args()
-
-
-def _parse_csv(value: Optional[str]) -> List[str]:
-    if not value:
-        return []
-    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _dr_values(start: float, end: float, step: float) -> List[float]:
@@ -363,7 +272,7 @@ def _resolve_policy_paths(
     args: argparse.Namespace, repo_root: Path, run_sspmmc: bool
 ) -> List[Path]:
     if args.sspmmc_policies:
-        paths = [Path(path) for path in _parse_csv(args.sspmmc_policies)]
+        paths = [Path(path) for path in parse_csv(args.sspmmc_policies)]
         return [path.resolve() for path in paths]
 
     if args.sspmmc_policy:
@@ -583,10 +492,10 @@ def main() -> None:
     log_dir = args.log_dir or (
         repo_root / "logs" / "retention_sweep" / f"user_{user_id}"
     )
-    envs = _parse_csv(args.env)
+    envs = parse_csv(args.env)
     if not envs:
         raise SystemExit("No environments specified. Use --env.")
-    schedulers = _parse_csv(args.sched) or ["fsrs6"]
+    schedulers = parse_csv(args.sched) or ["fsrs6"]
     try:
         scheduler_specs = [parse_scheduler_spec(item) for item in schedulers]
     except ValueError as exc:
