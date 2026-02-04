@@ -85,6 +85,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to write FSRS-6 equivalence summary JSON.",
     )
+    parser.add_argument(
+        "--short-term",
+        choices=["on", "off", "any"],
+        default="any",
+        help="Filter logs by short-term flag.",
+    )
+    parser.add_argument(
+        "--short-term-source",
+        choices=["steps", "sched", "any"],
+        default="any",
+        help="Filter logs by short-term source (steps/sched).",
+    )
     return parser.parse_args()
 
 
@@ -92,6 +104,18 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalize_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
 
 
 def _load_meta_totals(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -228,6 +252,20 @@ def main() -> None:
             continue
         if scheduler not in {name for name, _, _ in scheduler_specs}:
             continue
+
+        short_term_value = _normalize_bool(meta.get("short_term"))
+        if args.short_term != "any":
+            if args.short_term == "on":
+                if short_term_value is not True:
+                    continue
+            elif short_term_value is True:
+                continue
+        if args.short_term_source != "any":
+            short_term_source = meta.get("short_term_source")
+            if short_term_source != args.short_term_source:
+                continue
+            if short_term_value is not True:
+                continue
 
         desired = meta.get("desired_retention")
         fixed_interval = None
