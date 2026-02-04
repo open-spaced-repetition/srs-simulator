@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=100,
+        default=1000,
         help="Number of users to simulate in parallel per batch.",
     )
     add_env_sched_args(
