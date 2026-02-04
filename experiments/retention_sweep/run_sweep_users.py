@@ -22,7 +22,12 @@ from simulator.scheduler_spec import (
     scheduler_uses_desired_retention,
 )
 
-from experiments.retention_sweep.cli_utils import add_user_range_args, parse_csv
+from experiments.retention_sweep.cli_utils import (
+    add_user_range_args,
+    build_retention_command,
+    has_flag,
+    parse_csv,
+)
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -277,34 +282,23 @@ def _build_command(
     torch_device: str | None,
     inject_torch_device: bool,
 ) -> list[str]:
-    cmd = [
-        uv_cmd,
-        "run",
-        str(script_path),
-        "--env",
-        environments,
-        "--sched",
-        schedulers,
-        "--user-id",
-        str(user_id),
-    ]
-    if inject_torch_device and torch_device is not None:
-        cmd.extend(["--torch-device", torch_device])
+    cmd = build_retention_command(
+        uv_cmd=uv_cmd,
+        script_path=script_path,
+        env=environments,
+        sched=schedulers,
+        user_id=user_id,
+        torch_device=torch_device,
+        inject_torch_device=inject_torch_device,
+    )
     cmd.extend(extra_args)
-    if disable_progress and "--no-progress" not in extra_args:
+    if disable_progress and not has_flag(extra_args, "--no-progress"):
         cmd.append("--no-progress")
-    if disable_summary and "--no-summary" not in extra_args:
+    if disable_summary and not has_flag(extra_args, "--no-summary"):
         cmd.append("--no-summary")
-    if emit_progress_events and "--progress-events" not in extra_args:
+    if emit_progress_events and not has_flag(extra_args, "--progress-events"):
         cmd.append("--progress-events")
     return cmd
-
-
-def _has_arg(extra_args: list[str], flag: str) -> bool:
-    for arg in extra_args:
-        if arg == flag or arg.startswith(f"{flag}="):
-            return True
-    return False
 
 
 def _run_command(

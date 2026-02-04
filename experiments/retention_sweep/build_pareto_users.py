@@ -10,7 +10,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.retention_sweep.cli_utils import add_user_range_args, passthrough_args
+from experiments.retention_sweep.cli_utils import (
+    add_user_range_args,
+    build_retention_command,
+    passthrough_args,
+)
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -93,17 +97,13 @@ def main() -> int:
 
     failures = 0
     for user_id in range(args.start_user, args.end_user + 1):
-        cmd = [
-            args.uv_cmd,
-            "run",
-            str(script_path),
-            "--env",
-            args.env,
-            "--sched",
-            args.sched,
-            "--user-id",
-            str(user_id),
-        ]
+        cmd = build_retention_command(
+            uv_cmd=args.uv_cmd,
+            script_path=script_path,
+            env=args.env,
+            sched=args.sched,
+            user_id=user_id,
+        )
         if args.short_term != "any":
             cmd.extend(["--short-term", args.short_term])
         if args.short_term_source != "any":
