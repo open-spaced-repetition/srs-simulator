@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 import os
-import sys
 
 import torch
 from torch import Tensor
@@ -12,11 +11,6 @@ from torch import Tensor
 from simulator.models.lstm import EPS, _normalize_state_dict, _resolve_weight_file
 
 _LN_EPS = 1e-5
-
-
-def _env_bool(name: str) -> bool:
-    raw = os.getenv(name, "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
 
 
 def _resolve_max_batch_size(value: int | None) -> int | None:
@@ -395,10 +389,6 @@ class LSTMBatchedEnvOps:
         self.device = device
         self.dtype = dtype
         self.default_retention = 0.85
-        self._mem_log = _env_bool("SRS_LSTM_MEM_LOG")
-        self._mem_log_sync = _env_bool("SRS_LSTM_MEM_LOG_SYNC")
-        self._mem_log_peak_alloc = 0
-        self._mem_log_peak_reserved = 0
         self.max_batch_size = _resolve_max_batch_size(max_batch_size)
         self.use_duration_feature = weights.use_duration_feature
         self.n_hidden = weights.n_hidden
@@ -408,34 +398,6 @@ class LSTMBatchedEnvOps:
         if self.use_duration_feature:
             self.duration_value = torch.tensor(
                 default_duration_ms, device=device, dtype=dtype
-            )
-
-    def _maybe_log_mem(self, batch_size: int, *, label: str) -> None:
-        if not self._mem_log or self.device.type != "cuda":
-            return
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-        torch.cuda.reset_peak_memory_stats(self.device)
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-
-    def _maybe_log_mem_post(self, batch_size: int, *, label: str) -> None:
-        if not self._mem_log or self.device.type != "cuda":
-            return
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-        peak_alloc = torch.cuda.max_memory_allocated(self.device)
-        peak_reserved = torch.cuda.max_memory_reserved(self.device)
-        if peak_alloc > self._mem_log_peak_alloc:
-            self._mem_log_peak_alloc = peak_alloc
-            self._mem_log_peak_reserved = max(
-                self._mem_log_peak_reserved, peak_reserved
-            )
-            sys.stderr.write(
-                "[lstm mem] "
-                f"{label} batch={batch_size} "
-                f"peak_alloc={peak_alloc / 1024**2:.1f}MiB "
-                f"peak_reserved={peak_reserved / 1024**2:.1f}MiB\n"
             )
 
     def init_state(self, user_count: int, deck_size: int) -> LSTMBatchedEnvState:
@@ -562,11 +524,9 @@ class LSTMBatchedEnvOps:
 
             h = state.lstm_h[:, chunk_user, chunk_card, :]
             c = state.lstm_c[:, chunk_user, chunk_card, :]
-            self._maybe_log_mem(chunk_user.numel(), label="env-batched")
             w_last, s_last, d_last, (h_new, c_new) = forward_step(
                 self.weights, step, (h, c), chunk_user
             )
-            self._maybe_log_mem_post(chunk_user.numel(), label="env-batched")
             state.lstm_h[:, chunk_user, chunk_card, :] = h_new
             state.lstm_c[:, chunk_user, chunk_card, :] = c_new
             state.mem_w[chunk_user, chunk_card] = w_last

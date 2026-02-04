@@ -27,11 +27,6 @@ def _resolve_max_batch_size(value: int | None) -> int | None:
     return parsed
 
 
-def _env_bool(name: str) -> bool:
-    raw = os.getenv(name, "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
 @dataclass
 class LSTMSchedulerState:
     curves: dict[str, list[float]]
@@ -324,10 +319,6 @@ class LSTMVectorizedSchedulerOps:
         self.max_interval = float(scheduler.max_interval)
         self.search_steps = int(scheduler.search_steps)
         self.max_batch_size = _resolve_max_batch_size(max_batch_size)
-        self._mem_log = _env_bool("SRS_LSTM_MEM_LOG")
-        self._mem_log_sync = _env_bool("SRS_LSTM_MEM_LOG_SYNC")
-        self._mem_log_peak_alloc = 0
-        self._mem_log_peak_reserved = 0
 
         self.model.device = device
         self.model.dtype = dtype
@@ -374,35 +365,6 @@ class LSTMVectorizedSchedulerOps:
             mem_d=mem_d,
             has_curves=has_curves,
         )
-
-    def _maybe_log_mem(self, batch_size: int, *, label: str) -> None:
-        if not self._mem_log or self.device.type != "cuda":
-            return
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-        torch.cuda.reset_peak_memory_stats(self.device)
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-        # Caller will run the kernel, so this function is invoked twice (pre/post).
-
-    def _maybe_log_mem_post(self, batch_size: int, *, label: str) -> None:
-        if not self._mem_log or self.device.type != "cuda":
-            return
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-        peak_alloc = torch.cuda.max_memory_allocated(self.device)
-        peak_reserved = torch.cuda.max_memory_reserved(self.device)
-        if peak_alloc > self._mem_log_peak_alloc:
-            self._mem_log_peak_alloc = peak_alloc
-            self._mem_log_peak_reserved = max(
-                self._mem_log_peak_reserved, peak_reserved
-            )
-            sys.stderr.write(
-                "[lstm mem] "
-                f"{label} batch={batch_size} "
-                f"peak_alloc={peak_alloc / 1024**2:.1f}MiB "
-                f"peak_reserved={peak_reserved / 1024**2:.1f}MiB\n"
-            )
 
     def review_priority(
         self,
@@ -483,11 +445,9 @@ class LSTMVectorizedSchedulerOps:
 
             h = state.lstm_h[:, idx_chunk, :]
             c = state.lstm_c[:, idx_chunk, :]
-            self._maybe_log_mem(idx_chunk.numel(), label="vectorized")
             w_last, s_last, d_last, (h_new, c_new) = self.model.network.forward_step(
                 step, (h, c)
             )
-            self._maybe_log_mem_post(idx_chunk.numel(), label="vectorized")
             state.lstm_h[:, idx_chunk, :] = h_new
             state.lstm_c[:, idx_chunk, :] = c_new
             state.mem_w[idx_chunk] = w_last
@@ -753,10 +713,6 @@ class LSTMBatchSchedulerOps:
         self.default_retention = float(default_retention)
         self.interval_mode = interval_mode
         self.max_batch_size = _resolve_max_batch_size(max_batch_size)
-        self._mem_log = _env_bool("SRS_LSTM_MEM_LOG")
-        self._mem_log_sync = _env_bool("SRS_LSTM_MEM_LOG_SYNC")
-        self._mem_log_peak_alloc = 0
-        self._mem_log_peak_reserved = 0
         self.use_duration_feature = bool(weights.use_duration_feature)
         self.duration_value = None
         if self.use_duration_feature:
@@ -766,34 +722,6 @@ class LSTMBatchSchedulerOps:
         self._target = torch.tensor(self.desired_retention, device=device, dtype=dtype)
         self._min_interval = torch.tensor(self.min_interval, device=device, dtype=dtype)
         self._max_interval = torch.tensor(self.max_interval, device=device, dtype=dtype)
-
-    def _maybe_log_mem(self, batch_size: int, *, label: str) -> None:
-        if not self._mem_log or self.device.type != "cuda":
-            return
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-        torch.cuda.reset_peak_memory_stats(self.device)
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-
-    def _maybe_log_mem_post(self, batch_size: int, *, label: str) -> None:
-        if not self._mem_log or self.device.type != "cuda":
-            return
-        if self._mem_log_sync:
-            torch.cuda.synchronize(self.device)
-        peak_alloc = torch.cuda.max_memory_allocated(self.device)
-        peak_reserved = torch.cuda.max_memory_reserved(self.device)
-        if peak_alloc > self._mem_log_peak_alloc:
-            self._mem_log_peak_alloc = peak_alloc
-            self._mem_log_peak_reserved = max(
-                self._mem_log_peak_reserved, peak_reserved
-            )
-            sys.stderr.write(
-                "[lstm mem] "
-                f"{label} batch={batch_size} "
-                f"peak_alloc={peak_alloc / 1024**2:.1f}MiB "
-                f"peak_reserved={peak_reserved / 1024**2:.1f}MiB\n"
-            )
 
     def init_state(self, user_count: int, deck_size: int) -> LSTMBatchSchedulerState:
         lstm_h = torch.zeros(
@@ -896,11 +824,9 @@ class LSTMBatchSchedulerOps:
 
             h = state.lstm_h[:, chunk_user, chunk_card, :]
             c = state.lstm_c[:, chunk_user, chunk_card, :]
-            self._maybe_log_mem(chunk_user.numel(), label="batched")
             w_last, s_last, d_last, (h_new, c_new) = forward_step(
                 self.weights, step, (h, c), chunk_user
             )
-            self._maybe_log_mem_post(chunk_user.numel(), label="batched")
             state.lstm_h[:, chunk_user, chunk_card, :] = h_new
             state.lstm_c[:, chunk_user, chunk_card, :] = c_new
             state.mem_w[chunk_user, chunk_card] = w_last
