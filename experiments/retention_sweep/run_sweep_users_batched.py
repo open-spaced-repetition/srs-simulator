@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
         description="Run multi-user retention sweeps with batched vectorized simulation.",
         allow_abbrev=False,
     )
-    add_user_range_args(parser, default_end=1000)
+    add_user_range_args(parser)
     parser.add_argument(
         "--batch-size",
         type=int,

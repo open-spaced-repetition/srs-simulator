@@ -8,6 +8,7 @@ from simulator.defaults import (
     DEFAULT_COST_LIMIT_MINUTES,
     DEFAULT_DECK_SIZE,
     DEFAULT_DAYS,
+    DEFAULT_END_USER,
     DEFAULT_LEARN_LIMIT,
     DEFAULT_PRIORITY,
     DEFAULT_REVIEW_LIMIT,
@@ -17,7 +18,11 @@ from simulator.defaults import (
 )
 
 
-def add_user_range_args(parser: argparse.ArgumentParser, *, default_end: int) -> None:
+def add_user_range_args(
+    parser: argparse.ArgumentParser, *, default_end: int | None = None
+) -> None:
+    if default_end is None:
+        default_end = DEFAULT_END_USER
     parser.add_argument("--start-user", type=int, default=1, help="First user id.")
     parser.add_argument(
         "--end-user", type=int, default=default_end, help="Last user id."
