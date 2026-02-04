@@ -271,6 +271,7 @@ class SimulationEngine:
         fuzz: bool = False,
         progress: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        short_term_loops_limit: Optional[int] = None,
     ) -> None:
         self.days = days
         self.deck_size = deck_size
@@ -284,6 +285,11 @@ class SimulationEngine:
         self.progress_callback = progress_callback
         self._progress_last = -1
         self._progress_bar: Optional[tqdm] = None
+        if short_term_loops_limit is not None and short_term_loops_limit < 0:
+            raise ValueError("short_term_loops_limit must be >= 0.")
+        self.short_term_loops_limit = short_term_loops_limit
+        self._short_term_loops_today = 0
+        self._short_term_loop_time: Optional[float] = None
 
         self.cards = [Card(id=i) for i in range(deck_size)]
         self.future_queue: List[tuple[float, int, int]] = []
@@ -371,6 +377,8 @@ class SimulationEngine:
 
     def _start_day(self, day: int) -> None:
         self.behavior.start_day(day, self.rng)
+        self._short_term_loops_today = 0
+        self._short_term_loop_time = None
 
     def _compute_memorized(self, day: int) -> None:
         memorized = 0.0
@@ -417,6 +425,20 @@ class SimulationEngine:
         if cid is None:
             return False
         card = self.cards[cid]
+        if self.short_term_loops_limit is not None:
+            try:
+                from simulator.short_term import ShortTermState
+            except ImportError:
+                ShortTermState = None  # type: ignore[assignment]
+            if ShortTermState is not None and isinstance(
+                card.scheduler_state, ShortTermState
+            ):
+                if self._short_term_loop_time != now:
+                    if self._short_term_loops_today >= self.short_term_loops_limit:
+                        self._schedule_card(card)
+                        return False
+                    self._short_term_loops_today += 1
+                    self._short_term_loop_time = now
         elapsed = float(now) - float(card.last_review)
         retrievability = self.environment.predict_retention(card, elapsed)
         view = _card_view(card)
@@ -597,6 +619,7 @@ def simulate(
     fuzz: bool = False,
     progress: bool = False,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    short_term_loops_limit: Optional[int] = None,
 ) -> SimulationStats:
     """Run an event-driven simulation with explicit environment/behavior separation."""
 
@@ -611,6 +634,7 @@ def simulate(
         fuzz=fuzz,
         progress=progress,
         progress_callback=progress_callback,
+        short_term_loops_limit=short_term_loops_limit,
     )
     return engine.run()
 

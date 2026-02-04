@@ -446,6 +446,7 @@ def main() -> None:
             fuzz=args.fuzz,
             seed_fn=rng.random,
             progress=not args.no_progress,
+            short_term_loops_limit=args.short_term_loops_limit,
         )
     elapsed = time.perf_counter() - start_time
     sys.stderr.write(f"Simulation time: {elapsed:.2f}s\n")

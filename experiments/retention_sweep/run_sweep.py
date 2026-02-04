@@ -501,6 +501,9 @@ def _run_once(
                 seed_fn=rng.random,
                 progress=False,
                 progress_callback=progress_callback,
+                short_term_loops_limit=getattr(
+                    run_args, "short_term_loops_limit", None
+                ),
             )
     finally:
         progress_close()
