@@ -110,9 +110,6 @@ class SimulationStats:
     events: List[Event]
     total_projected_retrievability: float
     timing: dict[str, float] | None = None
-    daily_gpu_peak_bytes: list[int] | None = None
-    daily_gpu_peak_allocated_bytes: list[int] | None = None
-    daily_gpu_peak_reserved_bytes: list[int] | None = None
     daily_phase_reviews: list[int] | None = None
     daily_phase_lapses: list[int] | None = None
     daily_short_loops: list[int] | None = None
@@ -334,8 +331,6 @@ class SimulationEngine:
             daily_phase_reviews=self.daily_phase_reviews,
             daily_phase_lapses=self.daily_phase_lapses,
             daily_short_loops=None,
-            daily_gpu_peak_allocated_bytes=None,
-            daily_gpu_peak_reserved_bytes=None,
         )
 
     def _start_progress(self) -> None:
