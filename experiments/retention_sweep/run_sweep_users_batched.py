@@ -92,7 +92,7 @@ def parse_args() -> argparse.Namespace:
         choices=["steps", "sched"],
         source_help=(
             "Short-term scheduling source: steps (Anki-style learning steps) "
-            "or sched (LSTM-only short-term intervals; not yet supported in batched)."
+            "or sched (LSTM-only short-term intervals)."
         ),
         learning_help="Comma-separated learning steps (minutes) for short-term steps mode.",
         relearning_help="Comma-separated relearning steps (minutes) for short-term steps mode.",
@@ -429,10 +429,6 @@ def _run_batch_core(
         args
     )
     short_term_enabled = bool(short_term_source)
-    if short_term_source not in {None, "steps"}:
-        raise SystemExit(
-            "Batched short-term currently supports --short-term-source steps only."
-        )
     learning_steps_arg = (
         ",".join(str(step) for step in learning_steps)
         if short_term_source == "steps"
@@ -445,6 +441,13 @@ def _run_batch_core(
     )
     schedulers = parse_csv(args.sched)
     envs = parse_csv(args.env)
+    if short_term_source == "sched":
+        for raw in schedulers:
+            name, _, _ = parse_scheduler_spec(raw)
+            if name != "lstm":
+                raise SystemExit(
+                    "--short-term-source sched requires --sched lstm in batched mode."
+                )
     base_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     for environment in envs:
@@ -580,9 +583,15 @@ def _run_batch_core(
                         dtype=torch.float32,
                     )
                 for dr in dr_values:
+                    interval_mode = (
+                        "float" if short_term_source == "sched" else "integer"
+                    )
+                    min_interval = 0.0 if short_term_source == "sched" else 1.0
                     sched_ops = LSTMBatchSchedulerOps(
                         lstm_packed,
                         desired_retention=dr,
+                        min_interval=min_interval,
+                        interval_mode=interval_mode,
                         device=env_ops.device,
                         dtype=torch.float32,
                     )
