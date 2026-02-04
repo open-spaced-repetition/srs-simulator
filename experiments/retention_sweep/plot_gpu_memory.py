@@ -25,7 +25,14 @@ def _load_log(path: Path) -> tuple[dict, dict]:
 
 
 def _plot(meta: dict, daily: dict, *, output: Path | None, show: bool) -> None:
-    gpu_bytes = daily.get("gpu_peak_bytes")
+    gpu_bytes = daily.get("gpu_peak_reserved_bytes")
+    label_suffix = "reserved"
+    if gpu_bytes is None:
+        gpu_bytes = daily.get("gpu_peak_bytes")
+        label_suffix = "peak"
+    if gpu_bytes is None:
+        gpu_bytes = daily.get("gpu_peak_allocated_bytes")
+        label_suffix = "allocated"
     if not gpu_bytes:
         raise ValueError("daily.gpu_peak_bytes missing in log.")
     reviews = daily.get("reviews")
@@ -34,7 +41,12 @@ def _plot(meta: dict, daily: dict, *, output: Path | None, show: bool) -> None:
     gpu_mib = [value / (1024 * 1024) for value in gpu_bytes]
 
     fig, axes = plt.subplots(3, 1, figsize=(12, 11), sharex=False)
-    axes[0].plot(days, gpu_mib, color="tab:purple", label="GPU peak (MiB)")
+    axes[0].plot(
+        days,
+        gpu_mib,
+        color="tab:purple",
+        label=f"GPU peak (MiB, {label_suffix})",
+    )
     axes[0].set_xlabel("Day")
     axes[0].set_ylabel("MiB")
     axes[0].set_title("Daily GPU peak memory")
@@ -60,7 +72,7 @@ def _plot(meta: dict, daily: dict, *, output: Path | None, show: bool) -> None:
                 label="Short reviews/day",
             )
         axes[1].set_xlabel("Reviews/day")
-        axes[1].set_ylabel("GPU peak (MiB)")
+        axes[1].set_ylabel(f"GPU peak (MiB, {label_suffix})")
         axes[1].set_title("GPU peak vs. reviews")
         axes[1].legend()
     else:
@@ -95,7 +107,7 @@ def _plot(meta: dict, daily: dict, *, output: Path | None, show: bool) -> None:
                 label="Short loops/day",
             )
         axes[2].set_xlabel("Short-term activity")
-        axes[2].set_ylabel("GPU peak (MiB)")
+        axes[2].set_ylabel(f"GPU peak (MiB, {label_suffix})")
         axes[2].set_title("GPU peak vs. short-term activity")
         axes[2].legend()
     else:
