@@ -92,6 +92,8 @@ Scheduler-driven short-term (LSTM only, no steps):
 uv run simulate.py --engine event --env lstm --sched lstm --short-term-source sched
 ```
 
+Use `--short-term-max-loops-per-day <N>` to cap short-term loops per user per day in vectorized/batched runs; remaining short-term cards carry over to the next day.
+
 When short-term scheduling is enabled, benchmark weights are loaded from `*-short-secs` result files, and LSTM weights are loaded from `weights/LSTM-short-secs` in the `srs-benchmark` repo (override via `--benchmark-result` if needed).
 
 Additional retention sweep helpers:
