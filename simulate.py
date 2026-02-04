@@ -788,6 +788,11 @@ def _write_log(args: argparse.Namespace, stats) -> None:
                 )
                 + "\n"
             )
+        gpu_peak_bytes = stats.daily_gpu_peak_reserved_bytes
+        if gpu_peak_bytes is None:
+            gpu_peak_bytes = stats.daily_gpu_peak_bytes
+        if gpu_peak_bytes is None:
+            gpu_peak_bytes = stats.daily_gpu_peak_allocated_bytes
         daily = {
             "reviews": stats.daily_reviews,
             "new": stats.daily_new,
@@ -796,7 +801,9 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             "memorized": stats.daily_memorized,
             "phase_reviews": stats.daily_phase_reviews,
             "phase_lapses": stats.daily_phase_lapses,
-            "gpu_peak_bytes": stats.daily_gpu_peak_bytes,
+            "gpu_peak_bytes": gpu_peak_bytes,
+            "gpu_peak_allocated_bytes": stats.daily_gpu_peak_allocated_bytes,
+            "gpu_peak_reserved_bytes": stats.daily_gpu_peak_reserved_bytes,
             "short_loops": stats.daily_short_loops,
         }
         if stats.daily_reviews is not None and stats.daily_phase_reviews is not None:
