@@ -13,6 +13,20 @@ from simulator.models.lstm import EPS, LSTMModel
 from simulator.models.lstm_batch import PackedLSTMWeights, forward_step
 
 
+def _resolve_max_batch_size(value: int | None) -> int | None:
+    if value is not None:
+        if value < 1:
+            raise ValueError("max_batch_size must be >= 1 when set.")
+        return value
+    raw = os.getenv("SRS_LSTM_MAX_BATCH", "").strip().lower()
+    if not raw or raw in {"0", "none", "off"}:
+        return None
+    parsed = int(raw)
+    if parsed < 1:
+        raise ValueError("SRS_LSTM_MAX_BATCH must be >= 1 when set.")
+    return parsed
+
+
 @dataclass
 class LSTMSchedulerState:
     curves: dict[str, list[float]]
@@ -287,6 +301,7 @@ class LSTMVectorizedSchedulerOps:
         *,
         device: "torch.device",
         dtype: "torch.dtype",
+        max_batch_size: int | None = None,
     ) -> None:
         import torch
 
@@ -303,6 +318,7 @@ class LSTMVectorizedSchedulerOps:
         self.min_interval = float(scheduler.min_interval)
         self.max_interval = float(scheduler.max_interval)
         self.search_steps = int(scheduler.search_steps)
+        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
 
         self.model.device = device
         self.model.dtype = dtype
@@ -408,29 +424,44 @@ class LSTMVectorizedSchedulerOps:
         delays: "torch.Tensor",
         ratings: "torch.Tensor",
     ) -> None:
-        delay_clamped = self._torch.clamp(delays, min=0.0)
-        rating_clamped = self._torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_clamped.unsqueeze(-1)
-        rating_feature = rating_clamped.unsqueeze(-1)
-        if self.use_duration_feature and self.duration_value is not None:
-            duration_feature = self.duration_value.expand_as(delay_feature)
-            step = self._torch.cat(
-                [delay_feature, duration_feature, rating_feature], dim=-1
+        def _update_chunk(
+            idx_chunk: "torch.Tensor",
+            delays_chunk: "torch.Tensor",
+            ratings_chunk: "torch.Tensor",
+        ) -> None:
+            delay_clamped = self._torch.clamp(delays_chunk, min=0.0)
+            rating_clamped = self._torch.clamp(ratings_chunk, min=1, max=4).to(
+                self.dtype
             )
-        else:
-            step = self._torch.cat([delay_feature, rating_feature], dim=-1)
+            delay_feature = delay_clamped.unsqueeze(-1)
+            rating_feature = rating_clamped.unsqueeze(-1)
+            if self.use_duration_feature and self.duration_value is not None:
+                duration_feature = self.duration_value.expand_as(delay_feature)
+                step = self._torch.cat(
+                    [delay_feature, duration_feature, rating_feature], dim=-1
+                )
+            else:
+                step = self._torch.cat([delay_feature, rating_feature], dim=-1)
 
-        h = state.lstm_h[:, idx, :]
-        c = state.lstm_c[:, idx, :]
-        w_last, s_last, d_last, (h_new, c_new) = self.model.network.forward_step(
-            step, (h, c)
-        )
-        state.lstm_h[:, idx, :] = h_new
-        state.lstm_c[:, idx, :] = c_new
-        state.mem_w[idx] = w_last
-        state.mem_s[idx] = s_last
-        state.mem_d[idx] = d_last
-        state.has_curves[idx] = True
+            h = state.lstm_h[:, idx_chunk, :]
+            c = state.lstm_c[:, idx_chunk, :]
+            w_last, s_last, d_last, (h_new, c_new) = self.model.network.forward_step(
+                step, (h, c)
+            )
+            state.lstm_h[:, idx_chunk, :] = h_new
+            state.lstm_c[:, idx_chunk, :] = c_new
+            state.mem_w[idx_chunk] = w_last
+            state.mem_s[idx_chunk] = s_last
+            state.mem_d[idx_chunk] = d_last
+            state.has_curves[idx_chunk] = True
+
+        total = int(idx.numel())
+        if self.max_batch_size is None or total <= self.max_batch_size:
+            _update_chunk(idx, delays, ratings)
+            return
+        for start in range(0, total, self.max_batch_size):
+            end = start + self.max_batch_size
+            _update_chunk(idx[start:end], delays[start:end], ratings[start:end])
 
     def _target_interval(
         self,
@@ -666,6 +697,7 @@ class LSTMBatchSchedulerOps:
         default_retention: float = 0.85,
         default_duration_ms: float = 2500.0,
         interval_mode: str = "integer",
+        max_batch_size: int | None = None,
         device: "torch.device",
         dtype: "torch.dtype",
     ) -> None:
@@ -680,6 +712,7 @@ class LSTMBatchSchedulerOps:
         self.search_steps = int(search_steps)
         self.default_retention = float(default_retention)
         self.interval_mode = interval_mode
+        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
         self.use_duration_feature = bool(weights.use_duration_feature)
         self.duration_value = None
         if self.use_duration_feature:
@@ -771,27 +804,48 @@ class LSTMBatchSchedulerOps:
         delays: "torch.Tensor",
         ratings: "torch.Tensor",
     ) -> None:
-        delay_clamped = torch.clamp(delays, min=0.0)
-        rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_clamped.unsqueeze(-1)
-        rating_feature = rating_clamped.unsqueeze(-1)
-        if self.use_duration_feature and self.duration_value is not None:
-            duration_feature = self.duration_value.expand_as(delay_feature)
-            step = torch.cat([delay_feature, duration_feature, rating_feature], dim=-1)
-        else:
-            step = torch.cat([delay_feature, rating_feature], dim=-1)
+        def _update_chunk(
+            chunk_user: "torch.Tensor",
+            chunk_card: "torch.Tensor",
+            chunk_delays: "torch.Tensor",
+            chunk_ratings: "torch.Tensor",
+        ) -> None:
+            delay_clamped = torch.clamp(chunk_delays, min=0.0)
+            rating_clamped = torch.clamp(chunk_ratings, min=1, max=4).to(self.dtype)
+            delay_feature = delay_clamped.unsqueeze(-1)
+            rating_feature = rating_clamped.unsqueeze(-1)
+            if self.use_duration_feature and self.duration_value is not None:
+                duration_feature = self.duration_value.expand_as(delay_feature)
+                step = torch.cat(
+                    [delay_feature, duration_feature, rating_feature], dim=-1
+                )
+            else:
+                step = torch.cat([delay_feature, rating_feature], dim=-1)
 
-        h = state.lstm_h[:, user_idx, card_idx, :]
-        c = state.lstm_c[:, user_idx, card_idx, :]
-        w_last, s_last, d_last, (h_new, c_new) = forward_step(
-            self.weights, step, (h, c), user_idx
-        )
-        state.lstm_h[:, user_idx, card_idx, :] = h_new
-        state.lstm_c[:, user_idx, card_idx, :] = c_new
-        state.mem_w[user_idx, card_idx] = w_last
-        state.mem_s[user_idx, card_idx] = s_last
-        state.mem_d[user_idx, card_idx] = d_last
-        state.has_curves[user_idx, card_idx] = True
+            h = state.lstm_h[:, chunk_user, chunk_card, :]
+            c = state.lstm_c[:, chunk_user, chunk_card, :]
+            w_last, s_last, d_last, (h_new, c_new) = forward_step(
+                self.weights, step, (h, c), chunk_user
+            )
+            state.lstm_h[:, chunk_user, chunk_card, :] = h_new
+            state.lstm_c[:, chunk_user, chunk_card, :] = c_new
+            state.mem_w[chunk_user, chunk_card] = w_last
+            state.mem_s[chunk_user, chunk_card] = s_last
+            state.mem_d[chunk_user, chunk_card] = d_last
+            state.has_curves[chunk_user, chunk_card] = True
+
+        total = int(user_idx.numel())
+        if self.max_batch_size is None or total <= self.max_batch_size:
+            _update_chunk(user_idx, card_idx, delays, ratings)
+            return
+        for start in range(0, total, self.max_batch_size):
+            end = start + self.max_batch_size
+            _update_chunk(
+                user_idx[start:end],
+                card_idx[start:end],
+                delays[start:end],
+                ratings[start:end],
+            )
 
     def _target_interval(
         self,
