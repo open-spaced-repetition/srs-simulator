@@ -96,7 +96,11 @@ def simulate_multiuser(
     daily_memorized = torch.zeros(
         (user_count, days), dtype=env_dtype, device=torch_device
     )
-    daily_short_loops = [0 for _ in range(days)] if steps_mode else None
+    daily_short_loops_by_user = (
+        torch.zeros((user_count, days), dtype=torch.int64, device=torch_device)
+        if steps_mode
+        else None
+    )
 
     total_reviews = torch.zeros(user_count, dtype=torch.int64, device=torch_device)
     total_lapses = torch.zeros_like(total_reviews)
@@ -599,6 +603,7 @@ def simulate_multiuser(
                 short_lapses = torch.zeros_like(total_reviews)
                 short_cost = torch.zeros_like(total_cost)
                 loops = 0
+                loops_by_user = torch.zeros_like(total_reviews)
                 while True:
                     phase_short = short_phase[short_user, short_card]
                     due_short = due[short_user, short_card]
@@ -807,8 +812,13 @@ def simulate_multiuser(
                     )
                     cost_sums.scatter_add_(0, exec_user, review_cost_due)
                     short_cost += cost_sums
+                    loops_by_user.scatter_add_(
+                        0,
+                        exec_user,
+                        torch.ones_like(exec_user, dtype=loops_by_user.dtype),
+                    )
 
-                return short_counts, short_lapses, short_cost, loops
+                return short_counts, short_lapses, short_cost, loops, loops_by_user
 
             if priority_mode == "review-first":
                 t0 = time.perf_counter()
@@ -832,9 +842,13 @@ def simulate_multiuser(
                 cost_today += learn_cost
                 learned_today += learn_counts
                 t0 = time.perf_counter()
-                short_counts, short_lapses, short_cost, short_loops = run_short_reviews(
-                    day_float + 1
-                )
+                (
+                    short_counts,
+                    short_lapses,
+                    short_cost,
+                    short_loops,
+                    short_loops_by_user,
+                ) = run_short_reviews(day_float + 1)
                 time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 reviews_today += short_counts
@@ -842,8 +856,8 @@ def simulate_multiuser(
                 if short_loops:
                     short_review_loops += short_loops
                     short_review_loop_days += 1
-                if daily_short_loops is not None:
-                    daily_short_loops[day] = short_loops
+                if daily_short_loops_by_user is not None:
+                    daily_short_loops_by_user[:, day] = short_loops_by_user
             else:
                 t0 = time.perf_counter()
                 learn_counts, learn_cost = run_learning(max_cost)
@@ -866,9 +880,13 @@ def simulate_multiuser(
                 phase_reviews_today += phase_counts
                 phase_lapses_today += phase_lapses
                 t0 = time.perf_counter()
-                short_counts, short_lapses, short_cost, short_loops = run_short_reviews(
-                    day_float + 1
-                )
+                (
+                    short_counts,
+                    short_lapses,
+                    short_cost,
+                    short_loops,
+                    short_loops_by_user,
+                ) = run_short_reviews(day_float + 1)
                 time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 reviews_today += short_counts
@@ -876,8 +894,8 @@ def simulate_multiuser(
                 if short_loops:
                     short_review_loops += short_loops
                     short_review_loop_days += 1
-                if daily_short_loops is not None:
-                    daily_short_loops[day] = short_loops
+                if daily_short_loops_by_user is not None:
+                    daily_short_loops_by_user[:, day] = short_loops_by_user
 
             daily_reviews[:, day] = reviews_today
             daily_new[:, day] = learned_today
@@ -928,7 +946,11 @@ def simulate_multiuser(
                 total_projected_retrievability=float(total_projected[user].item()),
                 daily_phase_reviews=daily_phase_reviews[user].tolist(),
                 daily_phase_lapses=daily_phase_lapses[user].tolist(),
-                daily_short_loops=daily_short_loops,
+                daily_short_loops=(
+                    daily_short_loops_by_user[user].tolist()
+                    if daily_short_loops_by_user is not None
+                    else None
+                ),
                 timing={
                     "long_reviews_s": time_long_reviews,
                     "short_reviews_s": time_short_reviews,
