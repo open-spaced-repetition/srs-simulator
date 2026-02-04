@@ -110,6 +110,7 @@ class SimulationStats:
     events: List[Event]
     total_projected_retrievability: float
     timing: dict[str, float] | None = None
+    daily_gpu_peak_bytes: list[int] | None = None
 
 
 class Action(Enum):

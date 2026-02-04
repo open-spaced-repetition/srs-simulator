@@ -778,6 +778,16 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         else:
             totals["cost_per_projected_retrievability"] = None
         fh.write(json.dumps({"type": "totals", "data": totals}) + "\n")
+        if stats.daily_gpu_peak_bytes is not None:
+            fh.write(
+                json.dumps(
+                    {
+                        "type": "daily_gpu_peak_bytes",
+                        "data": stats.daily_gpu_peak_bytes,
+                    }
+                )
+                + "\n"
+            )
         if args.log_reviews:
             for event in stats.events:
                 fh.write(json.dumps({"type": "event", "data": event.to_dict()}) + "\n")
