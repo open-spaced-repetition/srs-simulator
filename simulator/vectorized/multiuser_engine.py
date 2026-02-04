@@ -95,6 +95,9 @@ def simulate_multiuser(
     daily_memorized = torch.zeros(
         (user_count, days), dtype=env_dtype, device=torch_device
     )
+    daily_gpu_peak_bytes: list[int] | None = None
+    if torch_device.type == "cuda":
+        daily_gpu_peak_bytes = [0 for _ in range(days)]
 
     total_reviews = torch.zeros(user_count, dtype=torch.int64, device=torch_device)
     total_lapses = torch.zeros_like(total_reviews)
@@ -214,6 +217,8 @@ def simulate_multiuser(
         if progress_callback is not None:
             progress_callback(0, days)
         for day in range(days):
+            if daily_gpu_peak_bytes is not None:
+                torch.cuda.reset_peak_memory_stats(torch_device)
             if progress_bar is not None:
                 progress_bar.update(1)
             if progress_callback is not None:
@@ -841,6 +846,10 @@ def simulate_multiuser(
             total_reviews += reviews_today
             total_lapses += lapses_today
             total_cost += cost_today
+            if daily_gpu_peak_bytes is not None:
+                daily_gpu_peak_bytes[day] = int(
+                    torch.cuda.max_memory_allocated(torch_device)
+                )
     finally:
         if progress_bar is not None:
             progress_bar.close()
@@ -879,6 +888,7 @@ def simulate_multiuser(
                 total_cost=float(total_cost[user].item()),
                 events=[],
                 total_projected_retrievability=float(total_projected[user].item()),
+                daily_gpu_peak_bytes=daily_gpu_peak_bytes,
             )
         )
     return stats
