@@ -19,6 +19,20 @@ def _env_bool(name: str) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _resolve_max_batch_size(value: int | None) -> int | None:
+    if value is not None:
+        if value < 1:
+            raise ValueError("max_batch_size must be >= 1 when set.")
+        return value
+    raw = os.getenv("SRS_LSTM_MAX_BATCH", "").strip().lower()
+    if not raw or raw in {"0", "none", "off"}:
+        return None
+    parsed = int(raw)
+    if parsed < 1:
+        raise ValueError("SRS_LSTM_MAX_BATCH must be >= 1 when set.")
+    return parsed
+
+
 @dataclass
 class PackedLSTMWeights:
     use_duration_feature: bool
@@ -375,6 +389,7 @@ class LSTMBatchedEnvOps:
         device: torch.device,
         dtype: torch.dtype,
         default_duration_ms: float = 2500.0,
+        max_batch_size: int | None = None,
     ) -> None:
         self.weights = weights
         self.device = device
@@ -384,6 +399,7 @@ class LSTMBatchedEnvOps:
         self._mem_log_sync = _env_bool("SRS_LSTM_MEM_LOG_SYNC")
         self._mem_log_peak_alloc = 0
         self._mem_log_peak_reserved = 0
+        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
         self.use_duration_feature = weights.use_duration_feature
         self.n_hidden = weights.n_hidden
         self.n_curves = weights.n_curves
@@ -525,29 +541,51 @@ class LSTMBatchedEnvOps:
     ) -> None:
         if user_idx.numel() == 0:
             return
-        delay_clamped = torch.clamp(delays, min=0.0)
-        rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_clamped.unsqueeze(-1)
-        rating_feature = rating_clamped.unsqueeze(-1)
-        if self.use_duration_feature:
-            duration_feature = self.duration_value.expand_as(delay_feature)
-            step = torch.cat([delay_feature, duration_feature, rating_feature], dim=-1)
-        else:
-            step = torch.cat([delay_feature, rating_feature], dim=-1)
 
-        h = state.lstm_h[:, user_idx, card_idx, :]
-        c = state.lstm_c[:, user_idx, card_idx, :]
-        self._maybe_log_mem(user_idx.numel(), label="env-batched")
-        w_last, s_last, d_last, (h_new, c_new) = forward_step(
-            self.weights, step, (h, c), user_idx
-        )
-        self._maybe_log_mem_post(user_idx.numel(), label="env-batched")
-        state.lstm_h[:, user_idx, card_idx, :] = h_new
-        state.lstm_c[:, user_idx, card_idx, :] = c_new
-        state.mem_w[user_idx, card_idx] = w_last
-        state.mem_s[user_idx, card_idx] = s_last
-        state.mem_d[user_idx, card_idx] = d_last
-        state.has_curves[user_idx, card_idx] = True
+        def _update_chunk(
+            chunk_user: Tensor,
+            chunk_card: Tensor,
+            chunk_delays: Tensor,
+            chunk_ratings: Tensor,
+        ) -> None:
+            delay_clamped = torch.clamp(chunk_delays, min=0.0)
+            rating_clamped = torch.clamp(chunk_ratings, min=1, max=4).to(self.dtype)
+            delay_feature = delay_clamped.unsqueeze(-1)
+            rating_feature = rating_clamped.unsqueeze(-1)
+            if self.use_duration_feature:
+                duration_feature = self.duration_value.expand_as(delay_feature)
+                step = torch.cat(
+                    [delay_feature, duration_feature, rating_feature], dim=-1
+                )
+            else:
+                step = torch.cat([delay_feature, rating_feature], dim=-1)
+
+            h = state.lstm_h[:, chunk_user, chunk_card, :]
+            c = state.lstm_c[:, chunk_user, chunk_card, :]
+            self._maybe_log_mem(chunk_user.numel(), label="env-batched")
+            w_last, s_last, d_last, (h_new, c_new) = forward_step(
+                self.weights, step, (h, c), chunk_user
+            )
+            self._maybe_log_mem_post(chunk_user.numel(), label="env-batched")
+            state.lstm_h[:, chunk_user, chunk_card, :] = h_new
+            state.lstm_c[:, chunk_user, chunk_card, :] = c_new
+            state.mem_w[chunk_user, chunk_card] = w_last
+            state.mem_s[chunk_user, chunk_card] = s_last
+            state.mem_d[chunk_user, chunk_card] = d_last
+            state.has_curves[chunk_user, chunk_card] = True
+
+        total = int(user_idx.numel())
+        if self.max_batch_size is None or total <= self.max_batch_size:
+            _update_chunk(user_idx, card_idx, delays, ratings)
+            return
+        for start in range(0, total, self.max_batch_size):
+            end = start + self.max_batch_size
+            _update_chunk(
+                user_idx[start:end],
+                card_idx[start:end],
+                delays[start:end],
+                ratings[start:end],
+            )
 
     @staticmethod
     def _lstm_retention(
