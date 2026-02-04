@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import math
 import json
 import random
@@ -660,6 +661,43 @@ def _print_review_summary(stats) -> None:
     )
 
 
+def _write_daily_csv(path: Path, stats) -> None:
+    headers = [
+        "day",
+        "reviews",
+        "new",
+        "retention",
+        "cost",
+        "memorized",
+        "phase_reviews",
+        "phase_lapses",
+        "short_loops",
+    ]
+    daily_map = {
+        "reviews": stats.daily_reviews,
+        "new": stats.daily_new,
+        "retention": stats.daily_retention,
+        "cost": stats.daily_cost,
+        "memorized": stats.daily_memorized,
+        "phase_reviews": stats.daily_phase_reviews,
+        "phase_lapses": stats.daily_phase_lapses,
+        "short_loops": stats.daily_short_loops,
+    }
+    days = len(stats.daily_reviews or [])
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(headers)
+        for day in range(days):
+            row = [day]
+            for key in headers[1:]:
+                series = daily_map.get(key)
+                if series is None or day >= len(series):
+                    row.append("")
+                else:
+                    row.append(series[day])
+            writer.writerow(row)
+
+
 def _write_log(args: argparse.Namespace, stats) -> None:
     args.log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -728,6 +766,8 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "relearning_steps": _parse_steps(getattr(args, "relearning_steps", None)),
         "short_term_threshold": getattr(args, "short_term_threshold", None),
     }
+    csv_filename = filename.with_suffix(".csv")
+    _write_daily_csv(csv_filename, stats)
     with filename.open("w", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "meta", "data": meta}) + "\n")
         accum_cost = []
@@ -778,18 +818,6 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         else:
             totals["cost_per_projected_retrievability"] = None
         fh.write(json.dumps({"type": "totals", "data": totals}) + "\n")
-        daily = {
-            "reviews": stats.daily_reviews,
-            "new": stats.daily_new,
-            "retention": stats.daily_retention,
-            "cost": stats.daily_cost,
-            "memorized": stats.daily_memorized,
-            "phase_reviews": stats.daily_phase_reviews,
-            "phase_lapses": stats.daily_phase_lapses,
-            "short_loops": stats.daily_short_loops,
-        }
-        daily = {key: value for key, value in daily.items() if value is not None}
-        fh.write(json.dumps({"type": "daily", "data": daily}) + "\n")
         if args.log_reviews:
             for event in stats.events:
                 fh.write(json.dumps({"type": "event", "data": event.to_dict()}) + "\n")
