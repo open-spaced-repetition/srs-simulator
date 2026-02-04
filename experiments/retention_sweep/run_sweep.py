@@ -53,14 +53,6 @@ def parse_args() -> argparse.Namespace:
     )
     add_common_sim_args(
         parser,
-        days_default=1825,
-        deck_default=10000,
-        learn_limit_default=10,
-        review_limit_default=9999,
-        cost_limit_default=720,
-        seed_default=42,
-        priority_default="review-first",
-        scheduler_priority_default="low_retrievability",
     )
     parser.add_argument(
         "--user-id",

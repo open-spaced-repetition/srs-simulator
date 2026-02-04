@@ -4,6 +4,17 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
+from simulator.defaults import (
+    DEFAULT_COST_LIMIT_MINUTES,
+    DEFAULT_DECK_SIZE,
+    DEFAULT_DAYS,
+    DEFAULT_LEARN_LIMIT,
+    DEFAULT_PRIORITY,
+    DEFAULT_REVIEW_LIMIT,
+    DEFAULT_SCHEDULER_PRIORITY,
+    DEFAULT_SEED,
+)
+
 
 def add_user_range_args(parser: argparse.ArgumentParser, *, default_end: int) -> None:
     parser.add_argument("--start-user", type=int, default=1, help="First user id.")
@@ -54,15 +65,31 @@ def add_env_sched_args(
 def add_common_sim_args(
     parser: argparse.ArgumentParser,
     *,
-    days_default: int = 1825,
-    deck_default: int = 10000,
-    learn_limit_default: int = 10,
-    review_limit_default: int = 9999,
-    cost_limit_default: float = 720.0,
-    seed_default: int = 42,
-    priority_default: str = "review-first",
-    scheduler_priority_default: str = "low_retrievability",
+    days_default: int | None = None,
+    deck_default: int | None = None,
+    learn_limit_default: int | None = None,
+    review_limit_default: int | None = None,
+    cost_limit_default: float | None = None,
+    seed_default: int | None = None,
+    priority_default: str | None = None,
+    scheduler_priority_default: str | None = None,
 ) -> None:
+    if days_default is None:
+        days_default = DEFAULT_DAYS
+    if deck_default is None:
+        deck_default = DEFAULT_DECK_SIZE
+    if learn_limit_default is None:
+        learn_limit_default = DEFAULT_LEARN_LIMIT
+    if review_limit_default is None:
+        review_limit_default = DEFAULT_REVIEW_LIMIT
+    if cost_limit_default is None:
+        cost_limit_default = DEFAULT_COST_LIMIT_MINUTES
+    if seed_default is None:
+        seed_default = DEFAULT_SEED
+    if priority_default is None:
+        priority_default = DEFAULT_PRIORITY
+    if scheduler_priority_default is None:
+        scheduler_priority_default = DEFAULT_SCHEDULER_PRIORITY
     parser.add_argument(
         "--days", type=int, default=days_default, help="Simulation days."
     )
