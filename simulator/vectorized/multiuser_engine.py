@@ -56,11 +56,18 @@ def simulate_multiuser(
     gen.manual_seed(seed)
     fuzz_max = resolve_max_interval(sched_ops)
 
-    if short_term_source not in {None, "steps"}:
-        raise ValueError("short_term_source must be None or 'steps'.")
+    if short_term_source not in {None, "steps", "sched"}:
+        raise ValueError("short_term_source must be None, 'steps', or 'sched'.")
+    if short_term_source == "sched":
+        interval_mode = getattr(sched_ops, "interval_mode", None)
+        if interval_mode != "float":
+            raise ValueError(
+                "--short-term-source=sched requires LSTM batch scheduler in float mode."
+            )
     if short_term_loops_limit is not None and short_term_loops_limit < 0:
         raise ValueError("short_term_loops_limit must be >= 0.")
     steps_mode = short_term_source == "steps"
+    sched_mode = short_term_source == "sched"
     learning_steps = list(learning_steps or [])
     relearning_steps = list(relearning_steps or [])
 
@@ -102,7 +109,7 @@ def simulate_multiuser(
     )
     daily_short_loops_by_user = (
         torch.zeros((user_count, days), dtype=torch.int64, device=torch_device)
-        if steps_mode
+        if steps_mode or sched_mode
         else None
     )
     batch_peak_allocated = None
@@ -284,7 +291,7 @@ def simulate_multiuser(
                         torch.zeros_like(total_reviews),
                     )
                 need_review = (reps > 0) & (due <= day_float) & attending[:, None]
-                if steps_mode:
+                if steps_mode or sched_mode:
                     need_review &= short_phase == phase_none
                 if not need_review.any():
                     return (
@@ -423,6 +430,25 @@ def simulate_multiuser(
                             )
                         )
 
+                elif sched_mode:
+                    short_mask = interval_days < short_term_threshold
+                    interval_days = torch.where(
+                        short_mask,
+                        torch.clamp(interval_days, min=min_short_days),
+                        interval_days,
+                    )
+                    new_phase = torch.where(
+                        short_mask,
+                        torch.where(
+                            exec_rating == 1,
+                            torch.full_like(exec_rating, phase_relearning),
+                            torch.full_like(exec_rating, phase_learning),
+                        ),
+                        torch.full_like(exec_rating, phase_none),
+                    )
+                    short_phase[sel_user, sel_card] = new_phase.to(torch.int8)
+                    short_remaining[sel_user, sel_card] = 0
+
                 if short_mask.any():
                     if fuzz:
                         fuzz_factors = torch.rand(
@@ -546,6 +572,20 @@ def simulate_multiuser(
                         use_steps, next_remaining, torch.zeros_like(next_remaining)
                     )
 
+                elif sched_mode:
+                    short_mask = interval_days < short_term_threshold
+                    interval_days = torch.where(
+                        short_mask,
+                        torch.clamp(interval_days, min=min_short_days),
+                        interval_days,
+                    )
+                    short_phase[sel_user, sel_card] = torch.where(
+                        short_mask,
+                        torch.full_like(exec_rating, phase_learning),
+                        torch.full_like(exec_rating, phase_none),
+                    ).to(torch.int8)
+                    short_remaining[sel_user, sel_card] = 0
+
                 if short_mask.any():
                     if fuzz:
                         fuzz_factors = torch.rand(
@@ -595,7 +635,7 @@ def simulate_multiuser(
             def run_short_reviews(
                 day_end: torch.Tensor,
             ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, torch.Tensor]:
-                if not steps_mode:
+                if not (steps_mode or sched_mode):
                     return (
                         torch.zeros_like(total_reviews),
                         torch.zeros_like(total_reviews),
@@ -789,6 +829,29 @@ def simulate_multiuser(
                                 torch.zeros_like(next_remaining),
                             )
 
+                    elif sched_mode:
+                        next_short_mask = interval_days < short_term_threshold
+                        interval_days = torch.where(
+                            next_short_mask,
+                            torch.clamp(interval_days, min=min_short_days),
+                            interval_days,
+                        )
+                        new_phase = torch.where(
+                            next_short_mask,
+                            torch.where(
+                                exec_phase != phase_none,
+                                exec_phase,
+                                torch.where(
+                                    exec_rating == 1,
+                                    torch.full_like(exec_phase, phase_relearning),
+                                    torch.full_like(exec_phase, phase_learning),
+                                ),
+                            ),
+                            torch.full_like(exec_phase, phase_none),
+                        )
+                        short_phase[exec_user, exec_card] = new_phase
+                        short_remaining[exec_user, exec_card] = 0
+
                     if next_short_mask.any():
                         if fuzz:
                             fuzz_factors = torch.rand(
@@ -948,7 +1011,7 @@ def simulate_multiuser(
             progress_bar.close()
 
     daily_retention = torch.full_like(daily_cost, float("nan"))
-    if steps_mode:
+    if steps_mode or sched_mode:
         review_mask = daily_phase_reviews > 0
         daily_retention[review_mask] = 1.0 - (
             daily_phase_lapses[review_mask].to(env_dtype)

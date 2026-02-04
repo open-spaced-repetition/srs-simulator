@@ -665,9 +665,12 @@ class LSTMBatchSchedulerOps:
         search_steps: int = 24,
         default_retention: float = 0.85,
         default_duration_ms: float = 2500.0,
+        interval_mode: str = "integer",
         device: "torch.device",
         dtype: "torch.dtype",
     ) -> None:
+        if interval_mode not in {"integer", "float"}:
+            raise ValueError("interval_mode must be 'integer' or 'float'.")
         self.weights = weights
         self.device = device
         self.dtype = dtype
@@ -676,6 +679,7 @@ class LSTMBatchSchedulerOps:
         self.max_interval = float(max_interval)
         self.search_steps = int(search_steps)
         self.default_retention = float(default_retention)
+        self.interval_mode = interval_mode
         self.use_duration_feature = bool(weights.use_duration_feature)
         self.duration_value = None
         if self.use_duration_feature:
@@ -796,6 +800,8 @@ class LSTMBatchSchedulerOps:
         card_idx: "torch.Tensor",
         prev_interval: "torch.Tensor | None",
     ) -> "torch.Tensor":
+        if self.interval_mode == "float":
+            return self._target_interval_float(state, user_idx, card_idx, prev_interval)
         weights = state.mem_w[user_idx, card_idx]
         stabilities = state.mem_s[user_idx, card_idx]
         decays = state.mem_d[user_idx, card_idx]
@@ -842,6 +848,100 @@ class LSTMBatchSchedulerOps:
                 low = torch.where(active & ~go_high, mid + 1, low)
 
         result = torch.where(active, high, low).to(self.dtype)
+        return torch.clamp(result, min=self.min_interval, max=self.max_interval)
+
+    def _target_interval_float(
+        self,
+        state: LSTMBatchSchedulerState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        prev_interval: "torch.Tensor | None",
+    ) -> "torch.Tensor":
+        weights = state.mem_w[user_idx, card_idx]
+        stabilities = state.mem_s[user_idx, card_idx]
+        decays = state.mem_d[user_idx, card_idx]
+        low = torch.full(
+            (user_idx.numel(),),
+            max(0.0, self.min_interval),
+            dtype=self.dtype,
+            device=self.device,
+        )
+        if prev_interval is None:
+            high = low.clone()
+        else:
+            high = torch.maximum(low, prev_interval.to(self.dtype))
+        high = torch.where(
+            high <= 0.0,
+            torch.full_like(
+                high,
+                max(self.max_interval, 1e-6),
+                dtype=self.dtype,
+                device=self.device,
+            ),
+            high,
+        )
+        t0 = self._effective_initial_guess(weights, stabilities, decays)
+        high = torch.maximum(high, t0)
+        high = torch.clamp(high, max=self.max_interval)
+
+        r_low = self._retention_at(low, weights, stabilities, decays)
+        result = torch.full_like(low, float("nan"))
+        done_low = r_low <= self._target
+        result = torch.where(done_low, low, result)
+
+        r_high = self._retention_at(high, weights, stabilities, decays)
+        active = (~done_low) & (r_high > self._target) & (high < self._max_interval)
+        while active.any():
+            high = torch.where(
+                active,
+                torch.minimum(
+                    self._max_interval, torch.maximum(high * 2.0, high + 1e-6)
+                ),
+                high,
+            )
+            r_high = torch.where(
+                active, self._retention_at(high, weights, stabilities, decays), r_high
+            )
+            active = (~done_low) & (r_high > self._target) & (high < self._max_interval)
+
+        done_high = (~done_low) & (r_high > self._target)
+        result = torch.where(done_high, self._max_interval, result)
+
+        active = (~done_low) & ~done_high
+        f_low = r_low - self._target
+        f_high = r_high - self._target
+        tol = 1e-3
+        for _ in range(self.search_steps):
+            active_mask = active & (low < high)
+            if not active_mask.any():
+                break
+            denom = f_high - f_low
+            guess = high - f_high * (high - low) / denom
+            invalid = (
+                ~torch.isfinite(guess)
+                | (guess <= low)
+                | (guess >= high)
+                | (torch.abs(denom) < 1e-12)
+            )
+            guess = torch.where(invalid, 0.5 * (low + high), guess)
+            pred = self._retention_at(guess, weights, stabilities, decays)
+            f_guess = pred - self._target
+            done = active_mask & (torch.abs(f_guess) <= tol)
+            result = torch.where(done, guess, result)
+
+            upper_mask = active_mask & (f_guess <= 0.0)
+            lower_mask = active_mask & (f_guess > 0.0)
+            high = torch.where(upper_mask, guess, high)
+            f_high = torch.where(upper_mask, f_guess, f_high)
+            f_low = torch.where(upper_mask, f_low * 0.5, f_low)
+
+            low = torch.where(lower_mask, guess, low)
+            f_low = torch.where(lower_mask, f_guess, f_low)
+            f_high = torch.where(lower_mask, f_high * 0.5, f_high)
+
+            active = active & ~done
+
+        result = torch.where(torch.isnan(result), high, result)
         return torch.clamp(result, min=self.min_interval, max=self.max_interval)
 
     def _retention_at(
