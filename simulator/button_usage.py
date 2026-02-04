@@ -18,6 +18,7 @@ DEFAULT_FIRST_RATING_OFFSETS = (0.0, 0.0, 0.0, 0.0)
 DEFAULT_FIRST_SESSION_LENS = (0.0, 0.0, 0.0, 0.0)
 DEFAULT_FORGET_RATING_OFFSET = 0.0
 DEFAULT_FORGET_SESSION_LEN = 0.0
+DEFAULT_RELEARNING_RATING_PROB_FALLBACK = (0.0, 1.0, 0.0)
 
 
 def _coerce_user_id(value: Any) -> int | None:
@@ -242,7 +243,7 @@ def normalize_button_usage(
             name="relearning_rating_prob",
         ),
         "relearning_rating_prob",
-        fallback=review_rating_prob,
+        fallback=DEFAULT_RELEARNING_RATING_PROB_FALLBACK,
     )
     first_rating_offsets = _coerce_list(
         source.get("first_rating_offsets", DEFAULT_FIRST_RATING_OFFSETS),
