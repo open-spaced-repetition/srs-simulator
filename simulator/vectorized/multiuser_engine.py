@@ -583,26 +583,41 @@ def simulate_multiuser(
                         torch.zeros_like(total_cost),
                         0,
                     )
+                short_mask = (short_phase != phase_none) & attending[:, None]
+                if not short_mask.any():
+                    return (
+                        torch.zeros_like(total_reviews),
+                        torch.zeros_like(total_reviews),
+                        torch.zeros_like(total_cost),
+                        0,
+                    )
+                short_user, short_card = short_mask.nonzero(as_tuple=True)
+                if short_user.numel() == 0:
+                    return (
+                        torch.zeros_like(total_reviews),
+                        torch.zeros_like(total_reviews),
+                        torch.zeros_like(total_cost),
+                        0,
+                    )
                 short_counts = torch.zeros_like(total_reviews)
                 short_lapses = torch.zeros_like(total_reviews)
                 short_cost = torch.zeros_like(total_cost)
                 loops = 0
                 while True:
-                    short_mask = (
-                        (short_phase != phase_none)
-                        & (due < day_end)
-                        & attending[:, None]
-                    )
-                    if not short_mask.any():
+                    phase_short = short_phase[short_user, short_card]
+                    due_short = due[short_user, short_card]
+                    active_mask = (phase_short != phase_none) & (due_short < day_end)
+                    if not active_mask.any():
                         break
                     loops += 1
-                    exec_user, exec_card = short_mask.nonzero(as_tuple=True)
-                    now_tensor = due[exec_user, exec_card]
+                    exec_user = short_user[active_mask]
+                    exec_card = short_card[active_mask]
+                    now_tensor = due_short[active_mask]
                     exec_elapsed = now_tensor - last_review[exec_user, exec_card]
                     r_due = env_ops.retrievability_entries(
                         env_state, exec_user, exec_card, exec_elapsed
                     )
-                    exec_phase = short_phase[exec_user, exec_card]
+                    exec_phase = phase_short[active_mask]
 
                     rand = torch.rand(r_due.shape, device=torch_device, generator=gen)
                     fail = rand > r_due
