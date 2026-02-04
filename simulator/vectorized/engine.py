@@ -959,5 +959,7 @@ def simulate(
             "short_review_loops": float(short_review_loops),
             "short_review_loop_days": float(short_review_days),
         },
+        daily_phase_reviews=daily_phase_reviews,
+        daily_phase_lapses=daily_phase_lapses,
     )
     return stats

@@ -788,6 +788,18 @@ def _write_log(args: argparse.Namespace, stats) -> None:
                 )
                 + "\n"
             )
+        daily = {
+            "reviews": stats.daily_reviews,
+            "new": stats.daily_new,
+            "retention": stats.daily_retention,
+            "cost": stats.daily_cost,
+            "memorized": stats.daily_memorized,
+            "phase_reviews": stats.daily_phase_reviews,
+            "phase_lapses": stats.daily_phase_lapses,
+            "gpu_peak_bytes": stats.daily_gpu_peak_bytes,
+        }
+        daily = {key: value for key, value in daily.items() if value is not None}
+        fh.write(json.dumps({"type": "daily", "data": daily}) + "\n")
         if args.log_reviews:
             for event in stats.events:
                 fh.write(json.dumps({"type": "event", "data": event.to_dict()}) + "\n")
