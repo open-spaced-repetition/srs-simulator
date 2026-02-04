@@ -131,6 +131,22 @@ def main() -> int:
 
     fig, axes = plt.subplots(2, 1, figsize=(10, 9))
     axes[0].hist(values, bins=args.bins, color="tab:blue", alpha=0.8)
+    sorted_values = sorted(values)
+    n_values = len(sorted_values)
+    median = (
+        sorted_values[n_values // 2]
+        if n_values % 2
+        else (sorted_values[n_values // 2 - 1] + sorted_values[n_values // 2]) / 2.0
+    )
+    mean = sum(sorted_values) / n_values if n_values else 0.0
+    q1 = sorted_values[max(int(0.25 * (n_values - 1)), 0)]
+    q3 = sorted_values[max(int(0.75 * (n_values - 1)), 0)]
+    axes[0].axvline(mean, color="tab:orange", linestyle="--", label=f"Mean={mean:.2f}")
+    axes[0].axvline(
+        median, color="tab:green", linestyle="--", label=f"Median={median:.2f}"
+    )
+    axes[0].axvline(q1, color="tab:red", linestyle=":", label=f"Q1={q1:.2f}")
+    axes[0].axvline(q3, color="tab:red", linestyle=":", label=f"Q3={q3:.2f}")
     axes[0].set_xlabel(
         "Short loops/day" if args.metric == "avg" else "Short loops/active day"
     )
@@ -145,6 +161,7 @@ def main() -> int:
     if args.short_term_source:
         title.append(f"st={args.short_term_source}")
     axes[0].set_title(" ".join(title))
+    axes[0].legend()
 
     if duplicates:
         axes[0].text(
@@ -163,6 +180,8 @@ def main() -> int:
         "Short loops/day" if args.metric == "avg" else "Short loops/active day"
     )
     axes[1].set_title("Short loops by user")
+    if user_ids:
+        axes[1].set_xticks(sorted(set(user_ids)))
 
     fig.tight_layout()
     if args.out:
