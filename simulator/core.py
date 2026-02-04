@@ -111,6 +111,8 @@ class SimulationStats:
     total_projected_retrievability: float
     timing: dict[str, float] | None = None
     daily_gpu_peak_bytes: list[int] | None = None
+    daily_phase_reviews: list[int] | None = None
+    daily_phase_lapses: list[int] | None = None
 
 
 class Action(Enum):
@@ -326,6 +328,8 @@ class SimulationEngine:
             total_cost=self.total_cost,
             events=self.events,
             total_projected_retrievability=self._projected_retrievability_sum(),
+            daily_phase_reviews=self.daily_phase_reviews,
+            daily_phase_lapses=self.daily_phase_lapses,
         )
 
     def _start_progress(self) -> None:

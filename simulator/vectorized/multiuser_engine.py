@@ -889,6 +889,8 @@ def simulate_multiuser(
                 events=[],
                 total_projected_retrievability=float(total_projected[user].item()),
                 daily_gpu_peak_bytes=daily_gpu_peak_bytes,
+                daily_phase_reviews=daily_phase_reviews[user].tolist(),
+                daily_phase_lapses=daily_phase_lapses[user].tolist(),
             )
         )
     return stats
