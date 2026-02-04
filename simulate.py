@@ -41,6 +41,10 @@ from simulator.scheduler_spec import (
 )
 from simulator.vectorized import simulate as simulate_vectorized
 from simulator.short_term import ShortTermScheduler
+from simulator.short_term_config import (
+    parse_steps as _parse_steps,
+    resolve_short_term_config as _resolve_short_term_config,
+)
 
 
 def _resolve_benchmark_weights(
@@ -62,38 +66,6 @@ def _resolve_benchmark_weights(
             f"{environment} expects {expected_len} weights, got {len(weights)}."
         )
     return tuple(float(x) for x in weights)
-
-
-def _parse_steps(value: str | None) -> list[float]:
-    if not value:
-        return []
-    items = [item.strip() for item in value.split(",") if item.strip()]
-    return [float(item) for item in items]
-
-
-def _resolve_short_term_config(
-    args: argparse.Namespace,
-) -> tuple[str | None, list[float], list[float]]:
-    short_term_source = getattr(args, "short_term_source", None)
-    learning_raw = getattr(args, "learning_steps", None)
-    relearning_raw = getattr(args, "relearning_steps", None)
-    if short_term_source == "steps":
-        if learning_raw is None:
-            learning_raw = "1,10"
-        if relearning_raw is None:
-            relearning_raw = "10"
-    learning_steps = _parse_steps(learning_raw)
-    relearning_steps = _parse_steps(relearning_raw)
-    if short_term_source is None:
-        if learning_steps or relearning_steps:
-            raise SystemExit("Learning steps require --short-term-source=steps.")
-        return None, learning_steps, relearning_steps
-    if short_term_source == "sched" and (learning_steps or relearning_steps):
-        raise SystemExit(
-            "--short-term-source=sched cannot be combined with "
-            "--learning-steps or --relearning-steps."
-        )
-    return short_term_source, learning_steps, relearning_steps
 
 
 def _lstm_interval_mode(args: argparse.Namespace) -> str:
