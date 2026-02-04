@@ -33,7 +33,7 @@ def _plot(meta: dict, daily: dict, *, output: Path | None, show: bool) -> None:
     days = list(range(len(gpu_bytes)))
     gpu_mib = [value / (1024 * 1024) for value in gpu_bytes]
 
-    fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=False)
+    fig, axes = plt.subplots(3, 1, figsize=(12, 11), sharex=False)
     axes[0].plot(days, gpu_mib, color="tab:purple", label="GPU peak (MiB)")
     axes[0].set_xlabel("Day")
     axes[0].set_ylabel("MiB")
@@ -65,6 +65,41 @@ def _plot(meta: dict, daily: dict, *, output: Path | None, show: bool) -> None:
         axes[1].legend()
     else:
         axes[1].axis("off")
+
+    short_reviews = daily.get("short_reviews")
+    short_loops = daily.get("short_loops")
+    short_per_loop = daily.get("short_reviews_per_loop")
+    if short_reviews or short_loops or short_per_loop:
+        if short_reviews:
+            axes[2].scatter(
+                short_reviews,
+                gpu_mib,
+                s=12,
+                alpha=0.7,
+                label="Short reviews/day",
+            )
+        if short_per_loop:
+            axes[2].scatter(
+                short_per_loop,
+                gpu_mib,
+                s=12,
+                alpha=0.5,
+                label="Short reviews/loop",
+            )
+        if short_loops:
+            axes[2].scatter(
+                short_loops,
+                gpu_mib,
+                s=12,
+                alpha=0.4,
+                label="Short loops/day",
+            )
+        axes[2].set_xlabel("Short-term activity")
+        axes[2].set_ylabel("GPU peak (MiB)")
+        axes[2].set_title("GPU peak vs. short-term activity")
+        axes[2].legend()
+    else:
+        axes[2].axis("off")
 
     title_bits = []
     if meta.get("environment"):
