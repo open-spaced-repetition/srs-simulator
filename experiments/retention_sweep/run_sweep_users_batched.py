@@ -196,12 +196,6 @@ def _parse_cuda_devices(raw: str | None) -> list[str]:
     return devices
 
 
-def _resolve_short_term_config(
-    args: argparse.Namespace,
-) -> tuple[str | None, list[float], list[float]]:
-    return resolve_short_term_config(args)
-
-
 def _chunked(values: list[int], batch_size: int) -> Iterable[list[int]]:
     for i in range(0, len(values), batch_size):
         yield values[i : i + batch_size]
@@ -467,7 +461,7 @@ def _run_batch_core(
         relearning_rating_prob,
         state_rating_costs,
     ) = _load_usage(batch, args.button_usage)
-    short_term_source, learning_steps, relearning_steps = _resolve_short_term_config(
+    short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         args
     )
     short_term_enabled = bool(short_term_source)
