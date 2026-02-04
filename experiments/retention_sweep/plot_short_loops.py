@@ -38,8 +38,9 @@ def _collect_values(
     engine: str | None,
     short_term_source: str | None,
     metric: str,
-) -> tuple[list[float], int]:
+) -> tuple[list[float], list[int], int]:
     values: list[float] = []
+    user_ids: list[int] = []
     seen_users: set[int] = set()
     duplicates = 0
 
@@ -67,8 +68,9 @@ def _collect_values(
             active = [val for val in loops if val > 0]
             value = sum(active) / len(active) if active else 0.0
         values.append(value)
+        user_ids.append(user_id)
 
-    return values, duplicates
+    return values, user_ids, duplicates
 
 
 def main() -> int:
@@ -116,7 +118,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    values, duplicates = _collect_values(
+    values, user_ids, duplicates = _collect_values(
         args.log_dir,
         env=args.env,
         sched=args.sched,
@@ -127,12 +129,12 @@ def main() -> int:
     if not values:
         raise SystemExit("No matching short_loops data found.")
 
-    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-    ax.hist(values, bins=args.bins, color="tab:blue", alpha=0.8)
-    ax.set_xlabel(
+    fig, axes = plt.subplots(2, 1, figsize=(10, 9))
+    axes[0].hist(values, bins=args.bins, color="tab:blue", alpha=0.8)
+    axes[0].set_xlabel(
         "Short loops/day" if args.metric == "avg" else "Short loops/active day"
     )
-    ax.set_ylabel("Users")
+    axes[0].set_ylabel("Users")
     title = ["Short loops distribution"]
     if args.env:
         title.append(f"env={args.env}")
@@ -142,18 +144,25 @@ def main() -> int:
         title.append(f"engine={args.engine}")
     if args.short_term_source:
         title.append(f"st={args.short_term_source}")
-    ax.set_title(" ".join(title))
+    axes[0].set_title(" ".join(title))
 
     if duplicates:
-        ax.text(
+        axes[0].text(
             0.99,
             0.95,
             f"duplicates skipped: {duplicates}",
-            transform=ax.transAxes,
+            transform=axes[0].transAxes,
             ha="right",
             va="top",
             fontsize=9,
         )
+
+    axes[1].scatter(user_ids, values, s=12, alpha=0.7)
+    axes[1].set_xlabel("User id")
+    axes[1].set_ylabel(
+        "Short loops/day" if args.metric == "avg" else "Short loops/active day"
+    )
+    axes[1].set_title("Short loops by user")
 
     fig.tight_layout()
     if args.out:
