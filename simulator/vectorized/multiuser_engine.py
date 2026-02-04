@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Callable, Optional
+import time
 
 import torch
 
@@ -102,6 +103,11 @@ def simulate_multiuser(
     total_reviews = torch.zeros(user_count, dtype=torch.int64, device=torch_device)
     total_lapses = torch.zeros_like(total_reviews)
     total_cost = torch.zeros(user_count, dtype=env_dtype, device=torch_device)
+    time_long_reviews = 0.0
+    time_short_reviews = 0.0
+    time_learning = 0.0
+    short_review_loops = 0
+    short_review_loop_days = 0
 
     new_ptr = torch.zeros(user_count, dtype=torch.int64, device=torch_device)
     if priority_mode not in {"review-first", "new-first"}:
@@ -569,16 +575,18 @@ def simulate_multiuser(
 
             def run_short_reviews(
                 day_end: torch.Tensor,
-            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
                 if not steps_mode:
                     return (
                         torch.zeros_like(total_reviews),
                         torch.zeros_like(total_reviews),
                         torch.zeros_like(total_cost),
+                        0,
                     )
                 short_counts = torch.zeros_like(total_reviews)
                 short_lapses = torch.zeros_like(total_reviews)
                 short_cost = torch.zeros_like(total_cost)
+                loops = 0
                 while True:
                     short_mask = (
                         (short_phase != phase_none)
@@ -587,6 +595,7 @@ def simulate_multiuser(
                     )
                     if not short_mask.any():
                         break
+                    loops += 1
                     exec_user, exec_card = short_mask.nonzero(as_tuple=True)
                     now_tensor = due[exec_user, exec_card]
                     exec_elapsed = now_tensor - last_review[exec_user, exec_card]
@@ -788,9 +797,10 @@ def simulate_multiuser(
                     cost_sums.scatter_add_(0, exec_user, review_cost_due)
                     short_cost += cost_sums
 
-                return short_counts, short_lapses, short_cost
+                return short_counts, short_lapses, short_cost, loops
 
             if priority_mode == "review-first":
+                t0 = time.perf_counter()
                 (
                     review_counts,
                     review_lapses,
@@ -798,26 +808,37 @@ def simulate_multiuser(
                     phase_counts,
                     phase_lapses,
                 ) = run_long_reviews(max_cost)
+                time_long_reviews += time.perf_counter() - t0
                 cost_today += review_cost
                 reviews_today += review_counts
                 lapses_today += review_lapses
                 phase_reviews_today += phase_counts
                 phase_lapses_today += phase_lapses
                 remaining = torch.clamp(max_cost - cost_today, min=0.0)
+                t0 = time.perf_counter()
                 learn_counts, learn_cost = run_learning(remaining)
+                time_learning += time.perf_counter() - t0
                 cost_today += learn_cost
                 learned_today += learn_counts
-                short_counts, short_lapses, short_cost = run_short_reviews(
+                t0 = time.perf_counter()
+                short_counts, short_lapses, short_cost, short_loops = run_short_reviews(
                     day_float + 1
                 )
+                time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 reviews_today += short_counts
                 lapses_today += short_lapses
+                if short_loops:
+                    short_review_loops += short_loops
+                    short_review_loop_days += 1
             else:
+                t0 = time.perf_counter()
                 learn_counts, learn_cost = run_learning(max_cost)
+                time_learning += time.perf_counter() - t0
                 cost_today += learn_cost
                 learned_today += learn_counts
                 remaining = torch.clamp(max_cost - cost_today, min=0.0)
+                t0 = time.perf_counter()
                 (
                     review_counts,
                     review_lapses,
@@ -825,17 +846,23 @@ def simulate_multiuser(
                     phase_counts,
                     phase_lapses,
                 ) = run_long_reviews(remaining)
+                time_long_reviews += time.perf_counter() - t0
                 cost_today += review_cost
                 reviews_today += review_counts
                 lapses_today += review_lapses
                 phase_reviews_today += phase_counts
                 phase_lapses_today += phase_lapses
-                short_counts, short_lapses, short_cost = run_short_reviews(
+                t0 = time.perf_counter()
+                short_counts, short_lapses, short_cost, short_loops = run_short_reviews(
                     day_float + 1
                 )
+                time_short_reviews += time.perf_counter() - t0
                 cost_today += short_cost
                 reviews_today += short_counts
                 lapses_today += short_lapses
+                if short_loops:
+                    short_review_loops += short_loops
+                    short_review_loop_days += 1
 
             daily_reviews[:, day] = reviews_today
             daily_new[:, day] = learned_today
@@ -891,6 +918,13 @@ def simulate_multiuser(
                 daily_gpu_peak_bytes=daily_gpu_peak_bytes,
                 daily_phase_reviews=daily_phase_reviews[user].tolist(),
                 daily_phase_lapses=daily_phase_lapses[user].tolist(),
+                timing={
+                    "long_reviews_s": time_long_reviews,
+                    "short_reviews_s": time_short_reviews,
+                    "learning_s": time_learning,
+                    "short_review_loops": float(short_review_loops),
+                    "short_review_loop_days": float(short_review_loop_days),
+                },
             )
         )
     return stats
