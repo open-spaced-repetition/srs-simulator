@@ -248,8 +248,6 @@ def simulate_multiuser(
             progress_callback(0, days)
         for day in range(days):
             if batch_peak_allocated is not None and batch_peak_reserved is not None:
-                baseline_allocated = torch.cuda.memory_allocated(torch_device)
-                baseline_reserved = torch.cuda.memory_reserved(torch_device)
                 torch.cuda.reset_peak_memory_stats(torch_device)
             if progress_bar is not None:
                 progress_bar.update(1)
@@ -1001,10 +999,10 @@ def simulate_multiuser(
             if batch_peak_allocated is not None and batch_peak_reserved is not None:
                 torch.cuda.synchronize(torch_device)
                 batch_peak_allocated[day] = int(
-                    baseline_allocated + torch.cuda.max_memory_allocated(torch_device)
+                    torch.cuda.max_memory_allocated(torch_device)
                 )
                 batch_peak_reserved[day] = int(
-                    baseline_reserved + torch.cuda.max_memory_reserved(torch_device)
+                    torch.cuda.max_memory_reserved(torch_device)
                 )
     finally:
         if progress_bar is not None:
