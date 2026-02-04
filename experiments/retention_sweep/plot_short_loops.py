@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 from pathlib import Path
 
@@ -17,8 +18,19 @@ def _load_log(path: Path) -> tuple[dict, dict]:
             payload = json.loads(line)
             if payload.get("type") == "meta":
                 meta = payload.get("data", {}) or {}
-            elif payload.get("type") == "daily":
-                daily = payload.get("data", {}) or {}
+    csv_path = path.with_suffix(".csv")
+    if csv_path.exists():
+        with csv_path.open("r", encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            loops: list[int] = []
+            for row in reader:
+                raw = row.get("short_loops", "")
+                if raw is None or raw == "":
+                    loops.append(0)
+                else:
+                    loops.append(int(float(raw)))
+            if loops:
+                daily["short_loops"] = loops
     return meta, daily
 
 
@@ -39,8 +51,7 @@ def _collect_values(
     short_term_source: str | None,
     metric: str,
 ) -> tuple[list[float], list[int], int]:
-    values: list[float] = []
-    user_ids: list[int] = []
+    items: list[tuple[int, float]] = []
     seen_users: set[int] = set()
     duplicates = 0
 
@@ -67,9 +78,11 @@ def _collect_values(
         else:
             active = [val for val in loops if val > 0]
             value = sum(active) / len(active) if active else 0.0
-        values.append(value)
-        user_ids.append(user_id)
+        items.append((user_id, value))
 
+    items.sort(key=lambda pair: pair[0])
+    user_ids = [item[0] for item in items]
+    values = [item[1] for item in items]
     return values, user_ids, duplicates
 
 
