@@ -28,6 +28,7 @@ from experiments.retention_sweep.cli_utils import (
     has_flag,
     parse_csv,
 )
+from simulator.defaults import DEFAULT_DAYS
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -154,7 +155,7 @@ def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
     parser.add_argument("--start-retention", type=float, default=0.50)
     parser.add_argument("--end-retention", type=float, default=0.98)
     parser.add_argument("--step", type=float, default=0.02)
-    parser.add_argument("--days", type=int, default=1825)
+    parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--sspmmc-policy", type=Path, default=None)
     parser.add_argument("--sspmmc-policy-dir", type=Path, default=None)
     parser.add_argument("--sspmmc-policies", default=None)

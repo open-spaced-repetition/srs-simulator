@@ -34,6 +34,16 @@ from simulator.schedulers import (
     SSPMMCScheduler,
 )
 from simulator.core import Action, Event, new_first_priority, review_first_priority
+from simulator.defaults import (
+    DEFAULT_COST_LIMIT_MINUTES,
+    DEFAULT_DECK_SIZE,
+    DEFAULT_DAYS,
+    DEFAULT_LEARN_LIMIT,
+    DEFAULT_PRIORITY,
+    DEFAULT_REVIEW_LIMIT,
+    DEFAULT_SCHEDULER_PRIORITY,
+    DEFAULT_SEED,
+)
 from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
@@ -225,31 +235,36 @@ def main() -> None:
         help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
     )
     parser.add_argument(
-        "--days", type=int, default=365 * 5, help="Number of simulated days."
+        "--days",
+        type=int,
+        default=DEFAULT_DAYS,
+        help="Number of simulated days.",
     )
-    parser.add_argument("--deck", type=int, default=10000, help="Deck size.")
+    parser.add_argument(
+        "--deck", type=int, default=DEFAULT_DECK_SIZE, help="Deck size."
+    )
     parser.add_argument(
         "--learn-limit",
         type=int,
-        default=10,
+        default=DEFAULT_LEARN_LIMIT,
         help="Max new cards per day (behavior limit).",
     )
     parser.add_argument(
         "--review-limit",
         type=int,
-        default=9999,
+        default=DEFAULT_REVIEW_LIMIT,
         help="Max reviews per day (behavior limit).",
     )
     parser.add_argument(
         "--cost-limit-minutes",
         type=float,
-        default=720,
+        default=DEFAULT_COST_LIMIT_MINUTES,
         help="Daily study time limit in minutes (behavior limit).",
     )
     parser.add_argument(
         "--priority",
         choices=["review-first", "new-first"],
-        default="review-first",
+        default=DEFAULT_PRIORITY,
         help="Card action priority: review-first favors due cards, new-first favors introductions.",
     )
     parser.add_argument(
@@ -307,7 +322,7 @@ def main() -> None:
     parser.add_argument(
         "--scheduler-priority",
         choices=sorted(FSRS6Scheduler.PRIORITY_MODES),
-        default="low_retrievability",
+        default=DEFAULT_SCHEDULER_PRIORITY,
         help="FSRS6 priority hint (ignored by other schedulers).",
     )
     parser.add_argument(
@@ -316,7 +331,7 @@ def main() -> None:
         default=None,
         help="Path to an SSP-MMC policy metadata JSON when using --sched sspmmc.",
     )
-    parser.add_argument("--seed", type=int, default=42, help="Random seed.")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed.")
     args = parser.parse_args()
 
     try:
