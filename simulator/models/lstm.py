@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
+import os
+import sys
 
 from simulator.core import Card, MemoryModel
 
@@ -12,6 +14,11 @@ from torch import Tensor, nn
 
 EPS = 1e-7
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _env_bool(name: str) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _default_benchmark_root() -> Path:
@@ -537,6 +544,10 @@ class LSTMVectorizedEnvOps:
         self.n_curves = int(environment.network.n_curves)
         self.use_duration_feature = environment.use_duration_feature
         self.default_retention = float(environment.default_retention)
+        self._mem_log = _env_bool("SRS_LSTM_MEM_LOG")
+        self._mem_log_sync = _env_bool("SRS_LSTM_MEM_LOG_SYNC")
+        self._mem_log_peak_alloc = 0
+        self._mem_log_peak_reserved = 0
         self.duration_value = None
         if self.use_duration_feature:
             self.duration_value = torch.tensor(
@@ -631,15 +642,45 @@ class LSTMVectorizedEnvOps:
 
         h = state.lstm_h[:, idx, :]
         c = state.lstm_c[:, idx, :]
+        self._maybe_log_mem(idx.numel(), label="env-vectorized")
         w_last, s_last, d_last, (h_new, c_new) = self.environment.network.forward_step(
             step, (h, c)
         )
+        self._maybe_log_mem_post(idx.numel(), label="env-vectorized")
         state.lstm_h[:, idx, :] = h_new
         state.lstm_c[:, idx, :] = c_new
         state.mem_w[idx] = w_last
         state.mem_s[idx] = s_last
         state.mem_d[idx] = d_last
         state.has_curves[idx] = True
+
+    def _maybe_log_mem(self, batch_size: int, *, label: str) -> None:
+        if not self._mem_log or self.device.type != "cuda":
+            return
+        if self._mem_log_sync:
+            torch.cuda.synchronize(self.device)
+        torch.cuda.reset_peak_memory_stats(self.device)
+        if self._mem_log_sync:
+            torch.cuda.synchronize(self.device)
+
+    def _maybe_log_mem_post(self, batch_size: int, *, label: str) -> None:
+        if not self._mem_log or self.device.type != "cuda":
+            return
+        if self._mem_log_sync:
+            torch.cuda.synchronize(self.device)
+        peak_alloc = torch.cuda.max_memory_allocated(self.device)
+        peak_reserved = torch.cuda.max_memory_reserved(self.device)
+        if peak_alloc > self._mem_log_peak_alloc:
+            self._mem_log_peak_alloc = peak_alloc
+            self._mem_log_peak_reserved = max(
+                self._mem_log_peak_reserved, peak_reserved
+            )
+            sys.stderr.write(
+                "[lstm mem] "
+                f"{label} batch={batch_size} "
+                f"peak_alloc={peak_alloc / 1024**2:.1f}MiB "
+                f"peak_reserved={peak_reserved / 1024**2:.1f}MiB\n"
+            )
 
     @staticmethod
     def _lstm_retention(
