@@ -21,6 +21,20 @@ def _env_bool(name: str) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _resolve_max_batch_size(value: int | None) -> int | None:
+    if value is not None:
+        if value < 1:
+            raise ValueError("max_batch_size must be >= 1 when set.")
+        return value
+    raw = os.getenv("SRS_LSTM_MAX_BATCH", "").strip().lower()
+    if not raw or raw in {"0", "none", "off"}:
+        return None
+    parsed = int(raw)
+    if parsed < 1:
+        raise ValueError("SRS_LSTM_MAX_BATCH must be >= 1 when set.")
+    return parsed
+
+
 def _default_benchmark_root() -> Path:
     return _REPO_ROOT.parent / "srs-benchmark"
 
@@ -526,6 +540,7 @@ class LSTMVectorizedEnvOps:
         environment: LSTMModel,
         *,
         device: torch.device | None,
+        max_batch_size: int | None = None,
     ) -> None:
         if device is None:
             self.device = environment.device
@@ -548,6 +563,7 @@ class LSTMVectorizedEnvOps:
         self._mem_log_sync = _env_bool("SRS_LSTM_MEM_LOG_SYNC")
         self._mem_log_peak_alloc = 0
         self._mem_log_peak_reserved = 0
+        self.max_batch_size = _resolve_max_batch_size(max_batch_size)
         self.duration_value = None
         if self.use_duration_feature:
             self.duration_value = torch.tensor(
@@ -630,29 +646,45 @@ class LSTMVectorizedEnvOps:
     ) -> None:
         if idx.numel() == 0:
             return
-        delay_clamped = torch.clamp(delays, min=0.0)
-        rating_clamped = torch.clamp(ratings, min=1, max=4).to(self.dtype)
-        delay_feature = delay_clamped.unsqueeze(-1)
-        rating_feature = rating_clamped.unsqueeze(-1)
-        if self.use_duration_feature:
-            duration_feature = self.duration_value.expand_as(delay_feature)
-            step = torch.cat([delay_feature, duration_feature, rating_feature], dim=-1)
-        else:
-            step = torch.cat([delay_feature, rating_feature], dim=-1)
 
-        h = state.lstm_h[:, idx, :]
-        c = state.lstm_c[:, idx, :]
-        self._maybe_log_mem(idx.numel(), label="env-vectorized")
-        w_last, s_last, d_last, (h_new, c_new) = self.environment.network.forward_step(
-            step, (h, c)
-        )
-        self._maybe_log_mem_post(idx.numel(), label="env-vectorized")
-        state.lstm_h[:, idx, :] = h_new
-        state.lstm_c[:, idx, :] = c_new
-        state.mem_w[idx] = w_last
-        state.mem_s[idx] = s_last
-        state.mem_d[idx] = d_last
-        state.has_curves[idx] = True
+        def _update_chunk(
+            chunk_idx: Tensor,
+            chunk_delays: Tensor,
+            chunk_ratings: Tensor,
+        ) -> None:
+            delay_clamped = torch.clamp(chunk_delays, min=0.0)
+            rating_clamped = torch.clamp(chunk_ratings, min=1, max=4).to(self.dtype)
+            delay_feature = delay_clamped.unsqueeze(-1)
+            rating_feature = rating_clamped.unsqueeze(-1)
+            if self.use_duration_feature:
+                duration_feature = self.duration_value.expand_as(delay_feature)
+                step = torch.cat(
+                    [delay_feature, duration_feature, rating_feature], dim=-1
+                )
+            else:
+                step = torch.cat([delay_feature, rating_feature], dim=-1)
+
+            h = state.lstm_h[:, chunk_idx, :]
+            c = state.lstm_c[:, chunk_idx, :]
+            self._maybe_log_mem(chunk_idx.numel(), label="env-vectorized")
+            w_last, s_last, d_last, (h_new, c_new) = (
+                self.environment.network.forward_step(step, (h, c))
+            )
+            self._maybe_log_mem_post(chunk_idx.numel(), label="env-vectorized")
+            state.lstm_h[:, chunk_idx, :] = h_new
+            state.lstm_c[:, chunk_idx, :] = c_new
+            state.mem_w[chunk_idx] = w_last
+            state.mem_s[chunk_idx] = s_last
+            state.mem_d[chunk_idx] = d_last
+            state.has_curves[chunk_idx] = True
+
+        total = int(idx.numel())
+        if self.max_batch_size is None or total <= self.max_batch_size:
+            _update_chunk(idx, delays, ratings)
+            return
+        for start in range(0, total, self.max_batch_size):
+            end = start + self.max_batch_size
+            _update_chunk(idx[start:end], delays[start:end], ratings[start:end])
 
     def _maybe_log_mem(self, batch_size: int, *, label: str) -> None:
         if not self._mem_log or self.device.type != "cuda":
