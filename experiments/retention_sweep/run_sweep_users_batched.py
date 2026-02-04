@@ -170,7 +170,7 @@ def parse_args() -> argparse.Namespace:
         help="Short-term cutoff in days (used by sched mode).",
     )
     parser.add_argument(
-        "--short-term-max-loops-per-day",
+        "--short-term-loops-limit",
         type=int,
         default=None,
         help="Max short-term review loops per day (per user).",
@@ -411,7 +411,7 @@ def _simulate_and_log(
         learning_steps=learning_steps,
         relearning_steps=relearning_steps,
         short_term_threshold=args.short_term_threshold,
-        short_term_max_loops_per_day=args.short_term_max_loops_per_day,
+        short_term_loops_limit=args.short_term_loops_limit,
         batch_stats=batch_stats,
     )
     if batch_stats:
@@ -430,8 +430,8 @@ def _simulate_and_log(
             parts.append(f"ivl={fixed_interval:.2f}")
         if short_term_source:
             parts.append(f"st={short_term_source}")
-            if args.short_term_max_loops_per_day is not None:
-                parts.append(f"stloops={args.short_term_max_loops_per_day}")
+            if args.short_term_loops_limit is not None:
+                parts.append(f"stloops={args.short_term_loops_limit}")
         parts.append(f"seed={args.seed}")
         filename = batch_log_root / f"batch_{'_'.join(parts)}.csv"
         with filename.open("w", encoding="utf-8", newline="") as fh:
@@ -476,7 +476,7 @@ def _simulate_and_log(
             learning_steps=learning_steps_arg,
             relearning_steps=relearning_steps_arg,
             short_term_threshold=args.short_term_threshold,
-            short_term_max_loops_per_day=args.short_term_max_loops_per_day,
+            short_term_loops_limit=args.short_term_loops_limit,
             log_dir=user_log_dir,
             log_reviews=False,
         )
