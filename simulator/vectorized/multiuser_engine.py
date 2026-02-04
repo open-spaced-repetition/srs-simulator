@@ -43,7 +43,7 @@ def simulate_multiuser(
     learning_steps: Optional[list[float]] = None,
     relearning_steps: Optional[list[float]] = None,
     short_term_threshold: float = 0.5,
-    short_term_max_loops_per_day: Optional[int] = None,
+    short_term_loops_limit: Optional[int] = None,
     batch_stats: Optional[dict[str, list[int]]] = None,
 ) -> list[SimulationStats]:
     config = VectorizedConfig(
@@ -58,8 +58,8 @@ def simulate_multiuser(
 
     if short_term_source not in {None, "steps"}:
         raise ValueError("short_term_source must be None or 'steps'.")
-    if short_term_max_loops_per_day is not None and short_term_max_loops_per_day < 0:
-        raise ValueError("short_term_max_loops_per_day must be >= 0.")
+    if short_term_loops_limit is not None and short_term_loops_limit < 0:
+        raise ValueError("short_term_loops_limit must be >= 0.")
     steps_mode = short_term_source == "steps"
     learning_steps = list(learning_steps or [])
     relearning_steps = list(relearning_steps or [])
@@ -633,10 +633,8 @@ def simulate_multiuser(
                     exec_card = short_card[active_mask]
                     exec_phase = phase_short[active_mask]
                     now_tensor = due_short[active_mask]
-                    if short_term_max_loops_per_day is not None:
-                        eligible = (
-                            loops_by_user[exec_user] < short_term_max_loops_per_day
-                        )
+                    if short_term_loops_limit is not None:
+                        eligible = loops_by_user[exec_user] < short_term_loops_limit
                         if not eligible.any():
                             break
                         exec_user = exec_user[eligible]

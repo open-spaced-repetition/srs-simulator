@@ -200,7 +200,7 @@ def main() -> None:
         help="Short-term threshold (days) for LSTM interval conversion.",
     )
     parser.add_argument(
-        "--short-term-max-loops-per-day",
+        "--short-term-loops-limit",
         type=int,
         default=None,
         help=(
@@ -431,7 +431,7 @@ def main() -> None:
                 learning_steps=learning_steps,
                 relearning_steps=relearning_steps,
                 short_term_threshold=args.short_term_threshold,
-                short_term_max_loops_per_day=args.short_term_max_loops_per_day,
+                short_term_loops_limit=args.short_term_loops_limit,
             )
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
@@ -497,7 +497,7 @@ def _format_plot_footer(args: argparse.Namespace) -> str:
     )
     short_term_source = resolved_short_term or "off"
     short_term_threshold = getattr(args, "short_term_threshold", None)
-    short_term_max_loops = getattr(args, "short_term_max_loops_per_day", None)
+    short_term_max_loops = getattr(args, "short_term_loops_limit", None)
     fixed_interval = (
         normalize_fixed_interval(getattr(args, "fixed_interval", None))
         if args.scheduler == "fixed"
@@ -536,7 +536,7 @@ def _format_plot_footer(args: argparse.Namespace) -> str:
         if short_term_threshold is not None:
             extra.append(f"short-term-threshold={format_float(short_term_threshold)}")
         if short_term_max_loops is not None:
-            extra.append(f"short-term-max-loops-per-day={short_term_max_loops}")
+            extra.append(f"short-term-loops-limit={short_term_max_loops}")
     lines = [" ".join(header), " ".join(core)]
     if extra:
         lines.append(" ".join(extra))
@@ -733,7 +733,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     if getattr(args, "fuzz", False):
         parts.append("fuzz=1")
     short_term_source = getattr(args, "short_term_source", None)
-    short_term_max_loops = getattr(args, "short_term_max_loops_per_day", None)
+    short_term_max_loops = getattr(args, "short_term_loops_limit", None)
     if short_term_source:
         parts.append(f"st={short_term_source}")
         if short_term_max_loops is not None:
@@ -781,7 +781,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "learning_steps": _parse_steps(getattr(args, "learning_steps", None)),
         "relearning_steps": _parse_steps(getattr(args, "relearning_steps", None)),
         "short_term_threshold": getattr(args, "short_term_threshold", None),
-        "short_term_max_loops_per_day": short_term_max_loops,
+        "short_term_loops_limit": short_term_max_loops,
     }
     csv_filename = filename.with_suffix(".csv")
     _write_daily_csv(csv_filename, stats)
