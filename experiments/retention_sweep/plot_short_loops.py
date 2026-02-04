@@ -157,7 +157,7 @@ def main() -> int:
             fontsize=9,
         )
 
-    axes[1].scatter(user_ids, values, s=12, alpha=0.7)
+    axes[1].bar(user_ids, values, width=0.9, color="tab:blue", alpha=0.8)
     axes[1].set_xlabel("User id")
     axes[1].set_ylabel(
         "Short loops/day" if args.metric == "avg" else "Short loops/active day"
