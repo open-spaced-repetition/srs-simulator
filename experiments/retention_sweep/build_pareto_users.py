@@ -22,7 +22,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         description="Run retention_sweep.build_pareto.py for a range of user IDs.",
         allow_abbrev=False,
     )
-    add_user_range_args(parser, default_end=10000)
+    add_user_range_args(parser)
     parser.add_argument(
         "--env",
         dest="env",

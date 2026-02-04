@@ -45,7 +45,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         ),
         allow_abbrev=False,
     )
-    add_user_range_args(parser, default_end=10000)
+    add_user_range_args(parser)
     parser.add_argument(
         "--env",
         dest="env",
