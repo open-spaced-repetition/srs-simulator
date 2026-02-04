@@ -797,7 +797,19 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             "phase_reviews": stats.daily_phase_reviews,
             "phase_lapses": stats.daily_phase_lapses,
             "gpu_peak_bytes": stats.daily_gpu_peak_bytes,
+            "short_loops": stats.daily_short_loops,
         }
+        if stats.daily_reviews is not None and stats.daily_phase_reviews is not None:
+            short_reviews = [
+                total - long
+                for total, long in zip(stats.daily_reviews, stats.daily_phase_reviews)
+            ]
+            daily["short_reviews"] = short_reviews
+            if stats.daily_short_loops is not None:
+                daily["short_reviews_per_loop"] = [
+                    (count / loops) if loops else None
+                    for count, loops in zip(short_reviews, stats.daily_short_loops)
+                ]
         daily = {key: value for key, value in daily.items() if value is not None}
         fh.write(json.dumps({"type": "daily", "data": daily}) + "\n")
         if args.log_reviews:

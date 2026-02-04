@@ -142,6 +142,7 @@ def simulate(
     daily_lapses = [0 for _ in range(days)]
     daily_phase_reviews = [0 for _ in range(days)]
     daily_phase_lapses = [0 for _ in range(days)]
+    daily_short_loops = [0 for _ in range(days)] if steps_mode else None
     total_reviews = 0
     total_lapses = 0
     total_cost = 0.0
@@ -871,6 +872,8 @@ def simulate(
                 if short_loops:
                     short_review_loops += short_loops
                     short_review_days += 1
+                if daily_short_loops is not None:
+                    daily_short_loops[day] = short_loops
             else:
                 remaining_cost = (
                     max_cost - cost_for_limits if max_cost is not None else None
@@ -914,6 +917,8 @@ def simulate(
                 if short_loops:
                     short_review_loops += short_loops
                     short_review_days += 1
+                if daily_short_loops is not None:
+                    daily_short_loops[day] = short_loops
 
             reviews_today = long_reviews_today + short_reviews_today
 
@@ -961,5 +966,6 @@ def simulate(
         },
         daily_phase_reviews=daily_phase_reviews,
         daily_phase_lapses=daily_phase_lapses,
+        daily_short_loops=daily_short_loops,
     )
     return stats
