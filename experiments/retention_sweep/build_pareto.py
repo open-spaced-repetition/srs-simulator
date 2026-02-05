@@ -683,11 +683,6 @@ def _plot_compare_frontier(
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
     if show_labels and texts:
-        if adjust_text is None:
-            raise SystemExit(
-                "adjustText is required for --show-labels. "
-                "Install it with `uv add adjustText`."
-            )
         import contextlib
         import io
         import logging
