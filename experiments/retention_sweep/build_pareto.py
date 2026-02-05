@@ -135,6 +135,35 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _format_output_dir_name(args: argparse.Namespace) -> str:
+    def _clean(value: Optional[str]) -> str:
+        if not value:
+            return "none"
+        return value.replace(" ", "").replace(",", "_")
+
+    parts = [
+        "pareto",
+        f"st={args.short_term}",
+        f"stsrc={args.short_term_source}",
+        f"fuzz={args.fuzz}",
+        f"engine={args.engine}",
+        f"compare-st={'on' if args.compare_short_term else 'off'}",
+        f"compare-fuzz={'on' if args.compare_fuzz else 'off'}",
+        f"compare-engine={'on' if args.compare_engine else 'off'}",
+        f"env={_clean(args.env)}",
+        f"sched={_clean(args.sched)}",
+    ]
+    return "_".join(parts)
+
+
+def _with_user_tag(filename: str, user_id: Optional[int]) -> str:
+    if user_id is None:
+        return filename
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    return f"{stem}_user_{user_id}{suffix}"
+
+
 def _normalize_bool(value: Any) -> Optional[bool]:
     if value is None:
         return None
@@ -781,8 +810,9 @@ def main() -> None:
 
     envs = _parse_csv(args.env)
 
+    output_dir_name = _format_output_dir_name(args)
     plot_dir = args.plot_dir or (
-        repo_root / "experiments" / "retention_sweep" / "plots" / f"user_{user_id}"
+        repo_root / "experiments" / "retention_sweep" / "plots" / output_dir_name
     )
 
     default_results = (
@@ -790,7 +820,9 @@ def main() -> None:
         if len(envs) > 1
         else "simulation_results_retention_sweep.json"
     )
-    results_path = args.results_path or (log_dir / default_results)
+    results_dir = repo_root / "logs" / "retention_sweep" / output_dir_name
+    results_filename = _with_user_tag(default_results, args.user_id)
+    results_path = args.results_path or (results_dir / results_filename)
 
     base_dirs = [repo_root, log_dir]
     combined_results: List[Dict[str, Any]] = []
@@ -1036,9 +1068,10 @@ def main() -> None:
 
     plot_dir.mkdir(parents=True, exist_ok=True)
     _setup_plot_style()
+    plot_name = _with_user_tag("Pareto frontier.png", args.user_id)
     _plot_compare_frontier(
         series,
-        plot_dir / "Pareto frontier.png",
+        plot_dir / plot_name,
         title_base="Pareto frontier",
         show_labels=not args.hide_labels,
     )
