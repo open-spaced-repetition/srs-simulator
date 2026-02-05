@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 from simulator.core import Card, MemoryModel
 from simulator.lstm_utils import resolve_lstm_max_batch_size
@@ -216,7 +216,9 @@ class _SequenceLSTM(nn.Module):
             x_main = torch.cat([x_delay, x_duration], dim=-1)
         else:
             x_main = x_delay
-        x_main = (x_main - self.input_mean) / self.input_std
+        input_mean = cast(Tensor, self.input_mean)
+        input_std = cast(Tensor, self.input_std)
+        x_main = (x_main - input_mean) / input_std
 
         x_rating = torch.maximum(x_rating, torch.ones_like(x_rating))
         x_rating = torch.nn.functional.one_hot(
@@ -363,7 +365,7 @@ class LSTMModel(MemoryModel):
             state_dict = torch.load(path, weights_only=False, **load_kwargs)
         except TypeError:
             state_dict = torch.load(path, **load_kwargs)
-        cleaned = _normalize_state_dict(state_dict)
+        cleaned = dict(_normalize_state_dict(state_dict))
         for key in ("input_mean", "input_std"):
             tensor = cleaned.get(key)
             if isinstance(tensor, torch.Tensor):
@@ -632,7 +634,7 @@ class LSTMVectorizedEnvOps:
             rating_clamped = torch.clamp(chunk_ratings, min=1, max=4).to(self.dtype)
             delay_feature = delay_clamped.unsqueeze(-1)
             rating_feature = rating_clamped.unsqueeze(-1)
-            if self.use_duration_feature:
+            if self.use_duration_feature and self.duration_value is not None:
                 duration_feature = self.duration_value.expand_as(delay_feature)
                 step = torch.cat(
                     [delay_feature, duration_feature, rating_feature], dim=-1

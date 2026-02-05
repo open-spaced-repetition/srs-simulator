@@ -718,7 +718,7 @@ def _write_daily_csv(path: Path, stats) -> None:
         writer = csv.writer(fh)
         writer.writerow(headers)
         for day in range(days):
-            row = [day]
+            row: list[object] = [day]
             for key in headers[1:]:
                 series = daily_map.get(key)
                 if series is None or day >= len(series):

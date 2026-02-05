@@ -202,12 +202,20 @@ class ShortTermScheduler(Scheduler):
 
     def _convert_interval(
         self,
-        interval: float,
+        interval: float | IntervalSpec,
         state: Any,
         *,
         phase: str | None = None,
     ) -> tuple[IntervalSpec, Any]:
-        interval_days = max(0.0, float(interval))
+        if isinstance(interval, IntervalSpec):
+            interval_days = (
+                interval.value / SECONDS_PER_DAY
+                if interval.unit == "secs"
+                else interval.value
+            )
+        else:
+            interval_days = float(interval)
+        interval_days = max(0.0, interval_days)
         if self.allow_short_term_interval and interval_days < self.threshold_days:
             interval_spec = IntervalSpec.secs(interval_days * SECONDS_PER_DAY)
             if (

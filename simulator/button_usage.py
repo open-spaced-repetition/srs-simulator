@@ -4,7 +4,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TypedDict
 
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
@@ -65,9 +65,23 @@ def _require_matrix(
     return matrix
 
 
+class ButtonUsageConfig(TypedDict):
+    learn_costs: list[float]
+    review_costs: list[float]
+    first_rating_prob: list[float]
+    review_rating_prob: list[float]
+    learning_rating_prob: list[float]
+    relearning_rating_prob: list[float]
+    state_rating_costs: list[list[float]]
+    first_rating_offsets: list[float]
+    first_session_lens: list[float]
+    forget_rating_offset: float
+    forget_session_len: float
+
+
 def load_button_usage_config(
     button_usage_path: str | Path, user_id: int
-) -> dict[str, list[float] | list[list[float]] | float]:
+) -> ButtonUsageConfig:
     path = Path(button_usage_path)
     target_user_id = _coerce_user_id(user_id)
     if target_user_id is None:
@@ -75,7 +89,7 @@ def load_button_usage_config(
     if not path.exists():
         raise FileNotFoundError(f"Button usage data not found: {path}")
 
-    config: dict[str, list[float] | list[list[float]] | float] | None = None
+    config: ButtonUsageConfig | None = None
     with path.open("r", encoding="utf-8") as fh:
         for line_number, line in enumerate(fh, 1):
             line = line.strip()
@@ -187,12 +201,9 @@ def _coerce_state_costs(
 
 
 def normalize_button_usage(
-    button_usage: Mapping[str, Sequence[float] | Sequence[Sequence[float]] | float]
-    | None,
-) -> dict[str, list[float] | list[list[float]] | float]:
-    source: Mapping[str, Sequence[float] | Sequence[Sequence[float]] | float] = (
-        button_usage or {}
-    )
+    button_usage: Mapping[str, Any] | None,
+) -> ButtonUsageConfig:
+    source: Mapping[str, Any] = button_usage or {}
 
     learn_costs = _coerce_list(
         source.get("learn_costs", DEFAULT_STATE_RATING_COSTS.learning),

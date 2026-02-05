@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 import torch
 
@@ -16,7 +16,7 @@ class VectorizedEnvOps(Protocol):
     device: torch.device
     dtype: torch.dtype
 
-    def init_state(self, deck_size: int): ...
+    def init_state(self, deck_size: int) -> Any: ...
 
     def retrievability(
         self, state, idx: torch.Tensor, elapsed: torch.Tensor
@@ -38,7 +38,7 @@ class VectorizedSchedulerOps(Protocol):
     device: torch.device
     dtype: torch.dtype
 
-    def init_state(self, deck_size: int): ...
+    def init_state(self, deck_size: int) -> Any: ...
 
     def review_priority(
         self, state, idx: torch.Tensor, elapsed: torch.Tensor

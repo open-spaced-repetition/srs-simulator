@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, cast
 
 import torch
 from torch import Tensor
@@ -135,11 +135,11 @@ class PackedLSTMWeights:
 
 def _load_state_dict(path: str | Path, *, device: torch.device) -> Mapping[str, Tensor]:
     path = _resolve_weight_file(Path(path))
-    load_kwargs = {"map_location": device}
     try:
-        raw = torch.load(path, weights_only=False, **load_kwargs)
+        load_fn = cast(Any, torch.load)
+        raw = load_fn(path, weights_only=False, map_location=device)
     except TypeError:
-        raw = torch.load(path, **load_kwargs)
+        raw = torch.load(path, map_location=device)
     return _normalize_state_dict(raw)
 
 
@@ -149,7 +149,7 @@ def _stack_tensors(
     device: torch.device,
     dtype: torch.dtype,
 ) -> dict[str, Tensor]:
-    stacked: dict[str, Tensor] = {}
+    stacked: dict[str, list[Tensor]] = {}
     for state in state_dicts:
         for key, value in state.items():
             if not isinstance(value, Tensor):
@@ -500,7 +500,7 @@ class LSTMBatchedEnvOps:
             rating_clamped = torch.clamp(chunk_ratings, min=1, max=4).to(self.dtype)
             delay_feature = delay_clamped.unsqueeze(-1)
             rating_feature = rating_clamped.unsqueeze(-1)
-            if self.use_duration_feature:
+            if self.use_duration_feature and self.duration_value is not None:
                 duration_feature = self.duration_value.expand_as(delay_feature)
                 step = torch.cat(
                     [delay_feature, duration_feature, rating_feature], dim=-1

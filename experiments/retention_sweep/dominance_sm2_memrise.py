@@ -280,8 +280,8 @@ def main() -> None:
     log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
     envs = _parse_csv(args.env)
 
-    sm2_users: Dict[Tuple[str, int], Dict[str, float]] = {}
-    memrise_users: Dict[Tuple[str, int], Dict[str, float]] = {}
+    sm2_users: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    memrise_users: Dict[Tuple[str, int], Dict[str, Any]] = {}
     duplicate_count = 0
 
     for path in _iter_log_paths(log_root):
@@ -292,6 +292,8 @@ def main() -> None:
 
         environment = meta.get("environment")
         scheduler = meta.get("scheduler")
+        if not isinstance(environment, str):
+            continue
         if envs and environment not in envs:
             continue
         if scheduler not in {"anki_sm2", "memrise"}:
