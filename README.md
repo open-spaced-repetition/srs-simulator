@@ -162,6 +162,8 @@ Metrics and outputs:
 
 ## Retention sweep comparisons (lstm)
 
+_All figures below use `--short-term off` in `aggregate_users.py`._
+
 **SM2 vs Memrise dominance**
 
 ![SM2 vs Memrise dominance](experiments/retention_sweep/plots/dominance/dominance_sm2_memrise.png)
@@ -170,12 +172,12 @@ _Caption: Per-user dominance outcomes between Anki-SM-2 and Memrise (dominates v
 **FSRS6 equivalence vs Anki-SM-2**
 
 ![FSRS6 equiv vs Anki-SM-2](experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_anki_sm2.png)
-_Caption: FSRS-6 interpolated to match Anki-SM-2 memorized-average per user; compares memorized-per-minute distributions and deltas._
+_Caption: FSRS-6 interpolated to match Anki-SM-2 memorized-average per user; compares memorized-per-minute distributions and deltas. (n=9999; superiority=86.5%; mean ratio=1.382; median ratio=1.134 (IQR 1.048-1.319); mean DR=0.879; median DR=0.896)._
 
 **FSRS6 equivalence vs Memrise**
 
 ![FSRS6 equiv vs Memrise](experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_memrise.png)
-_Caption: FSRS-6 interpolated to match Memrise memorized-average per user; compares memorized-per-minute distributions and deltas._
+_Caption: FSRS-6 interpolated to match Memrise memorized-average per user; compares memorized-per-minute distributions and deltas. (n=9999; superiority=85.2%; mean ratio=1.342; median ratio=1.172 (IQR 1.066-1.352); mean DR=0.860; median DR=0.886)._
 
 ## Benchmarks
 Performance baselines live under `benches/`. See `benches/README.md` for details.
