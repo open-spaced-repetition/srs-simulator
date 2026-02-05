@@ -221,10 +221,13 @@ def simulate(
             hard_delay = steps_secs[idx]
             first_mask = idx == 0
             if steps_len > 1:
+                # Match Anki's learning-step "hard" interval: midpoint between first two steps.
+                # See anki/rslib/src/scheduler/states/fuzz.rs (hard interval for learning steps).
                 hard_first = _maybe_round_in_days(
                     torch.floor((steps_secs[0] + steps_secs[1]) / 2.0)
                 )
             else:
+                # Single-step fallback: 1.5x the first step, capped to +1 day (Anki-style).
                 hard_first = _maybe_round_in_days(
                     torch.minimum(steps_secs[0] * 1.5, steps_secs[0] + day_secs)
                 )
