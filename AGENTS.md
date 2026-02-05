@@ -8,6 +8,7 @@ Project rules:
 4. Commit messages must follow Conventional Commits.
 5. Do not push code to remotes.
 6. For performance-related changes, run a baseline performance test first and report results by engine (event vs vectorized) affected by the change.
+7. Use `uv run pyright` for static type checking.
 
 ## Conventional Commits
 
