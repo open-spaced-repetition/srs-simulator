@@ -53,6 +53,18 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Treat metric differences within this epsilon as ties.",
     )
+    parser.add_argument(
+        "--short-term",
+        choices=["on", "off", "any"],
+        default="any",
+        help="Filter logs by short-term flag.",
+    )
+    parser.add_argument(
+        "--short-term-source",
+        choices=["steps", "sched", "any"],
+        default="any",
+        help="Filter logs by short-term source (steps/sched).",
+    )
     return parser.parse_args()
 
 
@@ -60,6 +72,18 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _normalize_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return None
 
 
 def _load_meta_totals(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -298,6 +322,20 @@ def main() -> None:
             continue
         if scheduler not in {"anki_sm2", "memrise"}:
             continue
+
+        short_term_value = _normalize_bool(meta.get("short_term"))
+        if args.short_term != "any":
+            if args.short_term == "on":
+                if short_term_value is not True:
+                    continue
+            elif short_term_value is True:
+                continue
+        if args.short_term_source != "any":
+            source_value = meta.get("short_term_source")
+            if source_value != args.short_term_source:
+                continue
+            if short_term_value is not True:
+                continue
 
         time_average = totals.get("time_average")
         if time_average is None:

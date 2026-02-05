@@ -688,6 +688,11 @@ def _plot_compare_frontier(
         import logging
         from matplotlib.patches import FancyArrowPatch
 
+        if adjust_text is None:
+            raise SystemExit(
+                "adjustText is required for --show-labels. "
+                "Install it with `uv add adjustText`."
+            )
         adjust_logger = logging.getLogger("adjustText")
         previous_level = adjust_logger.level
         adjust_logger.setLevel(logging.ERROR)
