@@ -244,9 +244,11 @@ def main() -> None:
 
         environment = meta.get("environment")
         scheduler = meta.get("scheduler")
+        if not isinstance(environment, str):
+            continue
         if envs and environment not in envs:
             continue
-        if scheduler is None:
+        if not isinstance(scheduler, str):
             continue
         if scheduler == "sspmmc":
             continue

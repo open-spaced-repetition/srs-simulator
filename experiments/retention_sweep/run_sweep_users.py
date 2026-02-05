@@ -177,7 +177,7 @@ def _resolve_sspmmc_policies(
     run_sspmmc: bool,
 ) -> list[Path]:
     if overrides.sspmmc_policies:
-        paths = [Path(path) for path in _parse_csv(overrides.sspmmc_policies)]
+        paths = [Path(path) for path in parse_csv(overrides.sspmmc_policies)]
         return [path.resolve() for path in paths]
 
     if overrides.sspmmc_policy:
@@ -435,7 +435,9 @@ def main() -> int:
     user_ids = list(range(args.start_user, args.end_user + 1))
     envs = parse_csv(args.env) or ["lstm"]
     schedulers = parse_csv(args.sched) or ["fsrs6"]
-    inject_torch_device = cuda_devices and not _has_arg(extra_args, "--torch-device")
+    inject_torch_device = bool(cuda_devices) and not has_flag(
+        extra_args, "--torch-device"
+    )
     if inject_torch_device:
         extra_args = list(extra_args)
     overall_total = None
@@ -471,6 +473,7 @@ def main() -> int:
         position=users_position,
         leave=True,
     )
+    worker_bars: dict[int, tqdm] = {}
     try:
         if args.dry_run or args.max_parallel == 1:
             failures = 0
@@ -524,7 +527,6 @@ def main() -> int:
         available_positions = list(
             range(worker_position_base, worker_position_base + args.max_parallel)
         )
-        worker_bars: dict[int, tqdm] = {}
         progress_lock = threading.RLock()
         tqdm.set_lock(progress_lock)
 

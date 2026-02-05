@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, TypeAlias
 import math
 import sys
 
@@ -255,6 +255,8 @@ def _iter_log_entries(
         if meta.get("environment") != environment:
             continue
         scheduler = meta.get("scheduler")
+        if not isinstance(scheduler, str):
+            continue
         if scheduler_filter and scheduler not in scheduler_filter:
             continue
 
@@ -296,7 +298,12 @@ def _iter_log_entries(
 
         desired = meta.get("desired_retention")
         if scheduler_uses_desired_retention(scheduler):
-            desired_value = float(desired or 0.0)
+            if desired is None:
+                continue
+            try:
+                desired_value = float(desired)
+            except (TypeError, ValueError):
+                continue
             if desired_value < min_retention or desired_value > max_retention:
                 continue
         else:
@@ -314,7 +321,9 @@ def _iter_log_entries(
         elif scheduler == "fixed":
             title = f"Ivl={format_float(fixed_interval)}"
         elif scheduler_uses_desired_retention(scheduler):
-            title = f"DR={format_float(float(desired_value) * 100)}%"
+            if desired_value is None:
+                continue
+            title = f"DR={format_float(desired_value * 100)}%"
         else:
             title = _format_scheduler_title(scheduler)
 
@@ -364,10 +373,10 @@ def _build_results(
     dedupe_short_term: bool = False,
     dedupe_engine: bool = False,
 ) -> List[Dict[str, Any]]:
-    by_retention: Dict[object, Dict[str, Any]] = {}
-    by_retention_rank: Dict[object, int] = {}
-    by_no_desired: Dict[object, Dict[str, Any]] = {}
-    by_no_desired_rank: Dict[object, int] = {}
+    by_retention: Dict[RetentionKey, Dict[str, Any]] = {}
+    by_retention_rank: Dict[RetentionKey, int] = {}
+    by_no_desired: Dict[NoDesiredKey, Dict[str, Any]] = {}
+    by_no_desired_rank: Dict[NoDesiredKey, int] = {}
     results: List[Dict[str, Any]] = []
     prefer_engine = engine_filter is None and not dedupe_engine
     for desired, entry in _iter_log_entries(
@@ -417,7 +426,11 @@ def _build_results(
                 and desired is None
                 and entry.get("scheduler") not in {"fixed", "sspmmc"}
             ):
-                key = (entry.get("scheduler"), entry.get("title"))
+                scheduler_name = entry.get("scheduler")
+                title = entry.get("title")
+                if not isinstance(scheduler_name, str) or not isinstance(title, str):
+                    continue
+                key = (scheduler_name, title)
                 existing = by_no_desired_rank.get(key)
                 if existing is None or rank < existing:
                     by_no_desired[key] = entry
@@ -426,12 +439,22 @@ def _build_results(
                 results.append(entry)
 
     if dedupe:
-        deduped = [by_retention[ret] for ret in sorted(by_retention)]
+        deduped = [
+            by_retention[ret]
+            for ret in sorted(
+                by_retention,
+                key=lambda key: key[0] if isinstance(key, tuple) else key,
+            )
+        ]
         if by_no_desired:
-            results.extend(by_no_desired[key] for key in sorted(by_no_desired))
+            results.extend(
+                by_no_desired[key] for key in sorted(by_no_desired, key=lambda k: k)
+            )
         return deduped + results
     if by_no_desired:
-        results.extend(by_no_desired[key] for key in sorted(by_no_desired))
+        results.extend(
+            by_no_desired[key] for key in sorted(by_no_desired, key=lambda k: k)
+        )
     return results
 
 
@@ -458,7 +481,9 @@ def _plot_compare_frontier(
     show_labels: bool = False,
 ) -> None:
     import matplotlib.pyplot as plt
+    from collections.abc import Callable
 
+    adjust_text: Callable[..., Any] | None = None
     if show_labels:
         try:
             from adjustText import adjust_text
@@ -579,7 +604,11 @@ def _plot_compare_frontier(
         if not entries:
             continue
         scheduler = item.get("scheduler")
+        if not isinstance(scheduler, str):
+            scheduler = "unknown"
         environment = item.get("environment")
+        if not isinstance(environment, str):
+            environment = "unknown"
         fuzz_value = item.get("fuzz")
         if use_fuzz_linestyles or use_short_term_linestyles or use_engine_linestyles:
             style_key = (
@@ -654,6 +683,11 @@ def _plot_compare_frontier(
     plt.xlim([x_min, x_max])
     plt.ylim([y_min, y_max])
     if show_labels and texts:
+        if adjust_text is None:
+            raise SystemExit(
+                "adjustText is required for --show-labels. "
+                "Install it with `uv add adjustText`."
+            )
         import contextlib
         import io
         import logging
@@ -709,13 +743,18 @@ def _plot_compare_frontier(
     plt.xticks(fontsize=16, color="black")
     plt.yticks(fontsize=16, color="black")
     user_ids = sorted(
-        {entry["user_id"] for entry in all_entries if entry.get("user_id") is not None}
+        {
+            user_id
+            for entry in all_entries
+            if isinstance((user_id := entry.get("user_id")), int)
+        }
     )
     envs = sorted(
         {
-            item.get("environment")
+            environment
             for item in series
-            if item.get("entries") and item.get("environment")
+            if item.get("entries")
+            and isinstance((environment := item.get("environment")), str)
         }
     )
     title = _format_title(title_base, user_ids)
@@ -896,9 +935,7 @@ def main() -> None:
                         if not fixed_results:
                             continue
                         fixed_results.sort(
-                            key=lambda entry: entry.get("fixed_interval")
-                            if entry.get("fixed_interval") is not None
-                            else 0.0
+                            key=lambda entry: float(entry.get("fixed_interval") or 0.0)
                         )
                         fixed_label_parts = []
                         if len(envs) > 1:
@@ -1010,3 +1047,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+RetentionKey: TypeAlias = (
+    float | tuple[float, Optional[bool], Optional[bool], Optional[str]]
+)
+NoDesiredKey: TypeAlias = tuple[str, str]

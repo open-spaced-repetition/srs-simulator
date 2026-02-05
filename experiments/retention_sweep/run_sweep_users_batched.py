@@ -9,6 +9,7 @@ from multiprocessing import get_context
 import queue
 from pathlib import Path
 import logging
+from collections.abc import Callable
 from typing import Iterable
 
 import torch
@@ -225,10 +226,11 @@ def _load_fsrs6_weights(
     *,
     benchmark_root: Path,
     benchmark_partition: str | None,
-    overrides: dict[str, float] | None,
+    overrides: dict[str, str] | None,
     short_term: bool,
     device: torch.device,
 ) -> tuple[torch.Tensor | None, list[int]]:
+    partition_key = benchmark_partition or "0"
     weights: list[torch.Tensor] = []
     kept: list[int] = []
     missing: list[int] = []
@@ -239,7 +241,7 @@ def _load_fsrs6_weights(
                 benchmark_root=benchmark_root,
                 environment="fsrs6",
                 user_id=user_id,
-                partition_key=benchmark_partition,
+                partition_key=partition_key,
                 overrides=overrides,
                 short_term=short_term,
             )
@@ -316,7 +318,7 @@ def _progress_callback_from_queue(
     device_label: str,
     run_label: str,
     total_days: int,
-) -> callable | None:
+) -> Callable[[int, int], None] | None:
     if progress_queue is None:
         return None
     last = 0

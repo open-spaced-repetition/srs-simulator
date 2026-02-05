@@ -478,7 +478,9 @@ def simulate(
                 if short_mask.any():
                     if fuzz:
                         fuzz_factors = torch.rand(
-                            short_mask.sum(), device=torch_device, generator=gen
+                            interval_days[short_mask].shape,
+                            device=torch_device,
+                            generator=gen,
                         )
                         secs = interval_days[short_mask] * day_secs
                         secs = with_learning_fuzz(secs, fuzz_factors)
@@ -494,7 +496,9 @@ def simulate(
                 if long_mask.any():
                     if fuzz:
                         fuzz_factors = torch.rand(
-                            long_mask.sum(), device=torch_device, generator=gen
+                            interval_days[long_mask].shape,
+                            device=torch_device,
+                            generator=gen,
                         )
                         interval_long = with_review_fuzz(
                             interval_days[long_mask],
@@ -611,7 +615,9 @@ def simulate(
                 if short_mask.any():
                     if fuzz:
                         fuzz_factors = torch.rand(
-                            short_mask.sum(), device=torch_device, generator=gen
+                            interval_days[short_mask].shape,
+                            device=torch_device,
+                            generator=gen,
                         )
                         secs = interval_days[short_mask] * day_secs
                         secs = with_learning_fuzz(secs, fuzz_factors)
@@ -627,7 +633,9 @@ def simulate(
                 if long_mask.any():
                     if fuzz:
                         fuzz_factors = torch.rand(
-                            long_mask.sum(), device=torch_device, generator=gen
+                            interval_days[long_mask].shape,
+                            device=torch_device,
+                            generator=gen,
                         )
                         interval_long = with_review_fuzz(
                             interval_days[long_mask],
@@ -785,7 +793,7 @@ def simulate(
                     if next_short_mask.any():
                         if fuzz:
                             fuzz_factors = torch.rand(
-                                next_short_mask.sum(),
+                                interval_days[next_short_mask].shape,
                                 device=torch_device,
                                 generator=gen,
                             )
@@ -803,7 +811,9 @@ def simulate(
                     if long_mask.any():
                         if fuzz:
                             fuzz_factors = torch.rand(
-                                long_mask.sum(), device=torch_device, generator=gen
+                                interval_days[long_mask].shape,
+                                device=torch_device,
+                                generator=gen,
                             )
                             interval_long = with_review_fuzz(
                                 interval_days[long_mask],
