@@ -8,6 +8,7 @@ from concurrent import futures
 from multiprocessing import get_context
 import queue
 from pathlib import Path
+import logging
 from typing import Iterable
 
 import torch
@@ -197,16 +198,72 @@ def _load_usage(
 
 def _resolve_lstm_paths(
     user_ids: list[int], benchmark_root: Path, *, short_term: bool
-) -> list[Path]:
-    paths = []
+) -> tuple[list[Path], list[int]]:
+    paths: list[Path] = []
+    kept: list[int] = []
+    missing: list[int] = []
     for user_id in user_ids:
         path = _resolve_benchmark_weights(
             user_id, benchmark_root, short_term=short_term
         )
         if path is None:
-            raise FileNotFoundError(f"LSTM weights not found for user {user_id}.")
+            missing.append(user_id)
+            continue
         paths.append(path)
-    return paths
+        kept.append(user_id)
+    if missing:
+        logging.warning(
+            "Skipping %d users missing LSTM weights: %s",
+            len(missing),
+            _format_id_list(missing),
+        )
+    return paths, kept
+
+
+def _load_fsrs6_weights(
+    user_ids: list[int],
+    *,
+    benchmark_root: Path,
+    benchmark_partition: str | None,
+    overrides: dict[str, float] | None,
+    short_term: bool,
+    device: torch.device,
+) -> tuple[torch.Tensor | None, list[int]]:
+    weights: list[torch.Tensor] = []
+    kept: list[int] = []
+    missing: list[int] = []
+    for user_id in user_ids:
+        try:
+            params = load_benchmark_weights(
+                repo_root=REPO_ROOT,
+                benchmark_root=benchmark_root,
+                environment="fsrs6",
+                user_id=user_id,
+                partition_key=benchmark_partition,
+                overrides=overrides,
+                short_term=short_term,
+            )
+        except ValueError:
+            missing.append(user_id)
+            continue
+        weights.append(torch.tensor(params, dtype=torch.float32))
+        kept.append(user_id)
+    if missing:
+        logging.warning(
+            "Skipping %d users missing FSRS-6 weights: %s",
+            len(missing),
+            _format_id_list(missing),
+        )
+    if not weights:
+        return None, []
+    return torch.stack(weights, dim=0).to(device), kept
+
+
+def _format_id_list(values: list[int], *, max_len: int = 10) -> str:
+    if len(values) <= max_len:
+        return ", ".join(str(value) for value in values)
+    head = ", ".join(str(value) for value in values[:max_len])
+    return f"{head}, ..."
 
 
 def _build_behavior_cost(
@@ -416,15 +473,6 @@ def _run_batch_core(
     progress_queue,
     device_label: str,
 ) -> None:
-    (
-        learn_costs,
-        review_costs,
-        first_rating_prob,
-        review_rating_prob,
-        learning_rating_prob,
-        relearning_rating_prob,
-        state_rating_costs,
-    ) = _load_usage(batch, args.button_usage)
     short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         args
     )
@@ -449,13 +497,64 @@ def _run_batch_core(
                     "--short-term-source sched requires --sched lstm in batched mode."
                 )
     base_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    scheduler_names = []
+    for raw in schedulers:
+        name, _, _ = parse_scheduler_spec(raw)
+        scheduler_names.append(name)
 
     for environment in envs:
+        active_batch = list(batch)
         lstm_packed: PackedLSTMWeights | None = None
-        if environment == "lstm":
-            lstm_paths = _resolve_lstm_paths(
-                batch, benchmark_root, short_term=short_term_enabled
+        lstm_paths: list[Path] | None = None
+        fsrs_weights: torch.Tensor | None = None
+        needs_lstm_weights = environment == "lstm" or "lstm" in scheduler_names
+        needs_fsrs_weights = environment == "fsrs6" or "fsrs6" in scheduler_names
+        if needs_lstm_weights:
+            lstm_paths, active_batch = _resolve_lstm_paths(
+                active_batch, benchmark_root, short_term=short_term_enabled
             )
+            if not active_batch:
+                logging.warning(
+                    "Skipping environment '%s' for users %s: no LSTM weights found.",
+                    environment,
+                    _format_id_list(batch),
+                )
+                continue
+        if needs_fsrs_weights:
+            fsrs_weights, fsrs_users = _load_fsrs6_weights(
+                active_batch,
+                benchmark_root=benchmark_root,
+                benchmark_partition=args.benchmark_partition,
+                overrides=overrides,
+                short_term=short_term_enabled,
+                device=base_device,
+            )
+            if not fsrs_users:
+                logging.warning(
+                    "Skipping environment '%s' for users %s: no FSRS-6 weights found.",
+                    environment,
+                    _format_id_list(batch),
+                )
+                continue
+            if len(fsrs_users) != len(active_batch):
+                if lstm_paths is not None:
+                    path_map = {
+                        user_id: path for user_id, path in zip(active_batch, lstm_paths)
+                    }
+                    lstm_paths = [path_map[user_id] for user_id in fsrs_users]
+                active_batch = fsrs_users
+        (
+            learn_costs,
+            review_costs,
+            first_rating_prob,
+            review_rating_prob,
+            learning_rating_prob,
+            relearning_rating_prob,
+            state_rating_costs,
+        ) = _load_usage(active_batch, args.button_usage)
+        if environment == "lstm":
+            if lstm_paths is None:
+                raise ValueError("Expected LSTM weights when environment is lstm.")
             lstm_packed = PackedLSTMWeights.from_paths(
                 lstm_paths,
                 use_duration_feature=False,
@@ -468,24 +567,9 @@ def _run_batch_core(
                 dtype=torch.float32,
             )
         elif environment == "fsrs6":
-            env_weights = torch.stack(
-                [
-                    torch.tensor(
-                        load_benchmark_weights(
-                            repo_root=REPO_ROOT,
-                            benchmark_root=benchmark_root,
-                            environment="fsrs6",
-                            user_id=user_id,
-                            partition_key=args.benchmark_partition,
-                            overrides=overrides,
-                            short_term=short_term_enabled,
-                        ),
-                        dtype=torch.float32,
-                    )
-                    for user_id in batch
-                ],
-                dim=0,
-            ).to(base_device)
+            if fsrs_weights is None:
+                raise ValueError("Expected FSRS-6 weights when environment is fsrs6.")
+            env_weights = fsrs_weights.to(base_device)
             env_ops = FSRS6BatchEnvOps(
                 weights=env_weights,
                 bounds=Bounds(),
@@ -495,8 +579,16 @@ def _run_batch_core(
         else:
             raise ValueError(f"Unsupported environment '{environment}' in batched run.")
 
+        if lstm_paths is not None and lstm_packed is None and "lstm" in scheduler_names:
+            lstm_packed = PackedLSTMWeights.from_paths(
+                lstm_paths,
+                use_duration_feature=False,
+                device=env_ops.device,
+                dtype=torch.float32,
+            )
+
         behavior, cost_model = _build_behavior_cost(
-            len(batch),
+            len(active_batch),
             deck_size=args.deck,
             learn_limit=args.learn_limit,
             review_limit=args.review_limit,
@@ -515,27 +607,12 @@ def _run_batch_core(
             name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
             if name not in {"fsrs6", "anki_sm2", "memrise", "fixed", "lstm"}:
                 raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
-            label_prefix = f"{environment} u{batch[0]}-{batch[-1]} {name}"
+            label_prefix = f"{environment} u{active_batch[0]}-{active_batch[-1]} {name}"
 
             if name == "fsrs6":
-                weights = torch.stack(
-                    [
-                        torch.tensor(
-                            load_benchmark_weights(
-                                repo_root=REPO_ROOT,
-                                benchmark_root=benchmark_root,
-                                environment="fsrs6",
-                                user_id=user_id,
-                                partition_key=args.benchmark_partition,
-                                overrides=overrides,
-                                short_term=short_term_enabled,
-                            ),
-                            dtype=torch.float32,
-                        )
-                        for user_id in batch
-                    ],
-                    dim=0,
-                ).to(env_ops.device)
+                if fsrs_weights is None:
+                    raise ValueError("Expected FSRS-6 weights for fsrs6 scheduler.")
+                weights = fsrs_weights.to(env_ops.device)
                 for dr in dr_values:
                     scheduler_ops = FSRS6BatchSchedulerOps(
                         weights=weights,
@@ -547,7 +624,7 @@ def _run_batch_core(
                     )
                     _simulate_and_log(
                         args=args,
-                        batch=batch,
+                        batch=active_batch,
                         env_ops=env_ops,
                         sched_ops=scheduler_ops,
                         behavior=behavior,
@@ -573,15 +650,7 @@ def _run_batch_core(
 
             if name == "lstm":
                 if lstm_packed is None:
-                    lstm_paths = _resolve_lstm_paths(
-                        batch, benchmark_root, short_term=short_term_enabled
-                    )
-                    lstm_packed = PackedLSTMWeights.from_paths(
-                        lstm_paths,
-                        use_duration_feature=False,
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                    )
+                    raise ValueError("Expected LSTM weights for lstm scheduler.")
                 for dr in dr_values:
                     interval_mode = (
                         "float" if short_term_source == "sched" else "integer"
@@ -597,7 +666,7 @@ def _run_batch_core(
                     )
                     _simulate_and_log(
                         args=args,
-                        batch=batch,
+                        batch=active_batch,
                         env_ops=env_ops,
                         sched_ops=sched_ops,
                         behavior=behavior,
@@ -636,7 +705,7 @@ def _run_batch_core(
                 )
                 _simulate_and_log(
                     args=args,
-                    batch=batch,
+                    batch=active_batch,
                     env_ops=env_ops,
                     sched_ops=sched_ops,
                     behavior=behavior,
@@ -669,7 +738,7 @@ def _run_batch_core(
                 )
                 _simulate_and_log(
                     args=args,
-                    batch=batch,
+                    batch=active_batch,
                     env_ops=env_ops,
                     sched_ops=sched_ops,
                     behavior=behavior,
@@ -702,7 +771,7 @@ def _run_batch_core(
                 )
                 _simulate_and_log(
                     args=args,
-                    batch=batch,
+                    batch=active_batch,
                     env_ops=env_ops,
                     sched_ops=sched_ops,
                     behavior=behavior,
