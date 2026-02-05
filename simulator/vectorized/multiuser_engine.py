@@ -114,8 +114,6 @@ def simulate_multiuser(
     )
     batch_peak_allocated = None
     batch_peak_reserved = None
-    baseline_allocated = torch.tensor(0.0, device=torch_device)
-    baseline_reserved = torch.tensor(0.0, device=torch_device)
     if batch_stats is not None and torch_device.type == "cuda":
         batch_peak_allocated = batch_stats.setdefault(
             "gpu_peak_allocated_bytes", [0 for _ in range(days)]
@@ -381,7 +379,6 @@ def simulate_multiuser(
                 exec_elapsed = elapsed_all[sel_user, sel_card]
                 exec_rating = rating_full[sel_user, sel_card]
                 exec_prev = intervals[sel_user, sel_card].to(env_dtype)
-                exec_r = r_full[sel_user, sel_card]
 
                 env_ops.update_review(
                     env_state, sel_user, sel_card, exec_elapsed, exec_rating
