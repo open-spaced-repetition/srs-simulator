@@ -18,14 +18,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import simulate as simulate_cli
-from simulator.benchmark_loader import load_benchmark_weights, parse_result_overrides
+from simulator.benchmark_loader import parse_result_overrides
 from simulator.button_usage import (
     DEFAULT_BUTTON_USAGE_PATH,
     load_button_usage_config,
     normalize_button_usage,
 )
 from simulator.math.fsrs import Bounds
-from simulator.models.lstm import _resolve_benchmark_weights
 from simulator.models.fsrs import FSRS6BatchEnvOps
 from simulator.models.lstm_batch import LSTMBatchedEnvOps, PackedLSTMWeights
 from simulator.scheduler_spec import parse_scheduler_spec
@@ -44,6 +43,11 @@ from simulator.batched_sweep.utils import (
     dr_values as _dr_values,
     format_id_list as _format_id_list,
     parse_cuda_devices as _parse_cuda_devices,
+)
+from simulator.batched_sweep.weights import (
+    load_fsrs3_weights as _load_fsrs3_weights,
+    load_fsrs6_weights as _load_fsrs6_weights,
+    resolve_lstm_paths as _resolve_lstm_paths,
 )
 
 from experiments.retention_sweep.cli_utils import (
@@ -157,120 +161,6 @@ def _load_usage(
         torch.tensor(relearning_rating_prob, dtype=torch.float32),
         torch.tensor(state_rating_costs, dtype=torch.float32),
     )
-
-
-def _resolve_lstm_paths(
-    user_ids: list[int], benchmark_root: Path, *, short_term: bool
-) -> tuple[list[Path], list[int]]:
-    paths: list[Path] = []
-    kept: list[int] = []
-    missing: list[int] = []
-    for user_id in user_ids:
-        path = _resolve_benchmark_weights(
-            user_id, benchmark_root, short_term=short_term
-        )
-        if path is None:
-            missing.append(user_id)
-            continue
-        paths.append(path)
-        kept.append(user_id)
-    if missing:
-        logging.warning(
-            "Skipping %d users missing LSTM weights: %s",
-            len(missing),
-            _format_id_list(missing),
-        )
-    return paths, kept
-
-
-def _load_fsrs6_weights(
-    user_ids: list[int],
-    *,
-    benchmark_root: Path,
-    benchmark_partition: str | None,
-    overrides: dict[str, str] | None,
-    short_term: bool,
-    device: torch.device,
-) -> tuple[torch.Tensor | None, list[int]]:
-    partition_key = benchmark_partition or "0"
-    weights: list[torch.Tensor] = []
-    kept: list[int] = []
-    missing: list[int] = []
-    for user_id in user_ids:
-        try:
-            params = load_benchmark_weights(
-                repo_root=REPO_ROOT,
-                benchmark_root=benchmark_root,
-                environment="fsrs6",
-                user_id=user_id,
-                partition_key=partition_key,
-                overrides=overrides,
-                short_term=short_term,
-            )
-        except ValueError:
-            missing.append(user_id)
-            continue
-        weights.append(torch.tensor(params, dtype=torch.float32))
-        kept.append(user_id)
-    if missing:
-        logging.warning(
-            "Skipping %d users missing FSRS-6 weights: %s",
-            len(missing),
-            _format_id_list(missing),
-        )
-    if not weights:
-        return None, []
-    return torch.stack(weights, dim=0).to(device), kept
-
-
-def _load_fsrs3_weights(
-    user_ids: list[int],
-    *,
-    benchmark_root: Path,
-    benchmark_partition: str | None,
-    overrides: dict[str, str] | None,
-    short_term: bool,
-    device: torch.device,
-) -> tuple[torch.Tensor | None, list[int]]:
-    partition_key = benchmark_partition or "0"
-    weights: list[torch.Tensor] = []
-    kept: list[int] = []
-    missing: list[int] = []
-    invalid: list[int] = []
-    for user_id in user_ids:
-        try:
-            params = load_benchmark_weights(
-                repo_root=REPO_ROOT,
-                benchmark_root=benchmark_root,
-                environment="fsrs3",
-                user_id=user_id,
-                partition_key=partition_key,
-                overrides=overrides,
-                short_term=short_term,
-            )
-        except ValueError:
-            missing.append(user_id)
-            continue
-        if len(params) != 13:
-            invalid.append(user_id)
-            continue
-        weights.append(torch.tensor(params, dtype=torch.float32))
-        kept.append(user_id)
-    if missing:
-        logging.warning(
-            "Skipping %d users missing FSRS-3 weights: %s",
-            len(missing),
-            _format_id_list(missing),
-        )
-    if invalid:
-        logging.warning(
-            "Skipping %d users with invalid FSRS-3 weights: %s",
-            len(invalid),
-            _format_id_list(invalid),
-        )
-    if not weights:
-        return None, []
-    return torch.stack(weights, dim=0).to(device), kept
 
 
 def _build_behavior_cost(
@@ -531,7 +421,8 @@ def _run_batch_core(
                 continue
         if needs_fsrs_weights:
             fsrs_weights, fsrs_users = _load_fsrs6_weights(
-                active_batch,
+                repo_root=REPO_ROOT,
+                user_ids=active_batch,
                 benchmark_root=benchmark_root,
                 benchmark_partition=args.benchmark_partition,
                 overrides=overrides,
@@ -554,7 +445,8 @@ def _run_batch_core(
                 active_batch = fsrs_users
         if needs_fsrs3_weights:
             fsrs3_weights, fsrs3_users = _load_fsrs3_weights(
-                active_batch,
+                repo_root=REPO_ROOT,
+                user_ids=active_batch,
                 benchmark_root=benchmark_root,
                 benchmark_partition=args.benchmark_partition,
                 overrides=overrides,
