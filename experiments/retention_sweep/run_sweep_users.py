@@ -22,6 +22,11 @@ from simulator.scheduler_spec import (
 )
 from simulator.retention_sweep.grid import count_dr_steps
 from simulator.retention_sweep.sspmmc import resolve_sspmmc_policy_paths
+from simulator.sweep_utils import (
+    parse_cuda_devices,
+    parse_env_overrides,
+    strip_arg_terminator,
+)
 
 from experiments.retention_sweep.cli_utils import (
     add_user_range_args,
@@ -127,30 +132,6 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     return parser.parse_known_args()
 
 
-def _parse_env_overrides(values: list[str]) -> dict[str, str]:
-    overrides: dict[str, str] = {}
-    for item in values:
-        if "=" not in item:
-            raise ValueError(f"Invalid --set-env '{item}'. Expected KEY=VALUE.")
-        key, value = item.split("=", 1)
-        if not key:
-            raise ValueError(f"Invalid --set-env '{item}'. Missing key.")
-        overrides[key] = value
-    return overrides
-
-
-def _parse_cuda_devices(raw: str | None) -> list[str]:
-    if not raw:
-        return []
-    devices = [item.strip() for item in raw.split(",") if item.strip()]
-    for device in devices:
-        if not device.isdigit():
-            raise ValueError(
-                f"Invalid --cuda-devices entry '{device}'. Expected numeric indices."
-            )
-    return devices
-
-
 def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--start-retention", type=float, default=0.50)
@@ -163,12 +144,6 @@ def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
     parser.add_argument("--sspmmc-policy-glob", default="*.json")
     parser.add_argument("--sspmmc-max", type=int, default=None)
     return parser.parse_known_args(extra_args)[0]
-
-
-def _strip_arg_terminator(extra_args: list[str]) -> list[str]:
-    if extra_args and extra_args[0] == "--":
-        return extra_args[1:]
-    return extra_args
 
 
 def _estimate_total_days(
@@ -343,7 +318,7 @@ def _run_command(
 
 def main() -> int:
     args, extra_args = parse_args()
-    extra_args = _strip_arg_terminator(extra_args)
+    extra_args = strip_arg_terminator(extra_args)
     if args.start_user < 1 or args.end_user < args.start_user:
         raise ValueError("Invalid user range.")
     if args.max_parallel < 1:
@@ -371,8 +346,8 @@ def main() -> int:
     )
 
     env = os.environ.copy()
-    env_overrides = _parse_env_overrides(args.set_env)
-    cuda_devices = _parse_cuda_devices(args.cuda_devices)
+    env_overrides = parse_env_overrides(args.set_env)
+    cuda_devices = parse_cuda_devices(args.cuda_devices)
     if cuda_devices and "CUDA_VISIBLE_DEVICES" in env_overrides:
         raise ValueError(
             "--cuda-devices cannot be combined with --set-env CUDA_VISIBLE_DEVICES."

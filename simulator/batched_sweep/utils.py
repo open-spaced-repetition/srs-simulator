@@ -2,17 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-
-def parse_cuda_devices(raw: str | None) -> list[str]:
-    if not raw:
-        return []
-    devices = [item.strip() for item in raw.split(",") if item.strip()]
-    for device in devices:
-        if not device.isdigit():
-            raise ValueError(
-                f"Invalid --cuda-devices entry '{device}'. Expected numeric indices."
-            )
-    return devices
+from simulator.sweep_utils import parse_cuda_devices
 
 
 def chunked(values: list[int], batch_size: int) -> Iterable[list[int]]:
