@@ -17,6 +17,7 @@ from simulator.batched_sweep.logging import (
     progress_callback_from_queue,
     simulate_and_log,
 )
+from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
 
 __all__ = [
     "chunked",
@@ -30,4 +31,6 @@ __all__ = [
     "load_usage",
     "progress_callback_from_queue",
     "simulate_and_log",
+    "BatchedSweepContext",
+    "run_batch_core",
 ]
