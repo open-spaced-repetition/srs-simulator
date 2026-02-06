@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.fanout import FanoutJob, create_fanout_bars, run_fanout
-from simulator.subprocess_progress import progress_event_from_payload, try_parse_json
+from simulator.subprocess_runner import run_command_with_progress
 from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
@@ -242,78 +241,14 @@ def _run_command(
     overall_bar: tqdm | None,
     progress_lock: threading.RLock | None,
 ) -> int:
-    if progress_bar is None:
-        result = subprocess.run(cmd, check=False, env=env)
-        return result.returncode
-
-    process = subprocess.Popen(
-        cmd,
+    return run_command_with_progress(
+        cmd=cmd,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=None,
-        text=True,
-        bufsize=1,
+        progress_bar=progress_bar,
+        overall_bar=overall_bar,
+        progress_lock=progress_lock,
+        write_line=progress_bar.write if progress_bar is not None else None,
     )
-    last_label = None
-    overall_label = None
-    overall_completed = 0
-    if process.stdout is not None:
-        for line in process.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            payload = try_parse_json(line)
-            if payload is None:
-                if progress_lock is not None:
-                    with progress_lock:
-                        progress_bar.write(line)
-                else:
-                    progress_bar.write(line)
-                continue
-            event = progress_event_from_payload(payload)
-            if event is None:
-                continue
-            label = event.label
-            completed = event.completed
-            total = event.total
-            if progress_lock is not None:
-                progress_lock.acquire()
-            try:
-                if overall_bar is not None:
-                    if label and label != overall_label:
-                        overall_label = label
-                        overall_completed = 0
-                    if completed < overall_completed:
-                        overall_completed = 0
-                    delta_overall = completed - overall_completed
-                    if delta_overall > 0:
-                        overall_bar.update(delta_overall)
-                        overall_completed = completed
-
-                if label and label != last_label:
-                    reset_total = total if total > 0 else progress_bar.total
-                    progress_bar.reset(total=reset_total)
-                    progress_bar.set_description_str(label)
-                    last_label = label
-                    if completed > 0:
-                        progress_bar.update(completed)
-                    else:
-                        progress_bar.refresh()
-                    continue
-                if total > 0 and progress_bar.total != total:
-                    progress_bar.total = total
-                if completed < progress_bar.n:
-                    progress_bar.reset(total=progress_bar.total)
-                    if completed > 0:
-                        progress_bar.update(completed)
-                    else:
-                        progress_bar.refresh()
-                elif completed > progress_bar.n:
-                    progress_bar.update(completed - progress_bar.n)
-            finally:
-                if progress_lock is not None:
-                    progress_lock.release()
-    return process.wait()
 
 
 def main() -> int:
