@@ -11,16 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from simulator.benchmark_loader import parse_result_overrides
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
-from simulator.scheduler_spec import parse_scheduler_spec
-from simulator.batched_sweep.utils import (
-    chunked as _chunked,
-    dr_values as _dr_values,
-    format_id_list as _format_id_list,
-    parse_cuda_devices as _parse_cuda_devices,
-)
-from simulator.batched_sweep.runner import BatchedSweepContext
+from simulator.batched_sweep.plan import build_batched_sweep_plan
 from simulator.batched_sweep.execution import run_batches
 
 from experiments.retention_sweep.cli_utils import (
@@ -96,75 +88,28 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     envs = parse_csv(args.env)
-    if not envs:
-        raise ValueError("No environments specified.")
-    for env in envs:
-        if env not in {"lstm", "fsrs6"}:
-            raise ValueError(
-                "Batched retention sweep supports only lstm or fsrs6 environments."
-            )
     schedulers = parse_csv(args.sched)
-    if not schedulers:
-        raise ValueError("No schedulers specified.")
-    if args.batch_size < 1:
-        raise ValueError("--batch-size must be >= 1.")
-    if args.torch_device and args.cuda_devices:
-        raise ValueError("--torch-device cannot be combined with --cuda-devices.")
-
-    user_ids = list(range(args.start_user, args.end_user + 1))
-    if not user_ids:
-        raise ValueError("Empty user range.")
-
-    benchmark_root = args.srs_benchmark_root or (REPO_ROOT.parent / "srs-benchmark")
-    benchmark_root = benchmark_root.resolve()
-    overrides = parse_result_overrides(args.benchmark_result)
-
-    log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
-    log_root.mkdir(parents=True, exist_ok=True)
-    batch_log_root = log_root / "batch_logs"
-    batch_log_root.mkdir(parents=True, exist_ok=True)
-
-    dr_values = _dr_values(args.start_retention, args.end_retention, args.step)
-    devices = _parse_cuda_devices(args.cuda_devices)
-    if devices and not torch.cuda.is_available():
-        raise ValueError("--cuda-devices was provided but CUDA is not available.")
-    device = torch.device(args.torch_device) if args.torch_device else None
-
-    batches = list(_chunked(user_ids, args.batch_size))
-    runs_per_batch = 0
-    for scheduler in schedulers:
-        name, _, _ = parse_scheduler_spec(scheduler)
-        if name in {"fsrs6", "fsrs3", "lstm"}:
-            runs_per_batch += len(dr_values)
-        else:
-            runs_per_batch += 1
-    runs_per_batch *= len(envs)
-    total_user_days = sum(len(batch) * args.days * runs_per_batch for batch in batches)
+    plan = build_batched_sweep_plan(
+        repo_root=REPO_ROOT,
+        args=args,
+        envs=envs,
+        schedulers=schedulers,
+    )
     overall = None
     if not args.no_progress:
         overall = tqdm(
-            total=total_user_days,
+            total=plan.total_user_days,
             desc="Overall",
             unit="user-day",
             leave=True,
         )
 
-    ctx = BatchedSweepContext(
-        repo_root=REPO_ROOT,
-        benchmark_root=benchmark_root,
-        overrides=overrides,
-        log_root=log_root,
-        batch_log_root=batch_log_root,
-        envs=envs,
-        schedulers=schedulers,
-        dr_values=dr_values,
-    )
     run_batches(
         args=args,
-        ctx=ctx,
-        batches=batches,
-        devices=devices,
-        device=device,
+        ctx=plan.ctx,
+        batches=plan.batches,
+        devices=plan.devices,
+        device=plan.device,
         overall=overall,
     )
     if overall is not None:
