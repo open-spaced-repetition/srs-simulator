@@ -20,6 +20,10 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.retention_sweep.grid import dr_values as grid_dr_values
+from simulator.retention_sweep.sspmmc import (
+    resolve_sspmmc_policy_paths as resolve_sspmmc_policy_paths,
+)
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from experiments.retention_sweep.cli_utils import (
     add_benchmark_args,
@@ -157,33 +161,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def _dr_values(start: float, end: float, step: float) -> List[float]:
-    values: List[float] = []
-    if step == 0:
-        return values
-    value = round(start, 2)
-    end = round(end, 2)
-    epsilon = abs(step) * 1e-6
-    if step > 0:
-        while value <= end + epsilon:
-            values.append(value)
-            next_value = round(value + step, 2)
-            if next_value == value:
-                raise SystemExit(
-                    "Retention step is too small after rounding; "
-                    "use a step of at least 0.01."
-                )
-            value = next_value
-    else:
-        while value >= end - epsilon:
-            values.append(value)
-            next_value = round(value + step, 2)
-            if next_value == value:
-                raise SystemExit(
-                    "Retention step is too small after rounding; "
-                    "use a step of at least 0.01."
-                )
-            value = next_value
-    return values
+    # Backwards-compatible wrapper: keep SystemExit error shape for CLI users.
+    try:
+        return list(grid_dr_values(start, end, step))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _progress_label(args: argparse.Namespace) -> str:
@@ -263,34 +245,18 @@ def _make_progress_callback(
 def _resolve_policy_paths(
     args: argparse.Namespace, repo_root: Path, run_sspmmc: bool
 ) -> List[Path]:
-    if args.sspmmc_policies:
-        paths = [Path(path) for path in parse_csv(args.sspmmc_policies)]
-        return [path.resolve() for path in paths]
-
-    if args.sspmmc_policy:
-        return [args.sspmmc_policy.resolve()]
-
-    policy_dir = args.sspmmc_policy_dir
-    if policy_dir is None and run_sspmmc:
-        user_id = args.user_id or 1
-        candidate = (
-            repo_root.parent
-            / "SSP-MMC-FSRS"
-            / "outputs"
-            / "policies"
-            / f"user_{user_id}"
+    return list(
+        resolve_sspmmc_policy_paths(
+            repo_root=repo_root,
+            user_id=args.user_id or 1,
+            run_sspmmc=run_sspmmc,
+            sspmmc_policies=args.sspmmc_policies,
+            sspmmc_policy=args.sspmmc_policy,
+            sspmmc_policy_dir=args.sspmmc_policy_dir,
+            sspmmc_policy_glob=args.sspmmc_policy_glob,
+            sspmmc_max=args.sspmmc_max,
         )
-        if candidate.exists():
-            policy_dir = candidate
-
-    if policy_dir is None:
-        return []
-
-    policy_dir = policy_dir.resolve()
-    paths = sorted(policy_dir.glob(args.sspmmc_policy_glob))
-    if args.sspmmc_max is not None:
-        paths = paths[: args.sspmmc_max]
-    return paths
+    )
 
 
 def _run_once(

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
-import math
 import os
 import subprocess
 import sys
@@ -21,6 +20,8 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.retention_sweep.grid import count_dr_steps
+from simulator.retention_sweep.sspmmc import resolve_sspmmc_policy_paths
 
 from experiments.retention_sweep.cli_utils import (
     add_user_range_args,
@@ -170,53 +171,6 @@ def _strip_arg_terminator(extra_args: list[str]) -> list[str]:
     return extra_args
 
 
-def _resolve_sspmmc_policies(
-    overrides: argparse.Namespace,
-    repo_root: Path,
-    user_id: int,
-    run_sspmmc: bool,
-) -> list[Path]:
-    if overrides.sspmmc_policies:
-        paths = [Path(path) for path in parse_csv(overrides.sspmmc_policies)]
-        return [path.resolve() for path in paths]
-
-    if overrides.sspmmc_policy:
-        return [overrides.sspmmc_policy.resolve()]
-
-    policy_dir = overrides.sspmmc_policy_dir
-    if policy_dir is None and run_sspmmc:
-        candidate = (
-            repo_root.parent
-            / "SSP-MMC-FSRS"
-            / "outputs"
-            / "policies"
-            / f"user_{user_id}"
-        )
-        if candidate.exists():
-            policy_dir = candidate
-
-    if policy_dir is None:
-        return []
-
-    policy_dir = policy_dir.resolve()
-    paths = sorted(policy_dir.glob(overrides.sspmmc_policy_glob))
-    if overrides.sspmmc_max is not None:
-        paths = paths[: overrides.sspmmc_max]
-    return paths
-
-
-def _count_dr_steps(start: float, end: float, step: float) -> int:
-    if step == 0:
-        return 0
-    if step > 0 and start > end:
-        return 0
-    if step < 0 and start < end:
-        return 0
-    span_abs = abs(end - start)
-    step_abs = abs(step)
-    return int(math.floor(span_abs / step_abs + 1e-9)) + 1
-
-
 def _estimate_total_days(
     user_ids: list[int],
     environments: list[str],
@@ -243,7 +197,7 @@ def _estimate_total_days(
     run_sspmmc = has_sspmmc
     run_fixed = bool(fixed_schedulers)
     run_non_dr = bool(non_dr_schedulers)
-    dr_steps = _count_dr_steps(
+    dr_steps = count_dr_steps(
         overrides.start_retention, overrides.end_retention, overrides.step
     )
     base_runs = 0
@@ -258,11 +212,15 @@ def _estimate_total_days(
     for user_id in user_ids:
         sspmmc_runs = 0
         if run_sspmmc:
-            policies = _resolve_sspmmc_policies(
-                overrides,
-                repo_root,
-                user_id,
-                run_sspmmc,
+            policies = resolve_sspmmc_policy_paths(
+                repo_root=repo_root,
+                user_id=user_id,
+                run_sspmmc=run_sspmmc,
+                sspmmc_policies=overrides.sspmmc_policies,
+                sspmmc_policy=overrides.sspmmc_policy,
+                sspmmc_policy_dir=overrides.sspmmc_policy_dir,
+                sspmmc_policy_glob=overrides.sspmmc_policy_glob,
+                sspmmc_max=overrides.sspmmc_max,
             )
             sspmmc_runs = len(policies)
         total_runs = base_runs + sspmmc_runs
