@@ -19,11 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import simulate as simulate_cli
 from simulator.benchmark_loader import parse_result_overrides
-from simulator.button_usage import (
-    DEFAULT_BUTTON_USAGE_PATH,
-    load_button_usage_config,
-    normalize_button_usage,
-)
+from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.math.fsrs import Bounds
 from simulator.models.fsrs import FSRS6BatchEnvOps
 from simulator.models.lstm_batch import LSTMBatchedEnvOps, PackedLSTMWeights
@@ -43,6 +39,10 @@ from simulator.batched_sweep.utils import (
     dr_values as _dr_values,
     format_id_list as _format_id_list,
     parse_cuda_devices as _parse_cuda_devices,
+)
+from simulator.batched_sweep.behavior_cost import (
+    build_behavior_cost as _build_behavior_cost,
+    load_usage as _load_usage,
 )
 from simulator.batched_sweep.weights import (
     load_fsrs3_weights as _load_fsrs3_weights,
@@ -118,92 +118,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
-
-
-def _load_usage(
-    user_ids: list[int], button_usage: Path | None
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
-    learn_costs = []
-    review_costs = []
-    first_rating_prob = []
-    review_rating_prob = []
-    learning_rating_prob = []
-    relearning_rating_prob = []
-    state_rating_costs = []
-    for user_id in user_ids:
-        config = (
-            load_button_usage_config(button_usage, user_id)
-            if button_usage is not None
-            else None
-        )
-        usage = normalize_button_usage(config)
-        learn_costs.append(usage["learn_costs"])
-        review_costs.append(usage["review_costs"])
-        first_rating_prob.append(usage["first_rating_prob"])
-        review_rating_prob.append(usage["review_rating_prob"])
-        learning_rating_prob.append(usage["learning_rating_prob"])
-        relearning_rating_prob.append(usage["relearning_rating_prob"])
-        state_rating_costs.append(usage["state_rating_costs"])
-    return (
-        torch.tensor(learn_costs, dtype=torch.float32),
-        torch.tensor(review_costs, dtype=torch.float32),
-        torch.tensor(first_rating_prob, dtype=torch.float32),
-        torch.tensor(review_rating_prob, dtype=torch.float32),
-        torch.tensor(learning_rating_prob, dtype=torch.float32),
-        torch.tensor(relearning_rating_prob, dtype=torch.float32),
-        torch.tensor(state_rating_costs, dtype=torch.float32),
-    )
-
-
-def _build_behavior_cost(
-    user_count: int,
-    *,
-    deck_size: int,
-    learn_limit: int,
-    review_limit: int | None,
-    cost_limit_minutes: float | None,
-    learn_costs: torch.Tensor,
-    review_costs: torch.Tensor,
-    first_rating_prob: torch.Tensor,
-    review_rating_prob: torch.Tensor,
-    learning_rating_prob: torch.Tensor,
-    relearning_rating_prob: torch.Tensor,
-    state_rating_costs: torch.Tensor,
-    short_term: bool,
-) -> tuple[MultiUserBehavior, MultiUserCost]:
-    max_reviews = review_limit if review_limit is not None else deck_size
-    max_cost = cost_limit_minutes * 60.0 if cost_limit_minutes is not None else math.inf
-    if short_term:
-        learn_costs = state_rating_costs[:, 0]
-        review_costs = state_rating_costs[:, 1]
-    behavior = MultiUserBehavior(
-        attendance_prob=torch.full((user_count,), 1.0),
-        lazy_good_bias=torch.zeros(user_count),
-        max_new_per_day=torch.full((user_count,), learn_limit, dtype=torch.int64),
-        max_reviews_per_day=torch.full((user_count,), max_reviews, dtype=torch.int64),
-        max_cost_per_day=torch.full((user_count,), max_cost),
-        success_weights=review_rating_prob,
-        learning_success_weights=learning_rating_prob,
-        relearning_success_weights=relearning_rating_prob,
-        first_rating_prob=first_rating_prob,
-    )
-    cost = MultiUserCost(
-        base=torch.zeros(user_count),
-        penalty=torch.zeros(user_count),
-        learn_costs=learn_costs,
-        review_costs=review_costs,
-        learning_review_costs=state_rating_costs[:, 0],
-        relearning_review_costs=state_rating_costs[:, 2],
-    )
-    return behavior, cost
 
 
 def _progress_callback_from_queue(

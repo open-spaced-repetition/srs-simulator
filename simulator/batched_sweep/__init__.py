@@ -9,6 +9,10 @@ from simulator.batched_sweep.weights import (
     load_fsrs6_weights,
     resolve_lstm_paths,
 )
+from simulator.batched_sweep.behavior_cost import (
+    build_behavior_cost,
+    load_usage,
+)
 
 __all__ = [
     "chunked",
@@ -18,4 +22,6 @@ __all__ = [
     "load_fsrs3_weights",
     "load_fsrs6_weights",
     "resolve_lstm_paths",
+    "build_behavior_cost",
+    "load_usage",
 ]
