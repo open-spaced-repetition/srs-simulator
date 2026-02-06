@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import os
 import subprocess
 import sys
@@ -15,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from simulator.fanout import FanoutJob, create_fanout_bars, run_fanout
 from simulator.subprocess_progress import progress_event_from_payload, try_parse_json
 from simulator.scheduler_spec import (
     parse_scheduler_spec,
@@ -341,13 +341,6 @@ def _run_command(
     return process.wait()
 
 
-def _reset_worker_bar(progress_bar: tqdm, label: str | None = None) -> None:
-    progress_bar.reset(total=0)
-    if label is not None:
-        progress_bar.set_description_str(label)
-    progress_bar.refresh()
-
-
 def main() -> int:
     args, extra_args = parse_args()
     extra_args = _strip_arg_terminator(extra_args)
@@ -408,98 +401,26 @@ def main() -> int:
             sweep_overrides,
             repo_root,
         )
-    overall_bar = None
-    users_position = 0
-    if show_overall:
-        overall_bar = tqdm(
-            total=overall_total,
-            desc="overall",
-            unit="day",
-            file=sys.stderr,
-            ascii=True,
-            position=0,
-            leave=True,
-        )
-        users_position = 1
-
-    progress = tqdm(
-        total=len(user_ids),
-        desc="users",
-        unit="user",
-        file=sys.stderr,
-        ascii=True,
-        position=users_position,
-        leave=True,
+    bars = create_fanout_bars(
+        user_count=len(user_ids),
+        show_overall=show_overall,
+        overall_total=overall_total,
+        use_parent_progress=use_parent_progress,
+        max_parallel=args.max_parallel,
     )
-    worker_bars: dict[int, tqdm] = {}
     try:
-        if args.dry_run or args.max_parallel == 1:
-            failures = 0
-            for index, user_id in enumerate(user_ids):
-                device = None
-                worker_env = env
-                if cuda_devices:
-                    device = cuda_devices[index % len(cuda_devices)]
-                    worker_env = env.copy()
-                    worker_env["CUDA_VISIBLE_DEVICES"] = device
-                cmd = _build_command(
-                    args.uv_cmd,
-                    script_path,
-                    args.env,
-                    args.sched,
-                    user_id,
-                    extra_args,
-                    disable_progress,
-                    not enable_child_summary,
-                    False,
-                    torch_device="cuda:0" if device is not None else None,
-                    inject_torch_device=inject_torch_device,
-                )
-                if args.dry_run or show_commands:
-                    prefix = (
-                        f"CUDA_VISIBLE_DEVICES={device} " if device is not None else ""
-                    )
-                    progress.write(f"[{user_id}] {prefix}{' '.join(cmd)}")
-                if not args.dry_run:
-                    returncode = _run_command(cmd, worker_env, None, None, None)
-                    if returncode != 0:
-                        failures += 1
-                        progress.write(
-                            f"[{user_id}] FAILED with exit code {returncode}"
-                        )
-                        if args.fail_fast:
-                            return returncode
-                progress.update(1)
-                if args.sleep_seconds > 0:
-                    time.sleep(args.sleep_seconds)
-            if failures:
-                print(f"Completed with {failures} failures.")
-                return 1
-            return 0
 
-        failures = 0
-        first_failure_code: int | None = None
-        stop_scheduling = False
-        user_iter = iter(user_ids)
-        worker_position_base = users_position + 1
-        available_positions = list(
-            range(worker_position_base, worker_position_base + args.max_parallel)
-        )
-        progress_lock = threading.RLock()
-        tqdm.set_lock(progress_lock)
-
-        def submit_next(executor: concurrent.futures.Executor) -> bool:
-            try:
-                user_id = next(user_iter)
-            except StopIteration:
-                return False
-            if not available_positions:
-                return False
-            position = available_positions.pop(0)
+        def build_job(user_id: int, slot: int | None, index: int) -> FanoutJob:
             device = None
             if cuda_devices:
-                device_index = (position - worker_position_base) % len(cuda_devices)
-                device = cuda_devices[device_index]
+                if slot is None:
+                    device = cuda_devices[index % len(cuda_devices)]
+                else:
+                    device = cuda_devices[slot % len(cuda_devices)]
+            worker_env = env
+            if device is not None:
+                worker_env = env.copy()
+                worker_env["CUDA_VISIBLE_DEVICES"] = device
             cmd = _build_command(
                 args.uv_cmd,
                 script_path,
@@ -513,99 +434,33 @@ def main() -> int:
                 torch_device="cuda:0" if device is not None else None,
                 inject_torch_device=inject_torch_device,
             )
-            if show_commands:
-                prefix = f"CUDA_VISIBLE_DEVICES={device} " if device is not None else ""
-                progress.write(f"[{user_id}] {prefix}{' '.join(cmd)}")
-            progress_bar = None
-            if use_parent_progress:
-                progress_bar = worker_bars.get(position)
-                if progress_bar is None:
-                    progress_bar = tqdm(
-                        total=0,
-                        desc=f"u{user_id}",
-                        unit="day",
-                        file=sys.stderr,
-                        ascii=True,
-                        position=position,
-                        leave=False,
-                    )
-                    worker_bars[position] = progress_bar
-                else:
-                    _reset_worker_bar(progress_bar, f"u{user_id}")
-                progress_bar.refresh()
-            worker_env = env
-            if device is not None:
-                worker_env = env.copy()
-                worker_env["CUDA_VISIBLE_DEVICES"] = device
-            future = executor.submit(
-                _run_command,
-                cmd,
-                worker_env,
-                progress_bar,
-                overall_bar,
-                progress_lock if use_parent_progress else None,
+            prefix = f"CUDA_VISIBLE_DEVICES={device} " if device is not None else ""
+            return FanoutJob(
+                user_id=user_id, cmd=cmd, env=worker_env, echo_prefix=prefix
             )
-            pending[future] = (user_id, position)
-            if args.sleep_seconds > 0:
-                time.sleep(args.sleep_seconds)
-            return True
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=args.max_parallel
-        ) as executor:
-            pending: dict[concurrent.futures.Future[int], tuple[int, int]] = {}
-            for _ in range(args.max_parallel):
-                if not submit_next(executor):
-                    break
-            while pending:
-                done, _ = concurrent.futures.wait(
-                    pending,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                for future in done:
-                    user_id, position = pending.pop(future)
-                    try:
-                        returncode = future.result()
-                    except concurrent.futures.CancelledError:
-                        progress.update(1)
-                        if use_parent_progress and position in worker_bars:
-                            _reset_worker_bar(worker_bars[position], "idle")
-                        available_positions.append(position)
-                        continue
-                    except (
-                        Exception
-                    ) as exc:  # pragma: no cover - unexpected subprocess error
-                        failures += 1
-                        progress.write(f"[{user_id}] FAILED with exception: {exc}")
-                        if first_failure_code is None:
-                            first_failure_code = 1
-                        if args.fail_fast:
-                            stop_scheduling = True
-                        progress.update(1)
-                        if use_parent_progress and position in worker_bars:
-                            _reset_worker_bar(worker_bars[position], "idle")
-                        available_positions.append(position)
-                        continue
-                    if returncode != 0:
-                        failures += 1
-                        progress.write(
-                            f"[{user_id}] FAILED with exit code {returncode}"
-                        )
-                        if first_failure_code is None:
-                            first_failure_code = returncode
-                        if args.fail_fast:
-                            stop_scheduling = True
-                    progress.update(1)
-                    if use_parent_progress and position in worker_bars:
-                        _reset_worker_bar(worker_bars[position], "idle")
-                    available_positions.append(position)
-                if stop_scheduling:
-                    for future in list(pending):
-                        future.cancel()
-                    continue
-                while len(pending) < args.max_parallel:
-                    if not submit_next(executor):
-                        break
+        def run_job(
+            job: FanoutJob,
+            progress_bar: tqdm | None,
+            overall_bar: tqdm | None,
+            progress_lock: threading.RLock | None,
+        ) -> int:
+            return _run_command(
+                job.cmd, job.env, progress_bar, overall_bar, progress_lock
+            )
+
+        failures, first_failure_code = run_fanout(
+            user_ids=user_ids,
+            max_parallel=args.max_parallel,
+            dry_run=args.dry_run,
+            show_commands=show_commands,
+            fail_fast=args.fail_fast,
+            sleep_seconds=args.sleep_seconds,
+            use_parent_progress=use_parent_progress,
+            bars=bars,
+            build_job=build_job,
+            run_job=run_job,
+        )
 
         if failures:
             print(f"Completed with {failures} failures.")
@@ -614,12 +469,7 @@ def main() -> int:
             return 1
         return 0
     finally:
-        progress.close()
-        if overall_bar is not None:
-            overall_bar.close()
-        if use_parent_progress:
-            for bar in worker_bars.values():
-                bar.close()
+        bars.close()
 
 
 if __name__ == "__main__":
