@@ -13,6 +13,10 @@ from simulator.batched_sweep.behavior_cost import (
     build_behavior_cost,
     load_usage,
 )
+from simulator.batched_sweep.logging import (
+    progress_callback_from_queue,
+    simulate_and_log,
+)
 
 __all__ = [
     "chunked",
@@ -24,4 +28,6 @@ __all__ = [
     "resolve_lstm_paths",
     "build_behavior_cost",
     "load_usage",
+    "progress_callback_from_queue",
+    "simulate_and_log",
 ]
