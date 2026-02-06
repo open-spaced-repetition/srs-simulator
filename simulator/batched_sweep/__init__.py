@@ -18,6 +18,7 @@ from simulator.batched_sweep.logging import (
     simulate_and_log,
 )
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
+from simulator.batched_sweep.execution import LocalProgressQueue, run_batches
 
 __all__ = [
     "chunked",
@@ -33,4 +34,6 @@ __all__ = [
     "simulate_and_log",
     "BatchedSweepContext",
     "run_batch_core",
+    "LocalProgressQueue",
+    "run_batches",
 ]

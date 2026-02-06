@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from concurrent import futures
-from multiprocessing import get_context
-import queue
 from pathlib import Path
 import logging
 import torch
@@ -23,7 +20,8 @@ from simulator.batched_sweep.utils import (
     format_id_list as _format_id_list,
     parse_cuda_devices as _parse_cuda_devices,
 )
-from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
+from simulator.batched_sweep.runner import BatchedSweepContext
+from simulator.batched_sweep.execution import run_batches
 
 from experiments.retention_sweep.cli_utils import (
     add_benchmark_args,
@@ -95,83 +93,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _run_batch_core(
-    *,
-    args: argparse.Namespace,
-    batch: list[int],
-    benchmark_root: Path,
-    overrides: dict[str, str],
-    log_root: Path,
-    batch_log_root: Path,
-    dr_values: list[float],
-    device: torch.device | None,
-    progress: bool,
-    progress_queue,
-    device_label: str,
-) -> None:
-    ctx = BatchedSweepContext(
-        repo_root=REPO_ROOT,
-        benchmark_root=benchmark_root,
-        overrides=overrides,
-        log_root=log_root,
-        batch_log_root=batch_log_root,
-        envs=parse_csv(args.env),
-        schedulers=parse_csv(args.sched),
-        dr_values=dr_values,
-    )
-    run_batch_core(
-        args=args,
-        ctx=ctx,
-        batch=batch,
-        device=device,
-        progress=progress,
-        progress_queue=progress_queue,
-        device_label=device_label,
-    )
-
-
-def _run_batch_worker(
-    *,
-    args: argparse.Namespace,
-    batch: list[int],
-    benchmark_root: Path,
-    overrides: dict[str, str],
-    log_root: Path,
-    batch_log_root: Path,
-    dr_values: list[float],
-    device_str: str,
-    progress_queue,
-) -> None:
-    device = torch.device(device_str)
-    if device.type == "cuda":
-        torch.cuda.set_device(device)
-    _run_batch_core(
-        args=args,
-        batch=batch,
-        benchmark_root=benchmark_root,
-        overrides=overrides,
-        log_root=log_root,
-        batch_log_root=batch_log_root,
-        dr_values=dr_values,
-        device=device,
-        progress=False,
-        progress_queue=progress_queue,
-        device_label=device_str,
-    )
-
-
-class _LocalProgressQueue:
-    def __init__(self, overall: tqdm) -> None:
-        self._overall = overall
-
-    def put(self, message) -> None:
-        if not isinstance(message, tuple):
-            return
-        if message[0] != "overall":
-            return
-        self._overall.update(message[1])
-
-
 def main() -> int:
     args = parse_args()
     envs = parse_csv(args.env)
@@ -228,112 +149,24 @@ def main() -> int:
             leave=True,
         )
 
-    if devices and len(devices) > 1:
-        ctx = get_context("spawn")
-        manager = ctx.Manager() if overall is not None else None
-        progress_queue = manager.Queue() if manager is not None else None
-        gpu_bars: dict[str, tqdm] = {}
-        if overall is not None:
-            for idx, dev in enumerate(devices, start=1):
-                label = f"cuda:{dev}"
-                gpu_bars[label] = tqdm(
-                    total=0,
-                    desc=label,
-                    unit="day",
-                    position=idx,
-                    leave=False,
-                )
-
-        def _drain_progress_queue() -> None:
-            if overall is None or progress_queue is None:
-                return
-            while True:
-                try:
-                    message = progress_queue.get_nowait()
-                except queue.Empty:
-                    break
-                if not isinstance(message, tuple):
-                    continue
-                kind = message[0]
-                if kind == "overall":
-                    overall.update(message[1])
-                    continue
-                if kind == "start":
-                    _, device_label, run_label, total_days = message
-                    bar = gpu_bars.get(device_label)
-                    if bar is None:
-                        bar = tqdm(
-                            total=0,
-                            desc=device_label,
-                            unit="day",
-                            leave=False,
-                        )
-                        gpu_bars[device_label] = bar
-                    bar.reset(total=int(total_days))
-                    bar.set_description_str(f"{device_label} {run_label}")
-                    bar.refresh()
-                    continue
-                if kind == "gpu":
-                    _, device_label, delta = message
-                    bar = gpu_bars.get(device_label)
-                    if bar is not None:
-                        bar.update(int(delta))
-                    continue
-
-        pending: set[futures.Future] = set()
-        try:
-            with futures.ProcessPoolExecutor(
-                max_workers=len(devices),
-                mp_context=ctx,
-            ) as executor:
-                for batch_idx, batch in enumerate(batches):
-                    device_str = f"cuda:{devices[batch_idx % len(devices)]}"
-                    pending.add(
-                        executor.submit(
-                            _run_batch_worker,
-                            args=args,
-                            batch=batch,
-                            benchmark_root=benchmark_root,
-                            overrides=overrides,
-                            log_root=log_root,
-                            batch_log_root=batch_log_root,
-                            dr_values=dr_values,
-                            device_str=device_str,
-                            progress_queue=progress_queue,
-                        )
-                    )
-                while pending:
-                    done, pending = futures.wait(
-                        pending, timeout=0.1, return_when=futures.FIRST_COMPLETED
-                    )
-                    _drain_progress_queue()
-                    for task in done:
-                        task.result()
-                _drain_progress_queue()
-        finally:
-            for bar in gpu_bars.values():
-                bar.close()
-            if manager is not None:
-                manager.shutdown()
-    else:
-        batch_device = torch.device(f"cuda:{devices[0]}") if devices else device
-        for batch in batches:
-            progress_queue = (
-                _LocalProgressQueue(overall) if overall is not None else None
-            )
-            _run_batch_core(
-                args=args,
-                batch=batch,
-                benchmark_root=benchmark_root,
-                overrides=overrides,
-                log_root=log_root,
-                batch_log_root=batch_log_root,
-                dr_values=dr_values,
-                device=batch_device,
-                progress=not args.no_progress,
-                progress_queue=progress_queue,
-                device_label=str(batch_device or "device"),
-            )
+    ctx = BatchedSweepContext(
+        repo_root=REPO_ROOT,
+        benchmark_root=benchmark_root,
+        overrides=overrides,
+        log_root=log_root,
+        batch_log_root=batch_log_root,
+        envs=envs,
+        schedulers=schedulers,
+        dr_values=dr_values,
+    )
+    run_batches(
+        args=args,
+        ctx=ctx,
+        batches=batches,
+        devices=devices,
+        device=device,
+        overall=overall,
+    )
     if overall is not None:
         overall.close()
     return 0
