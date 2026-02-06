@@ -20,6 +20,10 @@ from simulator.scheduler_spec import (
     scheduler_uses_desired_retention,
 )
 from simulator.retention_sweep.grid import count_dr_steps
+from simulator.retention_sweep.overrides import (
+    RunSweepOverrides,
+    parse_run_sweep_overrides,
+)
 from simulator.retention_sweep.sspmmc import resolve_sspmmc_policy_paths
 from simulator.sweep_utils import (
     parse_cuda_devices,
@@ -33,7 +37,6 @@ from experiments.retention_sweep.cli_utils import (
     has_flag,
     parse_csv,
 )
-from simulator.defaults import DEFAULT_DAYS
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
@@ -131,25 +134,11 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     return parser.parse_known_args()
 
 
-def _parse_run_sweep_overrides(extra_args: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--start-retention", type=float, default=0.50)
-    parser.add_argument("--end-retention", type=float, default=0.98)
-    parser.add_argument("--step", type=float, default=0.02)
-    parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
-    parser.add_argument("--sspmmc-policy", type=Path, default=None)
-    parser.add_argument("--sspmmc-policy-dir", type=Path, default=None)
-    parser.add_argument("--sspmmc-policies", default=None)
-    parser.add_argument("--sspmmc-policy-glob", default="*.json")
-    parser.add_argument("--sspmmc-max", type=int, default=None)
-    return parser.parse_known_args(extra_args)[0]
-
-
 def _estimate_total_days(
     user_ids: list[int],
     environments: list[str],
     schedulers: list[str],
-    overrides: argparse.Namespace,
+    overrides: RunSweepOverrides,
     repo_root: Path,
 ) -> int:
     scheduler_specs = [parse_scheduler_spec(item) for item in schedulers]
@@ -264,7 +253,7 @@ def main() -> int:
         raise ValueError("--mps-active-thread-percentage must be between 1 and 100.")
 
     script_path = Path("experiments") / "retention_sweep" / "run_sweep.py"
-    sweep_overrides = _parse_run_sweep_overrides(extra_args)
+    sweep_overrides = parse_run_sweep_overrides(extra_args)
     repo_root = Path(__file__).resolve().parents[2]
 
     parallel = args.max_parallel > 1 and not args.dry_run

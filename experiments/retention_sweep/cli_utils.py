@@ -9,11 +9,14 @@ from simulator.defaults import (
     DEFAULT_DECK_SIZE,
     DEFAULT_DAYS,
     DEFAULT_END_USER,
+    DEFAULT_END_RETENTION,
     DEFAULT_LEARN_LIMIT,
     DEFAULT_PRIORITY,
+    DEFAULT_RETENTION_STEP,
     DEFAULT_REVIEW_LIMIT,
     DEFAULT_SCHEDULER_PRIORITY,
     DEFAULT_SEED,
+    DEFAULT_START_RETENTION,
     DEFAULT_SHORT_TERM_LOOPS_LIMIT,
 )
 
@@ -32,9 +35,9 @@ def add_user_range_args(
 def add_retention_range_args(
     parser: argparse.ArgumentParser,
     *,
-    start_default: float = 0.50,
-    end_default: float = 0.98,
-    step_default: float = 0.02,
+    start_default: float = DEFAULT_START_RETENTION,
+    end_default: float = DEFAULT_END_RETENTION,
+    step_default: float = DEFAULT_RETENTION_STEP,
 ) -> None:
     parser.add_argument(
         "--start-retention",
