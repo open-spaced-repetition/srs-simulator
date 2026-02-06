@@ -34,7 +34,7 @@ from simulator.scheduler_spec import parse_scheduler_spec
 from simulator.scheduler_spec import normalize_fixed_interval
 from simulator.schedulers.anki_sm2 import AnkiSM2BatchSchedulerOps, AnkiSM2Scheduler
 from simulator.schedulers.fixed import FixedBatchSchedulerOps
-from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
+from simulator.schedulers.fsrs import FSRS3BatchSchedulerOps, FSRS6BatchSchedulerOps
 from simulator.schedulers.lstm import LSTMBatchSchedulerOps
 from simulator.schedulers.memrise import MemriseScheduler
 from simulator.schedulers.memrise import MemriseBatchSchedulerOps
@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
         env_help="Comma-separated environments to sweep (lstm, fsrs6).",
         sched_help=(
             "Comma-separated schedulers to sweep "
-            "(fsrs6, lstm, anki_sm2, memrise, fixed)."
+            "(fsrs6, fsrs3, lstm, anki_sm2, memrise, fixed)."
         ),
     )
     add_retention_range_args(parser)
@@ -255,6 +255,56 @@ def _load_fsrs6_weights(
             "Skipping %d users missing FSRS-6 weights: %s",
             len(missing),
             _format_id_list(missing),
+        )
+    if not weights:
+        return None, []
+    return torch.stack(weights, dim=0).to(device), kept
+
+
+def _load_fsrs3_weights(
+    user_ids: list[int],
+    *,
+    benchmark_root: Path,
+    benchmark_partition: str | None,
+    overrides: dict[str, str] | None,
+    short_term: bool,
+    device: torch.device,
+) -> tuple[torch.Tensor | None, list[int]]:
+    partition_key = benchmark_partition or "0"
+    weights: list[torch.Tensor] = []
+    kept: list[int] = []
+    missing: list[int] = []
+    invalid: list[int] = []
+    for user_id in user_ids:
+        try:
+            params = load_benchmark_weights(
+                repo_root=REPO_ROOT,
+                benchmark_root=benchmark_root,
+                environment="fsrs3",
+                user_id=user_id,
+                partition_key=partition_key,
+                overrides=overrides,
+                short_term=short_term,
+            )
+        except ValueError:
+            missing.append(user_id)
+            continue
+        if len(params) != 13:
+            invalid.append(user_id)
+            continue
+        weights.append(torch.tensor(params, dtype=torch.float32))
+        kept.append(user_id)
+    if missing:
+        logging.warning(
+            "Skipping %d users missing FSRS-3 weights: %s",
+            len(missing),
+            _format_id_list(missing),
+        )
+    if invalid:
+        logging.warning(
+            "Skipping %d users with invalid FSRS-3 weights: %s",
+            len(invalid),
+            _format_id_list(invalid),
         )
     if not weights:
         return None, []
@@ -509,8 +559,10 @@ def _run_batch_core(
         lstm_packed: PackedLSTMWeights | None = None
         lstm_paths: list[Path] | None = None
         fsrs_weights: torch.Tensor | None = None
+        fsrs3_weights: torch.Tensor | None = None
         needs_lstm_weights = environment == "lstm" or "lstm" in scheduler_names
         needs_fsrs_weights = environment == "fsrs6" or "fsrs6" in scheduler_names
+        needs_fsrs3_weights = "fsrs3" in scheduler_names
         if needs_lstm_weights:
             lstm_paths, active_batch = _resolve_lstm_paths(
                 active_batch, benchmark_root, short_term=short_term_enabled
@@ -545,6 +597,36 @@ def _run_batch_core(
                     }
                     lstm_paths = [path_map[user_id] for user_id in fsrs_users]
                 active_batch = fsrs_users
+        if needs_fsrs3_weights:
+            fsrs3_weights, fsrs3_users = _load_fsrs3_weights(
+                active_batch,
+                benchmark_root=benchmark_root,
+                benchmark_partition=args.benchmark_partition,
+                overrides=overrides,
+                short_term=short_term_enabled,
+                device=base_device,
+            )
+            if not fsrs3_users:
+                logging.warning(
+                    "Skipping environment '%s' for users %s: no FSRS-3 weights found.",
+                    environment,
+                    _format_id_list(batch),
+                )
+                continue
+            if len(fsrs3_users) != len(active_batch):
+                idx_map = {user_id: idx for idx, user_id in enumerate(active_batch)}
+                keep_idx = torch.tensor(
+                    [idx_map[user_id] for user_id in fsrs3_users],
+                    dtype=torch.int64,
+                    device=base_device,
+                )
+                if lstm_paths is not None:
+                    lstm_paths = [
+                        lstm_paths[idx_map[user_id]] for user_id in fsrs3_users
+                    ]
+                if fsrs_weights is not None:
+                    fsrs_weights = fsrs_weights.index_select(0, keep_idx)
+                active_batch = fsrs3_users
         (
             learn_costs,
             review_costs,
@@ -607,7 +689,7 @@ def _run_batch_core(
 
         for scheduler_spec in schedulers:
             name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
-            if name not in {"fsrs6", "anki_sm2", "memrise", "fixed", "lstm"}:
+            if name not in {"fsrs6", "fsrs3", "anki_sm2", "memrise", "fixed", "lstm"}:
                 raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
             label_prefix = f"{environment} u{active_batch[0]}-{active_batch[-1]} {name}"
 
@@ -621,6 +703,44 @@ def _run_batch_core(
                         desired_retention=dr,
                         bounds=Bounds(),
                         priority_mode=args.scheduler_priority,
+                        device=env_ops.device,
+                        dtype=torch.float32,
+                    )
+                    _simulate_and_log(
+                        args=args,
+                        batch=active_batch,
+                        env_ops=env_ops,
+                        sched_ops=scheduler_ops,
+                        behavior=behavior,
+                        cost_model=cost_model,
+                        progress=progress,
+                        progress_queue=progress_queue,
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr={dr:.2f}",
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=dr,
+                        fixed_interval=fixed_interval,
+                        short_term_source=short_term_source,
+                        learning_steps=learning_steps,
+                        relearning_steps=relearning_steps,
+                        learning_steps_arg=learning_steps_arg,
+                        relearning_steps_arg=relearning_steps_arg,
+                        log_root=log_root,
+                        batch_log_root=batch_log_root,
+                    )
+                continue
+
+            if name == "fsrs3":
+                if fsrs3_weights is None:
+                    raise ValueError("Expected FSRS-3 weights for fsrs3 scheduler.")
+                weights = fsrs3_weights.to(env_ops.device)
+                for dr in dr_values:
+                    scheduler_ops = FSRS3BatchSchedulerOps(
+                        weights=weights,
+                        desired_retention=dr,
+                        bounds=Bounds(),
                         device=env_ops.device,
                         dtype=torch.float32,
                     )
@@ -881,7 +1001,7 @@ def main() -> int:
     runs_per_batch = 0
     for scheduler in schedulers:
         name, _, _ = parse_scheduler_spec(scheduler)
-        if name in {"fsrs6", "lstm"}:
+        if name in {"fsrs6", "fsrs3", "lstm"}:
             runs_per_batch += len(dr_values)
         else:
             runs_per_batch += 1

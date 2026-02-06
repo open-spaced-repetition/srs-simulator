@@ -504,6 +504,140 @@ class FSRS6BatchSchedulerOps:
         )
 
 
+@dataclass
+class FSRS3BatchState:
+    s: "torch.Tensor"
+    d: "torch.Tensor"
+
+
+class FSRS3BatchSchedulerOps:
+    def __init__(
+        self,
+        *,
+        weights: "torch.Tensor",
+        desired_retention: float,
+        bounds: Bounds,
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+
+        if not (0.0 < float(desired_retention) < 1.0):
+            raise ValueError("desired_retention must be between 0 and 1.")
+        if weights.ndim != 2 or int(weights.shape[1]) != 13:
+            raise ValueError(
+                "FSRS3BatchSchedulerOps expects weights shape (users, 13)."
+            )
+        self._torch = torch
+        self.device = device
+        self.dtype = dtype
+        self._weights = weights.to(device=device, dtype=dtype)
+        self._bounds = bounds
+        self._base = torch.tensor(0.9, device=device, dtype=dtype)
+        self._interval_factor = math.log(float(desired_retention)) / math.log(0.9)
+
+    def init_state(self, user_count: int, deck_size: int) -> FSRS3BatchState:
+        s = self._torch.full(
+            (user_count, deck_size),
+            self._bounds.s_min,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        d = self._torch.full(
+            (user_count, deck_size),
+            self._bounds.d_min,
+            dtype=self.dtype,
+            device=self.device,
+        )
+        return FSRS3BatchState(s=s, d=d)
+
+    def review_priority(
+        self, state: FSRS3BatchState, elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        # FSRSv3 uses retrievability (lower = more urgent); we return retrievability so
+        # the engine can apply its own min/max priority conventions.
+        return self._torch.pow(
+            self._base, elapsed / self._torch.clamp(state.s, min=self._bounds.s_min)
+        )
+
+    def update_review(
+        self,
+        state: FSRS3BatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+
+        w = self._weights.index_select(0, user_idx)
+        rating_f = rating.to(dtype=self.dtype)
+
+        sched_s = state.s[user_idx, card_idx]
+        sched_d = state.d[user_idx, card_idx]
+        sched_r = self._torch.pow(
+            self._base, elapsed / self._torch.clamp(sched_s, min=self._bounds.s_min)
+        )
+
+        success = rating > 1
+
+        inc = (
+            self._torch.exp(w[:, 6])
+            * (11.0 - sched_d)
+            * self._torch.pow(sched_s, w[:, 7])
+            * (self._torch.exp((1.0 - sched_r) * w[:, 8]) - 1.0)
+        )
+        s_success = sched_s * (1.0 + inc)
+        s_failure = (
+            w[:, 9]
+            * self._torch.pow(sched_d, w[:, 10])
+            * self._torch.pow(sched_s, w[:, 11])
+            * self._torch.exp((1.0 - sched_r) * w[:, 12])
+        )
+        new_s = self._torch.where(success, s_success, s_failure)
+
+        d_update = sched_d + w[:, 4] * (rating_f - 3.0)
+        new_d = 0.5 * w[:, 2] + 0.5 * d_update
+
+        state.s[user_idx, card_idx] = self._torch.clamp(
+            new_s, self._bounds.s_min, self._bounds.s_max
+        )
+        state.d[user_idx, card_idx] = self._torch.clamp(
+            new_d, self._bounds.d_min, self._bounds.d_max
+        )
+        return self._torch.clamp(
+            state.s[user_idx, card_idx] * self._interval_factor, min=1.0
+        )
+
+    def update_learn(
+        self,
+        state: FSRS3BatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+
+        w = self._weights.index_select(0, user_idx)
+        rating_f = rating.to(dtype=self.dtype)
+
+        s_init = w[:, 0] + w[:, 1] * (rating_f - 1.0)
+        d_init = w[:, 2] + w[:, 3] * (rating_f - 3.0)
+
+        state.s[user_idx, card_idx] = self._torch.clamp(
+            s_init, self._bounds.s_min, self._bounds.s_max
+        )
+        state.d[user_idx, card_idx] = self._torch.clamp(
+            d_init, self._bounds.d_min, self._bounds.d_max
+        )
+        return self._torch.clamp(
+            state.s[user_idx, card_idx] * self._interval_factor, min=1.0
+        )
+
+
 class FSRS3VectorizedSchedulerOps:
     def __init__(
         self,

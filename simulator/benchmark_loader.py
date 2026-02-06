@@ -13,7 +13,8 @@ DEFAULT_RESULT_BASE = {
 
 SHORT_TERM_RESULT_BASE = {
     "dash": "DASH-short",
-    "fsrs3": "FSRSv3-short",
+    # The benchmark repo uses "-short-secs" naming for FSRSv3 short-term weights.
+    "fsrs3": "FSRSv3-short-secs",
     "fsrs6": "FSRS-6-short-recency",
     "hlr": "HLR-short",
 }
