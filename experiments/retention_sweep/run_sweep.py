@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import random
@@ -14,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from simulator.subprocess_progress import encode_progress_event
 from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
@@ -195,13 +195,10 @@ def _make_progress_callback(
             if completed == last_completed:
                 return
             last_completed = completed
-            event = {
-                "type": "progress",
-                "completed": completed,
-                "total": total,
-                "label": label,
-            }
-            print(json.dumps(event), flush=True)
+            print(
+                encode_progress_event(label=label, completed=completed, total=total),
+                flush=True,
+            )
 
         def _noop_close() -> None:
             return None

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import json
 import os
 import subprocess
 import sys
@@ -16,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from simulator.subprocess_progress import progress_event_from_payload, try_parse_json
 from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
@@ -287,20 +287,20 @@ def _run_command(
             line = line.strip()
             if not line:
                 continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
+            payload = try_parse_json(line)
+            if payload is None:
                 if progress_lock is not None:
                     with progress_lock:
                         progress_bar.write(line)
                 else:
                     progress_bar.write(line)
                 continue
-            if payload.get("type") != "progress":
+            event = progress_event_from_payload(payload)
+            if event is None:
                 continue
-            label = payload.get("label", "")
-            completed = int(payload.get("completed", 0))
-            total = int(payload.get("total", 0))
+            label = event.label
+            completed = event.completed
+            total = event.total
             if progress_lock is not None:
                 progress_lock.acquire()
             try:
