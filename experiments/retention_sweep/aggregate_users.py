@@ -77,13 +77,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--equiv-report",
         action="store_true",
-        help="Print summary stats for FSRS-6 equivalence comparisons.",
+        help="Print summary stats for equivalence comparisons.",
     )
     parser.add_argument(
         "--equiv-report-path",
         type=Path,
         default=None,
-        help="Optional path to write FSRS-6 equivalence summary JSON.",
+        help="Optional path to write equivalence summary JSON.",
+    )
+    parser.add_argument(
+        "--equiv-target",
+        choices=["fsrs6", "fsrs3"],
+        default="fsrs6",
+        help="DR scheduler to compute equivalence for (default: fsrs6).",
     )
     parser.add_argument(
         "--short-term",
@@ -154,6 +160,8 @@ def _iter_log_paths(log_root: Path) -> Iterable[Path]:
 def _format_scheduler_title(scheduler: str) -> str:
     labels = {
         "anki_sm2": "Anki-SM-2",
+        "fsrs3": "FSRSv3",
+        "fsrs6": "FSRS-6",
         "memrise": "Memrise",
     }
     return labels.get(scheduler, scheduler)
@@ -419,10 +427,11 @@ def main() -> None:
     needs_equiv = wants_equiv or not args.no_plot
     equivalent_distributions: List[Dict[str, Any]] = []
     if needs_equiv:
-        equivalent_distributions = _compute_equivalent_fsrs6_distributions(
+        equivalent_distributions = _compute_equivalent_dr_distributions(
             groups,
             envs,
             common_user_ids,
+            target=args.equiv_target,
             baselines=["anki_sm2", "memrise"],
         )
 
@@ -432,17 +441,29 @@ def main() -> None:
         for entry in equivalent_distributions:
             env_label = entry["environment"]
             distribution_title = _format_title(
-                f"{_format_scheduler_title(entry['baseline'])} vs FSRS-6 equiv distributions",
+                (
+                    f"{_format_scheduler_title(entry['baseline'])} vs "
+                    f"{_format_scheduler_title(entry.get('target', 'fsrs6'))} "
+                    "equiv distributions"
+                ),
                 sorted(entry["user_ids"]),
             )
             if len(envs) > 1:
                 distribution_title = f"{env_label} {distribution_title}"
             suffix = f"_{env_label}" if len(envs) > 1 else ""
             baseline_suffix = entry["baseline"]
-            distribution_path = (
-                plot_dir
-                / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}.png"
-            )
+            target_suffix = entry.get("target", "fsrs6")
+            if target_suffix == "fsrs6":
+                # Preserve existing filenames for backwards compatibility.
+                distribution_path = (
+                    plot_dir
+                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}.png"
+                )
+            else:
+                distribution_path = (
+                    plot_dir
+                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{suffix}.png"
+                )
             _plot_equivalent_distributions(entry, distribution_path, distribution_title)
             print(f"Saved plot to {distribution_path}")
 
@@ -473,18 +494,36 @@ def _compute_equivalent_fsrs6_distributions(
     common_user_ids: set[int],
     baselines: List[str],
 ) -> List[Dict[str, Any]]:
+    # Backwards-compatible wrapper: original behavior is fsrs6 equivalence.
+    return _compute_equivalent_dr_distributions(
+        groups,
+        envs,
+        common_user_ids,
+        target="fsrs6",
+        baselines=baselines,
+    )
+
+
+def _compute_equivalent_dr_distributions(
+    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    envs: List[str],
+    common_user_ids: set[int],
+    *,
+    target: str,
+    baselines: List[str],
+) -> List[Dict[str, Any]]:
     distributions: List[Dict[str, Any]] = []
     for env in envs:
-        fsrs_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
+        target_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
 
         for (group_env, scheduler, desired, _), group in groups.items():
             if group_env != env:
                 continue
-            if scheduler == "fsrs6" and desired is not None:
+            if scheduler == target and desired is not None:
                 for user_key, payload in group["users"].items():
                     if not isinstance(user_key, int):
                         continue
-                    fsrs_users.setdefault(user_key, []).append(
+                    target_users.setdefault(user_key, []).append(
                         (float(desired), payload["metrics"])
                     )
 
@@ -497,17 +536,17 @@ def _compute_equivalent_fsrs6_distributions(
                     if isinstance(user_key, int):
                         baseline_users[user_key] = payload["metrics"]
 
-            eligible_users = set(baseline_users) & set(fsrs_users) & common_user_ids
+            eligible_users = set(baseline_users) & set(target_users) & common_user_ids
             if not eligible_users:
                 continue
 
             baseline_per_minute: List[float] = []
-            fsrs_per_minute: List[float] = []
-            fsrs_dr_equiv: List[float] = []
+            target_per_minute: List[float] = []
+            target_dr_equiv: List[float] = []
             used_users: set[int] = set()
             for user_id in sorted(eligible_users):
                 baseline_metrics = baseline_users[user_id]
-                candidates = fsrs_users[user_id]
+                candidates = target_users[user_id]
                 if len(candidates) < 2:
                     continue
                 target_value = baseline_metrics["memorized_average"]
@@ -545,8 +584,8 @@ def _compute_equivalent_fsrs6_distributions(
                     y_equiv = lower["y"] + t * (upper["y"] - lower["y"])
 
                 baseline_per_minute.append(baseline_metrics["memorized_per_minute"])
-                fsrs_per_minute.append(y_equiv)
-                fsrs_dr_equiv.append(dr_equiv)
+                target_per_minute.append(y_equiv)
+                target_dr_equiv.append(dr_equiv)
                 used_users.add(user_id)
 
             if not used_users:
@@ -557,8 +596,9 @@ def _compute_equivalent_fsrs6_distributions(
                     "environment": env,
                     "baseline": baseline,
                     "baseline_per_minute": baseline_per_minute,
-                    "fsrs_per_minute": fsrs_per_minute,
-                    "fsrs_dr_equiv": fsrs_dr_equiv,
+                    "target": target,
+                    "target_per_minute": target_per_minute,
+                    "target_dr_equiv": target_dr_equiv,
                     "user_ids": used_users,
                 }
             )
@@ -572,17 +612,23 @@ def _summarize_equivalent_distributions(
     summaries: List[Dict[str, Any]] = []
     for entry in distributions:
         baseline_per_minute = entry.get("baseline_per_minute", [])
-        fsrs_per_minute = entry.get("fsrs_per_minute", [])
-        dr_equiv = entry.get("fsrs_dr_equiv", [])
-        if not baseline_per_minute or not fsrs_per_minute:
+        target_per_minute = entry.get(
+            "target_per_minute", entry.get("fsrs_per_minute", [])
+        )
+        dr_equiv = entry.get("target_dr_equiv", entry.get("fsrs_dr_equiv", []))
+        if not baseline_per_minute or not target_per_minute:
             continue
         diffs = [
-            fsrs_value - baseline_value
-            for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
+            target_value - baseline_value
+            for baseline_value, target_value in zip(
+                baseline_per_minute, target_per_minute
+            )
         ]
         ratios = [
-            fsrs_value / baseline_value
-            for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
+            target_value / baseline_value
+            for baseline_value, target_value in zip(
+                baseline_per_minute, target_per_minute
+            )
             if baseline_value > 0
         ]
         if not ratios:
@@ -601,6 +647,7 @@ def _summarize_equivalent_distributions(
             {
                 "environment": entry.get("environment"),
                 "baseline": entry.get("baseline"),
+                "target": entry.get("target", "fsrs6"),
                 "user_count": len(entry.get("user_ids", [])),
                 "diff_mean": mean(diffs),
                 "diff_median": median(diffs),
@@ -620,12 +667,14 @@ def _summarize_equivalent_distributions(
 
 def _print_equiv_report(summaries: List[Dict[str, Any]]) -> None:
     if not summaries:
-        print("No FSRS-6 equivalence summaries available.")
+        print("No equivalence summaries available.")
         return
-    print("FSRS-6 equivalence summary (matched memorized average)")
+    title_target = _format_scheduler_title(str(summaries[0].get("target", "fsrs6")))
+    print(f"{title_target} equivalence summary (matched memorized average)")
     for summary in summaries:
         env = summary.get("environment")
         baseline = _format_scheduler_title(str(summary.get("baseline")))
+        target = _format_scheduler_title(str(summary.get("target", "fsrs6")))
         user_count = summary.get("user_count")
         pos_pct = summary.get("pos_pct")
         neg_pct = summary.get("neg_pct")
@@ -636,7 +685,7 @@ def _print_equiv_report(summaries: List[Dict[str, Any]]) -> None:
         dr_mean = summary.get("dr_equiv_mean")
         dr_median = summary.get("dr_equiv_median")
         print(
-            f"- FSRS-6 vs {baseline} (env={env}): n={user_count}, "
+            f"- {target} vs {baseline} (env={env}): n={user_count}, "
             f"superiority={pos_pct:.1%}, "
             f"mean ratio={ratio_mean:.3f}, "
             f"median ratio={ratio_median:.3f} "
@@ -653,10 +702,17 @@ def _plot_equivalent_distributions(
 ) -> None:
     import matplotlib.pyplot as plt
 
-    baseline_per_minute = entry["baseline_per_minute"]
-    fsrs_per_minute = entry["fsrs_per_minute"]
-    fsrs_dr_equiv = entry["fsrs_dr_equiv"]
+    baseline_per_minute: List[float] = [float(x) for x in entry["baseline_per_minute"]]
+    target_per_minute: List[float] = [
+        float(x)
+        for x in (entry.get("target_per_minute", entry.get("fsrs_per_minute")) or [])
+    ]
+    target_dr_equiv: List[float] = [
+        float(x)
+        for x in (entry.get("target_dr_equiv", entry.get("fsrs_dr_equiv")) or [])
+    ]
     baseline_label = _format_scheduler_title(entry["baseline"])
+    target_label = _format_scheduler_title(entry.get("target", "fsrs6"))
 
     fig, axes = plt.subplots(3, 2, figsize=(14, 12))
     ax_middle = axes[0, 0]
@@ -667,7 +723,7 @@ def _plot_equivalent_distributions(
     ax_ratio_box = axes[2, 1]
 
     boxplot_left = ax_left.boxplot(
-        [baseline_per_minute, fsrs_per_minute],
+        [baseline_per_minute, target_per_minute],
         widths=0.5,
         patch_artist=True,
         showfliers=True,
@@ -677,7 +733,7 @@ def _plot_equivalent_distributions(
     for patch, color in zip(boxplot_left["boxes"], ["#1f77b4", "#2ca02c"]):
         patch.set_facecolor(color)
     ax_left.set_xticks([1, 2])
-    ax_left.set_xticklabels([baseline_label, "FSRS-6 equiv"])
+    ax_left.set_xticklabels([baseline_label, f"{target_label} equiv"])
     ax_left.set_ylabel("Memorized cards/min (average)")
     ax_left.grid(True, axis="y", ls="--", alpha=0.6)
 
@@ -718,7 +774,7 @@ def _plot_equivalent_distributions(
 
     left_labels, _, _ = _annotate_box_stats(
         ax_left,
-        [baseline_per_minute, fsrs_per_minute],
+        [baseline_per_minute, target_per_minute],
         [1, 2],
     )
     if left_labels:
@@ -730,22 +786,22 @@ def _plot_equivalent_distributions(
             fontsize=8,
         )
 
-    dr_percent = [value * 100 for value in fsrs_dr_equiv]
+    dr_percent = [value * 100 for value in target_dr_equiv]
     dr_bins = min(15, max(5, len(dr_percent) // 3))
     ax_middle.hist(dr_percent, bins=dr_bins, color="#1f77b4", alpha=0.8)
-    ax_middle.set_xlabel("Equivalent FSRS-6 DR (%)")
+    ax_middle.set_xlabel(f"Equivalent {target_label} DR (%)")
     ax_middle.set_ylabel("User count")
     ax_middle.grid(True, axis="y", ls="--", alpha=0.6)
 
     diff_values = [
-        fsrs_value - baseline_value
-        for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
+        target_value - baseline_value
+        for baseline_value, target_value in zip(baseline_per_minute, target_per_minute)
     ]
     if diff_values:
         diff_bins = min(15, max(5, len(diff_values) // 3))
         ax_right.hist(diff_values, bins=diff_bins, color="#ff7f0e", alpha=0.8)
     ax_right.axvline(0.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
-    ax_right.set_xlabel(f"FSRS-6 equiv - {baseline_label} (cards/min)")
+    ax_right.set_xlabel(f"{target_label} equiv - {baseline_label} (cards/min)")
     ax_right.set_ylabel("User count")
     ax_right.grid(True, axis="y", ls="--", alpha=0.6)
 
@@ -762,7 +818,7 @@ def _plot_equivalent_distributions(
         ax_box.axhline(0.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
         ax_box.set_xticks([1])
         ax_box.set_xticklabels(["Diff"])
-        ax_box.set_ylabel(f"FSRS-6 equiv - {baseline_label} (cards/min)")
+        ax_box.set_ylabel(f"{target_label} equiv - {baseline_label} (cards/min)")
         ax_box.grid(True, axis="y", ls="--", alpha=0.6)
         diff_positive = sum(value > 0 for value in diff_values)
         diff_ratio = diff_positive / len(diff_values)
@@ -789,15 +845,15 @@ def _plot_equivalent_distributions(
         ax_box.axis("off")
 
     ratio_values = [
-        fsrs_value / baseline_value
-        for baseline_value, fsrs_value in zip(baseline_per_minute, fsrs_per_minute)
+        target_value / baseline_value
+        for baseline_value, target_value in zip(baseline_per_minute, target_per_minute)
         if baseline_value > 0
     ]
     if ratio_values:
         ratio_bins = min(15, max(5, len(ratio_values) // 3))
         ax_ratio_hist.hist(ratio_values, bins=ratio_bins, color="#2ca02c", alpha=0.8)
     ax_ratio_hist.axvline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
-    ax_ratio_hist.set_xlabel(f"FSRS-6 equiv / {baseline_label} (cards/min)")
+    ax_ratio_hist.set_xlabel(f"{target_label} equiv / {baseline_label} (cards/min)")
     ax_ratio_hist.set_ylabel("User count")
     ax_ratio_hist.grid(True, axis="y", ls="--", alpha=0.6)
 
@@ -816,7 +872,7 @@ def _plot_equivalent_distributions(
         )
         ax_ratio_box.set_xticks([1])
         ax_ratio_box.set_xticklabels(["Ratio"])
-        ax_ratio_box.set_ylabel(f"FSRS-6 equiv / {baseline_label} (cards/min)")
+        ax_ratio_box.set_ylabel(f"{target_label} equiv / {baseline_label} (cards/min)")
         ax_ratio_box.grid(True, axis="y", ls="--", alpha=0.6)
         ratio_above = sum(value > 1 for value in ratio_values)
         ratio_ratio = ratio_above / len(ratio_values)
