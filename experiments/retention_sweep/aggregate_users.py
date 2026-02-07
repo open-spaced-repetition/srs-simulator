@@ -485,7 +485,7 @@ def main() -> None:
                 env_label = entry["environment"]
                 title = _format_title(
                     (
-                        "FSRSv3 / FSRS-6 ratio at equivalent memorized-average "
+                        "FSRSv3 / FSRS-6 ratio at the same DR "
                         f"(env={env_label}, short-term={args.short_term})"
                     ),
                     sorted(entry["user_ids"]),
@@ -662,35 +662,30 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
     envs: List[str],
     common_user_ids: set[int],
 ) -> List[Dict[str, Any]]:
-    """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
+    """Compute per-user ratio at the same DR (no interpolation), binned by FSRS-6 DR.
 
-    For each user and each FSRS-6 desired retention point:
-    - take FSRS-6 (dr6, x6=memorized_average, y6=memorized_per_minute)
-    - interpolate FSRSv3 to match x6 => y3_equiv
-    - ratio = y3_equiv / y6
-    - group ratio by dr6
+    For each user and each DR value present in both FSRS-6 and FSRSv3 sweeps:
+    - ratio = y3(dr) / y6(dr), where y is memorized_per_minute
+    - group ratio by DR (x axis is FSRS-6 DR)
     """
 
     entries: List[Dict[str, Any]] = []
     for env in envs:
-        fsrs6_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
-        fsrs3_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
+        fsrs6_users: Dict[int, Dict[float, Dict[str, float]]] = {}
+        fsrs3_users: Dict[int, Dict[float, Dict[str, float]]] = {}
 
         for (group_env, scheduler, desired, _), group in groups.items():
             if group_env != env or desired is None:
                 continue
+            dr = round(float(desired), 2)
             if scheduler == "fsrs6":
                 for user_key, payload in group["users"].items():
                     if isinstance(user_key, int):
-                        fsrs6_users.setdefault(user_key, []).append(
-                            (float(desired), payload["metrics"])
-                        )
+                        fsrs6_users.setdefault(user_key, {})[dr] = payload["metrics"]
             elif scheduler == "fsrs3":
                 for user_key, payload in group["users"].items():
                     if isinstance(user_key, int):
-                        fsrs3_users.setdefault(user_key, []).append(
-                            (float(desired), payload["metrics"])
-                        )
+                        fsrs3_users.setdefault(user_key, {})[dr] = payload["metrics"]
 
         if not fsrs6_users or not fsrs3_users:
             continue
@@ -705,22 +700,19 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
         for user_id in sorted(eligible_users):
             fsrs6_points = fsrs6_users[user_id]
             fsrs3_points = fsrs3_users[user_id]
-            if len(fsrs3_points) < 2:
+            common_drs = sorted(set(fsrs6_points) & set(fsrs3_points))
+            if not common_drs:
                 continue
 
-            for dr6, metrics6 in fsrs6_points:
-                x6 = float(metrics6["memorized_average"])
-                y6 = float(metrics6["memorized_per_minute"])
+            for dr in common_drs:
+                y6 = float(fsrs6_points[dr]["memorized_per_minute"])
+                y3 = float(fsrs3_points[dr]["memorized_per_minute"])
                 if y6 <= 0:
                     continue
-                fsrs3_interp = _interpolate_equivalent_point(fsrs3_points, target_x=x6)
-                if fsrs3_interp is None:
-                    continue
-                _dr3, y3 = fsrs3_interp
                 ratio = y3 / y6
                 if not math.isfinite(ratio):
                     continue
-                fsrs6_dr.append(float(dr6))
+                fsrs6_dr.append(float(dr))
                 ratio_values.append(ratio)
                 used_users.add(user_id)
 
@@ -776,7 +768,7 @@ def _plot_fsrs3_vs_fsrs6_ratio_boxplot(
     ax.axhline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
     ax.set_xticks(positions)
     ax.set_xticklabels([f"{value * 100:.0f}%" for value in dr_bins], rotation=45)
-    ax.set_xlabel("Equivalent FSRS-6 DR (%)")
+    ax.set_xlabel("FSRS-6 DR (%)")
     ax.set_ylabel("FSRSv3 equiv / FSRS-6 equiv (cards/min)")
     ax.set_title(title)
     ax.grid(True, axis="y", ls="--", alpha=0.6)
