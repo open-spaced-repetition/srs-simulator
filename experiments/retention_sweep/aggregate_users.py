@@ -103,6 +103,14 @@ def parse_args() -> argparse.Namespace:
         default="any",
         help="Filter logs by short-term source (steps/sched).",
     )
+    parser.add_argument(
+        "--fsrs3-vs-fsrs6-boxplot",
+        action="store_true",
+        help=(
+            "Plot FSRSv3/FSRS-6 efficiency ratio at equivalent memorized-average, "
+            "binned by equivalent FSRS-6 DR."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -440,6 +448,7 @@ def main() -> None:
         plot_dir.mkdir(parents=True, exist_ok=True)
         _setup_plot_style()
         st_suffix = f"_st={args.short_term}"
+        sts_suffix = f"_sts={args.short_term_source}"
         for entry in equivalent_distributions:
             env_label = entry["environment"]
             distribution_title = _format_title(
@@ -466,6 +475,34 @@ def main() -> None:
             _plot_equivalent_distributions(entry, distribution_path, distribution_title)
             print(f"Saved plot to {distribution_path}")
 
+        if args.fsrs3_vs_fsrs6_boxplot:
+            ratio_entries = _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
+                groups,
+                envs,
+                common_user_ids,
+                baselines=["anki_sm2", "memrise"],
+            )
+            for entry in ratio_entries:
+                env_label = entry["environment"]
+                baseline = entry["baseline"]
+                title = _format_title(
+                    (
+                        "FSRSv3 / FSRS-6 ratio at equivalent memorized-average "
+                        f"(baseline={_format_scheduler_title(baseline)}, "
+                        f"env={env_label}, short-term={args.short_term})"
+                    ),
+                    sorted(entry["user_ids"]),
+                )
+                suffix = f"_{env_label}" if len(envs) > 1 else ""
+                out_path = (
+                    plot_dir
+                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr_{baseline}{suffix}{st_suffix}{sts_suffix}.png"
+                )
+                _plot_fsrs3_vs_fsrs6_ratio_boxplot(
+                    entry, output_path=out_path, title=title
+                )
+                print(f"Saved plot to {out_path}")
+
     if wants_equiv:
         summaries = _summarize_equivalent_distributions(equivalent_distributions)
         _print_equiv_report(summaries)
@@ -485,6 +522,52 @@ def _setup_plot_style() -> None:
     import matplotlib.pyplot as plt
 
     plt.style.use("ggplot")
+
+
+def _interpolate_equivalent_point(
+    candidates: List[Tuple[float, Dict[str, float]]],
+    *,
+    target_x: float,
+) -> Tuple[float, float] | None:
+    """Interpolate (dr, y) at target memorized-average x.
+
+    candidates is a list of (desired_retention, metrics) for a single user and
+    scheduler where metrics has keys: memorized_average (x) and memorized_per_minute (y).
+    """
+
+    if len(candidates) < 2:
+        return None
+    points = [
+        {
+            "dr": float(dr),
+            "x": float(payload["memorized_average"]),
+            "y": float(payload["memorized_per_minute"]),
+        }
+        for dr, payload in candidates
+    ]
+    points.sort(key=lambda item: item["x"])
+    lower = None
+    upper = None
+    for point in points:
+        if point["x"] <= target_x:
+            lower = point
+        if point["x"] >= target_x and upper is None:
+            upper = point
+    if lower is None or upper is None:
+        points.sort(key=lambda item: abs(item["x"] - target_x))
+        lower = points[0]
+        upper = points[1]
+    x1 = lower["x"]
+    x2 = upper["x"]
+    if math.isclose(x1, x2):
+        dr_equiv = (lower["dr"] + upper["dr"]) / 2.0
+        y_equiv = (lower["y"] + upper["y"]) / 2.0
+        return dr_equiv, y_equiv
+    t = (target_x - x1) / (x2 - x1)
+    t = max(0.0, min(1.0, t))
+    dr_equiv = lower["dr"] + t * (upper["dr"] - lower["dr"])
+    y_equiv = lower["y"] + t * (upper["y"] - lower["y"])
+    return dr_equiv, y_equiv
 
 
 def _compute_equivalent_fsrs6_distributions(
@@ -546,41 +629,13 @@ def _compute_equivalent_dr_distributions(
             for user_id in sorted(eligible_users):
                 baseline_metrics = baseline_users[user_id]
                 candidates = target_users[user_id]
-                if len(candidates) < 2:
+                target_value = float(baseline_metrics["memorized_average"])
+                interp = _interpolate_equivalent_point(
+                    candidates, target_x=target_value
+                )
+                if interp is None:
                     continue
-                target_value = baseline_metrics["memorized_average"]
-                candidate_points = [
-                    {
-                        "dr": dr,
-                        "x": payload["memorized_average"],
-                        "y": payload["memorized_per_minute"],
-                    }
-                    for dr, payload in candidates
-                ]
-                candidate_points.sort(key=lambda item: item["x"])
-                lower = None
-                upper = None
-                for point in candidate_points:
-                    if point["x"] <= target_value:
-                        lower = point
-                    if point["x"] >= target_value and upper is None:
-                        upper = point
-                if lower is None or upper is None:
-                    candidate_points.sort(
-                        key=lambda item: abs(item["x"] - target_value)
-                    )
-                    lower = candidate_points[0]
-                    upper = candidate_points[1]
-                x1 = lower["x"]
-                x2 = upper["x"]
-                if math.isclose(x1, x2):
-                    dr_equiv = (lower["dr"] + upper["dr"]) / 2.0
-                    y_equiv = (lower["y"] + upper["y"]) / 2.0
-                else:
-                    t = (target_value - x1) / (x2 - x1)
-                    t = max(0.0, min(1.0, t))
-                    dr_equiv = lower["dr"] + t * (upper["dr"] - lower["dr"])
-                    y_equiv = lower["y"] + t * (upper["y"] - lower["y"])
+                dr_equiv, y_equiv = interp
 
                 baseline_per_minute.append(baseline_metrics["memorized_per_minute"])
                 target_per_minute.append(y_equiv)
@@ -603,6 +658,150 @@ def _compute_equivalent_dr_distributions(
             )
 
     return distributions
+
+
+def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
+    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    envs: List[str],
+    common_user_ids: set[int],
+    *,
+    baselines: List[str],
+) -> List[Dict[str, Any]]:
+    """Compute per-user ratio: FSRSv3 equiv / FSRS-6 equiv at same memorized-average.
+
+    For each baseline scheduler, we:
+    - pick a target memorized-average (baseline's memorized_average for the user)
+    - interpolate FSRS-6 to match that memorized-average => (equiv_fsrs6_dr, equiv_fsrs6_y)
+    - interpolate FSRSv3 to match that memorized-average => (equiv_fsrs3_dr, equiv_fsrs3_y)
+    - compute ratio = equiv_fsrs3_y / equiv_fsrs6_y, and group by equiv_fsrs6_dr.
+    """
+
+    entries: List[Dict[str, Any]] = []
+    for env in envs:
+        fsrs6_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
+        fsrs3_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
+
+        for (group_env, scheduler, desired, _), group in groups.items():
+            if group_env != env or desired is None:
+                continue
+            if scheduler == "fsrs6":
+                for user_key, payload in group["users"].items():
+                    if isinstance(user_key, int):
+                        fsrs6_users.setdefault(user_key, []).append(
+                            (float(desired), payload["metrics"])
+                        )
+            elif scheduler == "fsrs3":
+                for user_key, payload in group["users"].items():
+                    if isinstance(user_key, int):
+                        fsrs3_users.setdefault(user_key, []).append(
+                            (float(desired), payload["metrics"])
+                        )
+
+        if not fsrs6_users or not fsrs3_users:
+            continue
+
+        for baseline in baselines:
+            baseline_users: Dict[int, Dict[str, float]] = {}
+            for (group_env, scheduler, _, _), group in groups.items():
+                if group_env != env or scheduler != baseline:
+                    continue
+                for user_key, payload in group["users"].items():
+                    if isinstance(user_key, int):
+                        baseline_users[user_key] = payload["metrics"]
+
+            eligible_users = (
+                set(baseline_users)
+                & set(fsrs6_users)
+                & set(fsrs3_users)
+                & common_user_ids
+            )
+            if not eligible_users:
+                continue
+
+            fsrs6_dr_equiv: List[float] = []
+            ratio_values: List[float] = []
+            used_users: set[int] = set()
+            for user_id in sorted(eligible_users):
+                target_x = float(baseline_users[user_id]["memorized_average"])
+                fsrs6_interp = _interpolate_equivalent_point(
+                    fsrs6_users[user_id], target_x=target_x
+                )
+                fsrs3_interp = _interpolate_equivalent_point(
+                    fsrs3_users[user_id], target_x=target_x
+                )
+                if fsrs6_interp is None or fsrs3_interp is None:
+                    continue
+                dr6, y6 = fsrs6_interp
+                _dr3, y3 = fsrs3_interp
+                if y6 <= 0:
+                    continue
+                ratio = y3 / y6
+                if not math.isfinite(ratio):
+                    continue
+                fsrs6_dr_equiv.append(dr6)
+                ratio_values.append(ratio)
+                used_users.add(user_id)
+
+            if not used_users:
+                continue
+
+            entries.append(
+                {
+                    "environment": env,
+                    "baseline": baseline,
+                    "fsrs6_dr_equiv": fsrs6_dr_equiv,
+                    "ratio_fsrs3_over_fsrs6": ratio_values,
+                    "user_ids": used_users,
+                }
+            )
+
+    return entries
+
+
+def _plot_fsrs3_vs_fsrs6_ratio_boxplot(
+    entry: Dict[str, Any],
+    *,
+    output_path: Path,
+    title: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    dr_values: List[float] = [float(x) for x in entry["fsrs6_dr_equiv"]]
+    ratios: List[float] = [float(x) for x in entry["ratio_fsrs3_over_fsrs6"]]
+
+    # Bin by rounded DR so x-axis remains readable and stable.
+    binned: Dict[float, List[float]] = {}
+    for dr, ratio in zip(dr_values, ratios):
+        dr_bin = round(dr, 2)
+        binned.setdefault(dr_bin, []).append(ratio)
+
+    dr_bins = sorted(binned)
+    data = [binned[value] for value in dr_bins]
+    positions = list(range(1, len(dr_bins) + 1))
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.boxplot(
+        data,
+        positions=positions,
+        widths=0.6,
+        patch_artist=True,
+        showfliers=True,
+        boxprops={"facecolor": "#2ca02c", "edgecolor": "black", "alpha": 0.5},
+        medianprops={"color": "black"},
+        whiskerprops={"color": "black"},
+        capprops={"color": "black"},
+        flierprops={"marker": ".", "markersize": 4, "markerfacecolor": "#2ca02c"},
+    )
+    ax.axhline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+    ax.set_xticks(positions)
+    ax.set_xticklabels([f"{value * 100:.0f}%" for value in dr_bins], rotation=45)
+    ax.set_xlabel("Equivalent FSRS-6 DR (%)")
+    ax.set_ylabel("FSRSv3 equiv / FSRS-6 equiv (cards/min)")
+    ax.set_title(title)
+    ax.grid(True, axis="y", ls="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close(fig)
 
 
 def _summarize_equivalent_distributions(
