@@ -76,20 +76,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--equiv-report",
-        action="store_true",
-        help="Print summary stats for equivalence comparisons.",
+        nargs="?",
+        const="fsrs6",
+        default="off",
+        choices=["off", "fsrs6", "fsrs3"],
+        help=(
+            "Print equivalence report; optionally set target DR scheduler "
+            "(fsrs6/fsrs3). `--equiv-report` defaults to fsrs6."
+        ),
     )
     parser.add_argument(
         "--equiv-report-path",
         type=Path,
         default=None,
         help="Optional path to write equivalence summary JSON.",
-    )
-    parser.add_argument(
-        "--equiv-target",
-        choices=["fsrs6", "fsrs3"],
-        default="fsrs6",
-        help="DR scheduler to compute equivalence for (default: fsrs6).",
     )
     parser.add_argument(
         "--short-term",
@@ -423,15 +423,16 @@ def main() -> None:
             f"{len(common_user_ids)} users."
         )
 
-    wants_equiv = args.equiv_report or args.equiv_report_path is not None
+    wants_equiv = args.equiv_report != "off" or args.equiv_report_path is not None
     needs_equiv = wants_equiv or not args.no_plot
+    equiv_target = args.equiv_report if args.equiv_report != "off" else "fsrs6"
     equivalent_distributions: List[Dict[str, Any]] = []
     if needs_equiv:
         equivalent_distributions = _compute_equivalent_dr_distributions(
             groups,
             envs,
             common_user_ids,
-            target=args.equiv_target,
+            target=equiv_target,
             baselines=["anki_sm2", "memrise"],
         )
 
