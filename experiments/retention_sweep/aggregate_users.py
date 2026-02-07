@@ -485,7 +485,7 @@ def main() -> None:
                 env_label = entry["environment"]
                 title = _format_title(
                     (
-                        "FSRSv3 / FSRS-6 ratio at the same DR "
+                        "FSRSv3 / FSRS-6 ratio at equivalent memorized-average "
                         f"(env={env_label}, short-term={args.short_term})"
                     ),
                     sorted(entry["user_ids"]),
@@ -525,6 +525,7 @@ def _interpolate_equivalent_point(
     candidates: List[Tuple[float, Dict[str, float]]],
     *,
     target_x: float,
+    allow_extrapolation: bool = True,
 ) -> Tuple[float, float] | None:
     """Interpolate (dr, y) at target memorized-average x.
 
@@ -551,6 +552,8 @@ def _interpolate_equivalent_point(
         if point["x"] >= target_x and upper is None:
             upper = point
     if lower is None or upper is None:
+        if not allow_extrapolation:
+            return None
         points.sort(key=lambda item: abs(item["x"] - target_x))
         lower = points[0]
         upper = points[1]
@@ -662,11 +665,15 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
     envs: List[str],
     common_user_ids: set[int],
 ) -> List[Dict[str, Any]]:
-    """Compute per-user ratio at the same DR (no interpolation), binned by FSRS-6 DR.
+    """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
 
-    For each user and each DR value present in both FSRS-6 and FSRSv3 sweeps:
-    - ratio = y3(dr) / y6(dr), where y is memorized_per_minute
-    - group ratio by DR (x axis is FSRS-6 DR)
+    For each user and each FSRS-6 desired retention point:
+    - take FSRS-6 (dr6, x6=memorized_average, y6=memorized_per_minute)
+    - interpolate FSRSv3 to match x6 => y3_equiv
+      - interpolation only (no extrapolation): if x6 is outside FSRSv3's x-range,
+        skip that (user, dr6) point.
+    - ratio = y3_equiv / y6
+    - group ratio by dr6 (x axis is FSRS-6 DR)
     """
 
     entries: List[Dict[str, Any]] = []
@@ -700,19 +707,28 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
         for user_id in sorted(eligible_users):
             fsrs6_points = fsrs6_users[user_id]
             fsrs3_points = fsrs3_users[user_id]
-            common_drs = sorted(set(fsrs6_points) & set(fsrs3_points))
-            if not common_drs:
+            if len(fsrs3_points) < 2:
                 continue
 
-            for dr in common_drs:
-                y6 = float(fsrs6_points[dr]["memorized_per_minute"])
-                y3 = float(fsrs3_points[dr]["memorized_per_minute"])
-                if y6 <= 0:
+            fsrs3_curve = [(dr, metrics) for dr, metrics in fsrs3_points.items()]
+            for dr6 in sorted(fsrs6_points):
+                metrics6 = fsrs6_points[dr6]
+                x6 = float(metrics6["memorized_average"])
+                y6 = float(metrics6["memorized_per_minute"])
+                if y6 <= 0 or not math.isfinite(y6):
                     continue
+                interp = _interpolate_equivalent_point(
+                    fsrs3_curve,
+                    target_x=x6,
+                    allow_extrapolation=False,
+                )
+                if interp is None:
+                    continue
+                _dr3, y3 = interp
                 ratio = y3 / y6
                 if not math.isfinite(ratio):
                     continue
-                fsrs6_dr.append(float(dr))
+                fsrs6_dr.append(float(dr6))
                 ratio_values.append(ratio)
                 used_users.add(user_id)
 
@@ -758,12 +774,11 @@ def _plot_fsrs3_vs_fsrs6_ratio_boxplot(
         positions=positions,
         widths=0.6,
         patch_artist=True,
-        showfliers=True,
+        showfliers=False,
         boxprops={"facecolor": "#2ca02c", "edgecolor": "black", "alpha": 0.5},
         medianprops={"color": "black"},
         whiskerprops={"color": "black"},
         capprops={"color": "black"},
-        flierprops={"marker": ".", "markersize": 4, "markerfacecolor": "#2ca02c"},
     )
     ax.axhline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
     ax.set_xticks(positions)
@@ -897,7 +912,7 @@ def _plot_equivalent_distributions(
         [baseline_per_minute, target_per_minute],
         widths=0.5,
         patch_artist=True,
-        showfliers=True,
+        showfliers=False,
         boxprops={"facecolor": "#d9d9d9", "edgecolor": "black"},
         medianprops={"color": "black"},
     )
@@ -982,7 +997,7 @@ def _plot_equivalent_distributions(
             vert=True,
             widths=0.5,
             patch_artist=True,
-            showfliers=True,
+            showfliers=False,
             boxprops={"facecolor": "#ff7f0e", "edgecolor": "black"},
             medianprops={"color": "black"},
         )
@@ -1034,7 +1049,7 @@ def _plot_equivalent_distributions(
             vert=True,
             widths=0.5,
             patch_artist=True,
-            showfliers=True,
+            showfliers=False,
             boxprops={"facecolor": "#2ca02c", "edgecolor": "black"},
             medianprops={"color": "black"},
         )
