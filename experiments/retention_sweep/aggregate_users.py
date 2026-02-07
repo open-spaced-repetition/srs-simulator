@@ -439,6 +439,7 @@ def main() -> None:
     if not args.no_plot:
         plot_dir.mkdir(parents=True, exist_ok=True)
         _setup_plot_style()
+        st_suffix = f"_st={args.short_term}"
         for entry in equivalent_distributions:
             env_label = entry["environment"]
             distribution_title = _format_title(
@@ -455,15 +456,14 @@ def main() -> None:
             baseline_suffix = entry["baseline"]
             target_suffix = entry.get("target", "fsrs6")
             if target_suffix == "fsrs6":
-                # Preserve existing filenames for backwards compatibility.
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}.png"
+                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}{st_suffix}.png"
                 )
             else:
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{suffix}.png"
+                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{suffix}{st_suffix}.png"
                 )
             _plot_equivalent_distributions(entry, distribution_path, distribution_title)
             print(f"Saved plot to {distribution_path}")
