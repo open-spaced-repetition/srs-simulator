@@ -480,23 +480,20 @@ def main() -> None:
                 groups,
                 envs,
                 common_user_ids,
-                baselines=["anki_sm2", "memrise"],
             )
             for entry in ratio_entries:
                 env_label = entry["environment"]
-                baseline = entry["baseline"]
                 title = _format_title(
                     (
                         "FSRSv3 / FSRS-6 ratio at equivalent memorized-average "
-                        f"(baseline={_format_scheduler_title(baseline)}, "
-                        f"env={env_label}, short-term={args.short_term})"
+                        f"(env={env_label}, short-term={args.short_term})"
                     ),
                     sorted(entry["user_ids"]),
                 )
                 suffix = f"_{env_label}" if len(envs) > 1 else ""
                 out_path = (
                     plot_dir
-                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr_{baseline}{suffix}{st_suffix}{sts_suffix}.png"
+                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr{suffix}{st_suffix}{sts_suffix}.png"
                 )
                 _plot_fsrs3_vs_fsrs6_ratio_boxplot(
                     entry, output_path=out_path, title=title
@@ -664,16 +661,14 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
-    *,
-    baselines: List[str],
 ) -> List[Dict[str, Any]]:
-    """Compute per-user ratio: FSRSv3 equiv / FSRS-6 equiv at same memorized-average.
+    """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
 
-    For each baseline scheduler, we:
-    - pick a target memorized-average (baseline's memorized_average for the user)
-    - interpolate FSRS-6 to match that memorized-average => (equiv_fsrs6_dr, equiv_fsrs6_y)
-    - interpolate FSRSv3 to match that memorized-average => (equiv_fsrs3_dr, equiv_fsrs3_y)
-    - compute ratio = equiv_fsrs3_y / equiv_fsrs6_y, and group by equiv_fsrs6_dr.
+    For each user and each FSRS-6 desired retention point:
+    - take FSRS-6 (dr6, x6=memorized_average, y6=memorized_per_minute)
+    - interpolate FSRSv3 to match x6 => y3_equiv
+    - ratio = y3_equiv / y6
+    - group ratio by dr6
     """
 
     entries: List[Dict[str, Any]] = []
@@ -700,60 +695,46 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
         if not fsrs6_users or not fsrs3_users:
             continue
 
-        for baseline in baselines:
-            baseline_users: Dict[int, Dict[str, float]] = {}
-            for (group_env, scheduler, _, _), group in groups.items():
-                if group_env != env or scheduler != baseline:
-                    continue
-                for user_key, payload in group["users"].items():
-                    if isinstance(user_key, int):
-                        baseline_users[user_key] = payload["metrics"]
+        eligible_users = set(fsrs6_users) & set(fsrs3_users) & common_user_ids
+        if not eligible_users:
+            continue
 
-            eligible_users = (
-                set(baseline_users)
-                & set(fsrs6_users)
-                & set(fsrs3_users)
-                & common_user_ids
-            )
-            if not eligible_users:
+        fsrs6_dr: List[float] = []
+        ratio_values: List[float] = []
+        used_users: set[int] = set()
+        for user_id in sorted(eligible_users):
+            fsrs6_points = fsrs6_users[user_id]
+            fsrs3_points = fsrs3_users[user_id]
+            if len(fsrs3_points) < 2:
                 continue
 
-            fsrs6_dr_equiv: List[float] = []
-            ratio_values: List[float] = []
-            used_users: set[int] = set()
-            for user_id in sorted(eligible_users):
-                target_x = float(baseline_users[user_id]["memorized_average"])
-                fsrs6_interp = _interpolate_equivalent_point(
-                    fsrs6_users[user_id], target_x=target_x
-                )
-                fsrs3_interp = _interpolate_equivalent_point(
-                    fsrs3_users[user_id], target_x=target_x
-                )
-                if fsrs6_interp is None or fsrs3_interp is None:
-                    continue
-                dr6, y6 = fsrs6_interp
-                _dr3, y3 = fsrs3_interp
+            for dr6, metrics6 in fsrs6_points:
+                x6 = float(metrics6["memorized_average"])
+                y6 = float(metrics6["memorized_per_minute"])
                 if y6 <= 0:
                     continue
+                fsrs3_interp = _interpolate_equivalent_point(fsrs3_points, target_x=x6)
+                if fsrs3_interp is None:
+                    continue
+                _dr3, y3 = fsrs3_interp
                 ratio = y3 / y6
                 if not math.isfinite(ratio):
                     continue
-                fsrs6_dr_equiv.append(dr6)
+                fsrs6_dr.append(float(dr6))
                 ratio_values.append(ratio)
                 used_users.add(user_id)
 
-            if not used_users:
-                continue
+        if not used_users:
+            continue
 
-            entries.append(
-                {
-                    "environment": env,
-                    "baseline": baseline,
-                    "fsrs6_dr_equiv": fsrs6_dr_equiv,
-                    "ratio_fsrs3_over_fsrs6": ratio_values,
-                    "user_ids": used_users,
-                }
-            )
+        entries.append(
+            {
+                "environment": env,
+                "fsrs6_dr_equiv": fsrs6_dr,
+                "ratio_fsrs3_over_fsrs6": ratio_values,
+                "user_ids": used_users,
+            }
+        )
 
     return entries
 
