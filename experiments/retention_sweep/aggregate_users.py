@@ -446,12 +446,10 @@ def main() -> None:
                 (
                     f"{_format_scheduler_title(entry['baseline'])} vs "
                     f"{_format_scheduler_title(entry.get('target', 'fsrs6'))} "
-                    "equiv distributions"
+                    f"equiv distributions (env={env_label}, short-term={args.short_term})"
                 ),
                 sorted(entry["user_ids"]),
             )
-            if len(envs) > 1:
-                distribution_title = f"{env_label} {distribution_title}"
             suffix = f"_{env_label}" if len(envs) > 1 else ""
             baseline_suffix = entry["baseline"]
             target_suffix = entry.get("target", "fsrs6")
