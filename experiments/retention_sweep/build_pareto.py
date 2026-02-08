@@ -85,7 +85,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized", "any"],
+        choices=["event", "vectorized", "batched", "any"],
         default="any",
         help="Filter logs by simulation engine.",
     )
@@ -102,7 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--compare-engine",
         action="store_true",
-        help="Plot event/vectorized as separate series when logs include meta.engine.",
+        help="Plot event/vectorized/batched as separate series when logs include meta.engine.",
     )
     parser.add_argument(
         "--results-path",

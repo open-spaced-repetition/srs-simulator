@@ -49,7 +49,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     )
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized", "any"],
+        choices=["event", "vectorized", "batched", "any"],
         default="any",
         help="Engine filter passed to build_pareto.py.",
     )
