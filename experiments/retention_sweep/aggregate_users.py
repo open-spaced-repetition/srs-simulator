@@ -92,6 +92,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to write equivalence summary JSON.",
     )
     parser.add_argument(
+        "--engine",
+        choices=["event", "vectorized", "batched", "any"],
+        default="any",
+        help="Filter logs by simulation engine (default: any).",
+    )
+    parser.add_argument(
         "--short-term",
         choices=["on", "off", "any"],
         default="any",
@@ -200,6 +206,24 @@ def _infer_user_id_from_path(path: Path) -> Optional[int]:
     return None
 
 
+def _infer_engine(meta: Dict[str, Any], path: Path) -> str | None:
+    value = meta.get("engine")
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "batch":
+            lowered = "batched"
+        if lowered in {"event", "vectorized", "batched"}:
+            return lowered
+    match = re.search(r"_engine=([^_]+)_", path.name)
+    if match:
+        lowered = match.group(1).strip().lower()
+        if lowered == "batch":
+            lowered = "batched"
+        if lowered in {"event", "vectorized", "batched"}:
+            return lowered
+    return None
+
+
 def _format_title(base: str, user_ids: List[int]) -> str:
     if not user_ids:
         return base
@@ -257,6 +281,11 @@ def main() -> None:
             meta, totals = _load_meta_totals(path)
         except ValueError:
             continue
+
+        engine = _infer_engine(meta, path)
+        if args.engine != "any":
+            if engine != args.engine:
+                continue
 
         environment = meta.get("environment")
         scheduler = meta.get("scheduler")
@@ -449,6 +478,7 @@ def main() -> None:
         _setup_plot_style()
         st_suffix = f"_st={args.short_term}"
         sts_suffix = f"_sts={args.short_term_source}"
+        engine_suffix = "" if args.engine == "any" else f"_engine={args.engine}"
         for entry in equivalent_distributions:
             env_label = entry["environment"]
             distribution_title = _format_title(
@@ -465,12 +495,12 @@ def main() -> None:
             if target_suffix == "fsrs6":
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}{st_suffix}.png"
+                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}{st_suffix}{engine_suffix}.png"
                 )
             else:
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{suffix}{st_suffix}.png"
+                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{suffix}{st_suffix}{engine_suffix}.png"
                 )
             _plot_equivalent_distributions(entry, distribution_path, distribution_title)
             print(f"Saved plot to {distribution_path}")
@@ -493,7 +523,7 @@ def main() -> None:
                 suffix = f"_{env_label}" if len(envs) > 1 else ""
                 out_path = (
                     plot_dir
-                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr{suffix}{st_suffix}{sts_suffix}.png"
+                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr{suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
                 _plot_fsrs3_vs_fsrs6_ratio_boxplot(
                     entry, output_path=out_path, title=title
