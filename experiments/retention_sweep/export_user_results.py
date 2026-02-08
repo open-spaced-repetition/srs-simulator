@@ -417,6 +417,7 @@ def main() -> None:
             "time_average": time_average,
             "total_cost": total_cost,
             "avg_accum_memorized_per_hour": avg_accum_mem_per_hour,
+            "total_reviews": total_reviews,
         }
         mem_per_minute = None
         if memorized_average is not None and time_average is not None:
@@ -435,11 +436,7 @@ def main() -> None:
             if csv_mean_retention is not None:
                 metrics["mean_retention"] = csv_mean_retention
 
-        record: Dict[str, Any] = {
-            "user": user_id,
-            "size": total_reviews,
-            "metrics": metrics,
-        }
+        record: Dict[str, Any] = {"user": user_id, "metrics": metrics}
         if not args.no_config:
             record["config"] = {
                 "environment": environment,
