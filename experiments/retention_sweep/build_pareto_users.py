@@ -62,7 +62,7 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--max-parallel",
         type=int,
-        default=1,
+        default=8,
         help="Max parallel users to run (1 keeps sequential behavior).",
     )
     parser.add_argument(
@@ -142,14 +142,18 @@ def _run_command(
     progress_bar: tqdm | None,
     overall_bar: tqdm | None,
     progress_lock: threading.RLock | None,
+    suppress_output: bool,
 ) -> int:
+    write_line = None
+    if progress_bar is not None and not suppress_output:
+        write_line = progress_bar.write
     return run_command_with_progress(
         cmd=cmd,
         env=env,
         progress_bar=progress_bar,
         overall_bar=overall_bar,
         progress_lock=progress_lock,
-        write_line=progress_bar.write if progress_bar is not None else None,
+        write_line=write_line,
     )
 
 
@@ -169,6 +173,7 @@ def main() -> int:
         args.child_progress == "auto" and args.max_parallel > 1
     )
     use_parent_progress = parallel and enable_child_progress
+    suppress_child_output = parallel
     show_commands = args.show_commands == "on" or (
         args.show_commands == "auto" and args.max_parallel == 1
     )
@@ -199,6 +204,7 @@ def main() -> int:
                 progress_bar,
                 overall_bar,
                 progress_lock,
+                suppress_child_output,
             )
 
         failures, first_failure = run_fanout(
