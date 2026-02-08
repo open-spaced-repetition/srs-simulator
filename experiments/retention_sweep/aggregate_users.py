@@ -481,6 +481,7 @@ def main() -> None:
         engine_suffix = "" if args.engine == "any" else f"_engine={args.engine}"
         for entry in equivalent_distributions:
             env_label = entry["environment"]
+            env_suffix = f"_env={env_label}"
             distribution_title = _format_title(
                 (
                     f"{_format_scheduler_title(entry['baseline'])} vs "
@@ -489,18 +490,17 @@ def main() -> None:
                 ),
                 sorted(entry["user_ids"]),
             )
-            suffix = f"_{env_label}" if len(envs) > 1 else ""
             baseline_suffix = entry["baseline"]
             target_suffix = entry.get("target", "fsrs6")
             if target_suffix == "fsrs6":
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{suffix}{st_suffix}{engine_suffix}.png"
+                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{env_suffix}{st_suffix}{engine_suffix}.png"
                 )
             else:
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{suffix}{st_suffix}{engine_suffix}.png"
+                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{env_suffix}{st_suffix}{engine_suffix}.png"
                 )
             _plot_equivalent_distributions(entry, distribution_path, distribution_title)
             print(f"Saved plot to {distribution_path}")
@@ -513,6 +513,7 @@ def main() -> None:
             )
             for entry in ratio_entries:
                 env_label = entry["environment"]
+                env_suffix = f"_env={env_label}"
                 title = _format_title(
                     (
                         "FSRSv3 / FSRS-6 ratio at equivalent memorized-average "
@@ -520,10 +521,9 @@ def main() -> None:
                     ),
                     sorted(entry["user_ids"]),
                 )
-                suffix = f"_{env_label}" if len(envs) > 1 else ""
                 out_path = (
                     plot_dir
-                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr{suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
                 _plot_fsrs3_vs_fsrs6_ratio_boxplot(
                     entry, output_path=out_path, title=title
