@@ -86,6 +86,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Omit config details from each record.",
     )
+    parser.add_argument(
+        "--mean-retention",
+        action="store_true",
+        help="Compute mean retention from daily CSV (slow).",
+    )
     return parser.parse_args()
 
 
@@ -425,9 +430,10 @@ def main() -> None:
                 mem_per_minute = mem_value / time_value
         metrics["memorized_per_minute"] = mem_per_minute
 
-        csv_mean_retention = _mean_retention_from_csv(path.with_suffix(".csv"))
-        if csv_mean_retention is not None:
-            metrics["mean_retention"] = csv_mean_retention
+        if args.mean_retention:
+            csv_mean_retention = _mean_retention_from_csv(path.with_suffix(".csv"))
+            if csv_mean_retention is not None:
+                metrics["mean_retention"] = csv_mean_retention
 
         record: Dict[str, Any] = {
             "user": user_id,
