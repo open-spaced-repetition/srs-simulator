@@ -145,8 +145,11 @@ def _run_command(
     suppress_output: bool,
 ) -> int:
     write_line = None
-    if progress_bar is not None and not suppress_output:
-        write_line = progress_bar.write
+    if progress_bar is not None:
+        if suppress_output:
+            write_line = lambda _line: None
+        else:
+            write_line = progress_bar.write
     return run_command_with_progress(
         cmd=cmd,
         env=env,
