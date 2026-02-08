@@ -68,8 +68,8 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--child-progress",
         choices=["auto", "on", "off"],
-        default="auto",
-        help="Control child progress bars (auto enables in parallel).",
+        default="off",
+        help="Unused (build_pareto_users does not display per-worker bars).",
     )
     parser.add_argument(
         "--show-commands",
@@ -145,19 +145,27 @@ def _run_command(
     suppress_output: bool,
 ) -> int:
     write_line = None
+    local_bar: tqdm | None = None
+    if progress_bar is None and suppress_output:
+        local_bar = tqdm(total=0, disable=True)
+        progress_bar = local_bar
     if progress_bar is not None:
         if suppress_output:
             write_line = lambda _line: None
         else:
             write_line = progress_bar.write
-    return run_command_with_progress(
-        cmd=cmd,
-        env=env,
-        progress_bar=progress_bar,
-        overall_bar=overall_bar,
-        progress_lock=progress_lock,
-        write_line=write_line,
-    )
+    try:
+        return run_command_with_progress(
+            cmd=cmd,
+            env=env,
+            progress_bar=progress_bar,
+            overall_bar=overall_bar,
+            progress_lock=progress_lock,
+            write_line=write_line,
+        )
+    finally:
+        if local_bar is not None:
+            local_bar.close()
 
 
 def main() -> int:
@@ -172,10 +180,8 @@ def main() -> int:
 
     user_ids = list(range(args.start_user, args.end_user + 1))
     parallel = args.max_parallel > 1 and not args.dry_run
-    enable_child_progress = args.child_progress == "on" or (
-        args.child_progress == "auto" and args.max_parallel > 1
-    )
-    use_parent_progress = parallel and enable_child_progress
+    # Build pareto jobs are one-shot; we keep only the users bar.
+    use_parent_progress = False
     suppress_child_output = parallel
     show_commands = args.show_commands == "on" or (
         args.show_commands == "auto" and args.max_parallel == 1
