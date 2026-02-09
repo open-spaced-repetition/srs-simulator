@@ -98,6 +98,7 @@ ENVIRONMENT_FACTORIES = {
     "fsrs6": lambda args: FSRS6Model(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21)
     ),
+    "fsrs6_default": lambda args: FSRS6Model(weights=None),
     "fsrs3": lambda args: FSRS3Model(
         weights=_resolve_benchmark_weights(args, "fsrs3", expected_len=13)
     ),
@@ -115,6 +116,11 @@ def _require_policy(path: Path | None) -> Path:
 SCHEDULER_FACTORIES = {
     "fsrs6": lambda args: FSRS6Scheduler(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
+        desired_retention=args.desired_retention,
+        priority_mode=args.scheduler_priority,
+    ),
+    "fsrs6_default": lambda args: FSRS6Scheduler(
+        weights=None,
         desired_retention=args.desired_retention,
         priority_mode=args.scheduler_priority,
     ),

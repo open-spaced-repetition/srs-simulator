@@ -12,8 +12,16 @@ from simulator.batched_sweep.utils import chunked, dr_values, parse_cuda_devices
 from simulator.scheduler_spec import parse_scheduler_spec
 
 
-SUPPORTED_ENVS = {"lstm", "fsrs6"}
-SUPPORTED_SCHEDS = {"fsrs6", "fsrs3", "lstm", "anki_sm2", "memrise", "fixed"}
+SUPPORTED_ENVS = {"lstm", "fsrs6", "fsrs6_default"}
+SUPPORTED_SCHEDS = {
+    "fsrs6",
+    "fsrs6_default",
+    "fsrs3",
+    "lstm",
+    "anki_sm2",
+    "memrise",
+    "fixed",
+}
 
 
 @dataclass(frozen=True)
@@ -37,7 +45,7 @@ def build_batched_sweep_plan(
     for env in envs:
         if env not in SUPPORTED_ENVS:
             raise ValueError(
-                "Batched retention sweep supports only lstm or fsrs6 environments."
+                "Batched retention sweep supports only lstm, fsrs6, or fsrs6_default environments."
             )
 
     if not schedulers:
@@ -77,7 +85,7 @@ def build_batched_sweep_plan(
     runs_per_batch = 0
     for scheduler in schedulers:
         name, _, _ = parse_scheduler_spec(scheduler)
-        if name in {"fsrs6", "fsrs3", "lstm"}:
+        if name in {"fsrs6", "fsrs6_default", "fsrs3", "lstm"}:
             runs_per_batch += len(drs)
         else:
             runs_per_batch += 1

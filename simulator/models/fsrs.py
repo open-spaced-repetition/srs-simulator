@@ -32,6 +32,7 @@ from simulator.math.fsrs_batch import (
     fsrs6_stability_after_success as fsrs6_stability_after_success_batch,
     fsrs6_stability_short_term as fsrs6_stability_short_term_batch,
 )
+from simulator.fsrs_defaults import resolve_fsrs6_weights
 
 if TYPE_CHECKING:
     import torch
@@ -43,8 +44,7 @@ class FSRS6Model(MemoryModel):
     """
 
     def __init__(self, weights: Sequence[float] | None, bounds: Bounds = Bounds()):
-        if weights is None:
-            raise ValueError("FSRS6Model requires weights from srs-benchmark.")
+        weights = resolve_fsrs6_weights(weights)
         if len(weights) != 21:
             raise ValueError("FSRS6Model expects 21 weights.")
         self.params = FSRS6Params(tuple(float(x) for x in weights), bounds)

@@ -4,7 +4,10 @@ from __future__ import annotations
 def parse_scheduler_spec(value: str) -> tuple[str, float | None, str]:
     raw = value.strip()
     if "@" not in raw:
-        return raw, None, raw
+        aliases = {
+            "fsrs6-default": "fsrs6_default",
+        }
+        return aliases.get(raw, raw), None, raw
     name, param = raw.split("@", 1)
     name = name.strip()
     param = param.strip()

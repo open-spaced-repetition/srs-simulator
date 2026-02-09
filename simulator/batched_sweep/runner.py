@@ -22,6 +22,7 @@ from simulator.batched_sweep.behavior_cost import build_behavior_cost, load_usag
 from simulator.batched_sweep.logging import simulate_and_log
 from simulator.batched_sweep.utils import format_id_list
 from simulator.batched_sweep.weights import (
+    build_default_fsrs6_weights,
     load_fsrs3_weights,
     load_fsrs6_weights,
     resolve_lstm_paths,
@@ -88,10 +89,14 @@ def run_batch_core(
         lstm_packed: PackedLSTMWeights | None = None
         lstm_paths: list[Path] | None = None
         fsrs_weights: torch.Tensor | None = None
+        fsrs_default_weights: torch.Tensor | None = None
         fsrs3_weights: torch.Tensor | None = None
 
         needs_lstm_weights = environment == "lstm" or "lstm" in scheduler_names
         needs_fsrs_weights = environment == "fsrs6" or "fsrs6" in scheduler_names
+        needs_fsrs_default = (
+            environment == "fsrs6_default" or "fsrs6_default" in scheduler_names
+        )
         needs_fsrs3_weights = "fsrs3" in scheduler_names
 
         if needs_lstm_weights:
@@ -163,6 +168,12 @@ def run_batch_core(
                     fsrs_weights = fsrs_weights.index_select(0, keep_idx)
                 active_batch = fsrs3_users
 
+        if needs_fsrs_default:
+            fsrs_default_weights = build_default_fsrs6_weights(
+                user_ids=active_batch,
+                device=base_device,
+            )
+
         (
             learn_costs,
             review_costs,
@@ -191,6 +202,16 @@ def run_batch_core(
             if fsrs_weights is None:
                 raise ValueError("Expected FSRS-6 weights when environment is fsrs6.")
             env_weights = fsrs_weights.to(base_device)
+            env_ops = FSRS6BatchEnvOps(
+                weights=env_weights,
+                bounds=Bounds(),
+                device=env_weights.device,
+                dtype=torch.float32,
+            )
+        elif environment == "fsrs6_default":
+            if fsrs_default_weights is None:
+                raise ValueError("Expected default FSRS-6 weights for fsrs6_default.")
+            env_weights = fsrs_default_weights.to(base_device)
             env_ops = FSRS6BatchEnvOps(
                 weights=env_weights,
                 bounds=Bounds(),
@@ -226,7 +247,15 @@ def run_batch_core(
 
         for scheduler_spec in schedulers:
             name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
-            if name not in {"fsrs6", "fsrs3", "anki_sm2", "memrise", "fixed", "lstm"}:
+            if name not in {
+                "fsrs6",
+                "fsrs6_default",
+                "fsrs3",
+                "anki_sm2",
+                "memrise",
+                "fixed",
+                "lstm",
+            }:
                 raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
             label_prefix = f"{environment} u{active_batch[0]}-{active_batch[-1]} {name}"
 
@@ -234,6 +263,48 @@ def run_batch_core(
                 if fsrs_weights is None:
                     raise ValueError("Expected FSRS-6 weights for fsrs6 scheduler.")
                 weights = fsrs_weights.to(env_ops.device)
+                for dr in dr_values:
+                    scheduler_ops = FSRS6BatchSchedulerOps(
+                        weights=weights,
+                        desired_retention=dr,
+                        bounds=Bounds(),
+                        priority_mode=args.scheduler_priority,
+                        device=env_ops.device,
+                        dtype=torch.float32,
+                    )
+                    simulate_and_log(
+                        write_log=simulate_cli._write_log,
+                        args=args,
+                        batch=active_batch,
+                        env_ops=env_ops,
+                        sched_ops=scheduler_ops,
+                        behavior=behavior,
+                        cost_model=cost_model,
+                        progress=progress,
+                        progress_queue=progress_queue,
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr={dr:.2f}",
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=dr,
+                        fixed_interval=fixed_interval,
+                        short_term_source=short_term_source,
+                        learning_steps=learning_steps,
+                        relearning_steps=relearning_steps,
+                        learning_steps_arg=learning_steps_arg,
+                        relearning_steps_arg=relearning_steps_arg,
+                        log_root=ctx.log_root,
+                        batch_log_root=ctx.batch_log_root,
+                    )
+                continue
+
+            if name == "fsrs6_default":
+                if fsrs_default_weights is None:
+                    raise ValueError(
+                        "Expected default FSRS-6 weights for fsrs6_default scheduler."
+                    )
+                weights = fsrs_default_weights.to(env_ops.device)
                 for dr in dr_values:
                     scheduler_ops = FSRS6BatchSchedulerOps(
                         weights=weights,

@@ -33,6 +33,7 @@ from simulator.math.fsrs_batch import (
     fsrs6_stability_after_success as fsrs6_stability_after_success_batch,
     fsrs6_stability_short_term as fsrs6_stability_short_term_batch,
 )
+from simulator.fsrs_defaults import resolve_fsrs6_weights
 
 if TYPE_CHECKING:
     import torch
@@ -59,8 +60,7 @@ class FSRS6Scheduler(Scheduler):
     ):
         if priority_mode not in self.PRIORITY_MODES:
             raise ValueError(f"Unknown priority_mode '{priority_mode}'")
-        if weights is None:
-            raise ValueError("FSRS6Scheduler requires weights from srs-benchmark.")
+        weights = resolve_fsrs6_weights(weights)
         if len(weights) != 21:
             raise ValueError("FSRS6Scheduler expects 21 weights.")
         self.params = FSRS6Params(tuple(float(w) for w in weights), bounds)

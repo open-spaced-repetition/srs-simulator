@@ -46,10 +46,10 @@ def parse_args() -> argparse.Namespace:
         parser,
         env_default="lstm",
         sched_default="fsrs6,anki_sm2,memrise",
-        env_help="Comma-separated environments to sweep (lstm, fsrs6).",
+        env_help="Comma-separated environments to sweep (lstm, fsrs6, fsrs6_default).",
         sched_help=(
             "Comma-separated schedulers to sweep "
-            "(fsrs6, fsrs3, lstm, anki_sm2, memrise, fixed)."
+            "(fsrs6, fsrs6_default, fsrs3, lstm, anki_sm2, memrise, fixed)."
         ),
     )
     add_retention_range_args(parser)
