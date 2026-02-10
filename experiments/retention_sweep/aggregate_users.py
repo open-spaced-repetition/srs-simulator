@@ -79,10 +79,10 @@ def parse_args() -> argparse.Namespace:
         nargs="?",
         const="fsrs6",
         default="off",
-        choices=["off", "fsrs6", "fsrs3"],
+        choices=["off", "fsrs6", "fsrs3", "fsrs6_default"],
         help=(
             "Print equivalence report; optionally set target DR scheduler "
-            "(fsrs6/fsrs3). `--equiv-report` defaults to fsrs6."
+            "(fsrs6/fsrs3/fsrs6_default). `--equiv-report` defaults to fsrs6."
         ),
     )
     parser.add_argument(
@@ -497,6 +497,11 @@ def main() -> None:
                 distribution_path = (
                     plot_dir
                     / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{env_suffix}{st_suffix}{engine_suffix}.png"
+                )
+            elif target_suffix == "fsrs6_default":
+                distribution_path = (
+                    plot_dir
+                    / f"retention_sweep_equivalent_fsrs6_default_distributions_{baseline_suffix}{env_suffix}{st_suffix}{engine_suffix}.png"
                 )
             else:
                 distribution_path = (
