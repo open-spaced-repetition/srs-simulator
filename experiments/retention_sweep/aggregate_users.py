@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.benchmark_loader import (
-    parse_result_overrides,
+    DEFAULT_RESULT_BASE,
     resolve_benchmark_root,
     resolve_result_path,
 )
@@ -101,19 +101,6 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to the srs-benchmark repo (used for size filtering).",
-    )
-    parser.add_argument(
-        "--benchmark-env",
-        default=None,
-        help="Environment key to resolve benchmark results for size filtering.",
-    )
-    parser.add_argument(
-        "--benchmark-result",
-        default=None,
-        help=(
-            "Override benchmark result base names (key=value) for size filtering. "
-            "Example: fsrs6=FSRS-6-recency,fsrs3=FSRSv3."
-        ),
     )
     parser.add_argument(
         "--benchmark-result-base",
@@ -505,7 +492,7 @@ def main() -> None:
 
     size_filter_active = args.min_size is not None or args.max_size is not None
     if size_filter_active:
-        env_for_sizes = args.benchmark_env or (envs[0] if envs else "fsrs6")
+        env_for_sizes = envs[0] if envs else "fsrs6"
         benchmark_root = resolve_benchmark_root(
             REPO_ROOT, args.benchmark_root
         ).resolve()
@@ -514,16 +501,11 @@ def main() -> None:
                 benchmark_root, args.benchmark_result_base
             )
         else:
-            overrides = parse_result_overrides(args.benchmark_result)
-            base_name = overrides.get(env_for_sizes.lower())
-            if not base_name:
-                from simulator.benchmark_loader import DEFAULT_RESULT_BASE
-
-                base_name = DEFAULT_RESULT_BASE.get(env_for_sizes.lower())
+            base_name = DEFAULT_RESULT_BASE.get(env_for_sizes.lower())
             if not base_name:
                 raise SystemExit(
                     "Unable to resolve benchmark result for size filtering. "
-                    "Provide --benchmark-result-base or --benchmark-result."
+                    "Provide --benchmark-result-base."
                 )
             result_path = resolve_result_path(benchmark_root, base_name)
         if not result_path.exists():
