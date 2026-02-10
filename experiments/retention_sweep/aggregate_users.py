@@ -14,6 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from simulator.benchmark_loader import (
+    parse_result_overrides,
+    resolve_benchmark_root,
+    resolve_result_path,
+)
 from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
@@ -90,6 +95,42 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional path to write equivalence summary JSON.",
+    )
+    parser.add_argument(
+        "--benchmark-root",
+        type=Path,
+        default=None,
+        help="Path to the srs-benchmark repo (used for size filtering).",
+    )
+    parser.add_argument(
+        "--benchmark-env",
+        default=None,
+        help="Environment key to resolve benchmark results for size filtering.",
+    )
+    parser.add_argument(
+        "--benchmark-result",
+        default=None,
+        help=(
+            "Override benchmark result base names (key=value) for size filtering. "
+            "Example: fsrs6=FSRS-6-recency,fsrs3=FSRSv3."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-result-base",
+        default=None,
+        help="Explicit benchmark result base name (overrides env mapping).",
+    )
+    parser.add_argument(
+        "--min-size",
+        type=int,
+        default=None,
+        help="Minimum revlog size (user-level) to include.",
+    )
+    parser.add_argument(
+        "--max-size",
+        type=int,
+        default=None,
+        help="Maximum revlog size (user-level) to include.",
     )
     parser.add_argument(
         "--engine",
@@ -268,6 +309,25 @@ def _infer_engine(meta: Dict[str, Any], path: Path) -> str | None:
     return None
 
 
+def _load_user_sizes(path: Path) -> Dict[int, int]:
+    sizes: Dict[int, int] = {}
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            user_id = record.get("user")
+            size = record.get("size")
+            if user_id is None or size is None:
+                continue
+            try:
+                sizes[int(user_id)] = int(size)
+            except (TypeError, ValueError):
+                continue
+    return sizes
+
+
 def _format_title(base: str, user_ids: List[int]) -> str:
     if not user_ids:
         return base
@@ -442,6 +502,43 @@ def main() -> None:
         raise SystemExit(
             "No overlapping user ids across configs; intersection is empty."
         )
+
+    size_filter_active = args.min_size is not None or args.max_size is not None
+    if size_filter_active:
+        env_for_sizes = args.benchmark_env or (envs[0] if envs else "fsrs6")
+        benchmark_root = resolve_benchmark_root(
+            REPO_ROOT, args.benchmark_root
+        ).resolve()
+        if args.benchmark_result_base:
+            result_path = resolve_result_path(
+                benchmark_root, args.benchmark_result_base
+            )
+        else:
+            overrides = parse_result_overrides(args.benchmark_result)
+            base_name = overrides.get(env_for_sizes.lower())
+            if not base_name:
+                from simulator.benchmark_loader import DEFAULT_RESULT_BASE
+
+                base_name = DEFAULT_RESULT_BASE.get(env_for_sizes.lower())
+            if not base_name:
+                raise SystemExit(
+                    "Unable to resolve benchmark result for size filtering. "
+                    "Provide --benchmark-result-base or --benchmark-result."
+                )
+            result_path = resolve_result_path(benchmark_root, base_name)
+        if not result_path.exists():
+            raise SystemExit(f"Benchmark result file not found: {result_path}")
+        size_map = _load_user_sizes(result_path)
+        min_size = args.min_size if args.min_size is not None else -math.inf
+        max_size = args.max_size if args.max_size is not None else math.inf
+        filtered_users = {
+            user_id
+            for user_id in common_user_ids
+            if user_id in size_map and min_size <= size_map[user_id] <= max_size
+        }
+        if not filtered_users:
+            raise SystemExit("No users left after size filtering.")
+        common_user_ids = filtered_users
 
     results: List[Dict[str, Any]] = []
     for key, group in sorted(
