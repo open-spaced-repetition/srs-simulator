@@ -501,7 +501,7 @@ def main() -> None:
                 benchmark_root, args.benchmark_result_base
             )
         else:
-            base_name = DEFAULT_RESULT_BASE.get(env_for_sizes.lower())
+            base_name = DEFAULT_RESULT_BASE.get(env_for_sizes.lower(), "FSRS-6-recency")
             if not base_name:
                 raise SystemExit(
                     "Unable to resolve benchmark result for size filtering. "
