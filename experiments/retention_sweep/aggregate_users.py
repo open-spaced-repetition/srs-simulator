@@ -207,6 +207,41 @@ def _infer_user_id_from_path(path: Path) -> Optional[int]:
     return None
 
 
+def _percentile(values: List[float], p: float) -> float:
+    if not values:
+        raise ValueError("Cannot compute percentile of empty list.")
+    sorted_vals = sorted(values)
+    if len(sorted_vals) == 1:
+        return float(sorted_vals[0])
+    pos = (len(sorted_vals) - 1) * p
+    lower = int(math.floor(pos))
+    upper = int(math.ceil(pos))
+    if lower == upper:
+        return float(sorted_vals[lower])
+    weight = pos - lower
+    return (
+        float(sorted_vals[lower]) * (1.0 - weight) + float(sorted_vals[upper]) * weight
+    )
+
+
+def _filter_outliers_iqr(values: List[float]) -> List[float]:
+    if len(values) < 4:
+        return values
+    q1 = _percentile(values, 0.25)
+    q3 = _percentile(values, 0.75)
+    iqr = q3 - q1
+    if iqr <= 0:
+        return values
+    low = q1 - 1.5 * iqr
+    high = q3 + 1.5 * iqr
+    filtered = [value for value in values if low <= value <= high]
+    return filtered or values
+
+
+def _mean_without_outliers(values: List[float]) -> float:
+    return mean(_filter_outliers_iqr(values))
+
+
 def _infer_engine(meta: Dict[str, Any], path: Path) -> str | None:
     value = meta.get("engine")
     if isinstance(value, str):
@@ -428,8 +463,8 @@ def main() -> None:
             title = _format_scheduler_title(scheduler)
         memorized_average_values = [item["memorized_average"] for item in users]
         memorized_per_minute_values = [item["memorized_per_minute"] for item in users]
-        memorized_average_mean = mean(memorized_average_values)
-        memorized_per_minute_mean = mean(memorized_per_minute_values)
+        memorized_average_mean = _mean_without_outliers(memorized_average_values)
+        memorized_per_minute_mean = _mean_without_outliers(memorized_per_minute_values)
         memorized_average_median = median(memorized_average_values)
         memorized_per_minute_median = median(memorized_per_minute_values)
         results.append(
@@ -871,16 +906,16 @@ def _summarize_equivalent_distributions(
                 "baseline": entry.get("baseline"),
                 "target": entry.get("target", "fsrs6"),
                 "user_count": len(entry.get("user_ids", [])),
-                "diff_mean": mean(diffs),
+                "diff_mean": _mean_without_outliers(diffs),
                 "diff_median": median(diffs),
-                "ratio_mean": mean(ratios),
+                "ratio_mean": _mean_without_outliers(ratios),
                 "ratio_median": median(ratios),
                 "ratio_q25": q1,
                 "ratio_q75": q3,
                 "pos_pct": pos / len(diffs),
                 "neg_pct": neg / len(diffs),
                 "zero_pct": zero / len(diffs),
-                "dr_equiv_mean": mean(dr_equiv) if dr_equiv else None,
+                "dr_equiv_mean": _mean_without_outliers(dr_equiv) if dr_equiv else None,
                 "dr_equiv_median": median(dr_equiv) if dr_equiv else None,
             }
         )
@@ -970,7 +1005,7 @@ def _plot_equivalent_distributions(
         for x_pos, values in zip(x_positions, values_list):
             if not values:
                 continue
-            mean_value = mean(values)
+            mean_value = _mean_without_outliers(values)
             median_value = median(values)
             means.append(mean_value)
             medians.append(median_value)
