@@ -117,6 +117,14 @@ def parse_args() -> argparse.Namespace:
             "binned by equivalent FSRS-6 DR."
         ),
     )
+    parser.add_argument(
+        "--fsrs6-default-vs-fsrs6-boxplot",
+        action="store_true",
+        help=(
+            "Plot FSRS-6 default/FSRS-6 efficiency ratio at equivalent "
+            "memorized-average, binned by equivalent FSRS-6 DR."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -571,6 +579,31 @@ def main() -> None:
                 )
                 print(f"Saved plot to {out_path}")
 
+        if args.fsrs6_default_vs_fsrs6_boxplot:
+            ratio_entries = _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
+                groups,
+                envs,
+                common_user_ids,
+            )
+            for entry in ratio_entries:
+                env_label = entry["environment"]
+                env_suffix = f"_env={env_label}"
+                title = _format_title(
+                    (
+                        "FSRS-6 default / FSRS-6 ratio at equivalent memorized-average "
+                        f"(env={env_label}, short-term={args.short_term})"
+                    ),
+                    sorted(entry["user_ids"]),
+                )
+                out_path = (
+                    plot_dir
+                    / f"retention_sweep_fsrs6_default_over_fsrs6_ratio_by_fsrs6_dr{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+                )
+                _plot_fsrs6_default_vs_fsrs6_ratio_boxplot(
+                    entry, output_path=out_path, title=title
+                )
+                print(f"Saved plot to {out_path}")
+
     if wants_equiv:
         summaries = _summarize_equivalent_distributions(equivalent_distributions)
         _print_equiv_report(summaries)
@@ -818,6 +851,97 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
     return entries
 
 
+def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
+    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    envs: List[str],
+    common_user_ids: set[int],
+) -> List[Dict[str, Any]]:
+    """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
+
+    For each user and each FSRS-6 desired retention point:
+    - take FSRS-6 (dr6, x6=memorized_average, y6=memorized_per_minute)
+    - interpolate FSRS-6 default to match x6 => y_default_equiv
+      - interpolation only (no extrapolation): if x6 is outside FSRS-6 default's
+        x-range, skip that (user, dr6) point.
+    - ratio = y_default_equiv / y6
+    - group ratio by dr6 (x axis is FSRS-6 DR)
+    """
+
+    entries: List[Dict[str, Any]] = []
+    for env in envs:
+        fsrs6_users: Dict[int, Dict[float, Dict[str, float]]] = {}
+        fsrs6_default_users: Dict[int, Dict[float, Dict[str, float]]] = {}
+
+        for (group_env, scheduler, desired, _), group in groups.items():
+            if group_env != env or desired is None:
+                continue
+            dr = round(float(desired), 2)
+            if scheduler == "fsrs6":
+                for user_key, payload in group["users"].items():
+                    if isinstance(user_key, int):
+                        fsrs6_users.setdefault(user_key, {})[dr] = payload["metrics"]
+            elif scheduler == "fsrs6_default":
+                for user_key, payload in group["users"].items():
+                    if isinstance(user_key, int):
+                        fsrs6_default_users.setdefault(user_key, {})[dr] = payload[
+                            "metrics"
+                        ]
+
+        if not fsrs6_users or not fsrs6_default_users:
+            continue
+
+        eligible_users = set(fsrs6_users) & set(fsrs6_default_users) & common_user_ids
+        if not eligible_users:
+            continue
+
+        fsrs6_dr: List[float] = []
+        ratio_values: List[float] = []
+        used_users: set[int] = set()
+        for user_id in sorted(eligible_users):
+            fsrs6_points = fsrs6_users[user_id]
+            fsrs6_default_points = fsrs6_default_users[user_id]
+            if len(fsrs6_default_points) < 2:
+                continue
+
+            default_curve = [
+                (dr, metrics) for dr, metrics in fsrs6_default_points.items()
+            ]
+            for dr6 in sorted(fsrs6_points):
+                metrics6 = fsrs6_points[dr6]
+                x6 = float(metrics6["memorized_average"])
+                y6 = float(metrics6["memorized_per_minute"])
+                if y6 <= 0 or not math.isfinite(y6):
+                    continue
+                interp = _interpolate_equivalent_point(
+                    default_curve,
+                    target_x=x6,
+                    allow_extrapolation=False,
+                )
+                if interp is None:
+                    continue
+                _dr_default, y_default = interp
+                ratio = y_default / y6
+                if not math.isfinite(ratio):
+                    continue
+                fsrs6_dr.append(float(dr6))
+                ratio_values.append(ratio)
+                used_users.add(user_id)
+
+        if not used_users:
+            continue
+
+        entries.append(
+            {
+                "environment": env,
+                "fsrs6_dr_equiv": fsrs6_dr,
+                "ratio_fsrs6_default_over_fsrs6": ratio_values,
+                "user_ids": used_users,
+            }
+        )
+
+    return entries
+
+
 def _plot_fsrs3_vs_fsrs6_ratio_boxplot(
     entry: Dict[str, Any],
     *,
@@ -856,6 +980,50 @@ def _plot_fsrs3_vs_fsrs6_ratio_boxplot(
     ax.set_xticklabels([f"{value * 100:.0f}%" for value in dr_bins], rotation=45)
     ax.set_xlabel("FSRS-6 DR (%)")
     ax.set_ylabel("FSRSv3 equiv / FSRS-6 equiv (cards/min)")
+    ax.set_title(title)
+    ax.grid(True, axis="y", ls="--", alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close(fig)
+
+
+def _plot_fsrs6_default_vs_fsrs6_ratio_boxplot(
+    entry: Dict[str, Any],
+    *,
+    output_path: Path,
+    title: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    dr_values: List[float] = [float(x) for x in entry["fsrs6_dr_equiv"]]
+    ratios: List[float] = [float(x) for x in entry["ratio_fsrs6_default_over_fsrs6"]]
+
+    binned: Dict[float, List[float]] = {}
+    for dr, ratio in zip(dr_values, ratios):
+        dr_bin = round(dr, 2)
+        binned.setdefault(dr_bin, []).append(ratio)
+
+    dr_bins = sorted(binned)
+    data = [binned[value] for value in dr_bins]
+    positions = list(range(1, len(dr_bins) + 1))
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.boxplot(
+        data,
+        positions=positions,
+        widths=0.6,
+        patch_artist=True,
+        showfliers=False,
+        boxprops={"facecolor": "#2ca02c", "edgecolor": "black", "alpha": 0.5},
+        medianprops={"color": "black"},
+        whiskerprops={"color": "black"},
+        capprops={"color": "black"},
+    )
+    ax.axhline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
+    ax.set_xticks(positions)
+    ax.set_xticklabels([f"{value * 100:.0f}%" for value in dr_bins], rotation=45)
+    ax.set_xlabel("FSRS-6 DR (%)")
+    ax.set_ylabel("FSRS-6 default equiv / FSRS-6 equiv (cards/min)")
     ax.set_title(title)
     ax.grid(True, axis="y", ls="--", alpha=0.6)
     plt.tight_layout()
