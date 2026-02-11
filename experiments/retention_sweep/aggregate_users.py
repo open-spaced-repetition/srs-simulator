@@ -753,6 +753,23 @@ def _interpolate_equivalent_point(
     return dr_equiv, y_equiv
 
 
+def _is_monotonic_increasing(
+    candidates: List[Tuple[float, Dict[str, float]]],
+    *,
+    tol: float = 1e-9,
+) -> bool:
+    if len(candidates) < 2:
+        return True
+    points = sorted(candidates, key=lambda item: float(item[0]))
+    prev = None
+    for _, payload in points:
+        value = float(payload["memorized_average"])
+        if prev is not None and value + tol < prev:
+            return False
+        prev = value
+    return True
+
+
 def _compute_equivalent_fsrs6_distributions(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
@@ -812,6 +829,8 @@ def _compute_equivalent_dr_distributions(
             for user_id in sorted(eligible_users):
                 baseline_metrics = baseline_users[user_id]
                 candidates = target_users[user_id]
+                if not _is_monotonic_increasing(candidates):
+                    continue
                 target_value = float(baseline_metrics["memorized_average"])
                 interp = _interpolate_equivalent_point(
                     candidates, target_x=target_value
@@ -894,6 +913,8 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
                 continue
 
             fsrs3_curve = [(dr, metrics) for dr, metrics in fsrs3_points.items()]
+            if not _is_monotonic_increasing(fsrs3_curve):
+                continue
             for dr6 in sorted(fsrs6_points):
                 metrics6 = fsrs6_points[dr6]
                 x6 = float(metrics6["memorized_average"])
@@ -985,6 +1006,8 @@ def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
             default_curve = [
                 (dr, metrics) for dr, metrics in fsrs6_default_points.items()
             ]
+            if not _is_monotonic_increasing(default_curve):
+                continue
             for dr6 in sorted(fsrs6_points):
                 metrics6 = fsrs6_points[dr6]
                 x6 = float(metrics6["memorized_average"])
