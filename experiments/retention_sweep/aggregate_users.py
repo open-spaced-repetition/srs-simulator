@@ -770,22 +770,6 @@ def _is_monotonic_increasing(
     return True
 
 
-def _compute_equivalent_fsrs6_distributions(
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
-    envs: List[str],
-    common_user_ids: set[int],
-    baselines: List[str],
-) -> List[Dict[str, Any]]:
-    # Backwards-compatible wrapper: original behavior is fsrs6 equivalence.
-    return _compute_equivalent_dr_distributions(
-        groups,
-        envs,
-        common_user_ids,
-        target="fsrs6",
-        baselines=baselines,
-    )
-
-
 def _compute_equivalent_dr_distributions(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
