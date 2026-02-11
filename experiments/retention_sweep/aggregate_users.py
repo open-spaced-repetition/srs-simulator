@@ -8,7 +8,7 @@ import statistics
 import sys
 from pathlib import Path
 from statistics import mean, median
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -194,17 +194,27 @@ def _load_meta_totals(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return meta, totals
 
 
-def _iter_log_paths(log_root: Path) -> Iterable[Path]:
+def _iter_log_paths(
+    log_root: Path, *, match_fn: Optional[Callable[[str], bool]] = None
+) -> Iterable[Path]:
     if not log_root.exists():
         return []
-    user_dirs = sorted(path for path in log_root.iterdir() if path.is_dir())
+    user_dirs = sorted(
+        path
+        for path in log_root.iterdir()
+        if path.is_dir() and path.name.startswith("user_")
+    )
     if user_dirs:
         for user_dir in user_dirs:
             for path in sorted(user_dir.glob("*.jsonl")):
+                if match_fn is not None and not match_fn(path.name):
+                    continue
                 yield path
-    else:
-        for path in sorted(log_root.glob("*.jsonl")):
-            yield path
+        return
+    for path in sorted(log_root.glob("*.jsonl")):
+        if match_fn is not None and not match_fn(path.name):
+            continue
+        yield path
 
 
 def _format_scheduler_title(scheduler: str) -> str:
@@ -296,6 +306,43 @@ def _infer_engine(meta: Dict[str, Any], path: Path) -> str | None:
     return None
 
 
+def _matches_filename(
+    name: str,
+    *,
+    envs: List[str],
+    scheds: List[str],
+    engine: str,
+    short_term: str,
+    short_term_source: str,
+    start_retention: float,
+    end_retention: float,
+) -> bool:
+    if envs and not any(f"env={env}" in name for env in envs):
+        return False
+    if scheds and not any(f"sched={sched}" in name for sched in scheds):
+        return False
+    if engine != "any" and f"engine={engine}" not in name:
+        return False
+    if short_term == "on":
+        if "_st=" not in name:
+            return False
+        if short_term_source != "any" and f"st={short_term_source}" not in name:
+            return False
+    elif short_term == "off":
+        if "_st=" in name and "st=off" not in name:
+            return False
+    if "ret=" in name:
+        match = re.search(r"ret=([0-9.]+)", name)
+        if match:
+            try:
+                value = float(match.group(1))
+            except ValueError:
+                return False
+            if value < start_retention or value > end_retention:
+                return False
+    return True
+
+
 def _load_user_sizes(path: Path) -> Dict[int, int]:
     sizes: Dict[int, int] = {}
     with path.open("r", encoding="utf-8") as fh:
@@ -367,7 +414,19 @@ def main() -> None:
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]] = {}
     duplicate_count = 0
 
-    for path in _iter_log_paths(log_root):
+    for path in _iter_log_paths(
+        log_root,
+        match_fn=lambda name: _matches_filename(
+            name,
+            envs=envs,
+            scheds=[name for name, _, _ in scheduler_specs],
+            engine=args.engine,
+            short_term=args.short_term,
+            short_term_source=args.short_term_source,
+            start_retention=args.start_retention,
+            end_retention=args.end_retention,
+        ),
+    ):
         try:
             meta, totals = _load_meta_totals(path)
         except ValueError:
