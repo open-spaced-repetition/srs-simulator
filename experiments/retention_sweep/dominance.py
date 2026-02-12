@@ -212,7 +212,6 @@ def _plot_dominance(
     b_dom = [item["b_dominates_pct"] * 100 for item in results]
     a_tradeoff = [item["a_b_tradeoff_pct"] * 100 for item in results]
     b_tradeoff = [item["b_a_tradeoff_pct"] * 100 for item in results]
-    neither = [item["neither_pct"] * 100 for item in results]
     counts = [item["user_count"] for item in results]
 
     x = np.arange(len(envs))
@@ -238,15 +237,6 @@ def _plot_dominance(
         bottom=[a + b + c for a, b, c in zip(a_dom, b_dom, a_tradeoff)],
         label=f"{b_label} higher memorized, lower efficiency",
         color="#d62728",
-    )
-    bars_neither = plt.bar(
-        x,
-        neither,
-        bottom=[
-            a + b + c + d for a, b, c, d in zip(a_dom, b_dom, a_tradeoff, b_tradeoff)
-        ],
-        label="Neither",
-        color="#7f7f7f",
     )
 
     def _label_segment(bars, values, bottoms):
@@ -274,14 +264,10 @@ def _plot_dominance(
     b_bottoms = a_dom
     a_tradeoff_bottoms = [a + b for a, b in zip(a_dom, b_dom)]
     b_tradeoff_bottoms = [a + b + c for a, b, c in zip(a_dom, b_dom, a_tradeoff)]
-    neither_bottoms = [
-        a + b + c + d for a, b, c, d in zip(a_dom, b_dom, a_tradeoff, b_tradeoff)
-    ]
     _label_segment(bars_a, a_dom, a_bottoms)
     _label_segment(bars_b, b_dom, b_bottoms)
     _label_segment(bars_a_tradeoff, a_tradeoff, a_tradeoff_bottoms)
     _label_segment(bars_b_tradeoff, b_tradeoff, b_tradeoff_bottoms)
-    _label_segment(bars_neither, neither, neither_bottoms)
 
     for idx, total in enumerate(counts):
         plt.text(
