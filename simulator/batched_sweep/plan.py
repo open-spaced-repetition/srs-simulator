@@ -16,6 +16,7 @@ SUPPORTED_ENVS = {"lstm", "fsrs6", "fsrs6_default"}
 SUPPORTED_SCHEDS = {
     "fsrs6",
     "fsrs6_default",
+    "fsrs3_default",
     "fsrs3",
     "lstm",
     "anki_sm2",
@@ -85,7 +86,7 @@ def build_batched_sweep_plan(
     runs_per_batch = 0
     for scheduler in schedulers:
         name, _, _ = parse_scheduler_spec(scheduler)
-        if name in {"fsrs6", "fsrs6_default", "fsrs3", "lstm"}:
+        if name in {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}:
             runs_per_batch += len(drs)
         else:
             runs_per_batch += 1

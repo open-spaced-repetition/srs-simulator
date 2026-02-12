@@ -7,7 +7,7 @@ import torch
 
 from simulator.benchmark_loader import load_benchmark_weights
 from simulator.batched_sweep.utils import format_id_list
-from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
+from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
 from simulator.models.lstm import _resolve_benchmark_weights
 
 
@@ -80,6 +80,13 @@ def build_default_fsrs6_weights(
     *, user_ids: list[int], device: torch.device
 ) -> torch.Tensor:
     tensor = torch.tensor(DEFAULT_FSRS6_WEIGHTS, dtype=torch.float32, device=device)
+    return tensor.repeat(len(user_ids), 1)
+
+
+def build_default_fsrs3_weights(
+    *, user_ids: list[int], device: torch.device
+) -> torch.Tensor:
+    tensor = torch.tensor(DEFAULT_FSRS3_WEIGHTS, dtype=torch.float32, device=device)
     return tensor.repeat(len(user_ids), 1)
 
 

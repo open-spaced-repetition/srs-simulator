@@ -22,6 +22,7 @@ from simulator.batched_sweep.behavior_cost import build_behavior_cost, load_usag
 from simulator.batched_sweep.logging import simulate_and_log
 from simulator.batched_sweep.utils import format_id_list
 from simulator.batched_sweep.weights import (
+    build_default_fsrs3_weights,
     build_default_fsrs6_weights,
     load_fsrs3_weights,
     load_fsrs6_weights,
@@ -91,6 +92,7 @@ def run_batch_core(
         fsrs_weights: torch.Tensor | None = None
         fsrs_default_weights: torch.Tensor | None = None
         fsrs3_weights: torch.Tensor | None = None
+        fsrs3_default_weights: torch.Tensor | None = None
 
         needs_lstm_weights = environment == "lstm" or "lstm" in scheduler_names
         needs_fsrs_weights = environment == "fsrs6" or "fsrs6" in scheduler_names
@@ -98,6 +100,7 @@ def run_batch_core(
             environment == "fsrs6_default" or "fsrs6_default" in scheduler_names
         )
         needs_fsrs3_weights = "fsrs3" in scheduler_names
+        needs_fsrs3_default = "fsrs3_default" in scheduler_names
 
         if needs_lstm_weights:
             lstm_paths, active_batch = resolve_lstm_paths(
@@ -170,6 +173,11 @@ def run_batch_core(
 
         if needs_fsrs_default:
             fsrs_default_weights = build_default_fsrs6_weights(
+                user_ids=active_batch,
+                device=base_device,
+            )
+        if needs_fsrs3_default:
+            fsrs3_default_weights = build_default_fsrs3_weights(
                 user_ids=active_batch,
                 device=base_device,
             )
@@ -250,6 +258,7 @@ def run_batch_core(
             if name not in {
                 "fsrs6",
                 "fsrs6_default",
+                "fsrs3_default",
                 "fsrs3",
                 "anki_sm2",
                 "memrise",
@@ -345,6 +354,47 @@ def run_batch_core(
                 if fsrs3_weights is None:
                     raise ValueError("Expected FSRS-3 weights for fsrs3 scheduler.")
                 weights = fsrs3_weights.to(env_ops.device)
+                for dr in dr_values:
+                    scheduler_ops = FSRS3BatchSchedulerOps(
+                        weights=weights,
+                        desired_retention=dr,
+                        bounds=Bounds(),
+                        device=env_ops.device,
+                        dtype=torch.float32,
+                    )
+                    simulate_and_log(
+                        write_log=simulate_cli._write_log,
+                        args=args,
+                        batch=active_batch,
+                        env_ops=env_ops,
+                        sched_ops=scheduler_ops,
+                        behavior=behavior,
+                        cost_model=cost_model,
+                        progress=progress,
+                        progress_queue=progress_queue,
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr={dr:.2f}",
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=dr,
+                        fixed_interval=fixed_interval,
+                        short_term_source=short_term_source,
+                        learning_steps=learning_steps,
+                        relearning_steps=relearning_steps,
+                        learning_steps_arg=learning_steps_arg,
+                        relearning_steps_arg=relearning_steps_arg,
+                        log_root=ctx.log_root,
+                        batch_log_root=ctx.batch_log_root,
+                    )
+                continue
+
+            if name == "fsrs3_default":
+                if fsrs3_default_weights is None:
+                    raise ValueError(
+                        "Expected default FSRS-3 weights for fsrs3_default scheduler."
+                    )
+                weights = fsrs3_default_weights.to(env_ops.device)
                 for dr in dr_values:
                     scheduler_ops = FSRS3BatchSchedulerOps(
                         weights=weights,

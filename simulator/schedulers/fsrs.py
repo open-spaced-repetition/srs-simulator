@@ -33,7 +33,7 @@ from simulator.math.fsrs_batch import (
     fsrs6_stability_after_success as fsrs6_stability_after_success_batch,
     fsrs6_stability_short_term as fsrs6_stability_short_term_batch,
 )
-from simulator.fsrs_defaults import resolve_fsrs6_weights
+from simulator.fsrs_defaults import resolve_fsrs3_weights, resolve_fsrs6_weights
 
 if TYPE_CHECKING:
     import torch
@@ -129,8 +129,7 @@ class FSRS3Scheduler(Scheduler):
         desired_retention: float = 0.9,
         bounds: Bounds = Bounds(),
     ):
-        if weights is None:
-            raise ValueError("FSRS3Scheduler requires weights from srs-benchmark.")
+        weights = resolve_fsrs3_weights(weights)
         if len(weights) != 13:
             raise ValueError("FSRS3Scheduler expects 13 weights.")
         self.params = FSRS3Params(tuple(float(w) for w in weights), bounds)

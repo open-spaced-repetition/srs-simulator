@@ -5,6 +5,7 @@ def parse_scheduler_spec(value: str) -> tuple[str, float | None, str]:
     raw = value.strip()
     if "@" not in raw:
         aliases = {
+            "fsrs3-default": "fsrs3_default",
             "fsrs6-default": "fsrs6_default",
         }
         return aliases.get(raw, raw), None, raw

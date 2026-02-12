@@ -234,6 +234,7 @@ def _format_scheduler_title(scheduler: str) -> str:
     labels = {
         "anki_sm2": "Anki-SM-2",
         "fsrs3": "FSRSv3",
+        "fsrs3_default": "FSRSv3 (default)",
         "fsrs6": "FSRS-6",
         "fsrs6_default": "FSRS-6 (default)",
         "memrise": "Memrise",

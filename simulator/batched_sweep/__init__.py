@@ -5,6 +5,8 @@ from simulator.batched_sweep.utils import (
     chunked,
 )
 from simulator.batched_sweep.weights import (
+    build_default_fsrs3_weights,
+    build_default_fsrs6_weights,
     load_fsrs3_weights,
     load_fsrs6_weights,
     resolve_lstm_paths,
@@ -29,6 +31,8 @@ __all__ = [
     "dr_values",
     "format_id_list",
     "parse_cuda_devices",
+    "build_default_fsrs3_weights",
+    "build_default_fsrs6_weights",
     "load_fsrs3_weights",
     "load_fsrs6_weights",
     "resolve_lstm_paths",

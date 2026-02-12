@@ -102,6 +102,7 @@ ENVIRONMENT_FACTORIES = {
     "fsrs3": lambda args: FSRS3Model(
         weights=_resolve_benchmark_weights(args, "fsrs3", expected_len=13)
     ),
+    "fsrs3_default": lambda args: FSRS3Model(weights=None),
 }
 
 
@@ -126,6 +127,10 @@ SCHEDULER_FACTORIES = {
     ),
     "fsrs3": lambda args: FSRS3Scheduler(
         weights=_resolve_benchmark_weights(args, "fsrs3", expected_len=13),
+        desired_retention=args.desired_retention,
+    ),
+    "fsrs3_default": lambda args: FSRS3Scheduler(
+        weights=None,
         desired_retention=args.desired_retention,
     ),
     "hlr": lambda args: HLRScheduler(
