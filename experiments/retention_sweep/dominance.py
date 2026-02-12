@@ -54,6 +54,18 @@ def parse_args() -> argparse.Namespace:
         help="Treat metric differences within this epsilon as ties.",
     )
     parser.add_argument(
+        "--engine",
+        choices=["event", "vectorized", "batched", "any"],
+        default="any",
+        help="Filter logs by simulation engine.",
+    )
+    parser.add_argument(
+        "--priority",
+        choices=["review-first", "new-first", "any"],
+        default="any",
+        help="Filter logs by review priority.",
+    )
+    parser.add_argument(
         "--fsrs6-default-dr",
         type=float,
         default=0.9,
@@ -89,6 +101,44 @@ def _normalize_bool(value: Any) -> Optional[bool]:
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False
+    return None
+
+
+def _infer_engine(meta: Dict[str, Any], path: Path) -> Optional[str]:
+    value = meta.get("engine")
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered == "batch":
+            lowered = "batched"
+        if lowered in {"event", "vectorized", "batched"}:
+            return lowered
+    marker = "_engine="
+    if marker in path.name:
+        try:
+            lowered = path.name.split(marker, 1)[1].split("_", 1)[0].strip().lower()
+        except IndexError:
+            return None
+        if lowered == "batch":
+            lowered = "batched"
+        if lowered in {"event", "vectorized", "batched"}:
+            return lowered
+    return None
+
+
+def _infer_priority(meta: Dict[str, Any], path: Path) -> Optional[str]:
+    value = meta.get("priority")
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"review-first", "new-first"}:
+            return lowered
+    marker = "_prio="
+    if marker in path.name:
+        try:
+            lowered = path.name.split(marker, 1)[1].split("_", 1)[0].strip().lower()
+        except IndexError:
+            return None
+        if lowered in {"review-first", "new-first"}:
+            return lowered
     return None
 
 
@@ -307,6 +357,13 @@ def main() -> None:
         try:
             meta, totals = _load_meta_totals(path)
         except ValueError:
+            continue
+
+        engine = _infer_engine(meta, path)
+        if args.engine != "any" and engine != args.engine:
+            continue
+        priority = _infer_priority(meta, path)
+        if args.priority != "any" and priority != args.priority:
             continue
 
         environment = meta.get("environment")
