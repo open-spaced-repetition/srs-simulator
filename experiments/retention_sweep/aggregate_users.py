@@ -91,6 +91,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--equiv-report-low-ratio",
+        action="store_true",
+        help="Print user IDs with equiv ratio < 0.8.",
+    )
+    parser.add_argument(
         "--equiv-report-path",
         type=Path,
         default=None,
@@ -655,6 +660,26 @@ def main() -> None:
             baselines=["anki_sm2", "memrise"],
         )
 
+    if args.equiv_report_low_ratio:
+        for entry in equivalent_distributions:
+            baseline = _format_scheduler_title(entry["baseline"])
+            target = _format_scheduler_title(entry.get("target", "fsrs6"))
+            user_ids_list = entry.get("user_ids_list", [])
+            baseline_vals = entry.get("baseline_per_minute", [])
+            target_vals = entry.get("target_per_minute", [])
+            low_ids = [
+                user_id
+                for user_id, base_val, targ_val in zip(
+                    user_ids_list, baseline_vals, target_vals
+                )
+                if base_val and targ_val and (targ_val / base_val) < 0.8
+            ]
+            if low_ids:
+                print(
+                    f"Low ratio (<0.8) {target} vs {baseline} "
+                    f"(env={entry.get('environment')}): {sorted(low_ids)}"
+                )
+
     if not args.no_plot:
         plot_dir.mkdir(parents=True, exist_ok=True)
         _setup_plot_style()
@@ -767,9 +792,8 @@ def _interpolate_equivalent_point(
     candidates: List[Tuple[float, Dict[str, float]]],
     *,
     target_x: float,
-    allow_extrapolation: bool = True,
 ) -> Tuple[float, float] | None:
-    """Interpolate (dr, y) at target memorized-average x.
+    """Interpolate (dr, y) at target memorized-average x without extrapolation.
 
     candidates is a list of (desired_retention, metrics) for a single user and
     scheduler where metrics has keys: memorized_average (x) and memorized_per_minute (y).
@@ -785,20 +809,17 @@ def _interpolate_equivalent_point(
         }
         for dr, payload in candidates
     ]
-    points.sort(key=lambda item: item["x"])
+    # Iterate in DR order, find the first point above the target x.
+    points.sort(key=lambda item: item["dr"])
     lower = None
     upper = None
     for point in points:
-        if point["x"] <= target_x:
-            lower = point
-        if point["x"] >= target_x and upper is None:
+        if point["x"] >= target_x:
             upper = point
+            break
+        lower = point
     if lower is None or upper is None:
-        if not allow_extrapolation:
-            return None
-        points.sort(key=lambda item: abs(item["x"] - target_x))
-        lower = points[0]
-        upper = points[1]
+        return None
     x1 = lower["x"]
     x2 = upper["x"]
     if math.isclose(x1, x2):
@@ -868,6 +889,7 @@ def _compute_equivalent_dr_distributions(
             baseline_per_minute: List[float] = []
             target_per_minute: List[float] = []
             target_dr_equiv: List[float] = []
+            user_ids_list: List[int] = []
             used_users: set[int] = set()
             for user_id in sorted(eligible_users):
                 baseline_metrics = baseline_users[user_id]
@@ -885,6 +907,7 @@ def _compute_equivalent_dr_distributions(
                 baseline_per_minute.append(baseline_metrics["memorized_per_minute"])
                 target_per_minute.append(y_equiv)
                 target_dr_equiv.append(dr_equiv)
+                user_ids_list.append(user_id)
                 used_users.add(user_id)
 
             if not used_users:
@@ -898,6 +921,7 @@ def _compute_equivalent_dr_distributions(
                     "target": target,
                     "target_per_minute": target_per_minute,
                     "target_dr_equiv": target_dr_equiv,
+                    "user_ids_list": user_ids_list,
                     "user_ids": used_users,
                 }
             )
@@ -967,7 +991,6 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
                 interp = _interpolate_equivalent_point(
                     fsrs3_curve,
                     target_x=x6,
-                    allow_extrapolation=False,
                 )
                 if interp is None:
                     continue
@@ -1060,7 +1083,6 @@ def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
                 interp = _interpolate_equivalent_point(
                     default_curve,
                     target_x=x6,
-                    allow_extrapolation=False,
                 )
                 if interp is None:
                     continue
