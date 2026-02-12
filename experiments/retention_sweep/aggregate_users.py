@@ -96,6 +96,14 @@ def parse_args() -> argparse.Namespace:
         help="Print user IDs with equiv ratio < 0.8.",
     )
     parser.add_argument(
+        "--equiv-require-monotonic",
+        action="store_true",
+        help=(
+            "Exclude users whose memorized-average is not monotonic increasing with "
+            "desired retention when computing equivalent comparisons."
+        ),
+    )
+    parser.add_argument(
         "--equiv-report-path",
         type=Path,
         default=None,
@@ -658,6 +666,7 @@ def main() -> None:
             common_user_ids,
             target=equiv_target,
             baselines=["anki_sm2", "memrise"],
+            require_monotonic=args.equiv_require_monotonic,
         )
 
     if args.equiv_report_low_ratio:
@@ -722,6 +731,7 @@ def main() -> None:
                 groups,
                 envs,
                 common_user_ids,
+                require_monotonic=args.equiv_require_monotonic,
             )
             for entry in ratio_entries:
                 env_label = entry["environment"]
@@ -747,6 +757,7 @@ def main() -> None:
                 groups,
                 envs,
                 common_user_ids,
+                require_monotonic=args.equiv_require_monotonic,
             )
             for entry in ratio_entries:
                 env_label = entry["environment"]
@@ -857,6 +868,7 @@ def _compute_equivalent_dr_distributions(
     *,
     target: str,
     baselines: List[str],
+    require_monotonic: bool,
 ) -> List[Dict[str, Any]]:
     distributions: List[Dict[str, Any]] = []
     for env in envs:
@@ -894,7 +906,7 @@ def _compute_equivalent_dr_distributions(
             for user_id in sorted(eligible_users):
                 baseline_metrics = baseline_users[user_id]
                 candidates = target_users[user_id]
-                if not _is_monotonic_increasing(candidates):
+                if require_monotonic and not _is_monotonic_increasing(candidates):
                     continue
                 target_value = float(baseline_metrics["memorized_average"])
                 interp = _interpolate_equivalent_point(
@@ -933,6 +945,8 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
+    *,
+    require_monotonic: bool,
 ) -> List[Dict[str, Any]]:
     """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
 
@@ -980,7 +994,7 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
                 continue
 
             fsrs3_curve = [(dr, metrics) for dr, metrics in fsrs3_points.items()]
-            if not _is_monotonic_increasing(fsrs3_curve):
+            if require_monotonic and not _is_monotonic_increasing(fsrs3_curve):
                 continue
             for dr6 in sorted(fsrs6_points):
                 metrics6 = fsrs6_points[dr6]
@@ -1021,6 +1035,8 @@ def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
+    *,
+    require_monotonic: bool,
 ) -> List[Dict[str, Any]]:
     """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
 
@@ -1072,7 +1088,7 @@ def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
             default_curve = [
                 (dr, metrics) for dr, metrics in fsrs6_default_points.items()
             ]
-            if not _is_monotonic_increasing(default_curve):
+            if require_monotonic and not _is_monotonic_increasing(default_curve):
                 continue
             for dr6 in sorted(fsrs6_points):
                 metrics6 = fsrs6_points[dr6]
