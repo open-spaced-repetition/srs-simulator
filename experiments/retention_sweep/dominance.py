@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Compare Anki-SM-2 vs Memrise dominance per user using retention_sweep logs."
+            "Compare scheduler dominance per user using retention_sweep logs."
         ),
         allow_abbrev=False,
     )
@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Treat metric differences within this epsilon as ties.",
+    )
+    parser.add_argument(
+        "--fsrs6-default-dr",
+        type=float,
+        default=0.9,
+        help="Desired retention to select FSRS-6 default logs.",
     )
     parser.add_argument(
         "--short-term",
@@ -152,35 +158,35 @@ def _compare(a: float, b: float, epsilon: float) -> int:
 
 
 def _dominance_label(
-    sm2_metrics: Dict[str, float],
-    memrise_metrics: Dict[str, float],
+    a_metrics: Dict[str, float],
+    b_metrics: Dict[str, float],
     *,
     epsilon: float,
 ) -> str:
     mem_cmp = _compare(
-        sm2_metrics["memorized_average"],
-        memrise_metrics["memorized_average"],
+        a_metrics["memorized_average"],
+        b_metrics["memorized_average"],
         epsilon,
     )
     eff_cmp = _compare(
-        sm2_metrics["memorized_per_minute"],
-        memrise_metrics["memorized_per_minute"],
+        a_metrics["memorized_per_minute"],
+        b_metrics["memorized_per_minute"],
         epsilon,
     )
     if mem_cmp == 0 and eff_cmp == 0:
         return "neither"
     if mem_cmp == 0:
-        return "sm2_dominates" if eff_cmp > 0 else "memrise_dominates"
+        return "a_dominates" if eff_cmp > 0 else "b_dominates"
     if eff_cmp == 0:
-        return "sm2_dominates" if mem_cmp > 0 else "memrise_dominates"
+        return "a_dominates" if mem_cmp > 0 else "b_dominates"
     if mem_cmp > 0 and eff_cmp > 0:
-        return "sm2_dominates"
+        return "a_dominates"
     if mem_cmp < 0 and eff_cmp < 0:
-        return "memrise_dominates"
+        return "b_dominates"
     if mem_cmp > 0 and eff_cmp < 0:
-        return "sm2_memrise_tradeoff"
+        return "a_b_tradeoff"
     if mem_cmp < 0 and eff_cmp > 0:
-        return "memrise_sm2_tradeoff"
+        return "b_a_tradeoff"
     return "neither"
 
 
@@ -194,48 +200,50 @@ def _plot_dominance(
     results: List[Dict[str, Any]],
     output_path: Path,
     title: str,
+    *,
+    a_label: str,
+    b_label: str,
 ) -> None:
     import matplotlib.pyplot as plt
     import numpy as np
 
     envs = [item["environment"] for item in results]
-    sm2 = [item["sm2_dominates_pct"] * 100 for item in results]
-    memrise = [item["memrise_dominates_pct"] * 100 for item in results]
-    sm2_tradeoff = [item["sm2_memrise_tradeoff_pct"] * 100 for item in results]
-    memrise_tradeoff = [item["memrise_sm2_tradeoff_pct"] * 100 for item in results]
+    a_dom = [item["a_dominates_pct"] * 100 for item in results]
+    b_dom = [item["b_dominates_pct"] * 100 for item in results]
+    a_tradeoff = [item["a_b_tradeoff_pct"] * 100 for item in results]
+    b_tradeoff = [item["b_a_tradeoff_pct"] * 100 for item in results]
     neither = [item["neither_pct"] * 100 for item in results]
     counts = [item["user_count"] for item in results]
 
     x = np.arange(len(envs))
     plt.figure(figsize=(10, 6))
-    bars_sm2 = plt.bar(x, sm2, label="SM-2 dominates", color="#1f77b4")
-    bars_memrise = plt.bar(
+    bars_a = plt.bar(x, a_dom, label=f"{a_label} dominates", color="#1f77b4")
+    bars_b = plt.bar(
         x,
-        memrise,
-        bottom=sm2,
-        label="Memrise dominates",
+        b_dom,
+        bottom=a_dom,
+        label=f"{b_label} dominates",
         color="#2ca02c",
     )
-    bars_sm2_tradeoff = plt.bar(
+    bars_a_tradeoff = plt.bar(
         x,
-        sm2_tradeoff,
-        bottom=[a + b for a, b in zip(sm2, memrise)],
-        label="SM-2 higher memorized, lower efficiency",
+        a_tradeoff,
+        bottom=[a + b for a, b in zip(a_dom, b_dom)],
+        label=f"{a_label} higher memorized, lower efficiency",
         color="#ff7f0e",
     )
-    bars_memrise_tradeoff = plt.bar(
+    bars_b_tradeoff = plt.bar(
         x,
-        memrise_tradeoff,
-        bottom=[a + b + c for a, b, c in zip(sm2, memrise, sm2_tradeoff)],
-        label="Memrise higher memorized, lower efficiency",
+        b_tradeoff,
+        bottom=[a + b + c for a, b, c in zip(a_dom, b_dom, a_tradeoff)],
+        label=f"{b_label} higher memorized, lower efficiency",
         color="#d62728",
     )
     bars_neither = plt.bar(
         x,
         neither,
         bottom=[
-            a + b + c + d
-            for a, b, c, d in zip(sm2, memrise, sm2_tradeoff, memrise_tradeoff)
+            a + b + c + d for a, b, c, d in zip(a_dom, b_dom, a_tradeoff, b_tradeoff)
         ],
         label="Neither",
         color="#7f7f7f",
@@ -262,20 +270,17 @@ def _plot_dominance(
                 color="white" if value >= 5.0 else "black",
             )
 
-    sm2_bottoms = [0.0] * len(x)
-    memrise_bottoms = sm2
-    sm2_tradeoff_bottoms = [a + b for a, b in zip(sm2, memrise)]
-    memrise_tradeoff_bottoms = [
-        a + b + c for a, b, c in zip(sm2, memrise, sm2_tradeoff)
-    ]
+    a_bottoms = [0.0] * len(x)
+    b_bottoms = a_dom
+    a_tradeoff_bottoms = [a + b for a, b in zip(a_dom, b_dom)]
+    b_tradeoff_bottoms = [a + b + c for a, b, c in zip(a_dom, b_dom, a_tradeoff)]
     neither_bottoms = [
-        a + b + c + d
-        for a, b, c, d in zip(sm2, memrise, sm2_tradeoff, memrise_tradeoff)
+        a + b + c + d for a, b, c, d in zip(a_dom, b_dom, a_tradeoff, b_tradeoff)
     ]
-    _label_segment(bars_sm2, sm2, sm2_bottoms)
-    _label_segment(bars_memrise, memrise, memrise_bottoms)
-    _label_segment(bars_sm2_tradeoff, sm2_tradeoff, sm2_tradeoff_bottoms)
-    _label_segment(bars_memrise_tradeoff, memrise_tradeoff, memrise_tradeoff_bottoms)
+    _label_segment(bars_a, a_dom, a_bottoms)
+    _label_segment(bars_b, b_dom, b_bottoms)
+    _label_segment(bars_a_tradeoff, a_tradeoff, a_tradeoff_bottoms)
+    _label_segment(bars_b_tradeoff, b_tradeoff, b_tradeoff_bottoms)
     _label_segment(bars_neither, neither, neither_bottoms)
 
     for idx, total in enumerate(counts):
@@ -304,9 +309,13 @@ def main() -> None:
     log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
     envs = _parse_csv(args.env)
 
-    sm2_users: Dict[Tuple[str, int], Dict[str, Any]] = {}
-    memrise_users: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    sched_users: Dict[str, Dict[Tuple[str, int], Dict[str, Any]]] = {
+        "anki_sm2": {},
+        "memrise": {},
+        "fsrs6_default": {},
+    }
     duplicate_count = 0
+    target_dr = round(float(args.fsrs6_default_dr), 2)
 
     for path in _iter_log_paths(log_root):
         try:
@@ -320,8 +329,18 @@ def main() -> None:
             continue
         if envs and environment not in envs:
             continue
-        if scheduler not in {"anki_sm2", "memrise"}:
+        if scheduler not in {"anki_sm2", "memrise", "fsrs6_default"}:
             continue
+        if scheduler == "fsrs6_default":
+            desired = meta.get("desired_retention")
+            if desired is None:
+                continue
+            try:
+                desired_value = round(float(desired), 2)
+            except (TypeError, ValueError):
+                continue
+            if desired_value != target_dr:
+                continue
 
         short_term_value = _normalize_bool(meta.get("short_term"))
         if args.short_term != "any":
@@ -353,7 +372,7 @@ def main() -> None:
             continue
 
         key = (environment, user_id)
-        target = sm2_users if scheduler == "anki_sm2" else memrise_users
+        target = sched_users[scheduler]
         existing = target.get(key)
         mtime = path.stat().st_mtime
         if existing is not None:
@@ -368,59 +387,68 @@ def main() -> None:
             "mtime": mtime,
         }
 
+    comparisons = [
+        ("anki_sm2", "memrise"),
+        ("fsrs6_default", "anki_sm2"),
+        ("fsrs6_default", "memrise"),
+    ]
     results: List[Dict[str, Any]] = []
-    for env in envs:
-        sm2_for_env = {
-            user_id: payload["metrics"]
-            for (env_key, user_id), payload in sm2_users.items()
-            if env_key == env
-        }
-        memrise_for_env = {
-            user_id: payload["metrics"]
-            for (env_key, user_id), payload in memrise_users.items()
-            if env_key == env
-        }
-        eligible_users = set(sm2_for_env) & set(memrise_for_env)
-        if not eligible_users:
-            continue
-        counts = {
-            "sm2_dominates": 0,
-            "memrise_dominates": 0,
-            "sm2_memrise_tradeoff": 0,
-            "memrise_sm2_tradeoff": 0,
-            "neither": 0,
-        }
-        neither_users: List[int] = []
-        for user_id in eligible_users:
-            label = _dominance_label(
-                sm2_for_env[user_id],
-                memrise_for_env[user_id],
-                epsilon=args.epsilon,
-            )
-            counts[label] += 1
-            if label == "neither":
-                neither_users.append(user_id)
-        total = len(eligible_users)
-        results.append(
-            {
-                "environment": env,
-                "user_count": total,
-                "sm2_dominates": counts["sm2_dominates"],
-                "memrise_dominates": counts["memrise_dominates"],
-                "sm2_memrise_tradeoff": counts["sm2_memrise_tradeoff"],
-                "memrise_sm2_tradeoff": counts["memrise_sm2_tradeoff"],
-                "neither": counts["neither"],
-                "sm2_dominates_pct": counts["sm2_dominates"] / total,
-                "memrise_dominates_pct": counts["memrise_dominates"] / total,
-                "sm2_memrise_tradeoff_pct": counts["sm2_memrise_tradeoff"] / total,
-                "memrise_sm2_tradeoff_pct": counts["memrise_sm2_tradeoff"] / total,
-                "neither_pct": counts["neither"] / total,
-                "neither_users": sorted(neither_users),
+    for left, right in comparisons:
+        for env in envs:
+            left_for_env = {
+                user_id: payload["metrics"]
+                for (env_key, user_id), payload in sched_users[left].items()
+                if env_key == env
             }
-        )
+            right_for_env = {
+                user_id: payload["metrics"]
+                for (env_key, user_id), payload in sched_users[right].items()
+                if env_key == env
+            }
+            eligible_users = set(left_for_env) & set(right_for_env)
+            if not eligible_users:
+                continue
+            counts = {
+                "a_dominates": 0,
+                "b_dominates": 0,
+                "a_b_tradeoff": 0,
+                "b_a_tradeoff": 0,
+                "neither": 0,
+            }
+            neither_users: List[int] = []
+            for user_id in eligible_users:
+                label = _dominance_label(
+                    left_for_env[user_id],
+                    right_for_env[user_id],
+                    epsilon=args.epsilon,
+                )
+                counts[label] += 1
+                if label == "neither":
+                    neither_users.append(user_id)
+            total = len(eligible_users)
+            results.append(
+                {
+                    "environment": env,
+                    "pair": f"{left}_vs_{right}",
+                    "left": left,
+                    "right": right,
+                    "user_count": total,
+                    "a_dominates": counts["a_dominates"],
+                    "b_dominates": counts["b_dominates"],
+                    "a_b_tradeoff": counts["a_b_tradeoff"],
+                    "b_a_tradeoff": counts["b_a_tradeoff"],
+                    "neither": counts["neither"],
+                    "a_dominates_pct": counts["a_dominates"] / total,
+                    "b_dominates_pct": counts["b_dominates"] / total,
+                    "a_b_tradeoff_pct": counts["a_b_tradeoff"] / total,
+                    "b_a_tradeoff_pct": counts["b_a_tradeoff"] / total,
+                    "neither_pct": counts["neither"] / total,
+                    "neither_users": sorted(neither_users),
+                }
+            )
 
     results_path = args.results_path or (
-        log_root / "simulation_results_retention_sweep_sm2_memrise_dominance.json"
+        log_root / "simulation_results_retention_sweep_dominance.json"
     )
     results_path.parent.mkdir(parents=True, exist_ok=True)
     with results_path.open("w", encoding="utf-8") as fh:
@@ -438,11 +466,40 @@ def main() -> None:
     )
     plot_dir.mkdir(parents=True, exist_ok=True)
     _setup_plot_style()
-    output_path = plot_dir / "dominance_sm2_memrise.png"
-    title = "SM-2 vs Memrise dominance (per user)"
-    _plot_dominance(results, output_path, title)
+    for left, right in comparisons:
+        pair_results = [
+            item
+            for item in results
+            if item.get("left") == left and item.get("right") == right
+        ]
+        if not pair_results:
+            continue
+        if left == "anki_sm2" and right == "memrise":
+            output_name = "dominance_sm2_memrise.png"
+        else:
+            output_name = f"dominance_{left}_vs_{right}.png"
+        output_path = plot_dir / output_name
+        title = (
+            f"{left} vs {right} dominance (per user)"
+            if left != "fsrs6_default"
+            else f"{left} (DR={target_dr:.2f}) vs {right} dominance (per user)"
+        )
+        _plot_dominance(
+            pair_results,
+            output_path,
+            title,
+            a_label=left,
+            b_label=right,
+        )
     print(f"Wrote {results_path}")
-    print(f"Saved plot to {output_path}")
+    for left, right in comparisons:
+        if left == "anki_sm2" and right == "memrise":
+            output_name = "dominance_sm2_memrise.png"
+        else:
+            output_name = f"dominance_{left}_vs_{right}.png"
+        output_path = plot_dir / output_name
+        if output_path.exists():
+            print(f"Saved plot to {output_path}")
 
 
 if __name__ == "__main__":
