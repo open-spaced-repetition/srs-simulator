@@ -301,7 +301,7 @@ def _plot_dominance(
                 continue
             y = bottom + value / 2
             text = f"{value:.1f}%"
-            if value < 3.0:
+            if value < 6.0:
                 y = bottom + value + 1.2 + small_offsets[idx] * 1.4
                 small_offsets[idx] += 1
                 va = "bottom"
