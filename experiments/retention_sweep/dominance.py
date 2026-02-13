@@ -318,7 +318,7 @@ def _plot_dominance(
     counts = [item["user_count"] for item in results]
 
     x = np.arange(len(envs))
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 7))
     bars_a = plt.bar(x, a_dom, label=f"{a_label} dominates", color="#1f77b4")
     bars_b = plt.bar(
         x,
@@ -403,9 +403,14 @@ def _plot_dominance(
     plt.ylabel("Users (%)")
     plt.title(title)
     plt.ylim(0, 110)
-    plt.legend(frameon=False, loc="upper left", bbox_to_anchor=(1.02, 1.0))
+    plt.legend(
+        frameon=False,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.12),
+        ncol=2,
+    )
     plt.grid(True, axis="y", ls="--", alpha=0.6)
-    plt.tight_layout()
+    plt.tight_layout(rect=(0.0, 0.08, 1.0, 0.95))
     plt.savefig(output_path)
     plt.close()
 
