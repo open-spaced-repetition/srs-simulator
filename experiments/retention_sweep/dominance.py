@@ -302,20 +302,34 @@ def _plot_dominance(
             y = bottom + value / 2
             text = f"{value:.1f}%"
             if value < 6.0:
-                y = bottom + value + 1.2 + small_offsets[idx] * 1.4
+                offset = 1.2 + small_offsets[idx] * 1.4
+                y = bottom + value + offset
                 small_offsets[idx] += 1
                 va = "bottom"
             else:
                 va = "center"
-            plt.text(
-                bar.get_x() + bar.get_width() / 2,
-                y,
-                text,
-                ha="center",
-                va=va,
-                fontsize=9,
-                color="white" if value >= 5.0 else "black",
-            )
+            x = bar.get_x() + bar.get_width() / 2
+            if value < 6.0:
+                plt.annotate(
+                    text,
+                    xy=(x, bottom + value / 2),
+                    xytext=(x, y),
+                    ha="center",
+                    va=va,
+                    fontsize=9,
+                    color="black",
+                    arrowprops=dict(arrowstyle="-", color="black", lw=0.8),
+                )
+            else:
+                plt.text(
+                    x,
+                    y,
+                    text,
+                    ha="center",
+                    va=va,
+                    fontsize=9,
+                    color="white" if value >= 5.0 else "black",
+                )
 
     a_bottoms = [0.0] * len(x)
     b_bottoms = a_dom
