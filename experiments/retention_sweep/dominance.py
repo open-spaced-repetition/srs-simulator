@@ -295,14 +295,15 @@ def _plot_dominance(
         color="#d62728",
     )
 
-    def _label_segment(bars, values, bottoms):
-        for bar, value, bottom in zip(bars, values, bottoms):
+    def _label_segment(bars, values, bottoms, small_offsets):
+        for idx, (bar, value, bottom) in enumerate(zip(bars, values, bottoms)):
             if value <= 0:
                 continue
             y = bottom + value / 2
             text = f"{value:.1f}%"
             if value < 3.0:
-                y = bottom + value + 1.2
+                y = bottom + value + 1.2 + small_offsets[idx] * 1.4
+                small_offsets[idx] += 1
                 va = "bottom"
             else:
                 va = "center"
@@ -320,10 +321,11 @@ def _plot_dominance(
     b_bottoms = a_dom
     a_tradeoff_bottoms = [a + b for a, b in zip(a_dom, b_dom)]
     b_tradeoff_bottoms = [a + b + c for a, b, c in zip(a_dom, b_dom, a_tradeoff)]
-    _label_segment(bars_a, a_dom, a_bottoms)
-    _label_segment(bars_b, b_dom, b_bottoms)
-    _label_segment(bars_a_tradeoff, a_tradeoff, a_tradeoff_bottoms)
-    _label_segment(bars_b_tradeoff, b_tradeoff, b_tradeoff_bottoms)
+    small_offsets = [0] * len(x)
+    _label_segment(bars_a, a_dom, a_bottoms, small_offsets)
+    _label_segment(bars_b, b_dom, b_bottoms, small_offsets)
+    _label_segment(bars_a_tradeoff, a_tradeoff, a_tradeoff_bottoms, small_offsets)
+    _label_segment(bars_b_tradeoff, b_tradeoff, b_tradeoff_bottoms, small_offsets)
 
     for idx, total in enumerate(counts):
         plt.text(
