@@ -604,6 +604,7 @@ def main() -> None:
     )
     plot_dir.mkdir(parents=True, exist_ok=True)
     _setup_plot_style()
+    saved_paths: List[Path] = []
     for left, right in comparisons:
         pair_results = [
             item
@@ -623,11 +624,10 @@ def main() -> None:
             a_label=left_label,
             b_label=right_label,
         )
+        saved_paths.append(output_path)
     print(f"Wrote {results_path}")
-    for left, right in comparisons:
-        output_path = plot_dir / _output_name(left, right)
-        if output_path.exists():
-            print(f"Saved plot to {output_path}")
+    for output_path in saved_paths:
+        print(f"Saved plot to {output_path}")
 
 
 if __name__ == "__main__":
