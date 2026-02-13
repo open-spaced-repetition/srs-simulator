@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         help="Desired retention to select FSRS-6 default logs.",
     )
     parser.add_argument(
+        "--fsrs3-default-dr",
+        type=float,
+        default=0.9,
+        help="Desired retention to select FSRS-3 default logs.",
+    )
+    parser.add_argument(
         "--short-term",
         choices=["on", "off", "any"],
         default="any",
@@ -349,9 +355,11 @@ def main() -> None:
         "anki_sm2": {},
         "memrise": {},
         "fsrs6_default": {},
+        "fsrs3_default": {},
     }
     duplicate_count = 0
     target_dr = round(float(args.fsrs6_default_dr), 2)
+    target_dr_fsrs3 = round(float(args.fsrs3_default_dr), 2)
 
     for path in _iter_log_paths(log_root):
         try:
@@ -372,7 +380,7 @@ def main() -> None:
             continue
         if envs and environment not in envs:
             continue
-        if scheduler not in {"anki_sm2", "memrise", "fsrs6_default"}:
+        if scheduler not in {"anki_sm2", "memrise", "fsrs6_default", "fsrs3_default"}:
             continue
         if scheduler == "fsrs6_default":
             desired = meta.get("desired_retention")
@@ -383,6 +391,16 @@ def main() -> None:
             except (TypeError, ValueError):
                 continue
             if desired_value != target_dr:
+                continue
+        if scheduler == "fsrs3_default":
+            desired = meta.get("desired_retention")
+            if desired is None:
+                continue
+            try:
+                desired_value = round(float(desired), 2)
+            except (TypeError, ValueError):
+                continue
+            if desired_value != target_dr_fsrs3:
                 continue
 
         short_term_value = _normalize_bool(meta.get("short_term"))
@@ -434,6 +452,7 @@ def main() -> None:
         ("anki_sm2", "memrise"),
         ("fsrs6_default", "anki_sm2"),
         ("fsrs6_default", "memrise"),
+        ("fsrs3_default", "fsrs6_default"),
     ]
     results: List[Dict[str, Any]] = []
     for left, right in comparisons:
@@ -522,11 +541,16 @@ def main() -> None:
         else:
             output_name = f"dominance_{left}_vs_{right}.png"
         output_path = plot_dir / output_name
-        title = (
-            f"{left} vs {right} dominance (per user)"
-            if left != "fsrs6_default"
-            else f"{left} (DR={target_dr:.2f}) vs {right} dominance (per user)"
-        )
+        if left == "fsrs6_default":
+            title = f"{left} (DR={target_dr:.2f}) vs {right} dominance (per user)"
+        elif left == "fsrs3_default":
+            title = f"{left} (DR={target_dr_fsrs3:.2f}) vs {right} dominance (per user)"
+        elif right == "fsrs6_default":
+            title = f"{left} vs {right} (DR={target_dr:.2f}) dominance (per user)"
+        elif right == "fsrs3_default":
+            title = f"{left} vs {right} (DR={target_dr_fsrs3:.2f}) dominance (per user)"
+        else:
+            title = f"{left} vs {right} dominance (per user)"
         _plot_dominance(
             pair_results,
             output_path,
