@@ -31,6 +31,15 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated environments to include.",
     )
     parser.add_argument(
+        "--sched",
+        dest="sched",
+        default="fsrs3_default,fsrs6_default,anki_sm2,memrise",
+        help=(
+            "Comma-separated schedulers to include for dominance "
+            "(fsrs3_default, fsrs6_default, anki_sm2, memrise)."
+        ),
+    )
+    parser.add_argument(
         "--results-path",
         type=Path,
         default=None,
@@ -89,6 +98,15 @@ def parse_args() -> argparse.Namespace:
         default="any",
         help="Filter logs by short-term source (steps/sched).",
     )
+    parser.add_argument(
+        "--pairs",
+        default=None,
+        help=(
+            "Comma-separated scheduler pairs to compare (e.g., "
+            "fsrs3_default:fsrs6_default,anki_sm2:memrise). "
+            "Defaults to all unique pairs from --sched."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -96,6 +114,23 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_pairs(value: Optional[str]) -> List[Tuple[str, str]]:
+    if not value:
+        return []
+    pairs: List[Tuple[str, str]] = []
+    for chunk in value.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if ":" not in chunk:
+            raise ValueError(f"Invalid pair '{chunk}'. Expected format like a:b.")
+        left, right = (part.strip() for part in chunk.split(":", 1))
+        if not left or not right:
+            raise ValueError(f"Invalid pair '{chunk}'. Expected format like a:b.")
+        pairs.append((left, right))
+    return pairs
 
 
 def _normalize_bool(value: Any) -> Optional[bool]:
@@ -246,6 +281,18 @@ def _dominance_label(
     return "neither"
 
 
+def _format_sched_label(scheduler: str, dr_map: Dict[str, float]) -> str:
+    if scheduler in dr_map:
+        return f"{scheduler} (DR={dr_map[scheduler]:.2f})"
+    return scheduler
+
+
+def _output_name(left: str, right: str) -> str:
+    if {left, right} == {"anki_sm2", "memrise"}:
+        return "dominance_sm2_memrise.png"
+    return f"dominance_{left}_vs_{right}.png"
+
+
 def _setup_plot_style() -> None:
     import matplotlib.pyplot as plt
 
@@ -367,16 +414,22 @@ def main() -> None:
     args = parse_args()
     log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
     envs = _parse_csv(args.env)
+    scheds = _parse_csv(args.sched)
+    if not scheds:
+        scheds = ["fsrs3_default", "fsrs6_default", "anki_sm2", "memrise"]
+    allowed_scheds = {"anki_sm2", "memrise", "fsrs6_default", "fsrs3_default"}
+    unknown = sorted(set(scheds) - allowed_scheds)
+    if unknown:
+        raise SystemExit(f"Unsupported schedulers: {', '.join(unknown)}")
 
     sched_users: Dict[str, Dict[Tuple[str, int], Dict[str, Any]]] = {
-        "anki_sm2": {},
-        "memrise": {},
-        "fsrs6_default": {},
-        "fsrs3_default": {},
+        sched: {} for sched in scheds
     }
     duplicate_count = 0
-    target_dr = round(float(args.fsrs6_default_dr), 2)
-    target_dr_fsrs3 = round(float(args.fsrs3_default_dr), 2)
+    dr_map = {
+        "fsrs6_default": round(float(args.fsrs6_default_dr), 2),
+        "fsrs3_default": round(float(args.fsrs3_default_dr), 2),
+    }
 
     for path in _iter_log_paths(log_root):
         try:
@@ -397,9 +450,9 @@ def main() -> None:
             continue
         if envs and environment not in envs:
             continue
-        if scheduler not in {"anki_sm2", "memrise", "fsrs6_default", "fsrs3_default"}:
+        if scheduler not in sched_users:
             continue
-        if scheduler == "fsrs6_default":
+        if scheduler in dr_map:
             desired = meta.get("desired_retention")
             if desired is None:
                 continue
@@ -407,17 +460,7 @@ def main() -> None:
                 desired_value = round(float(desired), 2)
             except (TypeError, ValueError):
                 continue
-            if desired_value != target_dr:
-                continue
-        if scheduler == "fsrs3_default":
-            desired = meta.get("desired_retention")
-            if desired is None:
-                continue
-            try:
-                desired_value = round(float(desired), 2)
-            except (TypeError, ValueError):
-                continue
-            if desired_value != target_dr_fsrs3:
+            if desired_value != dr_map[scheduler]:
                 continue
 
         short_term_value = _normalize_bool(meta.get("short_term"))
@@ -465,12 +508,23 @@ def main() -> None:
             "mtime": mtime,
         }
 
-    comparisons = [
-        ("anki_sm2", "memrise"),
-        ("fsrs6_default", "anki_sm2"),
-        ("fsrs6_default", "memrise"),
-        ("fsrs3_default", "fsrs6_default"),
+    try:
+        comparisons = _parse_pairs(args.pairs)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not comparisons:
+        comparisons = [
+            (left, right)
+            for idx, left in enumerate(scheds)
+            for right in scheds[idx + 1 :]
+        ]
+    bad_pairs = [
+        f"{left}:{right}"
+        for left, right in comparisons
+        if left not in sched_users or right not in sched_users
     ]
+    if bad_pairs:
+        raise SystemExit("Unsupported pair(s): " + ", ".join(sorted(bad_pairs)))
     results: List[Dict[str, Any]] = []
     for left, right in comparisons:
         for env in envs:
@@ -553,35 +607,20 @@ def main() -> None:
         ]
         if not pair_results:
             continue
-        if left == "anki_sm2" and right == "memrise":
-            output_name = "dominance_sm2_memrise.png"
-        else:
-            output_name = f"dominance_{left}_vs_{right}.png"
-        output_path = plot_dir / output_name
-        if left == "fsrs6_default":
-            title = f"{left} (DR={target_dr:.2f}) vs {right} dominance (per user)"
-        elif left == "fsrs3_default":
-            title = f"{left} (DR={target_dr_fsrs3:.2f}) vs {right} dominance (per user)"
-        elif right == "fsrs6_default":
-            title = f"{left} vs {right} (DR={target_dr:.2f}) dominance (per user)"
-        elif right == "fsrs3_default":
-            title = f"{left} vs {right} (DR={target_dr_fsrs3:.2f}) dominance (per user)"
-        else:
-            title = f"{left} vs {right} dominance (per user)"
+        output_path = plot_dir / _output_name(left, right)
+        left_label = _format_sched_label(left, dr_map)
+        right_label = _format_sched_label(right, dr_map)
+        title = f"{left_label} vs {right_label} dominance (per user)"
         _plot_dominance(
             pair_results,
             output_path,
             title,
-            a_label=left,
-            b_label=right,
+            a_label=left_label,
+            b_label=right_label,
         )
     print(f"Wrote {results_path}")
     for left, right in comparisons:
-        if left == "anki_sm2" and right == "memrise":
-            output_name = "dominance_sm2_memrise.png"
-        else:
-            output_name = f"dominance_{left}_vs_{right}.png"
-        output_path = plot_dir / output_name
+        output_path = plot_dir / _output_name(left, right)
         if output_path.exists():
             print(f"Saved plot to {output_path}")
 
