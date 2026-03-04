@@ -4,7 +4,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any, Mapping, Sequence, TypedDict
+from typing import Any, Mapping, NotRequired, Sequence, TypedDict
 
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
@@ -77,6 +77,9 @@ class ButtonUsageConfig(TypedDict):
     first_session_lens: list[float]
     forget_rating_offset: float
     forget_session_len: float
+    long_term_transition: NotRequired[list[list[float]] | None]
+    learning_step_transition: NotRequired[list[list[float]] | None]
+    relearning_step_transition: NotRequired[list[list[float]] | None]
 
 
 def load_button_usage_config(
@@ -143,6 +146,27 @@ def load_button_usage_config(
                 ),
                 "forget_rating_offset": float(entry.get("forget_rating_offset")),
                 "forget_session_len": float(entry.get("forget_session_len")),
+                "long_term_transition": (
+                    _require_matrix(
+                        entry, "long_term_transition", expected_shape=(4, 4)
+                    )
+                    if "long_term_transition" in entry
+                    else None
+                ),
+                "learning_step_transition": (
+                    _require_matrix(
+                        entry, "learning_step_transition", expected_shape=(3, 4)
+                    )
+                    if "learning_step_transition" in entry
+                    else None
+                ),
+                "relearning_step_transition": (
+                    _require_matrix(
+                        entry, "relearning_step_transition", expected_shape=(3, 4)
+                    )
+                    if "relearning_step_transition" in entry
+                    else None
+                ),
             }
             break
 
@@ -197,6 +221,28 @@ def _coerce_state_costs(
         rows.append(
             _coerce_list(row, expected_len=4, name=f"state_rating_costs[{idx}]")
         )
+    return rows
+
+
+def _coerce_optional_matrix(
+    value: Sequence[Sequence[float]] | None,
+    *,
+    expected_shape: tuple[int, int],
+    name: str,
+) -> list[list[float]] | None:
+    if value is None:
+        return None
+    if len(value) != expected_shape[0]:
+        raise ValueError(
+            f"{name} must have {expected_shape[0]} rows; got {len(value)}."
+        )
+    rows: list[list[float]] = []
+    for idx, row in enumerate(value):
+        if len(row) != expected_shape[1]:
+            raise ValueError(
+                f"{name}[{idx}] must have {expected_shape[1]} columns; got {len(row)}."
+            )
+        rows.append([float(item) for item in row])
     return rows
 
 
@@ -272,6 +318,21 @@ def normalize_button_usage(
     forget_session_len = float(
         source.get("forget_session_len", DEFAULT_FORGET_SESSION_LEN)
     )
+    long_term_transition = _coerce_optional_matrix(
+        source.get("long_term_transition"),
+        expected_shape=(4, 4),
+        name="long_term_transition",
+    )
+    learning_step_transition = _coerce_optional_matrix(
+        source.get("learning_step_transition"),
+        expected_shape=(3, 4),
+        name="learning_step_transition",
+    )
+    relearning_step_transition = _coerce_optional_matrix(
+        source.get("relearning_step_transition"),
+        expected_shape=(3, 4),
+        name="relearning_step_transition",
+    )
 
     return {
         "learn_costs": learn_costs,
@@ -285,4 +346,7 @@ def normalize_button_usage(
         "first_session_lens": first_session_lens,
         "forget_rating_offset": forget_rating_offset,
         "forget_session_len": forget_session_len,
+        "long_term_transition": long_term_transition,
+        "learning_step_transition": learning_step_transition,
+        "relearning_step_transition": relearning_step_transition,
     }

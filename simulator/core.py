@@ -454,6 +454,8 @@ class SimulationEngine:
         self._apply_schedule(card, interval, sched_state, now)
         card.reps += 1
         card.history.append(ReviewLog(rating, elapsed, float(now)))
+        if phase == "review":
+            card.metadata["last_review_rating"] = rating
         self._schedule_card(card)
 
         self.daily_reviews[day] += 1
@@ -500,6 +502,7 @@ class SimulationEngine:
         card.reps = 0
         card.lapses = 0
         card.history.clear()
+        card.metadata.pop("last_review_rating", None)
 
         first_rating = self.behavior.initial_rating(self.rng)
         self.environment.init_card(card, first_rating)
