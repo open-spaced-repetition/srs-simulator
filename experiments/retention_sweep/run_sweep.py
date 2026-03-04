@@ -322,6 +322,7 @@ def _run_once(
         review_rating_prob=usage["review_rating_prob"],
         learning_rating_prob=usage["learning_rating_prob"],
         relearning_rating_prob=usage["relearning_rating_prob"],
+        review_markov_transition=usage.get("long_term_transition"),
     )
     if short_term_source:
         state_rating_costs = usage["state_rating_costs"]

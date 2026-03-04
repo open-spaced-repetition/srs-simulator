@@ -119,12 +119,21 @@ def simulate(
         device=torch_device,
         dtype=env_dtype,
     )
+    review_markov_success = behavior.review_markov_success
+    review_markov_success_weights = (
+        torch.tensor(review_markov_success, device=torch_device, dtype=env_dtype)
+        if review_markov_success is not None
+        else None
+    )
     first_rating_prob = torch.tensor(
         behavior.first_rating_prob, device=torch_device, dtype=env_dtype
     )
 
     due = torch.zeros(deck_size, dtype=env_dtype, device=torch_device)
     last_review = torch.full((deck_size,), -1.0, dtype=env_dtype, device=torch_device)
+    last_review_rating = torch.zeros(
+        (deck_size,), dtype=torch.int64, device=torch_device
+    )
     intervals = torch.zeros(deck_size, dtype=env_dtype, device=torch_device)
     reps = torch.zeros(deck_size, dtype=torch.int64, device=torch_device)
     lapses = torch.zeros(deck_size, dtype=torch.int64, device=torch_device)
@@ -291,7 +300,7 @@ def simulate(
             phase_lapses_today = 0
 
             def _sample_ratings(
-                r_env: torch.Tensor, phase: torch.Tensor
+                r_env: torch.Tensor, phase: torch.Tensor, card_idx: torch.Tensor
             ) -> torch.Tensor:
                 rand = torch.rand(r_env.shape, device=torch_device, generator=gen)
                 fail = rand > r_env
@@ -312,6 +321,24 @@ def simulate(
                     .view_as(r_env)
                     + 2
                 )
+                if review_markov_success_weights is not None:
+                    review_mask = phase == phase_none
+                    if review_mask.any():
+                        review_idx = torch.nonzero(review_mask, as_tuple=False).squeeze(
+                            1
+                        )
+                        prev = last_review_rating[card_idx[review_idx]]
+                        known = prev > 0
+                        if known.any():
+                            prev_idx = torch.clamp(prev[known] - 1, min=0, max=3)
+                            markov_weights = review_markov_success_weights[prev_idx]
+                            draw = torch.multinomial(
+                                markov_weights,
+                                num_samples=1,
+                                replacement=True,
+                                generator=gen,
+                            ).squeeze(1)
+                            samples[review_idx[known]] = draw + 2
                 if steps_mode or sched_mode:
                     learning_mask = phase == phase_learning
                     if learning_mask.any():
@@ -379,7 +406,7 @@ def simulate(
                 elapsed = now_tensor - last_review[review_idx]
                 r_env = env_ops.retrievability(env_state, review_idx, elapsed)
                 phase = torch.zeros_like(review_idx, dtype=torch.int8)
-                rating = _sample_ratings(r_env, phase)
+                rating = _sample_ratings(r_env, phase, review_idx)
                 review_cost = _review_cost_for(r_env, rating, phase)
 
                 primary = sched_ops.review_priority(sched_state, review_idx, elapsed)
@@ -514,6 +541,7 @@ def simulate(
 
                 intervals[exec_idx] = interval_days
                 last_review[exec_idx] = now_tensor
+                last_review_rating[exec_idx] = exec_rating
                 floor_now = torch.floor(now_tensor)
                 due[exec_idx] = torch.where(
                     short_mask, now_tensor + interval_days, floor_now + interval_days
@@ -685,7 +713,7 @@ def simulate(
                     exec_elapsed = now_tensor - last_review[exec_idx]
                     r_env = env_ops.retrievability(env_state, exec_idx, exec_elapsed)
                     exec_phase = short_phase[exec_idx]
-                    exec_rating = _sample_ratings(r_env, exec_phase)
+                    exec_rating = _sample_ratings(r_env, exec_phase, exec_idx)
                     exec_cost = _review_cost_for(r_env, exec_rating, exec_phase)
                     prev_interval = intervals[exec_idx]
 

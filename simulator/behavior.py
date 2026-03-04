@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from .core import Action, BehaviorModel, CardView, review_first_priority
@@ -44,6 +45,37 @@ def _sample_weighted(
     return len(weights) + offset - 1
 
 
+def _normalize_markov_success(
+    transitions: Sequence[Sequence[float]],
+    *,
+    name: str,
+    fallback: Sequence[float],
+    expected_rows: int = 4,
+) -> List[List[float]]:
+    if len(transitions) == 0:
+        raise ValueError(f"{name} must have at least one row")
+    rows: List[List[float]] = []
+    for row_idx in range(expected_rows):
+        if row_idx >= len(transitions):
+            rows.append(list(fallback))
+            continue
+        row = transitions[row_idx]
+        if len(row) < 4:
+            raise ValueError(
+                f"{name}[{row_idx}] must have at least 4 entries; got {len(row)}."
+            )
+        raw = [float(row[1]), float(row[2]), float(row[3])]
+        if any((not math.isfinite(v)) or v < 0.0 for v in raw):
+            rows.append(list(fallback))
+            continue
+        total = sum(raw)
+        if total <= 0.0:
+            rows.append(list(fallback))
+            continue
+        rows.append([v / total for v in raw])
+    return rows
+
+
 class StochasticBehavior(BehaviorModel):
     """Simple behavior model with attendance, daily limits, and lazy grading."""
 
@@ -60,6 +92,7 @@ class StochasticBehavior(BehaviorModel):
         review_rating_prob: Optional[Sequence[float]] = None,
         learning_rating_prob: Optional[Sequence[float]] = None,
         relearning_rating_prob: Optional[Sequence[float]] = None,
+        review_markov_transition: Optional[Sequence[Sequence[float]]] = None,
     ) -> None:
         self.attendance_prob = attendance_prob
         self.lazy_good_bias = lazy_good_bias
@@ -80,6 +113,15 @@ class StochasticBehavior(BehaviorModel):
             first_rating_prob or DEFAULT_FIRST_RATING_PROB,
             expected_len=4,
             name="first_rating_prob",
+        )
+        self._review_markov_success = (
+            _normalize_markov_success(
+                review_markov_transition,
+                name="review_markov_transition",
+                fallback=self.success_dist.success_weights,
+            )
+            if review_markov_transition is not None
+            else None
         )
         self.max_new_per_day = max_new_per_day
         self.max_reviews_per_day = max_reviews_per_day
@@ -188,7 +230,8 @@ class StochasticBehavior(BehaviorModel):
             return 1
         if rng() < self.lazy_good_bias:
             return 3
-        return self._sample_success_rating(rng, self._success_dist_for_view(card_view))
+        weights = self._success_weights_for_view(card_view)
+        return self._sample_success_rating(rng, weights)
 
     def record_review(self, cost: float) -> None:
         self._reviews_today += 1
@@ -210,7 +253,29 @@ class StochasticBehavior(BehaviorModel):
             return self.relearning_success_dist
         return self.success_dist
 
+    def _success_weights_for_view(self, card_view: CardView) -> Sequence[float]:
+        phase = getattr(card_view.scheduler_state, "phase", None)
+        if phase in {"learning", "relearning"}:
+            return self._success_dist_for_view(card_view).success_weights
+        if self._review_markov_success is None:
+            return self.success_dist.success_weights
+        prev = _last_review_rating(card_view)
+        if prev is None:
+            return self.success_dist.success_weights
+        return self._review_markov_success[prev - 1]
+
     def _sample_success_rating(
-        self, rng: Callable[[], float], dist: RatingDistribution
+        self, rng: Callable[[], float], weights: Sequence[float]
     ) -> int:
-        return _sample_weighted(rng, dist.success_weights, offset=2)
+        return _sample_weighted(rng, weights, offset=2)
+
+    @property
+    def review_markov_success(self) -> Optional[List[List[float]]]:
+        return self._review_markov_success
+
+
+def _last_review_rating(card_view: CardView) -> Optional[int]:
+    value = card_view.metadata.get("last_review_rating")
+    if isinstance(value, int) and 1 <= value <= 4:
+        return value
+    return None
