@@ -52,6 +52,14 @@ def _normalize_markov_success(
     fallback: Sequence[float],
     expected_rows: int = 4,
 ) -> List[List[float]]:
+    """Normalize 4-class transition rows into 3-class success distributions.
+
+    Returns a list of per-previous-rating probability vectors (length 3 each),
+    where "previous rating" refers to the last review-phase rating for the card,
+    and each vector is P(next rating in {2,3,4} | previous review rating, success).
+    Each row is converted by ignoring rating 1 and renormalizing ratings 2/3/4.
+    Invalid or missing rows fall back to the provided default distribution.
+    """
     if len(transitions) == 0:
         raise ValueError(f"{name} must have at least one row")
     rows: List[List[float]] = []
