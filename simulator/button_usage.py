@@ -4,7 +4,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any, Mapping, NotRequired, Sequence, TypedDict
+from typing import Any, Mapping, NotRequired, Sequence, TypedDict, cast
 
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
@@ -126,48 +126,44 @@ def load_button_usage_config(
                 relearning_rating_prob = _require_list(
                     entry, "relearning_rating_prob", expected_len=3
                 )
-            config = {
-                "learn_costs": _require_list(entry, "learn_costs", expected_len=4),
-                "review_costs": _require_list(entry, "review_costs", expected_len=4),
-                "first_rating_prob": _require_list(
-                    entry, "first_rating_prob", expected_len=4
-                ),
-                "review_rating_prob": review_rating_prob,
-                "learning_rating_prob": learning_rating_prob,
-                "relearning_rating_prob": relearning_rating_prob,
-                "state_rating_costs": _require_matrix(
-                    entry, "state_rating_costs", expected_shape=(3, 4)
-                ),
-                "first_rating_offsets": _require_list(
-                    entry, "first_rating_offset", expected_len=4
-                ),
-                "first_session_lens": _require_list(
-                    entry, "first_session_len", expected_len=4
-                ),
-                "forget_rating_offset": float(entry.get("forget_rating_offset")),
-                "forget_session_len": float(entry.get("forget_session_len")),
-                "long_term_transition": (
-                    _require_matrix(
-                        entry, "long_term_transition", expected_shape=(4, 4)
-                    )
-                    if "long_term_transition" in entry
+            transitions: dict[str, list[list[float]] | None] = {}
+            for key, shape in {
+                "long_term_transition": (4, 4),
+                "learning_step_transition": (3, 4),
+                "relearning_step_transition": (3, 4),
+            }.items():
+                transitions[key] = (
+                    _require_matrix(entry, key, expected_shape=shape)
+                    if key in entry
                     else None
-                ),
-                "learning_step_transition": (
-                    _require_matrix(
-                        entry, "learning_step_transition", expected_shape=(3, 4)
-                    )
-                    if "learning_step_transition" in entry
-                    else None
-                ),
-                "relearning_step_transition": (
-                    _require_matrix(
-                        entry, "relearning_step_transition", expected_shape=(3, 4)
-                    )
-                    if "relearning_step_transition" in entry
-                    else None
-                ),
-            }
+                )
+            config = cast(
+                ButtonUsageConfig,
+                {
+                    "learn_costs": _require_list(entry, "learn_costs", expected_len=4),
+                    "review_costs": _require_list(
+                        entry, "review_costs", expected_len=4
+                    ),
+                    "first_rating_prob": _require_list(
+                        entry, "first_rating_prob", expected_len=4
+                    ),
+                    "review_rating_prob": review_rating_prob,
+                    "learning_rating_prob": learning_rating_prob,
+                    "relearning_rating_prob": relearning_rating_prob,
+                    "state_rating_costs": _require_matrix(
+                        entry, "state_rating_costs", expected_shape=(3, 4)
+                    ),
+                    "first_rating_offsets": _require_list(
+                        entry, "first_rating_offset", expected_len=4
+                    ),
+                    "first_session_lens": _require_list(
+                        entry, "first_session_len", expected_len=4
+                    ),
+                    "forget_rating_offset": float(entry.get("forget_rating_offset")),
+                    "forget_session_len": float(entry.get("forget_session_len")),
+                    **transitions,
+                },
+            )
             break
 
     if config is None:
@@ -318,35 +314,34 @@ def normalize_button_usage(
     forget_session_len = float(
         source.get("forget_session_len", DEFAULT_FORGET_SESSION_LEN)
     )
-    long_term_transition = _coerce_optional_matrix(
-        source.get("long_term_transition"),
-        expected_shape=(4, 4),
-        name="long_term_transition",
-    )
-    learning_step_transition = _coerce_optional_matrix(
-        source.get("learning_step_transition"),
-        expected_shape=(3, 4),
-        name="learning_step_transition",
-    )
-    relearning_step_transition = _coerce_optional_matrix(
-        source.get("relearning_step_transition"),
-        expected_shape=(3, 4),
-        name="relearning_step_transition",
-    )
-
-    return {
-        "learn_costs": learn_costs,
-        "review_costs": review_costs,
-        "first_rating_prob": first_rating_prob,
-        "review_rating_prob": review_rating_prob,
-        "learning_rating_prob": learning_rating_prob,
-        "relearning_rating_prob": relearning_rating_prob,
-        "state_rating_costs": state_rating_costs,
-        "first_rating_offsets": first_rating_offsets,
-        "first_session_lens": first_session_lens,
-        "forget_rating_offset": forget_rating_offset,
-        "forget_session_len": forget_session_len,
-        "long_term_transition": long_term_transition,
-        "learning_step_transition": learning_step_transition,
-        "relearning_step_transition": relearning_step_transition,
+    transition_keys = {
+        "long_term_transition": (4, 4),
+        "learning_step_transition": (3, 4),
+        "relearning_step_transition": (3, 4),
     }
+    transitions = {
+        key: _coerce_optional_matrix(
+            source.get(key),
+            expected_shape=shape,
+            name=key,
+        )
+        for key, shape in transition_keys.items()
+    }
+
+    return cast(
+        ButtonUsageConfig,
+        {
+            "learn_costs": learn_costs,
+            "review_costs": review_costs,
+            "first_rating_prob": first_rating_prob,
+            "review_rating_prob": review_rating_prob,
+            "learning_rating_prob": learning_rating_prob,
+            "relearning_rating_prob": relearning_rating_prob,
+            "state_rating_costs": state_rating_costs,
+            "first_rating_offsets": first_rating_offsets,
+            "first_session_lens": first_session_lens,
+            "forget_rating_offset": forget_rating_offset,
+            "forget_session_len": forget_session_len,
+            **transitions,
+        },
+    )
