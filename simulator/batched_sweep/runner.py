@@ -190,6 +190,7 @@ def run_batch_core(
             learning_rating_prob,
             relearning_rating_prob,
             state_rating_costs,
+            review_markov_success_weights,
         ) = load_usage(active_batch, args.button_usage)
 
         if environment == "lstm":
@@ -250,6 +251,9 @@ def run_batch_core(
             learning_rating_prob=learning_rating_prob.to(env_ops.device),
             relearning_rating_prob=relearning_rating_prob.to(env_ops.device),
             state_rating_costs=state_rating_costs.to(env_ops.device),
+            review_markov_success_weights=review_markov_success_weights.to(
+                env_ops.device
+            ),
             short_term=short_term_enabled,
         )
 

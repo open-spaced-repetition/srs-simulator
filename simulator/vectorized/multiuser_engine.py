@@ -76,6 +76,9 @@ def simulate_multiuser(
     last_review = torch.full(
         (user_count, deck_size), -1.0, dtype=env_dtype, device=torch_device
     )
+    last_review_rating = torch.zeros(
+        (user_count, deck_size), dtype=torch.int64, device=torch_device
+    )
     intervals = torch.zeros(
         (user_count, deck_size), dtype=env_dtype, device=torch_device
     )
@@ -145,6 +148,11 @@ def simulate_multiuser(
     relearning_success_weights = behavior.relearning_success_weights.to(
         device=torch_device
     )
+    review_markov_success_weights = behavior.review_markov_success_weights
+    if review_markov_success_weights is not None:
+        review_markov_success_weights = review_markov_success_weights.to(
+            device=torch_device
+        )
     first_rating_prob = behavior.first_rating_prob.to(device=torch_device)
     review_costs = cost_model.review_costs.to(device=torch_device)
     learn_costs = cost_model.learn_costs.to(device=torch_device)
@@ -333,6 +341,26 @@ def simulate_multiuser(
                     .to(torch.int64)
                     + 2
                 )
+                if review_markov_success_weights is not None:
+                    prev = last_review_rating[due_user, due_card]
+                    known = prev > 0
+                    if known.any():
+                        prev_idx = torch.clamp(prev[known] - 1, min=0, max=3)
+                        markov_weights = review_markov_success_weights[
+                            due_user[known], prev_idx
+                        ]
+                        markov_sample = (
+                            torch.multinomial(
+                                markov_weights,
+                                num_samples=1,
+                                replacement=True,
+                                generator=gen,
+                            )
+                            .squeeze(1)
+                            .to(torch.int64)
+                            + 2
+                        )
+                        success_sample[known] = markov_sample
                 rating_due = torch.where(
                     fail,
                     torch.ones_like(success_sample),
@@ -486,6 +514,7 @@ def simulate_multiuser(
 
                 intervals[sel_user, sel_card] = interval_days
                 last_review[sel_user, sel_card] = day_float
+                last_review_rating[sel_user, sel_card] = exec_rating
                 due[sel_user, sel_card] = day_float + interval_days
                 reps[sel_user, sel_card] += 1
                 lapses[sel_user, sel_card] += (exec_rating == 1).to(torch.int64)

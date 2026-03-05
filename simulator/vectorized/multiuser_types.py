@@ -16,6 +16,7 @@ class MultiUserBehavior:
     learning_success_weights: torch.Tensor
     relearning_success_weights: torch.Tensor
     first_rating_prob: torch.Tensor
+    review_markov_success_weights: torch.Tensor | None = None
 
 
 @dataclass
