@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import math
 
 import torch
 
@@ -19,6 +20,7 @@ def load_usage(
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
+    torch.Tensor,
 ]:
     learn_costs = []
     review_costs = []
@@ -27,6 +29,7 @@ def load_usage(
     learning_rating_prob = []
     relearning_rating_prob = []
     state_rating_costs = []
+    markov_success = []
     for user_id in user_ids:
         config = (
             load_button_usage_config(button_usage, user_id)
@@ -41,6 +44,11 @@ def load_usage(
         learning_rating_prob.append(usage["learning_rating_prob"])
         relearning_rating_prob.append(usage["relearning_rating_prob"])
         state_rating_costs.append(usage["state_rating_costs"])
+        markov_success.append(
+            _normalize_markov_success(
+                usage.get("long_term_transition"), usage["review_rating_prob"]
+            )
+        )
     return (
         torch.tensor(learn_costs, dtype=torch.float32),
         torch.tensor(review_costs, dtype=torch.float32),
@@ -49,7 +57,29 @@ def load_usage(
         torch.tensor(learning_rating_prob, dtype=torch.float32),
         torch.tensor(relearning_rating_prob, dtype=torch.float32),
         torch.tensor(state_rating_costs, dtype=torch.float32),
+        torch.tensor(markov_success, dtype=torch.float32),
     )
+
+
+def _normalize_markov_success(
+    transitions: list[list[float]] | None, fallback: list[float]
+) -> list[list[float]]:
+    rows: list[list[float]] = []
+    for row_idx in range(4):
+        if transitions is None:
+            rows.append(list(fallback))
+            continue
+        row = transitions[row_idx]
+        raw = [float(row[1]), float(row[2]), float(row[3])]
+        if any((not math.isfinite(v)) or v < 0.0 for v in raw):
+            rows.append(list(fallback))
+            continue
+        total = sum(raw)
+        if total <= 0.0:
+            rows.append(list(fallback))
+            continue
+        rows.append([v / total for v in raw])
+    return rows
 
 
 def build_behavior_cost(
@@ -66,6 +96,7 @@ def build_behavior_cost(
     learning_rating_prob: torch.Tensor,
     relearning_rating_prob: torch.Tensor,
     state_rating_costs: torch.Tensor,
+    review_markov_success_weights: torch.Tensor,
     short_term: bool,
 ) -> tuple[MultiUserBehavior, MultiUserCost]:
     max_reviews = review_limit if review_limit is not None else deck_size
@@ -85,6 +116,7 @@ def build_behavior_cost(
         learning_success_weights=learning_rating_prob,
         relearning_success_weights=relearning_rating_prob,
         first_rating_prob=first_rating_prob,
+        review_markov_success_weights=review_markov_success_weights,
     )
     cost = MultiUserCost(
         base=torch.zeros(user_count),
