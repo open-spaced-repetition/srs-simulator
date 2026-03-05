@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-import math
 
 import torch
 
@@ -69,7 +68,13 @@ def _normalize_markov_success(
         if transitions is None:
             rows.append(list(fallback))
             continue
+        if row_idx >= len(transitions):
+            rows.append(list(fallback))
+            continue
         row = transitions[row_idx]
+        if len(row) < 4:
+            rows.append(list(fallback))
+            continue
         raw = [float(row[1]), float(row[2]), float(row[3])]
         if any((not math.isfinite(v)) or v < 0.0 for v in raw):
             rows.append(list(fallback))
