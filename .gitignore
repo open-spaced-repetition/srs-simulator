@@ -233,3 +233,4 @@ logs/
 
 # Unknown
 *.Identifier
+.codex
