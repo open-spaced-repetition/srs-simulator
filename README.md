@@ -104,6 +104,7 @@ uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --e
 uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,sspmmc
 uv run experiments/retention_sweep/aggregate_users.py --env lstm --sched fsrs6,anki_sm2,memrise
 uv run experiments/retention_sweep/dominance.py --env lstm
+uv run python experiments/retention_sweep/plot_short_loops.py --env lstm --sched fsrs6 --short-term-source steps --desired-retention 0.9 --metric avg --out experiments/retention_sweep/plots/short_loops_fsrs6_steps_dr09.png --no-show
 ```
 
 - `run_sweep_users.py` fans out `run_sweep.py` across a user-id range and supports `--max-parallel`, `--cuda-devices` (round-robin per worker), plus MPS env passthrough; `--max-parallel` only delivers speedups when GPU Multi-Process Service (MPS) is enabled on the host. In parallel it shows an overall work bar, a user bar, and per-worker bars (disable with `--child-progress off`, and use `--show-commands on` if you need the raw subprocess commands).
@@ -112,6 +113,7 @@ uv run experiments/retention_sweep/dominance.py --env lstm
 - `build_pareto_users.py` fans out `build_pareto.py` across a user-id range.
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON and plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise. Use `--equiv-report fsrs3` (and include `fsrs3` in `--sched`) to switch the equivalence target to FSRSv3.
 - `dominance.py` reports per-user dominance rates between Anki-SM-2 and Memrise, plus FSRS-6 default (DR=90%) vs Anki-SM-2/Memrise, and saves stacked bar charts.
+- `plot_short_loops.py` plots the per-user distribution of daily short-term loops from retention_sweep CSV sidecars. For DR schedulers such as `fsrs6`, pass `--desired-retention` so the plot uses a single target-retention config instead of mixing multiple DR runs for the same user. Use `--metric avg-active` to average only over days with loops, `--log-dir` to point at a single user or alternate sweep root, and `--max-user-ticks` to cap lower-panel x-axis labels.
 - Note: very high desired retention targets (e.g., `--end-retention 0.99` for FSRS6 sweeps) can dramatically increase GPU memory usage; reduce batch size or cap retention if you hit OOM.
 - Retention range flags use `--start-retention/--end-retention` across the sweep, aggregate, and pareto tools.
 - To pass retention sweep overrides (e.g., `--start-retention/--end-retention/--step`, now 0-1 floats) to `run_sweep.py`, add them after `--` when invoking `run_sweep_users.py`.
