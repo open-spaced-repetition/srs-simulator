@@ -4,11 +4,13 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from experiments.retention_sweep.cli_utils import LogFilenameFilter
 
 
 def parse_args() -> argparse.Namespace:
@@ -203,16 +205,22 @@ def _load_meta_totals(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return meta, totals
 
 
-def _iter_log_paths(log_root: Path) -> Iterable[Path]:
+def _iter_log_paths(
+    log_root: Path, *, match_fn: Optional[Callable[[str], bool]] = None
+) -> Iterable[Path]:
     if not log_root.exists():
         return []
     user_dirs = sorted(path for path in log_root.iterdir() if path.is_dir())
     if user_dirs:
         for user_dir in user_dirs:
             for path in sorted(user_dir.glob("*.jsonl")):
+                if match_fn is not None and not match_fn(path.name):
+                    continue
                 yield path
     else:
         for path in sorted(log_root.glob("*.jsonl")):
+            if match_fn is not None and not match_fn(path.name):
+                continue
             yield path
 
 
@@ -435,8 +443,21 @@ def main() -> None:
         "fsrs6_default": round(float(args.fsrs6_default_dr), 2),
         "fsrs3_default": round(float(args.fsrs3_default_dr), 2),
     }
+    log_filter = LogFilenameFilter(
+        envs=envs,
+        scheds=scheds,
+        engine=args.engine,
+        short_term=args.short_term,
+        short_term_source=args.short_term_source,
+        priority=args.priority,
+        retention_values_by_scheduler=dr_map,
+        match_short_term_source_when_any=True,
+    )
 
-    for path in _iter_log_paths(log_root):
+    for path in _iter_log_paths(
+        log_root,
+        match_fn=log_filter.matches,
+    ):
         try:
             meta, totals = _load_meta_totals(path)
         except ValueError:

@@ -25,6 +25,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from experiments.retention_sweep.cli_utils import LogFilenameFilter
 
 
 def parse_args() -> argparse.Namespace:
@@ -320,43 +321,6 @@ def _infer_engine(meta: Dict[str, Any], path: Path) -> str | None:
     return None
 
 
-def _matches_filename(
-    name: str,
-    *,
-    envs: List[str],
-    scheds: List[str],
-    engine: str,
-    short_term: str,
-    short_term_source: str,
-    start_retention: float,
-    end_retention: float,
-) -> bool:
-    if envs and not any(f"env={env}" in name for env in envs):
-        return False
-    if scheds and not any(f"sched={sched}" in name for sched in scheds):
-        return False
-    if engine != "any" and f"engine={engine}" not in name:
-        return False
-    if short_term == "on":
-        if "_st=" not in name:
-            return False
-        if short_term_source != "any" and f"st={short_term_source}" not in name:
-            return False
-    elif short_term == "off":
-        if "_st=" in name and "st=off" not in name:
-            return False
-    if "ret=" in name:
-        match = re.search(r"ret=([0-9.]+)", name)
-        if match:
-            try:
-                value = float(match.group(1))
-            except ValueError:
-                return False
-            if value < start_retention or value > end_retention:
-                return False
-    return True
-
-
 def _load_user_sizes(path: Path) -> Dict[int, int]:
     sizes: Dict[int, int] = {}
     with path.open("r", encoding="utf-8") as fh:
@@ -427,19 +391,19 @@ def main() -> None:
 
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]] = {}
     duplicate_count = 0
+    log_filter = LogFilenameFilter(
+        envs=envs,
+        scheds=[name for name, _, _ in scheduler_specs],
+        engine=args.engine,
+        short_term=args.short_term,
+        short_term_source=args.short_term_source,
+        start_retention=args.start_retention,
+        end_retention=args.end_retention,
+    )
 
     for path in _iter_log_paths(
         log_root,
-        match_fn=lambda name: _matches_filename(
-            name,
-            envs=envs,
-            scheds=[name for name, _, _ in scheduler_specs],
-            engine=args.engine,
-            short_term=args.short_term,
-            short_term_source=args.short_term_source,
-            start_retention=args.start_retention,
-            end_retention=args.end_retention,
-        ),
+        match_fn=log_filter.matches,
     ):
         try:
             meta, totals = _load_meta_totals(path)
