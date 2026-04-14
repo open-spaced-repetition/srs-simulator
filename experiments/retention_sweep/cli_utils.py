@@ -271,7 +271,6 @@ class LogFilenameFilter:
     end_retention: float | None = None
     priority: str = "any"
     retention_values_by_scheduler: Mapping[str, float] | None = None
-    match_short_term_source_when_any: bool = False
 
     def matches(self, name: str) -> bool:
         if self.envs and not any(f"env={env}" in name for env in self.envs):
@@ -292,11 +291,12 @@ class LogFilenameFilter:
             ):
                 return False
         elif self.short_term == "off":
+            if self.short_term_source != "any":
+                return False
             if "_st=" in name and "st=off" not in name:
                 return False
         elif (
-            self.match_short_term_source_when_any
-            and self.short_term_source != "any"
+            self.short_term_source != "any"
             and f"st={self.short_term_source}" not in name
         ):
             return False

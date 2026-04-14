@@ -451,7 +451,6 @@ def main() -> None:
         short_term_source=args.short_term_source,
         priority=args.priority,
         retention_values_by_scheduler=dr_map,
-        match_short_term_source_when_any=True,
     )
 
     for path in _iter_log_paths(
