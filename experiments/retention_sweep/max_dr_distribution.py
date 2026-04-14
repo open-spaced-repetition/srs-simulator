@@ -7,12 +7,13 @@ import re
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from experiments.retention_sweep.cli_utils import LogFilenameFilter
 from simulator.scheduler_spec import (
     format_float,
     parse_scheduler_spec,
@@ -117,7 +118,9 @@ def _load_meta_totals(path: Path) -> tuple[Dict[str, Any], Dict[str, Any]]:
     return meta, totals
 
 
-def _iter_log_paths(log_root: Path) -> Iterable[Path]:
+def _iter_log_paths(
+    log_root: Path, *, match_fn: Optional[Callable[[str], bool]] = None
+) -> Iterable[Path]:
     if not log_root.exists():
         return []
     user_dirs = sorted(
@@ -128,9 +131,13 @@ def _iter_log_paths(log_root: Path) -> Iterable[Path]:
     if user_dirs:
         for user_dir in user_dirs:
             for path in sorted(user_dir.glob("*.jsonl")):
+                if match_fn is not None and not match_fn(path.name):
+                    continue
                 yield path
     else:
         for path in sorted(log_root.glob("*.jsonl")):
+            if match_fn is not None and not match_fn(path.name):
+                continue
             yield path
 
 
@@ -189,9 +196,18 @@ def main() -> None:
     if not scheduler_uses_desired_retention(scheduler_name):
         raise SystemExit(f"{scheduler_name} does not use desired retention.")
 
+    log_filter = LogFilenameFilter(
+        envs=[args.env] if args.env else [],
+        scheds=[scheduler_name],
+        engine=args.engine,
+        short_term=args.short_term,
+        short_term_source=args.short_term_source,
+        start_retention=args.start_retention,
+        end_retention=args.end_retention,
+    )
     per_user_best: dict[int, tuple[float, float]] = {}
 
-    for path in _iter_log_paths(log_root):
+    for path in _iter_log_paths(log_root, match_fn=log_filter.matches):
         try:
             meta, totals = _load_meta_totals(path)
         except ValueError:
