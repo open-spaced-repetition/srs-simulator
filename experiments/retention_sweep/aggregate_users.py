@@ -663,11 +663,16 @@ def main() -> None:
         for entry in equivalent_distributions:
             env_label = entry["environment"]
             env_suffix = f"_env={env_label}"
+            filter_parts = [f"env={env_label}", f"short-term={args.short_term}"]
+            if args.short_term_source != "any":
+                filter_parts.append(f"short-term-source={args.short_term_source}")
+            if args.engine != "any":
+                filter_parts.append(f"engine={args.engine}")
             distribution_title = _format_title(
                 (
                     f"{_format_scheduler_title(entry['baseline'])} vs "
                     f"{_format_scheduler_title(entry.get('target', 'fsrs6'))} "
-                    f"equiv distributions (env={env_label}, short-term={args.short_term})"
+                    f"equiv distributions ({', '.join(filter_parts)})"
                 ),
                 sorted(entry["user_ids"]),
             )
@@ -676,17 +681,17 @@ def main() -> None:
             if target_suffix == "fsrs6":
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{env_suffix}{st_suffix}{engine_suffix}.png"
+                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
             elif target_suffix == "fsrs6_default":
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_fsrs6_default_distributions_{baseline_suffix}{env_suffix}{st_suffix}{engine_suffix}.png"
+                    / f"retention_sweep_equivalent_fsrs6_default_distributions_{baseline_suffix}{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
             else:
                 distribution_path = (
                     plot_dir
-                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{env_suffix}{st_suffix}{engine_suffix}.png"
+                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
             _plot_equivalent_distributions(entry, distribution_path, distribution_title)
             print(f"Saved plot to {distribution_path}")

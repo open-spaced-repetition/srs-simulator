@@ -295,10 +295,35 @@ def _format_sched_label(scheduler: str, dr_map: Dict[str, float]) -> str:
     return scheduler
 
 
-def _output_name(left: str, right: str) -> str:
+def _clean_output_token(value: str) -> str:
+    return value.replace(" ", "").replace(",", "_")
+
+
+def _output_name(
+    left: str,
+    right: str,
+    *,
+    env: str,
+    short_term: str,
+    short_term_source: str,
+    engine: str,
+    priority: str,
+) -> str:
     if {left, right} == {"anki_sm2", "memrise"}:
-        return "dominance_sm2_memrise.png"
-    return f"dominance_{left}_vs_{right}.png"
+        base = "dominance_sm2_memrise"
+    else:
+        base = f"dominance_{left}_vs_{right}"
+    parts = [
+        base,
+        f"env={_clean_output_token(env)}",
+        f"st={short_term}",
+        f"sts={short_term_source}",
+    ]
+    if engine != "any":
+        parts.append(f"engine={engine}")
+    if priority != "any":
+        parts.append(f"prio={priority}")
+    return "_".join(parts) + ".png"
 
 
 def _setup_plot_style() -> None:
@@ -633,10 +658,29 @@ def main() -> None:
         ]
         if not pair_results:
             continue
-        output_path = plot_dir / _output_name(left, right)
+        output_path = plot_dir / _output_name(
+            left,
+            right,
+            env=args.env,
+            short_term=args.short_term,
+            short_term_source=args.short_term_source,
+            engine=args.engine,
+            priority=args.priority,
+        )
         left_label = _format_sched_label(left, dr_map)
         right_label = _format_sched_label(right, dr_map)
+        title_parts = []
+        if args.short_term != "any":
+            title_parts.append(f"short-term={args.short_term}")
+        if args.short_term_source != "any":
+            title_parts.append(f"short-term-source={args.short_term_source}")
+        if args.engine != "any":
+            title_parts.append(f"engine={args.engine}")
+        if args.priority != "any":
+            title_parts.append(f"priority={args.priority}")
         title = f"{left_label} vs {right_label} dominance (per user)"
+        if title_parts:
+            title = f"{title}\n" + ", ".join(title_parts)
         _plot_dominance(
             pair_results,
             output_path,
