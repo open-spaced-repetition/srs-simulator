@@ -27,6 +27,9 @@ from simulator.scheduler_spec import (
 )
 from experiments.retention_sweep.cli_utils import LogFilenameFilter
 
+SchedulerSpec = Tuple[str, Optional[float], str]
+EquivPair = Tuple[SchedulerSpec, SchedulerSpec]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -85,10 +88,29 @@ def parse_args() -> argparse.Namespace:
         nargs="?",
         const="fsrs6",
         default="off",
-        choices=["off", "fsrs6", "fsrs3", "fsrs6_default"],
         help=(
-            "Print equivalence report; optionally set target DR scheduler "
-            "(fsrs6/fsrs3/fsrs6_default). `--equiv-report` defaults to fsrs6."
+            "Print equivalence report; optionally set the target DR scheduler "
+            "used for baseline equivalence interpolation. Use `off` to disable. "
+            "`--equiv-report` defaults to fsrs6."
+        ),
+    )
+    parser.add_argument(
+        "--equiv-baselines",
+        default=None,
+        help=(
+            "Comma-separated baseline scheduler specs for equivalence "
+            "distribution plots/reports. Defaults to anki_sm2,memrise unless "
+            "--equiv-pairs is set. Use off/none to disable baseline "
+            "equivalence plots."
+        ),
+    )
+    parser.add_argument(
+        "--equiv-pairs",
+        default=None,
+        help=(
+            "Comma-separated baseline:target DR-scheduler pairs for equivalent "
+            "ratio boxplots (e.g. fsrs6:fsrs3,lstm:fsrs6). Both sides must use "
+            "desired retention."
         ),
     )
     parser.add_argument(
@@ -176,6 +198,52 @@ def _parse_csv(value: Optional[str]) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _parse_scheduler_specs(value: Optional[str]) -> List[SchedulerSpec]:
+    specs: List[SchedulerSpec] = []
+    for item in _parse_csv(value):
+        try:
+            specs.append(parse_scheduler_spec(item))
+        except ValueError as exc:
+            raise ValueError(f"Invalid scheduler spec '{item}': {exc}") from exc
+    return specs
+
+
+def _resolve_equiv_baseline_specs(
+    raw_value: Optional[str], *, has_explicit_pairs: bool
+) -> List[SchedulerSpec]:
+    if raw_value is None:
+        if has_explicit_pairs:
+            return []
+        return _parse_scheduler_specs("anki_sm2,memrise")
+    items = _parse_csv(raw_value)
+    if not items:
+        return []
+    if len(items) == 1 and items[0].lower() in {"off", "none"}:
+        return []
+    return _parse_scheduler_specs(raw_value)
+
+
+def _parse_equiv_pairs(raw_value: Optional[str]) -> List[EquivPair]:
+    pairs: List[EquivPair] = []
+    for item in _parse_csv(raw_value):
+        if ":" not in item:
+            raise ValueError(
+                f"Invalid equivalence pair '{item}'. Expected baseline:target."
+            )
+        baseline_raw, target_raw = item.split(":", 1)
+        if not baseline_raw.strip() or not target_raw.strip():
+            raise ValueError(
+                f"Invalid equivalence pair '{item}'. Expected baseline:target."
+            )
+        try:
+            baseline_spec = parse_scheduler_spec(baseline_raw.strip())
+            target_spec = parse_scheduler_spec(target_raw.strip())
+        except ValueError as exc:
+            raise ValueError(f"Invalid equivalence pair '{item}': {exc}") from exc
+        pairs.append((baseline_spec, target_spec))
+    return pairs
+
+
 def _normalize_bool(value: Any) -> Optional[bool]:
     if isinstance(value, bool):
         return value
@@ -238,9 +306,145 @@ def _format_scheduler_title(scheduler: str) -> str:
         "fsrs3_default": "FSRSv3 (default)",
         "fsrs6": "FSRS-6",
         "fsrs6_default": "FSRS-6 (default)",
+        "lstm": "LSTM",
         "memrise": "Memrise",
     }
     return labels.get(scheduler, scheduler)
+
+
+def _format_scheduler_spec_title(spec: SchedulerSpec) -> str:
+    name, interval, raw = spec
+    if name == "fixed" and interval is not None:
+        return f"fixed@{format_float(normalize_fixed_interval(interval))}"
+    return _format_scheduler_title(raw if raw != name else name)
+
+
+def _entry_scheduler_label(entry: Dict[str, Any], prefix: str) -> str:
+    raw_value = entry.get(f"{prefix}_raw")
+    if isinstance(raw_value, str):
+        try:
+            return _format_scheduler_spec_title(parse_scheduler_spec(raw_value))
+        except ValueError:
+            return _format_scheduler_title(raw_value)
+    value = entry.get(prefix)
+    if isinstance(value, str):
+        return _format_scheduler_title(value)
+    return str(value)
+
+
+def _clean_output_token(value: str) -> str:
+    cleaned = value.replace("@", "_at_")
+    cleaned = re.sub(r"[^A-Za-z0-9._=-]+", "_", cleaned)
+    return re.sub(r"_+", "_", cleaned).strip("_")
+
+
+def _spec_matches_group(
+    spec: SchedulerSpec,
+    *,
+    scheduler: str,
+    fixed_interval: Optional[float],
+) -> bool:
+    name, interval, _raw = spec
+    if scheduler != name:
+        return False
+    if name != "fixed":
+        return True
+    if interval is None or fixed_interval is None:
+        return True
+    return math.isclose(
+        normalize_fixed_interval(interval),
+        normalize_fixed_interval(fixed_interval),
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    )
+
+
+def _collect_curve_users(
+    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    *,
+    env: str,
+    spec: SchedulerSpec,
+) -> Dict[int, List[Tuple[float, Dict[str, float]]]]:
+    users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
+    for (group_env, scheduler, desired, fixed_interval), group in groups.items():
+        if group_env != env or desired is None:
+            continue
+        if not _spec_matches_group(
+            spec, scheduler=scheduler, fixed_interval=fixed_interval
+        ):
+            continue
+        for user_key, payload in group["users"].items():
+            if not isinstance(user_key, int):
+                continue
+            users.setdefault(user_key, []).append((float(desired), payload["metrics"]))
+    return users
+
+
+def _collect_single_point_users(
+    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    *,
+    env: str,
+    spec: SchedulerSpec,
+) -> Dict[int, Dict[str, float]]:
+    user_points: Dict[int, List[Dict[str, float]]] = {}
+    for (group_env, scheduler, _desired, fixed_interval), group in groups.items():
+        if group_env != env:
+            continue
+        if not _spec_matches_group(
+            spec, scheduler=scheduler, fixed_interval=fixed_interval
+        ):
+            continue
+        for user_key, payload in group["users"].items():
+            if isinstance(user_key, int):
+                user_points.setdefault(user_key, []).append(payload["metrics"])
+    return {
+        user_id: points[0]
+        for user_id, points in user_points.items()
+        if len(points) == 1
+    }
+
+
+def _validate_equiv_pair_specs(pair_specs: List[EquivPair]) -> None:
+    for baseline_spec, target_spec in pair_specs:
+        for spec, role in ((baseline_spec, "baseline"), (target_spec, "target")):
+            name, interval, raw = spec
+            if interval is not None:
+                raise SystemExit(
+                    f"{role} '{raw}' in --equiv-pairs must be a DR scheduler, not a fixed interval."
+                )
+            if not scheduler_uses_desired_retention(name):
+                raise SystemExit(
+                    f"{role} '{raw}' in --equiv-pairs must use desired retention."
+                )
+
+
+def _resolve_ratio_output_name(
+    *,
+    baseline_spec: SchedulerSpec,
+    target_spec: SchedulerSpec,
+    env_suffix: str,
+    st_suffix: str,
+    sts_suffix: str,
+    engine_suffix: str,
+) -> str:
+    baseline_raw = baseline_spec[2]
+    target_raw = target_spec[2]
+    if baseline_raw == "fsrs6" and target_raw == "fsrs3":
+        return (
+            "retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr"
+            f"{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+        )
+    if baseline_raw == "fsrs6" and target_raw == "fsrs6_default":
+        return (
+            "retention_sweep_fsrs6_default_over_fsrs6_ratio_by_fsrs6_dr"
+            f"{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+        )
+    return (
+        f"retention_sweep_equivalent_{_clean_output_token(target_raw)}"
+        f"_over_{_clean_output_token(baseline_raw)}"
+        f"_ratio_by_{_clean_output_token(baseline_raw)}_dr"
+        f"{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+    )
 
 
 def _normalize_user_id(value: Any) -> Optional[int]:
@@ -353,6 +557,17 @@ def _format_title(base: str, user_ids: List[int]) -> str:
 
 def main() -> None:
     args = parse_args()
+
+    has_explicit_pairs = bool(_parse_csv(args.equiv_pairs))
+    try:
+        equiv_baseline_specs = _resolve_equiv_baseline_specs(
+            args.equiv_baselines,
+            has_explicit_pairs=has_explicit_pairs,
+        )
+        equiv_pair_specs = _parse_equiv_pairs(args.equiv_pairs)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    _validate_equiv_pair_specs(equiv_pair_specs)
 
     log_root = args.log_dir or (REPO_ROOT / "logs" / "retention_sweep")
     envs = _parse_csv(args.env)
@@ -621,23 +836,60 @@ def main() -> None:
         )
 
     wants_equiv = args.equiv_report != "off" or args.equiv_report_path is not None
-    needs_equiv = wants_equiv or not args.no_plot
+    needs_equiv = bool(equiv_baseline_specs) and (wants_equiv or not args.no_plot)
     equiv_target = args.equiv_report if args.equiv_report != "off" else "fsrs6"
     equivalent_distributions: List[Dict[str, Any]] = []
     if needs_equiv:
+        try:
+            equiv_target_spec = parse_scheduler_spec(equiv_target)
+        except ValueError as exc:
+            raise SystemExit(
+                f"Invalid equivalence target '{equiv_target}': {exc}"
+            ) from exc
+        if equiv_target_spec[1] is not None or not scheduler_uses_desired_retention(
+            equiv_target_spec[0]
+        ):
+            raise SystemExit(
+                f"Equivalence target '{equiv_target_spec[2]}' must use desired retention."
+            )
         equivalent_distributions = _compute_equivalent_dr_distributions(
             groups,
             envs,
             common_user_ids,
-            target=equiv_target,
-            baselines=["anki_sm2", "memrise"],
+            target_spec=equiv_target_spec,
+            baselines=equiv_baseline_specs,
             require_monotonic=args.equiv_require_monotonic,
         )
+    equivalent_ratio_entries: List[Dict[str, Any]] = []
+    if not args.no_plot:
+        pair_specs = list(equiv_pair_specs)
+        if args.fsrs3_vs_fsrs6_boxplot:
+            pair_specs.append((("fsrs6", None, "fsrs6"), ("fsrs3", None, "fsrs3")))
+        if args.fsrs6_default_vs_fsrs6_boxplot:
+            pair_specs.append(
+                (("fsrs6", None, "fsrs6"), ("fsrs6_default", None, "fsrs6_default"))
+            )
+        seen_pairs: set[Tuple[str, str]] = set()
+        for baseline_spec, target_spec in pair_specs:
+            key = (baseline_spec[2], target_spec[2])
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            equivalent_ratio_entries.extend(
+                _compute_equivalent_ratio_by_baseline_dr(
+                    groups,
+                    envs,
+                    common_user_ids,
+                    baseline_spec=baseline_spec,
+                    target_spec=target_spec,
+                    require_monotonic=args.equiv_require_monotonic,
+                )
+            )
 
     if args.equiv_report_low_ratio:
         for entry in equivalent_distributions:
-            baseline = _format_scheduler_title(entry["baseline"])
-            target = _format_scheduler_title(entry.get("target", "fsrs6"))
+            baseline = _entry_scheduler_label(entry, "baseline")
+            target = _entry_scheduler_label(entry, "target")
             user_ids_list = entry.get("user_ids_list", [])
             baseline_vals = entry.get("baseline_per_minute", [])
             target_vals = entry.get("target_per_minute", [])
@@ -670,83 +922,73 @@ def main() -> None:
                 filter_parts.append(f"engine={args.engine}")
             distribution_title = _format_title(
                 (
-                    f"{_format_scheduler_title(entry['baseline'])} vs "
-                    f"{_format_scheduler_title(entry.get('target', 'fsrs6'))} "
+                    f"{_entry_scheduler_label(entry, 'baseline')} vs "
+                    f"{_entry_scheduler_label(entry, 'target')} "
                     f"equiv distributions ({', '.join(filter_parts)})"
                 ),
                 sorted(entry["user_ids"]),
             )
             baseline_suffix = entry["baseline"]
+            baseline_raw = str(entry.get("baseline_raw", baseline_suffix))
             target_suffix = entry.get("target", "fsrs6")
+            target_raw = str(entry.get("target_raw", target_suffix))
             if target_suffix == "fsrs6":
-                distribution_path = (
-                    plot_dir
-                    / f"retention_sweep_equivalent_fsrs6_distributions_{baseline_suffix}{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+                distribution_path = plot_dir / (
+                    "retention_sweep_equivalent_fsrs6_distributions_"
+                    f"{_clean_output_token(baseline_raw)}"
+                    f"{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
             elif target_suffix == "fsrs6_default":
-                distribution_path = (
-                    plot_dir
-                    / f"retention_sweep_equivalent_fsrs6_default_distributions_{baseline_suffix}{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+                distribution_path = plot_dir / (
+                    "retention_sweep_equivalent_fsrs6_default_distributions_"
+                    f"{_clean_output_token(baseline_raw)}"
+                    f"{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
             else:
-                distribution_path = (
-                    plot_dir
-                    / f"retention_sweep_equivalent_{target_suffix}_distributions_{baseline_suffix}{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
+                distribution_path = plot_dir / (
+                    f"retention_sweep_equivalent_{_clean_output_token(target_raw)}"
+                    "_distributions_"
+                    f"{_clean_output_token(baseline_raw)}"
+                    f"{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
                 )
             _plot_equivalent_distributions(entry, distribution_path, distribution_title)
             print(f"Saved plot to {distribution_path}")
 
-        if args.fsrs3_vs_fsrs6_boxplot:
-            ratio_entries = _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
-                groups,
-                envs,
-                common_user_ids,
-                require_monotonic=args.equiv_require_monotonic,
+        for entry in equivalent_ratio_entries:
+            env_label = entry["environment"]
+            env_suffix = f"_env={env_label}"
+            filter_parts = [f"env={env_label}", f"short-term={args.short_term}"]
+            if args.short_term_source != "any":
+                filter_parts.append(f"short-term-source={args.short_term_source}")
+            if args.engine != "any":
+                filter_parts.append(f"engine={args.engine}")
+            baseline_label = _entry_scheduler_label(entry, "baseline")
+            target_label = _entry_scheduler_label(entry, "target")
+            title = _format_title(
+                (
+                    f"{target_label} / {baseline_label} ratio at equivalent "
+                    f"memorized-average ({', '.join(filter_parts)})"
+                ),
+                sorted(entry["user_ids"]),
             )
-            for entry in ratio_entries:
-                env_label = entry["environment"]
-                env_suffix = f"_env={env_label}"
-                title = _format_title(
-                    (
-                        "FSRSv3 / FSRS-6 ratio at equivalent memorized-average "
-                        f"(env={env_label}, short-term={args.short_term})"
-                    ),
-                    sorted(entry["user_ids"]),
-                )
-                out_path = (
-                    plot_dir
-                    / f"retention_sweep_fsrs3_over_fsrs6_ratio_by_fsrs6_dr{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
-                )
-                _plot_fsrs3_vs_fsrs6_ratio_boxplot(
-                    entry, output_path=out_path, title=title
-                )
-                print(f"Saved plot to {out_path}")
-
-        if args.fsrs6_default_vs_fsrs6_boxplot:
-            ratio_entries = _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
-                groups,
-                envs,
-                common_user_ids,
-                require_monotonic=args.equiv_require_monotonic,
+            out_path = plot_dir / _resolve_ratio_output_name(
+                baseline_spec=(
+                    str(entry["baseline"]),
+                    None,
+                    str(entry.get("baseline_raw", entry["baseline"])),
+                ),
+                target_spec=(
+                    str(entry["target"]),
+                    None,
+                    str(entry.get("target_raw", entry["target"])),
+                ),
+                env_suffix=env_suffix,
+                st_suffix=st_suffix,
+                sts_suffix=sts_suffix,
+                engine_suffix=engine_suffix,
             )
-            for entry in ratio_entries:
-                env_label = entry["environment"]
-                env_suffix = f"_env={env_label}"
-                title = _format_title(
-                    (
-                        "FSRS-6 default / FSRS-6 ratio at equivalent memorized-average "
-                        f"(env={env_label}, short-term={args.short_term})"
-                    ),
-                    sorted(entry["user_ids"]),
-                )
-                out_path = (
-                    plot_dir
-                    / f"retention_sweep_fsrs6_default_over_fsrs6_ratio_by_fsrs6_dr{env_suffix}{st_suffix}{sts_suffix}{engine_suffix}.png"
-                )
-                _plot_fsrs6_default_vs_fsrs6_ratio_boxplot(
-                    entry, output_path=out_path, title=title
-                )
-                print(f"Saved plot to {out_path}")
+            _plot_equivalent_ratio_boxplot(entry, output_path=out_path, title=title)
+            print(f"Saved plot to {out_path}")
 
     if wants_equiv:
         summaries = _summarize_equivalent_distributions(equivalent_distributions)
@@ -836,33 +1078,22 @@ def _compute_equivalent_dr_distributions(
     envs: List[str],
     common_user_ids: set[int],
     *,
-    target: str,
-    baselines: List[str],
+    target_spec: SchedulerSpec,
+    baselines: List[SchedulerSpec],
     require_monotonic: bool,
 ) -> List[Dict[str, Any]]:
     distributions: List[Dict[str, Any]] = []
     for env in envs:
-        target_users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
+        target_users = _collect_curve_users(groups, env=env, spec=target_spec)
+        if not target_users:
+            continue
 
-        for (group_env, scheduler, desired, _), group in groups.items():
-            if group_env != env:
-                continue
-            if scheduler == target and desired is not None:
-                for user_key, payload in group["users"].items():
-                    if not isinstance(user_key, int):
-                        continue
-                    target_users.setdefault(user_key, []).append(
-                        (float(desired), payload["metrics"])
-                    )
-
-        for baseline in baselines:
-            baseline_users: Dict[int, Dict[str, float]] = {}
-            for (group_env, scheduler, _, _), group in groups.items():
-                if group_env != env or scheduler != baseline:
-                    continue
-                for user_key, payload in group["users"].items():
-                    if isinstance(user_key, int):
-                        baseline_users[user_key] = payload["metrics"]
+        for baseline_spec in baselines:
+            baseline_users = _collect_single_point_users(
+                groups,
+                env=env,
+                spec=baseline_spec,
+            )
 
             eligible_users = set(baseline_users) & set(target_users) & common_user_ids
             if not eligible_users:
@@ -898,9 +1129,11 @@ def _compute_equivalent_dr_distributions(
             distributions.append(
                 {
                     "environment": env,
-                    "baseline": baseline,
+                    "baseline": baseline_spec[0],
+                    "baseline_raw": baseline_spec[2],
                     "baseline_per_minute": baseline_per_minute,
-                    "target": target,
+                    "target": target_spec[0],
+                    "target_raw": target_spec[2],
                     "target_per_minute": target_per_minute,
                     "target_dr_equiv": target_dr_equiv,
                     "user_ids_list": user_ids_list,
@@ -911,78 +1144,69 @@ def _compute_equivalent_dr_distributions(
     return distributions
 
 
-def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
+def _compute_equivalent_ratio_by_baseline_dr(
     groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
     *,
+    baseline_spec: SchedulerSpec,
+    target_spec: SchedulerSpec,
     require_monotonic: bool,
 ) -> List[Dict[str, Any]]:
-    """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
-
-    For each user and each FSRS-6 desired retention point:
-    - take FSRS-6 (dr6, x6=memorized_average, y6=memorized_per_minute)
-    - interpolate FSRSv3 to match x6 => y3_equiv
-      - interpolation only (no extrapolation): if x6 is outside FSRSv3's x-range,
-        skip that (user, dr6) point.
-    - ratio = y3_equiv / y6
-    - group ratio by dr6 (x axis is FSRS-6 DR)
-    """
-
     entries: List[Dict[str, Any]] = []
     for env in envs:
-        fsrs6_users: Dict[int, Dict[float, Dict[str, float]]] = {}
-        fsrs3_users: Dict[int, Dict[float, Dict[str, float]]] = {}
+        baseline_users_raw = _collect_curve_users(groups, env=env, spec=baseline_spec)
+        target_users_raw = _collect_curve_users(groups, env=env, spec=target_spec)
+        baseline_users: Dict[int, Dict[float, Dict[str, float]]] = {}
+        target_users: Dict[int, Dict[float, Dict[str, float]]] = {}
+        for user_id, values in baseline_users_raw.items():
+            baseline_users[user_id] = {
+                round(float(dr), 2): metrics for dr, metrics in values
+            }
+        for user_id, values in target_users_raw.items():
+            target_users[user_id] = {
+                round(float(dr), 2): metrics for dr, metrics in values
+            }
 
-        for (group_env, scheduler, desired, _), group in groups.items():
-            if group_env != env or desired is None:
-                continue
-            dr = round(float(desired), 2)
-            if scheduler == "fsrs6":
-                for user_key, payload in group["users"].items():
-                    if isinstance(user_key, int):
-                        fsrs6_users.setdefault(user_key, {})[dr] = payload["metrics"]
-            elif scheduler == "fsrs3":
-                for user_key, payload in group["users"].items():
-                    if isinstance(user_key, int):
-                        fsrs3_users.setdefault(user_key, {})[dr] = payload["metrics"]
-
-        if not fsrs6_users or not fsrs3_users:
+        if not baseline_users or not target_users:
             continue
 
-        eligible_users = set(fsrs6_users) & set(fsrs3_users) & common_user_ids
+        eligible_users = set(baseline_users) & set(target_users) & common_user_ids
         if not eligible_users:
             continue
 
-        fsrs6_dr: List[float] = []
+        baseline_dr: List[float] = []
         ratio_values: List[float] = []
         used_users: set[int] = set()
         for user_id in sorted(eligible_users):
-            fsrs6_points = fsrs6_users[user_id]
-            fsrs3_points = fsrs3_users[user_id]
-            if len(fsrs3_points) < 2:
+            baseline_points = baseline_users[user_id]
+            target_points = target_users[user_id]
+            if len(baseline_points) < 1 or len(target_points) < 2:
                 continue
 
-            fsrs3_curve = [(dr, metrics) for dr, metrics in fsrs3_points.items()]
-            if require_monotonic and not _is_monotonic_increasing(fsrs3_curve):
+            baseline_curve = [(dr, metrics) for dr, metrics in baseline_points.items()]
+            target_curve = [(dr, metrics) for dr, metrics in target_points.items()]
+            if require_monotonic and not _is_monotonic_increasing(target_curve):
                 continue
-            for dr6 in sorted(fsrs6_points):
-                metrics6 = fsrs6_points[dr6]
-                x6 = float(metrics6["memorized_average"])
-                y6 = float(metrics6["memorized_per_minute"])
-                if y6 <= 0 or not math.isfinite(y6):
+            if require_monotonic and not _is_monotonic_increasing(baseline_curve):
+                continue
+            for baseline_dr_value in sorted(baseline_points):
+                baseline_metrics = baseline_points[baseline_dr_value]
+                baseline_x = float(baseline_metrics["memorized_average"])
+                baseline_y = float(baseline_metrics["memorized_per_minute"])
+                if baseline_y <= 0 or not math.isfinite(baseline_y):
                     continue
                 interp = _interpolate_equivalent_point(
-                    fsrs3_curve,
-                    target_x=x6,
+                    target_curve,
+                    target_x=baseline_x,
                 )
                 if interp is None:
                     continue
-                _dr3, y3 = interp
-                ratio = y3 / y6
+                _target_dr_equiv, target_y = interp
+                ratio = target_y / baseline_y
                 if not math.isfinite(ratio):
                     continue
-                fsrs6_dr.append(float(dr6))
+                baseline_dr.append(float(baseline_dr_value))
                 ratio_values.append(ratio)
                 used_users.add(user_id)
 
@@ -992,13 +1216,34 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
         entries.append(
             {
                 "environment": env,
-                "fsrs6_dr_equiv": fsrs6_dr,
-                "ratio_fsrs3_over_fsrs6": ratio_values,
+                "baseline": baseline_spec[0],
+                "baseline_raw": baseline_spec[2],
+                "target": target_spec[0],
+                "target_raw": target_spec[2],
+                "baseline_dr_equiv": baseline_dr,
+                "target_over_baseline_ratio": ratio_values,
                 "user_ids": used_users,
             }
         )
 
     return entries
+
+
+def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
+    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    envs: List[str],
+    common_user_ids: set[int],
+    *,
+    require_monotonic: bool,
+) -> List[Dict[str, Any]]:
+    return _compute_equivalent_ratio_by_baseline_dr(
+        groups,
+        envs,
+        common_user_ids,
+        baseline_spec=("fsrs6", None, "fsrs6"),
+        target_spec=("fsrs3", None, "fsrs3"),
+        require_monotonic=require_monotonic,
+    )
 
 
 def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
@@ -1008,91 +1253,14 @@ def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
     *,
     require_monotonic: bool,
 ) -> List[Dict[str, Any]]:
-    """Compute per-user ratio at equivalent memorized-average, binned by FSRS-6 DR.
-
-    For each user and each FSRS-6 desired retention point:
-    - take FSRS-6 (dr6, x6=memorized_average, y6=memorized_per_minute)
-    - interpolate FSRS-6 default to match x6 => y_default_equiv
-      - interpolation only (no extrapolation): if x6 is outside FSRS-6 default's
-        x-range, skip that (user, dr6) point.
-    - ratio = y_default_equiv / y6
-    - group ratio by dr6 (x axis is FSRS-6 DR)
-    """
-
-    entries: List[Dict[str, Any]] = []
-    for env in envs:
-        fsrs6_users: Dict[int, Dict[float, Dict[str, float]]] = {}
-        fsrs6_default_users: Dict[int, Dict[float, Dict[str, float]]] = {}
-
-        for (group_env, scheduler, desired, _), group in groups.items():
-            if group_env != env or desired is None:
-                continue
-            dr = round(float(desired), 2)
-            if scheduler == "fsrs6":
-                for user_key, payload in group["users"].items():
-                    if isinstance(user_key, int):
-                        fsrs6_users.setdefault(user_key, {})[dr] = payload["metrics"]
-            elif scheduler == "fsrs6_default":
-                for user_key, payload in group["users"].items():
-                    if isinstance(user_key, int):
-                        fsrs6_default_users.setdefault(user_key, {})[dr] = payload[
-                            "metrics"
-                        ]
-
-        if not fsrs6_users or not fsrs6_default_users:
-            continue
-
-        eligible_users = set(fsrs6_users) & set(fsrs6_default_users) & common_user_ids
-        if not eligible_users:
-            continue
-
-        fsrs6_dr: List[float] = []
-        ratio_values: List[float] = []
-        used_users: set[int] = set()
-        for user_id in sorted(eligible_users):
-            fsrs6_points = fsrs6_users[user_id]
-            fsrs6_default_points = fsrs6_default_users[user_id]
-            if len(fsrs6_default_points) < 2:
-                continue
-
-            default_curve = [
-                (dr, metrics) for dr, metrics in fsrs6_default_points.items()
-            ]
-            if require_monotonic and not _is_monotonic_increasing(default_curve):
-                continue
-            for dr6 in sorted(fsrs6_points):
-                metrics6 = fsrs6_points[dr6]
-                x6 = float(metrics6["memorized_average"])
-                y6 = float(metrics6["memorized_per_minute"])
-                if y6 <= 0 or not math.isfinite(y6):
-                    continue
-                interp = _interpolate_equivalent_point(
-                    default_curve,
-                    target_x=x6,
-                )
-                if interp is None:
-                    continue
-                _dr_default, y_default = interp
-                ratio = y_default / y6
-                if not math.isfinite(ratio):
-                    continue
-                fsrs6_dr.append(float(dr6))
-                ratio_values.append(ratio)
-                used_users.add(user_id)
-
-        if not used_users:
-            continue
-
-        entries.append(
-            {
-                "environment": env,
-                "fsrs6_dr_equiv": fsrs6_dr,
-                "ratio_fsrs6_default_over_fsrs6": ratio_values,
-                "user_ids": used_users,
-            }
-        )
-
-    return entries
+    return _compute_equivalent_ratio_by_baseline_dr(
+        groups,
+        envs,
+        common_user_ids,
+        baseline_spec=("fsrs6", None, "fsrs6"),
+        target_spec=("fsrs6_default", None, "fsrs6_default"),
+        require_monotonic=require_monotonic,
+    )
 
 
 def _plot_fsrs3_vs_fsrs6_ratio_boxplot(
@@ -1101,43 +1269,7 @@ def _plot_fsrs3_vs_fsrs6_ratio_boxplot(
     output_path: Path,
     title: str,
 ) -> None:
-    import matplotlib.pyplot as plt
-
-    dr_values: List[float] = [float(x) for x in entry["fsrs6_dr_equiv"]]
-    ratios: List[float] = [float(x) for x in entry["ratio_fsrs3_over_fsrs6"]]
-
-    # Bin by rounded DR so x-axis remains readable and stable.
-    binned: Dict[float, List[float]] = {}
-    for dr, ratio in zip(dr_values, ratios):
-        dr_bin = round(dr, 2)
-        binned.setdefault(dr_bin, []).append(ratio)
-
-    dr_bins = sorted(binned)
-    data = [binned[value] for value in dr_bins]
-    positions = list(range(1, len(dr_bins) + 1))
-
-    fig, ax = plt.subplots(figsize=(14, 5))
-    ax.boxplot(
-        data,
-        positions=positions,
-        widths=0.6,
-        patch_artist=True,
-        showfliers=False,
-        boxprops={"facecolor": "#2ca02c", "edgecolor": "black", "alpha": 0.5},
-        medianprops={"color": "black"},
-        whiskerprops={"color": "black"},
-        capprops={"color": "black"},
-    )
-    ax.axhline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
-    ax.set_xticks(positions)
-    ax.set_xticklabels([f"{value * 100:.0f}%" for value in dr_bins], rotation=45)
-    ax.set_xlabel("FSRS-6 DR (%)")
-    ax.set_ylabel("FSRSv3 equiv / FSRS-6 equiv (cards/min)")
-    ax.set_title(title)
-    ax.grid(True, axis="y", ls="--", alpha=0.6)
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close(fig)
+    _plot_equivalent_ratio_boxplot(entry, output_path=output_path, title=title)
 
 
 def _plot_fsrs6_default_vs_fsrs6_ratio_boxplot(
@@ -1146,10 +1278,21 @@ def _plot_fsrs6_default_vs_fsrs6_ratio_boxplot(
     output_path: Path,
     title: str,
 ) -> None:
+    _plot_equivalent_ratio_boxplot(entry, output_path=output_path, title=title)
+
+
+def _plot_equivalent_ratio_boxplot(
+    entry: Dict[str, Any],
+    *,
+    output_path: Path,
+    title: str,
+) -> None:
     import matplotlib.pyplot as plt
 
-    dr_values: List[float] = [float(x) for x in entry["fsrs6_dr_equiv"]]
-    ratios: List[float] = [float(x) for x in entry["ratio_fsrs6_default_over_fsrs6"]]
+    dr_values: List[float] = [float(x) for x in entry["baseline_dr_equiv"]]
+    ratios: List[float] = [float(x) for x in entry["target_over_baseline_ratio"]]
+    baseline_label = _entry_scheduler_label(entry, "baseline")
+    target_label = _entry_scheduler_label(entry, "target")
 
     binned: Dict[float, List[float]] = {}
     for dr, ratio in zip(dr_values, ratios):
@@ -1175,8 +1318,8 @@ def _plot_fsrs6_default_vs_fsrs6_ratio_boxplot(
     ax.axhline(1.0, color="black", linestyle="--", linewidth=1.0, alpha=0.7)
     ax.set_xticks(positions)
     ax.set_xticklabels([f"{value * 100:.0f}%" for value in dr_bins], rotation=45)
-    ax.set_xlabel("FSRS-6 DR (%)")
-    ax.set_ylabel("FSRS-6 default equiv / FSRS-6 equiv (cards/min)")
+    ax.set_xlabel(f"{baseline_label} DR (%)")
+    ax.set_ylabel(f"{target_label} equiv / {baseline_label} equiv (cards/min)")
     ax.set_title(title)
     ax.grid(True, axis="y", ls="--", alpha=0.6)
     plt.tight_layout()
@@ -1225,7 +1368,9 @@ def _summarize_equivalent_distributions(
             {
                 "environment": entry.get("environment"),
                 "baseline": entry.get("baseline"),
+                "baseline_raw": entry.get("baseline_raw", entry.get("baseline")),
                 "target": entry.get("target", "fsrs6"),
+                "target_raw": entry.get("target_raw", entry.get("target", "fsrs6")),
                 "user_count": len(entry.get("user_ids", [])),
                 "diff_mean": _mean_without_outliers(diffs),
                 "diff_median": median(diffs),
@@ -1247,12 +1392,12 @@ def _print_equiv_report(summaries: List[Dict[str, Any]]) -> None:
     if not summaries:
         print("No equivalence summaries available.")
         return
-    title_target = _format_scheduler_title(str(summaries[0].get("target", "fsrs6")))
+    title_target = _entry_scheduler_label(summaries[0], "target")
     print(f"{title_target} equivalence summary (matched memorized average)")
     for summary in summaries:
         env = summary.get("environment")
-        baseline = _format_scheduler_title(str(summary.get("baseline")))
-        target = _format_scheduler_title(str(summary.get("target", "fsrs6")))
+        baseline = _entry_scheduler_label(summary, "baseline")
+        target = _entry_scheduler_label(summary, "target")
         user_count = summary.get("user_count")
         pos_pct = summary.get("pos_pct")
         neg_pct = summary.get("neg_pct")
@@ -1289,8 +1434,8 @@ def _plot_equivalent_distributions(
         float(x)
         for x in (entry.get("target_dr_equiv", entry.get("fsrs_dr_equiv")) or [])
     ]
-    baseline_label = _format_scheduler_title(entry["baseline"])
-    target_label = _format_scheduler_title(entry.get("target", "fsrs6"))
+    baseline_label = _entry_scheduler_label(entry, "baseline")
+    target_label = _entry_scheduler_label(entry, "target")
 
     fig, axes = plt.subplots(3, 2, figsize=(14, 12))
     ax_middle = axes[0, 0]
