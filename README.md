@@ -191,6 +191,16 @@ _Caption: FSRS-6 interpolated to match Anki-SM-2 memorized-average per user; com
 ![FSRS6 equiv vs Memrise](experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_memrise_env=lstm_st=on_sts=steps_engine=batched.png)
 _Caption: FSRS-6 interpolated to match Memrise memorized-average per user; compares memorized-per-minute distributions and deltas. (n=7544; superiority=70.3%; mean ratio=1.074; median ratio=1.074 (IQR 0.980-1.188); mean DR=0.848; median DR=0.869)._
 
+**LSTM equivalence vs Anki-SM-2**
+
+![LSTM equiv vs Anki-SM-2](experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_lstm_distributions_anki_sm2_env=lstm_st=on_sts=steps_engine=batched.png)
+_Caption: LSTM scheduler interpolated to match Anki-SM-2 memorized-average per user; compares memorized-per-minute distributions and deltas. (n=8281; superiority=87.4%; mean ratio=1.243; median ratio=1.232 (IQR 1.091-1.449); mean DR=0.895; median DR=0.901)._
+
+**LSTM equivalence vs Memrise**
+
+![LSTM equiv vs Memrise](experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_lstm_distributions_memrise_env=lstm_st=on_sts=steps_engine=batched.png)
+_Caption: LSTM scheduler interpolated to match Memrise memorized-average per user; compares memorized-per-minute distributions and deltas. (n=8070; superiority=82.4%; mean ratio=1.133; median ratio=1.132 (IQR 1.040-1.247); mean DR=0.872; median DR=0.885)._
+
 ## Benchmarks
 Performance baselines live under `benches/`. See `benches/README.md` for details.
 
