@@ -166,6 +166,8 @@ Metrics and outputs:
 
 _All figures below use `--env lstm --engine batched --short-term on --short-term-source steps` in the corresponding `retention_sweep` analysis scripts._
 
+_Interpretation caveat: these plots are conditional on the LSTM environment being the simulator's ground-truth memory model. That is not a neutral test bed for every scheduler, and it is especially favorable to the LSTM scheduler because the scheduler is being evaluated inside the same model family that defines recall dynamics. These figures should therefore be read as "performance under the LSTM simulator", not as unbiased evidence that LSTM is universally better on real users._
+
 **SM2 vs Memrise dominance**
 
 ![SM2 vs Memrise dominance](experiments/retention_sweep/plots/dominance/dominance_sm2_memrise_env=lstm_st=on_sts=steps_engine=batched.png)
