@@ -528,7 +528,7 @@ def _plot_compare_frontier(
 
     min_x = min(entry["memorized_average"] for entry in all_entries)
     max_x = max(entry["memorized_average"] for entry in all_entries)
-    max_y = max(entry["memorized_per_minute"] for entry in all_entries)
+    max_y = max(entry["time_average"] for entry in all_entries)
 
     x_min = 200 * math.floor(min_x / 200) if min_x else 0
     x_max = 200 * math.ceil(max_x / 200) if max_x else 1
@@ -669,7 +669,7 @@ def _plot_compare_frontier(
                 markerfacecolor = color if short_term_value else "none"
                 markeredgecolor = color
         x_vals = [entry["memorized_average"] for entry in entries]
-        y_vals = [entry["memorized_per_minute"] for entry in entries]
+        y_vals = [entry["time_average"] for entry in entries]
         avoid_x.extend(x_vals)
         avoid_y.extend(y_vals)
         if len(x_vals) > 1:
@@ -765,7 +765,7 @@ def _plot_compare_frontier(
         color="black",
     )
     plt.ylabel(
-        "Memorized cards (average)/Minutes of studying per day\n(higher=better)",
+        "Minutes of studying per day (average)\n(lower=better)",
         fontsize=18,
         color="black",
     )
@@ -791,7 +791,7 @@ def _plot_compare_frontier(
         title = f"{title} (env {envs[0]})"
     plt.title(title, fontsize=22)
     plt.grid(True, ls="--")
-    plt.legend(fontsize=16, loc="lower left", facecolor="white")
+    plt.legend(fontsize=16, loc="upper left", facecolor="white")
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
