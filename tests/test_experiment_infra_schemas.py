@@ -29,6 +29,7 @@ reserved_test = [4]
 scheduler = "fsrs6"
 log_root = "logs/baseline/fsrs6"
 expected_engine = "batched"
+stage_mode = "copy"
 
 [simulation]
 engine = "batched"

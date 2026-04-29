@@ -44,6 +44,7 @@ reserved_test = [3]
 scheduler = "fsrs6"
 log_root = "{_toml_path(baseline_root)}"
 expected_engine = "batched"
+stage_mode = "copy"
 
 [simulation]
 engine = "batched"
@@ -68,6 +69,33 @@ lambda_grid = [0.0, 0.5, 1.0]
         encoding="utf-8",
     )
     return config_path
+
+
+def _write_baseline_log(path: Path, *, user_id: int, scheduler: str = "fsrs6") -> None:
+    meta = {
+        "type": "meta",
+        "data": {
+            "engine": "batched",
+            "days": 30,
+            "deck_size": 100,
+            "learn_limit": 10,
+            "review_limit": 999,
+            "cost_limit_minutes": 60.0,
+            "priority": "review-first",
+            "environment": "lstm",
+            "scheduler": scheduler,
+            "scheduler_spec": scheduler,
+            "user_id": user_id,
+            "desired_retention": 0.9,
+            "scheduler_priority": "low_retrievability",
+            "seed": 42,
+            "fuzz": False,
+            "short_term": True,
+            "short_term_source": "steps",
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(meta) + "\n", encoding="utf-8")
 
 
 class ExperimentInfraRunnerTests(unittest.TestCase):
@@ -185,6 +213,69 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 2)
             self.assertEqual(result.summary["type"], "unsupported-stage")
             self.assertFalse(output_root.exists())
+
+    def test_stage_baseline_copies_exact_jsonl_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.STAGE_BASELINE,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 0)
+            stage_root = output_root / "test-run" / "stage-baseline"
+            staged_logs = sorted((stage_root / "baseline_logs").rglob("*.jsonl"))
+            self.assertEqual(len(staged_logs), 3)
+            self.assertEqual(list((stage_root / "baseline_logs").rglob("*.csv")), [])
+            summary = json.loads((stage_root / "baseline_summary.json").read_text())
+            self.assertTrue(summary["passed"])
+            self.assertEqual(summary["matched_users"], [1, 2, 3])
+
+    def test_stage_baseline_rejects_metadata_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                    scheduler="anki_sm2",
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.STAGE_BASELINE,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            stage_root = output_root / "test-run" / "stage-baseline"
+            gate = json.loads((stage_root / "gate_summary.json").read_text())
+            self.assertFalse(gate["passed"])
+            self.assertIn("invalid-baseline", gate["failures"])
+            self.assertEqual(list((stage_root / "baseline_logs").rglob("*.jsonl")), [])
 
 
 if __name__ == "__main__":

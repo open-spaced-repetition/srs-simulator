@@ -3,7 +3,7 @@ name = "rl_reboot_smoke"
 family = "rl_scheduler"
 seed = 42
 output_root = "artifacts/rl_scheduler/reboot_smoke"
-stages = ["dry-run", "preflight", "train-overfit", "sweep", "pareto"]
+stages = ["dry-run", "preflight", "stage-baseline", "train-overfit", "sweep", "pareto"]
 
 [users]
 train = [1]
@@ -14,6 +14,7 @@ reserved_test = [4]
 scheduler = "fsrs6"
 log_root = "logs/retention_sweep"
 expected_engine = "batched"
+stage_mode = "copy"
 
 [simulation]
 engine = "batched"

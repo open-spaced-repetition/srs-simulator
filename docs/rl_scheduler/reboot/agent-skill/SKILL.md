@@ -61,10 +61,12 @@ Current runner entry point:
 ```bash
 uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage dry-run --run-id <id>
 uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage preflight --run-id <id>
+uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage stage-baseline --run-id <id>
 ```
 
-Only `dry-run` and `preflight` are implemented. Treat later stages as unavailable
-until they return machine-readable evidence and enforce their gates.
+Only `dry-run`, `preflight`, and `stage-baseline` are implemented. Treat later
+stages as unavailable until they return machine-readable evidence and enforce
+their gates.
 
 ## Required Metrics
 

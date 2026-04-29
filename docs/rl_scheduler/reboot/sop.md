@@ -123,6 +123,13 @@ Every non-dry stage must write:
 - Validate metadata for user, DR, seed, engine, short-term, fuzz, limits,
   priority, scheduler priority, days, deck, and button usage.
 - Do not rerun FSRS6 automatically when exact logs are missing.
+- Current implementation stages JSONL logs only. CSV sidecars remain diagnostic
+  artifacts and are not copied into formal baseline staging.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage stage-baseline --run-id <id>
+  ```
 
 `train-overfit`:
 

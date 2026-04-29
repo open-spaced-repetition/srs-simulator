@@ -70,12 +70,15 @@ profiles and machine-readable stage records:
 ```bash
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage dry-run --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage preflight --run-id smoke
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage stage-baseline --run-id smoke
 ```
 
 `dry-run` validates the TOML and prints resolved commands without writing formal
 outputs. `preflight` writes a config snapshot, resolved config, command record,
 run record, GPU summary, gate summary, manifest, and preflight summary under the
-configured `output_root`. It fails if the exact baseline log root is missing.
+configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata
+and stages exact baseline logs by copy or hardlink without staging CSV sidecars.
+Both formal stages fail if the exact baseline log root is missing.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):

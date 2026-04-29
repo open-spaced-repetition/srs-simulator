@@ -210,6 +210,7 @@ class BaselineSource:
     scheduler: str
     log_root: Path
     expected_engine: str = "batched"
+    stage_mode: str = "copy"
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> BaselineSource:
@@ -219,6 +220,9 @@ class BaselineSource:
             expected_engine=_require_str(
                 raw.get("expected_engine", "batched"), "baseline.expected_engine"
             ),
+            stage_mode=_require_str(
+                raw.get("stage_mode", "copy"), "baseline.stage_mode"
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -226,12 +230,15 @@ class BaselineSource:
             raise ValueError("baseline.scheduler must be fsrs6 for formal gates.")
         if self.expected_engine not in {"event", "vectorized", "batched"}:
             raise ValueError("baseline.expected_engine is invalid.")
+        if self.stage_mode not in {"copy", "hardlink"}:
+            raise ValueError("baseline.stage_mode must be copy or hardlink.")
 
     def to_dict(self) -> dict[str, str]:
         return {
             "scheduler": self.scheduler,
             "log_root": str(self.log_root),
             "expected_engine": self.expected_engine,
+            "stage_mode": self.stage_mode,
         }
 
 
