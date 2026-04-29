@@ -137,6 +137,14 @@ def parse_args() -> argparse.Namespace:
         help="Include per-event logs (learn/review) in the JSONL output (can be large).",
     )
     parser.add_argument(
+        "--diagnostic-csv-logs",
+        action="store_true",
+        help=(
+            "Write daily CSV sidecar logs for diagnosing simulation behavior. "
+            "Retention sweeps skip these CSVs by default to limit disk usage."
+        ),
+    )
+    parser.add_argument(
         "--engine",
         choices=["event", "vectorized"],
         default="vectorized",
@@ -373,6 +381,7 @@ def _run_once(
     finally:
         progress_close()
     if not run_args.no_log:
+        run_args.write_daily_csv = bool(getattr(run_args, "diagnostic_csv_logs", False))
         simulate_cli._write_log(run_args, stats)
     if run_args.plot:
         simulate_cli.plot_simulation(stats, run_args)

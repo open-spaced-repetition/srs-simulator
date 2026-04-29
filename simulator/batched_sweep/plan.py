@@ -73,7 +73,8 @@ def build_batched_sweep_plan(
     log_root = args.log_dir or (repo_root / "logs" / "retention_sweep")
     log_root.mkdir(parents=True, exist_ok=True)
     batch_log_root = log_root / "batch_logs"
-    batch_log_root.mkdir(parents=True, exist_ok=True)
+    if getattr(args, "diagnostic_csv_logs", False):
+        batch_log_root.mkdir(parents=True, exist_ok=True)
 
     drs = dr_values(args.start_retention, args.end_retention, args.step)
     devices = parse_cuda_devices(args.cuda_devices)

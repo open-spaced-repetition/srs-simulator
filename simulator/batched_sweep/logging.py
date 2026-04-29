@@ -115,7 +115,8 @@ def simulate_and_log(
         run_label=run_label,
         total_days=args.days,
     )
-    batch_stats: dict[str, list[int]] = {}
+    diagnostic_csv_logs = bool(getattr(args, "diagnostic_csv_logs", False))
+    batch_stats: dict[str, list[int]] | None = {} if diagnostic_csv_logs else None
     stats_list = simulate_multiuser(
         days=args.days,
         deck_size=args.deck,
@@ -138,7 +139,7 @@ def simulate_and_log(
         short_term_loops_limit=args.short_term_loops_limit,
         batch_stats=batch_stats,
     )
-    if batch_stats:
+    if diagnostic_csv_logs and batch_stats:
         _write_batch_stats_csv(
             batch_stats=batch_stats,
             batch_log_root=batch_log_root,
@@ -184,5 +185,6 @@ def simulate_and_log(
             short_term_loops_limit=args.short_term_loops_limit,
             log_dir=user_log_dir,
             log_reviews=False,
+            write_daily_csv=diagnostic_csv_logs,
         )
         write_log(log_args, stats)

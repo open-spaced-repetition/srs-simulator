@@ -295,7 +295,8 @@ def _plot_curves(
     fig, axes = plt.subplots(
         4, 1, figsize=(14, 12), sharex=True, constrained_layout=True
     )
-    colors = plt.get_cmap("tab10").colors
+    cmap = plt.get_cmap("tab10")
+    colors = [cmap(index) for index in range(10)]
 
     for index, curve in enumerate(curves):
         color = colors[index % len(colors)]

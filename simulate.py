@@ -812,8 +812,9 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "short_term_threshold": getattr(args, "short_term_threshold", None),
         "short_term_loops_limit": short_term_max_loops,
     }
-    csv_filename = filename.with_suffix(".csv")
-    _write_daily_csv(csv_filename, stats)
+    if getattr(args, "write_daily_csv", True):
+        csv_filename = filename.with_suffix(".csv")
+        _write_daily_csv(csv_filename, stats)
     with filename.open("w", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "meta", "data": meta}) + "\n")
         accum_cost = []

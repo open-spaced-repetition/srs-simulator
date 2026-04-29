@@ -61,6 +61,15 @@ def parse_args() -> argparse.Namespace:
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
     )
+    parser.add_argument(
+        "--diagnostic-csv-logs",
+        action="store_true",
+        help=(
+            "Write per-user daily CSV sidecars and batch GPU CSV logs for "
+            "diagnosing simulation behavior. Batched retention sweeps skip CSVs "
+            "by default to limit disk usage."
+        ),
+    )
     add_fuzz_arg(parser)
     add_short_term_args(
         parser,
