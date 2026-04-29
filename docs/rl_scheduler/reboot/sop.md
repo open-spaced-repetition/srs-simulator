@@ -237,6 +237,27 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 - Do not select by training loss, reward, or internal feasibility.
 - Manifest must include selected artifact, sweep logs, Pareto outputs, GPU logs,
   and selector rationale.
+- Configure `select.command_template` in TOML. The runner requires a passed
+  Pareto summary before executing the command.
+- Supported placeholders include `{run_id}`, `{seed}`, `{family}`, `{engine}`,
+  `{repo_root}`, `{run_root}`, `{stage_root}`, `{output_dir}`,
+  `{train_stage_root}`, `{train_summary_path}`, `{sweep_stage_root}`,
+  `{pareto_stage_root}`, `{pareto_outputs_dir}`, `{config_path}`,
+  `{config_snapshot_path}`, `{command_record_path}`, `{stdout_path}`, and
+  `{stderr_path}`.
+- The command must write selection JSON matching `select.result_glob`; the
+  default is `selection.json`. Each selection JSON must include
+  `selected_artifact_metadata_path` and `selection_reason`.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage select --run-id <id>
+  ```
+
+- Current evidence files: `config_snapshot.toml`, `resolved_config.json`,
+  `command_record.json`, selector command record plus stdout/stderr,
+  `gate_summary.json`, `select_summary.json`, `run_record.json`, and
+  `manifest.json`.
 
 `aggregate`:
 

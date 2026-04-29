@@ -346,6 +346,8 @@ class ExperimentConfig:
     pareto_command_template: tuple[str, ...] = ()
     pareto_result_glob: str = "*.json"
     pareto_plot_glob: str = "*.png"
+    select_command_template: tuple[str, ...] = ()
+    select_result_glob: str = "selection.json"
     config_path: Path | None = None
     schema_version: int = SCHEMA_VERSION
 
@@ -367,6 +369,7 @@ class ExperimentConfig:
         training = _require_mapping(raw.get("training"), "training")
         sweep = _require_mapping(raw.get("sweep", {}), "sweep")
         pareto = _require_mapping(raw.get("pareto", {}), "pareto")
+        select = _require_mapping(raw.get("select", {}), "select")
         return cls(
             name=_require_str(raw.get("name"), "name"),
             family=_require_str(raw.get("family"), "family"),
@@ -406,6 +409,12 @@ class ExperimentConfig:
             pareto_plot_glob=_require_str(
                 pareto.get("plot_glob", "*.png"), "pareto.plot_glob"
             ),
+            select_command_template=_str_tuple(
+                select.get("command_template", []), "select.command_template"
+            ),
+            select_result_glob=_require_str(
+                select.get("result_glob", "selection.json"), "select.result_glob"
+            ),
             config_path=config_path,
             schema_version=schema_version,
         )
@@ -435,6 +444,10 @@ class ExperimentConfig:
                 "command_template": list(self.pareto_command_template),
                 "result_glob": self.pareto_result_glob,
                 "plot_glob": self.pareto_plot_glob,
+            },
+            "select": {
+                "command_template": list(self.select_command_template),
+                "result_glob": self.select_result_glob,
             },
             "config_path": str(self.config_path) if self.config_path else None,
         }

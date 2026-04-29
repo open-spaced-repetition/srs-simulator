@@ -35,6 +35,7 @@ SUPPORTED_RUNNER_STAGES = {
     StageName.TRAIN_OVERFIT,
     StageName.SWEEP,
     StageName.PARETO,
+    StageName.SELECT,
 }
 
 
@@ -185,6 +186,17 @@ def run_stage(
         )
     if stage == StageName.PARETO:
         return run_pareto(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=command
+            or stage_command(
+                config_path=config_path, stage=stage, run_id=actual_run_id
+            ),
+        )
+    if stage == StageName.SELECT:
+        return run_select(
             config=config,
             config_path=config_path,
             repo_root=repo_root,
@@ -1115,6 +1127,259 @@ def run_pareto(
     )
 
 
+def run_select(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    command: list[str],
+) -> StageExecutionResult:
+    started_at = utc_timestamp()
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    stage_root = output_root / run_id / StageName.SELECT.value
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    config_snapshot_path = stage_root / "config_snapshot.toml"
+    resolved_config_path = stage_root / "resolved_config.json"
+    gate_summary_path = stage_root / "gate_summary.json"
+    command_record_path = stage_root / "command_record.json"
+    select_command_record_path = stage_root / "commands" / "select_command.json"
+    select_stdout_path = stage_root / "commands" / "select_stdout.txt"
+    select_stderr_path = stage_root / "commands" / "select_stderr.txt"
+    run_record_path = stage_root / "run_record.json"
+    select_summary_path = stage_root / "select_summary.json"
+    manifest_path = stage_root / "manifest.json"
+    output_dir = stage_root / "select_outputs"
+    pareto_stage_root = output_root / run_id / StageName.PARETO.value
+    pareto_summary_path = pareto_stage_root / "pareto_summary.json"
+
+    shutil.copyfile(config_path, config_snapshot_path)
+    _write_json(resolved_config_path, config.to_dict())
+
+    failures: list[FailureClass] = []
+    notes: list[str] = []
+    selection_paths: list[Path] = []
+    selected_artifact_paths: list[Path] = []
+    command_results: list[dict[str, Any]] = []
+    command_records: list[Path] = []
+    stdout_paths: list[Path] = []
+    stderr_paths: list[Path] = []
+    commands_attempted = 0
+    commands_succeeded = 0
+
+    if not config.select_command_template:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append("select.command_template is required for select.")
+    if not failures:
+        summary_notes = _read_passed_stage_summary(
+            pareto_summary_path, StageName.PARETO
+        )
+        if summary_notes:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.extend(summary_notes)
+
+    if not failures:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            select_command = _format_select_command(
+                config=config,
+                config_path=config_path,
+                repo_root=repo_root,
+                run_id=run_id,
+                stage_root=stage_root,
+                output_dir=output_dir,
+                pareto_stage_root=pareto_stage_root,
+                command_record_path=select_command_record_path,
+                stdout_path=select_stdout_path,
+                stderr_path=select_stderr_path,
+            )
+        except ValueError as exc:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(f"Invalid select.command_template: {exc}")
+        else:
+            commands_attempted = 1
+            select_command_record = _run_recorded_command(
+                command=select_command,
+                cwd=repo_root,
+                command_record_path=select_command_record_path,
+                stdout_path=select_stdout_path,
+                stderr_path=select_stderr_path,
+            )
+            exit_code = _record_exit_code(select_command_record)
+            command_records.append(select_command_record_path)
+            stdout_paths.append(select_stdout_path)
+            stderr_paths.append(select_stderr_path)
+            command_results.append(
+                {
+                    "output_dir": str(output_dir),
+                    "command_record_path": str(select_command_record_path),
+                    "stdout_path": str(select_stdout_path),
+                    "stderr_path": str(select_stderr_path),
+                    "exit_code": exit_code,
+                }
+            )
+            if exit_code != 0:
+                failures.append(FailureClass.RUNNER_FAILED)
+                notes.append("Select command failed.")
+            else:
+                commands_succeeded = 1
+
+    if not failures:
+        selection_paths, selection_note = _collect_paths(
+            root=output_dir,
+            path_glob=config.select_result_glob,
+            field_name="select.result_glob",
+        )
+        if selection_note is not None:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(selection_note)
+        elif not selection_paths:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.append(
+                f"No selection JSON matched {config.select_result_glob!r} "
+                f"in {output_dir}."
+            )
+        else:
+            selection_note = _validate_selection_files(selection_paths, config=config)
+            if selection_note is not None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(selection_note)
+            else:
+                selected_artifact_paths = [
+                    _selection_artifact_path(path) for path in selection_paths
+                ]
+
+    unique_failures = tuple(dict.fromkeys(failures))
+    passed = not unique_failures
+    gate_summary = GateSummary(
+        gate_name=StageName.SELECT.value,
+        passed=passed,
+        failures=unique_failures,
+        metrics={
+            "commands_attempted": float(commands_attempted),
+            "commands_succeeded": float(commands_succeeded),
+            "selection_files": float(len(selection_paths)),
+            "selected_artifacts": float(len(selected_artifact_paths)),
+        },
+        thresholds={},
+    )
+    _write_json(gate_summary_path, gate_summary.to_dict())
+
+    finished_at = utc_timestamp()
+    exit_code = 0 if passed else 1
+    command_record = CommandRecord(
+        command=tuple(command),
+        cwd=repo_root,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=None,
+        stderr_path=None,
+    )
+    _write_json(command_record_path, command_record.to_dict())
+
+    provenance = collect_environment_summary(repo_root)
+    summary = {
+        "type": "select",
+        "run_id": run_id,
+        "stage": StageName.SELECT.value,
+        "passed": passed,
+        "failures": [failure.value for failure in unique_failures],
+        "notes": notes,
+        "repo_root": str(repo_root),
+        "output_root": str(output_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "pareto_stage_root": str(pareto_stage_root),
+        "command_template": list(config.select_command_template),
+        "result_glob": config.select_result_glob,
+        "selection_paths": [str(path) for path in selection_paths],
+        "selected_artifact_paths": [str(path) for path in selected_artifact_paths],
+        "command_results": command_results,
+        "config_snapshot_path": str(config_snapshot_path),
+        "resolved_config_path": str(resolved_config_path),
+        "gate_summary_path": str(gate_summary_path),
+        "command_record_path": str(command_record_path),
+        "run_record_path": str(run_record_path),
+        "manifest_path": str(manifest_path),
+        "environment": provenance,
+    }
+    _write_json(select_summary_path, summary)
+
+    run_record = RunRecord(
+        run_id=run_id,
+        stage=StageName.SELECT,
+        command=command_record,
+        config_path=config_path,
+        config_snapshot_path=config_snapshot_path,
+        resolved_config_path=resolved_config_path,
+        git_commit=provenance["git_commit"],
+        dirty=bool(provenance["dirty"]),
+        uv_lock_hash=provenance["uv_lock_hash"],
+        python_version=provenance["python_version"],
+        torch_version=provenance["torch_version"],
+        cuda_version=provenance["cuda_version"],
+        artifact_paths=(
+            gate_summary_path,
+            select_summary_path,
+            manifest_path,
+            *command_records,
+            *stdout_paths,
+            *stderr_paths,
+            *selection_paths,
+            *selected_artifact_paths,
+        ),
+    )
+    _write_json(run_record_path, run_record.to_dict())
+
+    manifest_artifacts: dict[str, Path] = {
+        "config_snapshot": config_snapshot_path,
+        "resolved_config": resolved_config_path,
+        "gate_summary": gate_summary_path,
+        "command_record": command_record_path,
+        "run_record": run_record_path,
+        "select_summary": select_summary_path,
+    }
+    manifest_artifacts.update(
+        {
+            f"select_command_record_{index}": path
+            for index, path in enumerate(command_records)
+        }
+    )
+    manifest_artifacts.update(
+        {f"select_stdout_{index}": path for index, path in enumerate(stdout_paths)}
+    )
+    manifest_artifacts.update(
+        {f"select_stderr_{index}": path for index, path in enumerate(stderr_paths)}
+    )
+    manifest_artifacts.update(
+        {f"selection_{index}": path for index, path in enumerate(selection_paths)}
+    )
+    manifest_artifacts.update(
+        {
+            f"selected_artifact_metadata_{index}": path
+            for index, path in enumerate(selected_artifact_paths)
+        }
+    )
+    manifest = ArtifactManifest(
+        run_id=run_id,
+        artifacts=manifest_artifacts,
+        config_snapshot_path=config_snapshot_path,
+        gate_summary_path=gate_summary_path,
+        command_record_paths=(command_record_path, *command_records),
+    )
+    _write_json(manifest_path, manifest.to_dict())
+
+    return StageExecutionResult(
+        exit_code=exit_code,
+        stage=StageName.SELECT,
+        run_id=run_id,
+        stage_root=stage_root,
+        summary=summary,
+    )
+
+
 def run_stage_baseline(
     *,
     config: ExperimentConfig,
@@ -1837,6 +2102,49 @@ def _format_pareto_command(
         raise ValueError("positional format fields are not supported") from exc
 
 
+def _format_select_command(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    output_dir: Path,
+    pareto_stage_root: Path,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> list[str]:
+    values: dict[str, Any] = {
+        "run_id": run_id,
+        "seed": config.seed,
+        "family": config.family,
+        "engine": config.simulation.engine,
+        "repo_root": str(repo_root),
+        "run_root": str(stage_root.parent),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "train_stage_root": str(stage_root.parent / StageName.TRAIN_OVERFIT.value),
+        "train_summary_path": str(
+            stage_root.parent / StageName.TRAIN_OVERFIT.value / "training_summary.json"
+        ),
+        "sweep_stage_root": str(stage_root.parent / StageName.SWEEP.value),
+        "pareto_stage_root": str(pareto_stage_root),
+        "pareto_outputs_dir": str(pareto_stage_root / "pareto_outputs"),
+        "config_path": str(config_path),
+        "config_snapshot_path": str(stage_root / "config_snapshot.toml"),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+    try:
+        return [item.format(**values) for item in config.select_command_template]
+    except KeyError as exc:
+        raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
+    except IndexError as exc:
+        raise ValueError("positional format fields are not supported") from exc
+
+
 def _format_lambda_token(value: float) -> str:
     token = format(value, ".12g")
     return token.replace("-", "neg_").replace("+", "").replace(".", "p")
@@ -2052,6 +2360,65 @@ def _validate_json_files(paths: list[Path]) -> str | None:
         except (OSError, json.JSONDecodeError) as exc:
             return f"Invalid JSON artifact {path}: {exc}"
     return None
+
+
+def _validate_selection_files(
+    paths: list[Path],
+    *,
+    config: ExperimentConfig,
+) -> str | None:
+    for path in paths:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"Invalid selection JSON {path}: {exc}"
+        if not isinstance(payload, dict):
+            return f"Selection JSON must be an object: {path}"
+        raw_artifact_path = payload.get("selected_artifact_metadata_path")
+        if not isinstance(raw_artifact_path, str) or not raw_artifact_path.strip():
+            return (
+                f"Selection JSON must contain selected_artifact_metadata_path: {path}"
+            )
+        reason = payload.get("selection_reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return f"Selection JSON must contain selection_reason: {path}"
+        artifact_path = _resolve_selection_artifact_path(
+            selection_path=path,
+            raw_artifact_path=raw_artifact_path,
+        )
+        try:
+            metadata = validate_scheduler_artifact(artifact_path, require_files=True)
+        except ValueError as exc:
+            return f"Invalid selected scheduler artifact {artifact_path}: {exc}"
+        artifact_note = _validate_sweep_artifact_metadata(
+            metadata_path=artifact_path,
+            metadata=metadata,
+            config=config,
+        )
+        if artifact_note is not None:
+            return artifact_note
+    return None
+
+
+def _selection_artifact_path(selection_path: Path) -> Path:
+    with selection_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    return _resolve_selection_artifact_path(
+        selection_path=selection_path,
+        raw_artifact_path=str(payload["selected_artifact_metadata_path"]),
+    )
+
+
+def _resolve_selection_artifact_path(
+    *,
+    selection_path: Path,
+    raw_artifact_path: str,
+) -> Path:
+    path = Path(raw_artifact_path)
+    if path.is_absolute():
+        return path
+    return (selection_path.parent / path).resolve()
 
 
 def _file_sha256(path: Path) -> str | None:

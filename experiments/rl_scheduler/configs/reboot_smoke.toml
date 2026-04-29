@@ -54,6 +54,23 @@ artifact_metadata_glob = "metadata.json"
 #   "{output_dir}",
 # ]
 
+[select]
+result_glob = "selection.json"
+# select requires a frozen selector command after Pareto artifacts pass.
+# Example shape:
+# command_template = [
+#   "uv",
+#   "run",
+#   "python",
+#   "experiments/rl_scheduler/select_policy.py",
+#   "--pareto-dir",
+#   "{pareto_outputs_dir}",
+#   "--train-summary",
+#   "{train_summary_path}",
+#   "--output",
+#   "{output_dir}/selection.json",
+# ]
+
 [pareto]
 result_glob = "*.json"
 plot_glob = "*.png"
