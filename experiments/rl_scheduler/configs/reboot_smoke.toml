@@ -1,0 +1,36 @@
+schema_version = 1
+name = "rl_reboot_smoke"
+family = "rl_scheduler"
+seed = 42
+output_root = "artifacts/rl_scheduler/reboot_smoke"
+stages = ["dry-run", "preflight", "train-overfit", "sweep", "pareto"]
+
+[users]
+train = [1]
+validation = [2, 3]
+reserved_test = [4]
+
+[baseline]
+scheduler = "fsrs6"
+log_root = "logs/retention_sweep"
+expected_engine = "batched"
+
+[simulation]
+engine = "batched"
+days = 365
+deck = 10000
+learn_limit = 10
+review_limit = 9999
+cost_limit_minutes = 720.0
+priority = "review-first"
+scheduler_priority = "low_retrievability"
+short_term_source = "steps"
+fuzz = false
+
+[gpu_guard]
+required = false
+device = "cpu"
+smoke = false
+
+[training]
+lambda_grid = [0.0, 0.25, 0.5, 0.75, 1.0]

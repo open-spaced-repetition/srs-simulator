@@ -34,6 +34,38 @@ class FailureClass(StrEnum):
     RUNNER_FAILED = "runner-failed"
 
 
+@dataclass(frozen=True, slots=True)
+class GpuGuardConfig:
+    required: bool = False
+    device: str | None = None
+    smoke: bool = False
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> GpuGuardConfig:
+        raw = raw or {}
+        device = raw.get("device")
+        if device is not None:
+            device = _require_str(device, "gpu_guard.device")
+        return cls(
+            required=_require_bool(raw.get("required", False), "gpu_guard.required"),
+            device=device,
+            smoke=_require_bool(raw.get("smoke", False), "gpu_guard.smoke"),
+        )
+
+    def __post_init__(self) -> None:
+        if self.device is not None and not (
+            self.device == "cpu" or self.device.startswith("cuda")
+        ):
+            raise ValueError("gpu_guard.device must be cpu, cuda, or cuda:<index>.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "required": self.required,
+            "device": self.device,
+            "smoke": self.smoke,
+        }
+
+
 def _require_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_name} must be a table/object.")
@@ -277,10 +309,12 @@ class ExperimentConfig:
     name: str
     family: str
     seed: int
+    output_root: Path
     stages: tuple[StageName, ...]
     users: UserSplit
     baseline: BaselineSource
     simulation: SimulationScope
+    gpu_guard: GpuGuardConfig
     lambda_grid: tuple[float, ...]
     config_path: Path | None = None
     schema_version: int = SCHEMA_VERSION
@@ -305,6 +339,7 @@ class ExperimentConfig:
             name=_require_str(raw.get("name"), "name"),
             family=_require_str(raw.get("family"), "family"),
             seed=_require_int(raw.get("seed"), "seed", minimum=0),
+            output_root=Path(_require_str(raw.get("output_root"), "output_root")),
             stages=_stage_tuple(raw.get("stages"), "stages"),
             users=UserSplit.from_mapping(_require_mapping(raw.get("users"), "users")),
             baseline=BaselineSource.from_mapping(
@@ -313,6 +348,7 @@ class ExperimentConfig:
             simulation=SimulationScope.from_mapping(
                 _require_mapping(raw.get("simulation"), "simulation")
             ),
+            gpu_guard=GpuGuardConfig.from_mapping(raw.get("gpu_guard")),
             lambda_grid=_float_tuple(
                 training.get("lambda_grid"), "training.lambda_grid"
             ),
@@ -326,10 +362,12 @@ class ExperimentConfig:
             "name": self.name,
             "family": self.family,
             "seed": self.seed,
+            "output_root": str(self.output_root),
             "stages": [stage.value for stage in self.stages],
             "users": self.users.to_dict(),
             "baseline": self.baseline.to_dict(),
             "simulation": self.simulation.to_dict(),
+            "gpu_guard": self.gpu_guard.to_dict(),
             "training": {"lambda_grid": list(self.lambda_grid)},
             "config_path": str(self.config_path) if self.config_path else None,
         }

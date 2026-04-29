@@ -17,6 +17,7 @@ schema_version = 1
 name = "rl-overfit-smoke"
 family = "rl_scheduler"
 seed = 42
+output_root = "artifacts/rl_scheduler/rl-overfit-smoke"
 stages = ["preflight", "train-overfit", "sweep", "pareto"]
 
 [users]
@@ -41,6 +42,11 @@ scheduler_priority = "low_retrievability"
 short_term_source = "steps"
 fuzz = false
 
+[gpu_guard]
+required = false
+device = "cpu"
+smoke = false
+
 [training]
 lambda_grid = [0.0, 0.25, 0.5]
 """
@@ -57,6 +63,9 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertEqual(config.name, "rl-overfit-smoke")
         self.assertEqual(config.stages[1], StageName.TRAIN_OVERFIT)
         self.assertEqual(config.users.train, (1,))
+        self.assertEqual(
+            str(config.output_root), "artifacts/rl_scheduler/rl-overfit-smoke"
+        )
         self.assertEqual(config.lambda_grid, (0.0, 0.25, 0.5))
         self.assertEqual(config.to_dict()["baseline"]["scheduler"], "fsrs6")
 

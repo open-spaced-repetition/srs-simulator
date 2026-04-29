@@ -56,6 +56,16 @@ Use this skill for RL scheduler experiment infrastructure work in
 - `aggregate`: compute gates and fail non-zero in formal mode when gates fail.
 - `reserved-test`: run only with frozen config and selected artifact.
 
+Current runner entry point:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage dry-run --run-id <id>
+uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage preflight --run-id <id>
+```
+
+Only `dry-run` and `preflight` are implemented. Treat later stages as unavailable
+until they return machine-readable evidence and enforce their gates.
+
 ## Required Metrics
 
 Always report:

@@ -30,3 +30,14 @@ evidence, and external Pareto gates are machine-checkable.
 The first implementation slice provides a stdlib typed schema scaffold under
 `simulator/experiment_infra/` and keeps retention_sweep CSV output diagnostic
 only by default.
+
+The second slice adds a minimal TOML runner:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage dry-run --run-id smoke
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage preflight --run-id smoke
+```
+
+Only `dry-run` and `preflight` are implemented at this point. Later stages must
+remain explicit non-zero unsupported stages until their artifact contracts and
+gates are implemented.

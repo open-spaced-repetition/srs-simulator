@@ -76,6 +76,9 @@ Deliverables:
 - A single TOML-driven runner with stages:
   `dry-run`, `preflight`, `stage-baseline`, `train-overfit`, `sweep`,
   `pareto`, `select`, `aggregate`, `reserved-test`.
+- Initial implementation supports only `dry-run` and `preflight`; all later
+  stages must return explicit non-zero unsupported-stage results until their
+  contracts are implemented.
 - Stage state is machine-readable and includes command, exit code, stdout/stderr
   paths, config snapshot, git commit, dirty status, and environment summary.
 - `all` fails fast when any required stage, artifact audit, or aggregate gate

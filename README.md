@@ -62,6 +62,21 @@ FSRS6 priority modes: `low_retrievability`, `high_retrievability`, `low_difficul
 
 Sanity checks: `tests/sanity_lstm_forward_calls.py` runs a quick vectorized LSTM simulation and prints the number of LSTM forward calls to confirm it scales with days, not reviews.
 
+## RL experiment infrastructure
+
+The rebooted RL scheduler experiment infrastructure starts from checked-in TOML
+profiles and machine-readable stage records:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage dry-run --run-id smoke
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage preflight --run-id smoke
+```
+
+`dry-run` validates the TOML and prints resolved commands without writing formal
+outputs. `preflight` writes a config snapshot, resolved config, command record,
+run record, GPU summary, gate summary, manifest, and preflight summary under the
+configured `output_root`. It fails if the exact baseline log root is missing.
+
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
 

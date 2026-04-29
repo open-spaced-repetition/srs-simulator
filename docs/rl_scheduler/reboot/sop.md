@@ -91,6 +91,11 @@ Every non-dry stage must write:
 - Print or write preview output only.
 - Do not allocate CUDA.
 - Do not create formal experiment evidence.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage dry-run --run-id <id>
+  ```
 
 `preflight`:
 
@@ -102,6 +107,15 @@ Every non-dry stage must write:
 - Concrete operations: parse TOML, materialize resolved config, verify baseline
   metadata keys, check output-root writeability, collect git/uv/Python/Torch/CUDA
   versions, run the GPU guard command, and write a preflight summary.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage preflight --run-id <id>
+  ```
+
+- Current evidence files: `config_snapshot.toml`, `resolved_config.json`,
+  `command_record.json`, `run_record.json`, `gpu_summary.json`,
+  `gate_summary.json`, `preflight_summary.json`, and `manifest.json`.
 
 `stage-baseline`:
 
