@@ -34,6 +34,7 @@ SUPPORTED_RUNNER_STAGES = {
     StageName.STAGE_BASELINE,
     StageName.TRAIN_OVERFIT,
     StageName.SWEEP,
+    StageName.PARETO,
 }
 
 
@@ -173,6 +174,17 @@ def run_stage(
         )
     if stage == StageName.SWEEP:
         return run_sweep(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=command
+            or stage_command(
+                config_path=config_path, stage=stage, run_id=actual_run_id
+            ),
+        )
+    if stage == StageName.PARETO:
+        return run_pareto(
             config=config,
             config_path=config_path,
             repo_root=repo_root,
@@ -829,6 +841,274 @@ def run_sweep(
     return StageExecutionResult(
         exit_code=exit_code,
         stage=StageName.SWEEP,
+        run_id=run_id,
+        stage_root=stage_root,
+        summary=summary,
+    )
+
+
+def run_pareto(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    command: list[str],
+) -> StageExecutionResult:
+    started_at = utc_timestamp()
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    stage_root = output_root / run_id / StageName.PARETO.value
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    config_snapshot_path = stage_root / "config_snapshot.toml"
+    resolved_config_path = stage_root / "resolved_config.json"
+    gate_summary_path = stage_root / "gate_summary.json"
+    command_record_path = stage_root / "command_record.json"
+    pareto_command_record_path = stage_root / "commands" / "pareto_command.json"
+    pareto_stdout_path = stage_root / "commands" / "pareto_stdout.txt"
+    pareto_stderr_path = stage_root / "commands" / "pareto_stderr.txt"
+    run_record_path = stage_root / "run_record.json"
+    pareto_summary_path = stage_root / "pareto_summary.json"
+    manifest_path = stage_root / "manifest.json"
+    output_dir = stage_root / "pareto_outputs"
+    baseline_stage_root = output_root / run_id / StageName.STAGE_BASELINE.value
+    sweep_stage_root = output_root / run_id / StageName.SWEEP.value
+    baseline_summary_path = baseline_stage_root / "baseline_summary.json"
+    sweep_summary_path = sweep_stage_root / "sweep_summary.json"
+
+    shutil.copyfile(config_path, config_snapshot_path)
+    _write_json(resolved_config_path, config.to_dict())
+
+    failures: list[FailureClass] = []
+    notes: list[str] = []
+    result_paths: list[Path] = []
+    plot_paths: list[Path] = []
+    command_results: list[dict[str, Any]] = []
+
+    if not config.pareto_command_template:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append("pareto.command_template is required for pareto.")
+    for summary_path, stage_name in (
+        (baseline_summary_path, StageName.STAGE_BASELINE),
+        (sweep_summary_path, StageName.SWEEP),
+    ):
+        if not failures:
+            summary_notes = _read_passed_stage_summary(summary_path, stage_name)
+            if summary_notes:
+                failures.append(FailureClass.INCOMPLETE_OUTPUT)
+                notes.extend(summary_notes)
+
+    command_records: list[Path] = []
+    stdout_paths: list[Path] = []
+    stderr_paths: list[Path] = []
+    commands_attempted = 0
+    commands_succeeded = 0
+    if not failures:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            pareto_command = _format_pareto_command(
+                config=config,
+                config_path=config_path,
+                repo_root=repo_root,
+                run_id=run_id,
+                stage_root=stage_root,
+                output_dir=output_dir,
+                baseline_stage_root=baseline_stage_root,
+                sweep_stage_root=sweep_stage_root,
+                command_record_path=pareto_command_record_path,
+                stdout_path=pareto_stdout_path,
+                stderr_path=pareto_stderr_path,
+            )
+        except ValueError as exc:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(f"Invalid pareto.command_template: {exc}")
+        else:
+            commands_attempted = 1
+            pareto_command_record = _run_recorded_command(
+                command=pareto_command,
+                cwd=repo_root,
+                command_record_path=pareto_command_record_path,
+                stdout_path=pareto_stdout_path,
+                stderr_path=pareto_stderr_path,
+            )
+            exit_code = _record_exit_code(pareto_command_record)
+            command_records.append(pareto_command_record_path)
+            stdout_paths.append(pareto_stdout_path)
+            stderr_paths.append(pareto_stderr_path)
+            command_results.append(
+                {
+                    "output_dir": str(output_dir),
+                    "command_record_path": str(pareto_command_record_path),
+                    "stdout_path": str(pareto_stdout_path),
+                    "stderr_path": str(pareto_stderr_path),
+                    "exit_code": exit_code,
+                }
+            )
+            if exit_code != 0:
+                failures.append(FailureClass.RUNNER_FAILED)
+                notes.append("Pareto command failed.")
+            else:
+                commands_succeeded = 1
+
+    if not failures:
+        result_paths, result_note = _collect_paths(
+            root=output_dir,
+            path_glob=config.pareto_result_glob,
+            field_name="pareto.result_glob",
+        )
+        if result_note is not None:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(result_note)
+        elif not result_paths:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.append(
+                f"No Pareto result JSON matched {config.pareto_result_glob!r} "
+                f"in {output_dir}."
+            )
+        else:
+            json_note = _validate_json_files(result_paths)
+            if json_note is not None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(json_note)
+
+    if not failures:
+        plot_paths, plot_note = _collect_paths(
+            root=output_dir,
+            path_glob=config.pareto_plot_glob,
+            field_name="pareto.plot_glob",
+        )
+        if plot_note is not None:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(plot_note)
+        elif not plot_paths:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.append(
+                f"No Pareto plot matched {config.pareto_plot_glob!r} in {output_dir}."
+            )
+
+    unique_failures = tuple(dict.fromkeys(failures))
+    passed = not unique_failures
+    gate_summary = GateSummary(
+        gate_name=StageName.PARETO.value,
+        passed=passed,
+        failures=unique_failures,
+        metrics={
+            "commands_attempted": float(commands_attempted),
+            "commands_succeeded": float(commands_succeeded),
+            "result_json_files": float(len(result_paths)),
+            "plot_files": float(len(plot_paths)),
+        },
+        thresholds={},
+    )
+    _write_json(gate_summary_path, gate_summary.to_dict())
+
+    finished_at = utc_timestamp()
+    exit_code = 0 if passed else 1
+    command_record = CommandRecord(
+        command=tuple(command),
+        cwd=repo_root,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=None,
+        stderr_path=None,
+    )
+    _write_json(command_record_path, command_record.to_dict())
+
+    provenance = collect_environment_summary(repo_root)
+    summary = {
+        "type": "pareto",
+        "run_id": run_id,
+        "stage": StageName.PARETO.value,
+        "passed": passed,
+        "failures": [failure.value for failure in unique_failures],
+        "notes": notes,
+        "repo_root": str(repo_root),
+        "output_root": str(output_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "baseline_stage_root": str(baseline_stage_root),
+        "sweep_stage_root": str(sweep_stage_root),
+        "command_template": list(config.pareto_command_template),
+        "result_glob": config.pareto_result_glob,
+        "plot_glob": config.pareto_plot_glob,
+        "result_paths": [str(path) for path in result_paths],
+        "plot_paths": [str(path) for path in plot_paths],
+        "command_results": command_results,
+        "config_snapshot_path": str(config_snapshot_path),
+        "resolved_config_path": str(resolved_config_path),
+        "gate_summary_path": str(gate_summary_path),
+        "command_record_path": str(command_record_path),
+        "run_record_path": str(run_record_path),
+        "manifest_path": str(manifest_path),
+        "environment": provenance,
+    }
+    _write_json(pareto_summary_path, summary)
+
+    run_record = RunRecord(
+        run_id=run_id,
+        stage=StageName.PARETO,
+        command=command_record,
+        config_path=config_path,
+        config_snapshot_path=config_snapshot_path,
+        resolved_config_path=resolved_config_path,
+        git_commit=provenance["git_commit"],
+        dirty=bool(provenance["dirty"]),
+        uv_lock_hash=provenance["uv_lock_hash"],
+        python_version=provenance["python_version"],
+        torch_version=provenance["torch_version"],
+        cuda_version=provenance["cuda_version"],
+        artifact_paths=(
+            gate_summary_path,
+            pareto_summary_path,
+            manifest_path,
+            *command_records,
+            *stdout_paths,
+            *stderr_paths,
+            *result_paths,
+            *plot_paths,
+        ),
+    )
+    _write_json(run_record_path, run_record.to_dict())
+
+    manifest_artifacts: dict[str, Path] = {
+        "config_snapshot": config_snapshot_path,
+        "resolved_config": resolved_config_path,
+        "gate_summary": gate_summary_path,
+        "command_record": command_record_path,
+        "run_record": run_record_path,
+        "pareto_summary": pareto_summary_path,
+    }
+    manifest_artifacts.update(
+        {
+            f"pareto_command_record_{index}": path
+            for index, path in enumerate(command_records)
+        }
+    )
+    manifest_artifacts.update(
+        {f"pareto_stdout_{index}": path for index, path in enumerate(stdout_paths)}
+    )
+    manifest_artifacts.update(
+        {f"pareto_stderr_{index}": path for index, path in enumerate(stderr_paths)}
+    )
+    manifest_artifacts.update(
+        {f"pareto_result_{index}": path for index, path in enumerate(result_paths)}
+    )
+    manifest_artifacts.update(
+        {f"pareto_plot_{index}": path for index, path in enumerate(plot_paths)}
+    )
+    manifest = ArtifactManifest(
+        run_id=run_id,
+        artifacts=manifest_artifacts,
+        config_snapshot_path=config_snapshot_path,
+        gate_summary_path=gate_summary_path,
+        command_record_paths=(command_record_path, *command_records),
+    )
+    _write_json(manifest_path, manifest.to_dict())
+
+    return StageExecutionResult(
+        exit_code=exit_code,
+        stage=StageName.PARETO,
         run_id=run_id,
         stage_root=stage_root,
         summary=summary,
@@ -1517,6 +1797,46 @@ def _format_sweep_command(
         raise ValueError("positional format fields are not supported") from exc
 
 
+def _format_pareto_command(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    output_dir: Path,
+    baseline_stage_root: Path,
+    sweep_stage_root: Path,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> list[str]:
+    values: dict[str, Any] = {
+        "run_id": run_id,
+        "seed": config.seed,
+        "family": config.family,
+        "engine": config.simulation.engine,
+        "repo_root": str(repo_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "baseline_stage_root": str(baseline_stage_root),
+        "baseline_logs_dir": str(baseline_stage_root / "baseline_logs"),
+        "sweep_stage_root": str(sweep_stage_root),
+        "sweep_outputs_dir": str(sweep_stage_root / "sweep_outputs"),
+        "config_path": str(config_path),
+        "config_snapshot_path": str(stage_root / "config_snapshot.toml"),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+    try:
+        return [item.format(**values) for item in config.pareto_command_template]
+    except KeyError as exc:
+        raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
+    except IndexError as exc:
+        raise ValueError("positional format fields are not supported") from exc
+
+
 def _format_lambda_token(value: float) -> str:
     token = format(value, ".12g")
     return token.replace("-", "neg_").replace("+", "").replace(".", "p")
@@ -1633,11 +1953,11 @@ def _collect_sweep_logs(
     output_dir: Path,
     log_glob: str,
 ) -> tuple[list[Path], str | None]:
-    try:
-        paths = sorted(path for path in output_dir.glob(log_glob) if path.is_file())
-    except ValueError as exc:
-        return [], f"Invalid sweep.log_glob {log_glob!r}: {exc}"
-    return paths, None
+    return _collect_paths(
+        root=output_dir,
+        path_glob=log_glob,
+        field_name="sweep.log_glob",
+    )
 
 
 def _validate_sweep_logs(
@@ -1693,6 +2013,44 @@ def _read_log_meta_and_totals(
                     return meta, totals
     except OSError:
         return None
+    return None
+
+
+def _read_passed_stage_summary(summary_path: Path, stage_name: StageName) -> list[str]:
+    if not summary_path.exists():
+        return [f"Missing {stage_name.value} summary: {summary_path}"]
+    try:
+        with summary_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"Cannot read {stage_name.value} summary {summary_path}: {exc}"]
+    if not isinstance(payload, dict):
+        return [f"{stage_name.value} summary must be an object: {summary_path}"]
+    if payload.get("passed") is not True:
+        return [f"{stage_name.value} summary did not pass: {summary_path}"]
+    return []
+
+
+def _collect_paths(
+    *,
+    root: Path,
+    path_glob: str,
+    field_name: str,
+) -> tuple[list[Path], str | None]:
+    try:
+        paths = sorted(path for path in root.glob(path_glob) if path.is_file())
+    except ValueError as exc:
+        return [], f"Invalid {field_name} {path_glob!r}: {exc}"
+    return paths, None
+
+
+def _validate_json_files(paths: list[Path]) -> str | None:
+    for path in paths:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            return f"Invalid JSON artifact {path}: {exc}"
     return None
 
 

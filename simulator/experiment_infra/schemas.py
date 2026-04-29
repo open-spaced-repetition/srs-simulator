@@ -343,6 +343,9 @@ class ExperimentConfig:
     train_artifact_glob: str = "metadata.json"
     sweep_command_template: tuple[str, ...] = ()
     sweep_log_glob: str = "*.jsonl"
+    pareto_command_template: tuple[str, ...] = ()
+    pareto_result_glob: str = "*.json"
+    pareto_plot_glob: str = "*.png"
     config_path: Path | None = None
     schema_version: int = SCHEMA_VERSION
 
@@ -363,6 +366,7 @@ class ExperimentConfig:
             )
         training = _require_mapping(raw.get("training"), "training")
         sweep = _require_mapping(raw.get("sweep", {}), "sweep")
+        pareto = _require_mapping(raw.get("pareto", {}), "pareto")
         return cls(
             name=_require_str(raw.get("name"), "name"),
             family=_require_str(raw.get("family"), "family"),
@@ -393,6 +397,15 @@ class ExperimentConfig:
             sweep_log_glob=_require_str(
                 sweep.get("log_glob", "*.jsonl"), "sweep.log_glob"
             ),
+            pareto_command_template=_str_tuple(
+                pareto.get("command_template", []), "pareto.command_template"
+            ),
+            pareto_result_glob=_require_str(
+                pareto.get("result_glob", "*.json"), "pareto.result_glob"
+            ),
+            pareto_plot_glob=_require_str(
+                pareto.get("plot_glob", "*.png"), "pareto.plot_glob"
+            ),
             config_path=config_path,
             schema_version=schema_version,
         )
@@ -417,6 +430,11 @@ class ExperimentConfig:
             "sweep": {
                 "command_template": list(self.sweep_command_template),
                 "log_glob": self.sweep_log_glob,
+            },
+            "pareto": {
+                "command_template": list(self.pareto_command_template),
+                "result_glob": self.pareto_result_glob,
+                "plot_glob": self.pareto_plot_glob,
             },
             "config_path": str(self.config_path) if self.config_path else None,
         }

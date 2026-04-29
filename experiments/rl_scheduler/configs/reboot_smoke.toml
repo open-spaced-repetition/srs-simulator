@@ -54,6 +54,24 @@ artifact_metadata_glob = "metadata.json"
 #   "{output_dir}",
 # ]
 
+[pareto]
+result_glob = "*.json"
+plot_glob = "*.png"
+# pareto requires a real comparison command after baseline staging and sweep pass.
+# Example shape:
+# command_template = [
+#   "uv",
+#   "run",
+#   "python",
+#   "experiments/retention_sweep/build_pareto.py",
+#   "--log-dir",
+#   "{sweep_outputs_dir}",
+#   "--results-path",
+#   "{output_dir}/pareto.json",
+#   "--plot-dir",
+#   "{output_dir}",
+# ]
+
 [sweep]
 log_glob = "*.jsonl"
 # sweep requires a real external evaluation command after train-overfit has

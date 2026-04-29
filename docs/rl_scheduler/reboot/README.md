@@ -15,6 +15,8 @@ base branch name. If the upstream branch is renamed later, read `main` and
   formal experiment execution.
 - [Best Practices](./best-practices.md): architecture, research-methodology,
   reproducibility, GPU, and reporting rules.
+- [GPU Utilization Plan](./gpu-utilization-plan.md): concrete profiling,
+  batching, and GPU evidence tasks.
 - [Build vs Buy](./build-vs-buy.md): which custom infrastructure should be
   replaced by mature libraries, and which domain logic should remain custom.
 - [Agent Skill Draft](./agent-skill/SKILL.md): a concise Codex skill draft for
@@ -42,13 +44,14 @@ uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_sc
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 ```
 
-`dry-run`, `preflight`, `stage-baseline`, `train-overfit`, and `sweep` are
-implemented. `train-overfit` and `sweep` require profile-specific command
-templates; the checked-in smoke TOML does not include real trainer or sweep
-commands, so `all` stops at the first missing command template until the profile
-is wired to commands that emit valid scheduler metadata and JSONL logs. Later
-stages must remain explicit non-zero unsupported stages until their artifact
-contracts and gates are implemented.
+`dry-run`, `preflight`, `stage-baseline`, `train-overfit`, `sweep`, and `pareto`
+are implemented. `train-overfit`, `sweep`, and `pareto` require
+profile-specific command templates; the checked-in smoke TOML does not include
+real trainer, sweep, or Pareto commands, so `all` stops at the first missing
+command template until the profile is wired to commands that emit valid
+scheduler metadata, JSONL logs, and Pareto artifacts. Later stages must remain
+explicit non-zero unsupported stages until their artifact contracts and gates are
+implemented.
 
 `all` runs configured stages in order, writes `all_summary.json`, and stops at
 the first non-zero stage result.

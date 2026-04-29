@@ -210,6 +210,26 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 - Build combined FSRS6 + candidate Pareto JSON and PNG.
 - Validate FSRS DR grid, candidate lambda grid, artifact path, scheduler fields,
   engine, short-term, fuzz, and user id.
+- Configure `pareto.command_template` in TOML. The runner requires passed
+  `stage-baseline` and `sweep` summaries before executing the command.
+- Supported placeholders include `{run_id}`, `{seed}`, `{family}`, `{engine}`,
+  `{repo_root}`, `{stage_root}`, `{output_dir}`, `{baseline_stage_root}`,
+  `{baseline_logs_dir}`, `{sweep_stage_root}`, `{sweep_outputs_dir}`,
+  `{config_path}`, `{config_snapshot_path}`, `{command_record_path}`,
+  `{stdout_path}`, and `{stderr_path}`.
+- The command must write Pareto JSON matching `pareto.result_glob` and plot
+  files matching `pareto.plot_glob` under `{output_dir}`. Defaults are `*.json`
+  and `*.png`.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage pareto --run-id <id>
+  ```
+
+- Current evidence files: `config_snapshot.toml`, `resolved_config.json`,
+  `command_record.json`, Pareto command record plus stdout/stderr,
+  `gate_summary.json`, `pareto_summary.json`, `run_record.json`, and
+  `manifest.json`.
 
 `select`:
 

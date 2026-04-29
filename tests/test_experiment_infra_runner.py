@@ -26,6 +26,7 @@ def _write_config(
     gpu_required: bool = False,
     command_template: list[str] | None = None,
     sweep_command_template: list[str] | None = None,
+    pareto_command_template: list[str] | None = None,
     stages: list[str] | None = None,
 ) -> Path:
     config_path = root / "experiment.toml"
@@ -36,6 +37,7 @@ def _write_config(
         "train-overfit",
         "sweep",
         "pareto",
+        "select",
     ]
     command_template_line = ""
     if command_template is not None:
@@ -44,6 +46,11 @@ def _write_config(
     if sweep_command_template is not None:
         sweep_command_template_line = (
             f"command_template = {json.dumps(sweep_command_template)}\n"
+        )
+    pareto_command_template_line = ""
+    if pareto_command_template is not None:
+        pareto_command_template_line = (
+            f"command_template = {json.dumps(pareto_command_template)}\n"
         )
     config_path.write_text(
         f"""
@@ -89,6 +96,10 @@ lambda_grid = [0.0, 0.5, 1.0]
 [sweep]
 log_glob = "*.jsonl"
 {sweep_command_template_line}
+[pareto]
+result_glob = "*.json"
+plot_glob = "*.png"
+{pareto_command_template_line}
 """.lstrip(),
         encoding="utf-8",
     )
@@ -248,6 +259,46 @@ def _sweep_writer_template(script_path: Path) -> list[str]:
     ]
 
 
+def _write_pareto_writer(path: Path) -> None:
+    path.write_text(
+        """
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+output_dir = Path(sys.argv[1])
+baseline_logs_dir = Path(sys.argv[2])
+sweep_outputs_dir = Path(sys.argv[3])
+output_dir.mkdir(parents=True, exist_ok=True)
+(output_dir / "pareto.json").write_text(
+    json.dumps(
+        {
+            "baseline_logs_dir": str(baseline_logs_dir),
+            "sweep_outputs_dir": str(sweep_outputs_dir),
+            "strict_dominance_points": 1,
+        }
+    ),
+    encoding="utf-8",
+)
+(output_dir / "pareto.png").write_bytes(b"\\x89PNG\\r\\n\\x1a\\n")
+print("wrote pareto artifacts")
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _pareto_writer_template(script_path: Path) -> list[str]:
+    return [
+        sys.executable,
+        str(script_path),
+        "{output_dir}",
+        "{baseline_logs_dir}",
+        "{sweep_outputs_dir}",
+    ]
+
+
 class ExperimentInfraRunnerTests(unittest.TestCase):
     def test_dry_run_has_no_formal_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -361,7 +412,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertFalse(gate["passed"])
             self.assertIn("invalid-config", gate["failures"])
 
-    def test_all_stops_at_pareto_after_valid_sweep(self) -> None:
+    def test_all_stops_at_pareto_without_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             baseline_root = root / "baseline"
@@ -389,7 +440,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                 run_id="test-run",
             )
 
-            self.assertEqual(result.exit_code, 2)
+            self.assertEqual(result.exit_code, 1)
             self.assertEqual(result.summary["stopped_at"], "pareto")
             stages = [item["stage"] for item in result.summary["stage_results"]]
             self.assertEqual(
@@ -408,6 +459,66 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             )
             self.assertTrue(summary["passed"])
             self.assertEqual(len(summary["log_paths"]), 3)
+            gate = json.loads(
+                (output_root / "test-run" / "pareto" / "gate_summary.json").read_text()
+            )
+            self.assertFalse(gate["passed"])
+            self.assertIn("invalid-config", gate["failures"])
+
+    def test_all_stops_at_select_after_valid_pareto(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            artifact_script = root / "write_artifact.py"
+            sweep_script = root / "write_sweep.py"
+            pareto_script = root / "write_pareto.py"
+            _write_artifact_writer(artifact_script)
+            _write_sweep_writer(sweep_script)
+            _write_pareto_writer(pareto_script)
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                command_template=_artifact_writer_template(artifact_script),
+                sweep_command_template=_sweep_writer_template(sweep_script),
+                pareto_command_template=_pareto_writer_template(pareto_script),
+            )
+
+            result = run_all(
+                config_path=config_path,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 2)
+            self.assertEqual(result.summary["stopped_at"], "select")
+            stages = [item["stage"] for item in result.summary["stage_results"]]
+            self.assertEqual(
+                stages,
+                [
+                    "dry-run",
+                    "preflight",
+                    "stage-baseline",
+                    "train-overfit",
+                    "sweep",
+                    "pareto",
+                    "select",
+                ],
+            )
+            summary = json.loads(
+                (
+                    output_root / "test-run" / "pareto" / "pareto_summary.json"
+                ).read_text()
+            )
+            self.assertTrue(summary["passed"])
+            self.assertEqual(len(summary["result_paths"]), 1)
+            self.assertEqual(len(summary["plot_paths"]), 1)
 
     def test_all_stops_before_baseline_stage_when_preflight_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -510,7 +621,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
 
             result = run_stage(
                 config_path=config_path,
-                stage=StageName.PARETO,
+                stage=StageName.SELECT,
                 repo_root=root,
                 run_id="test-run",
             )
