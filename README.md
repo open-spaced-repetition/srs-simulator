@@ -84,10 +84,11 @@ including configured `baseline.desired_retention_values`, and stages exact
 baseline logs by copy or hardlink without staging CSV sidecars. `train-overfit`
 runs the user-provided `training.command_template` once per training user and
 lambda value, then requires scheduler policy artifact metadata under the command
-output directory. Formal stages fail if required inputs are missing. `all` runs
-the configured stages in order and stops at the first non-zero stage result.
-Scheduler policy artifacts must validate against the metadata contract before
-they can be used by formal stages.
+output directory. `sweep` reads those artifacts, runs `sweep.command_template`,
+and validates the resulting JSONL logs. Formal stages fail if required inputs are
+missing. `all` runs the configured stages in order and stops at the first
+non-zero stage result. Scheduler policy artifacts must validate against the
+metadata contract before they can be used by formal stages.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):

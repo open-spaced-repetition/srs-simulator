@@ -12,7 +12,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from simulator.experiment_infra.artifacts import validate_scheduler_artifact
+from simulator.experiment_infra.artifacts import (
+    SchedulerArtifactMetadata,
+    validate_scheduler_artifact,
+)
 from simulator.experiment_infra.schemas import (
     ArtifactManifest,
     CommandRecord,
@@ -30,6 +33,7 @@ SUPPORTED_RUNNER_STAGES = {
     StageName.PREFLIGHT,
     StageName.STAGE_BASELINE,
     StageName.TRAIN_OVERFIT,
+    StageName.SWEEP,
 }
 
 
@@ -158,6 +162,17 @@ def run_stage(
         )
     if stage == StageName.TRAIN_OVERFIT:
         return run_train_overfit(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=command
+            or stage_command(
+                config_path=config_path, stage=stage, run_id=actual_run_id
+            ),
+        )
+    if stage == StageName.SWEEP:
+        return run_sweep(
             config=config,
             config_path=config_path,
             repo_root=repo_root,
@@ -317,36 +332,15 @@ def run_train_overfit(
                     break
 
                 output_dir.mkdir(parents=True, exist_ok=True)
-                commands_root.mkdir(parents=True, exist_ok=True)
-                command_started_at = utc_timestamp()
                 commands_attempted += 1
-                try:
-                    completed = subprocess.run(
-                        train_command,
-                        cwd=repo_root,
-                        check=False,
-                        capture_output=True,
-                        text=True,
-                    )
-                    exit_code = completed.returncode
-                    stdout_path.write_text(completed.stdout, encoding="utf-8")
-                    stderr_path.write_text(completed.stderr, encoding="utf-8")
-                except OSError as exc:
-                    exit_code = 127
-                    stdout_path.write_text("", encoding="utf-8")
-                    stderr_path.write_text(str(exc), encoding="utf-8")
-
-                command_finished_at = utc_timestamp()
-                train_command_record = CommandRecord(
-                    command=tuple(train_command),
+                train_command_record = _run_recorded_command(
+                    command=train_command,
                     cwd=repo_root,
-                    started_at=command_started_at,
-                    finished_at=command_finished_at,
-                    exit_code=exit_code,
+                    command_record_path=command_record,
                     stdout_path=stdout_path,
                     stderr_path=stderr_path,
                 )
-                _write_json(command_record, train_command_record.to_dict())
+                exit_code = _record_exit_code(train_command_record)
                 command_records.append(command_record)
                 stdout_paths.append(stdout_path)
                 stderr_paths.append(stderr_path)
@@ -526,6 +520,315 @@ def run_train_overfit(
     return StageExecutionResult(
         exit_code=exit_code,
         stage=StageName.TRAIN_OVERFIT,
+        run_id=run_id,
+        stage_root=stage_root,
+        summary=summary,
+    )
+
+
+def run_sweep(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    command: list[str],
+) -> StageExecutionResult:
+    started_at = utc_timestamp()
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    stage_root = output_root / run_id / StageName.SWEEP.value
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    config_snapshot_path = stage_root / "config_snapshot.toml"
+    resolved_config_path = stage_root / "resolved_config.json"
+    gate_summary_path = stage_root / "gate_summary.json"
+    command_record_path = stage_root / "command_record.json"
+    run_record_path = stage_root / "run_record.json"
+    sweep_summary_path = stage_root / "sweep_summary.json"
+    manifest_path = stage_root / "manifest.json"
+    commands_root = stage_root / "commands"
+    outputs_root = stage_root / "sweep_outputs"
+    train_summary_path = (
+        output_root / run_id / StageName.TRAIN_OVERFIT.value / "training_summary.json"
+    )
+
+    shutil.copyfile(config_path, config_snapshot_path)
+    _write_json(resolved_config_path, config.to_dict())
+
+    failures: list[FailureClass] = []
+    notes: list[str] = []
+    command_records: list[Path] = []
+    stdout_paths: list[Path] = []
+    stderr_paths: list[Path] = []
+    log_paths: list[Path] = []
+    artifact_paths: list[Path] = []
+    command_results: list[dict[str, Any]] = []
+    commands_attempted = 0
+    commands_succeeded = 0
+
+    if not config.sweep_command_template:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append("sweep.command_template is required for sweep.")
+
+    train_artifact_paths: list[Path] = []
+    if not failures:
+        train_artifact_paths, artifact_notes = _read_train_artifact_paths(
+            train_summary_path
+        )
+        if artifact_notes:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.extend(artifact_notes)
+
+    if not failures:
+        for metadata_path in train_artifact_paths:
+            artifact_paths.append(metadata_path)
+            try:
+                metadata = validate_scheduler_artifact(
+                    metadata_path, require_files=True
+                )
+            except ValueError as exc:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(
+                    f"Invalid scheduler artifact metadata {metadata_path}: {exc}"
+                )
+                break
+            artifact_note = _validate_sweep_artifact_metadata(
+                metadata_path=metadata_path,
+                metadata=metadata,
+                config=config,
+            )
+            if artifact_note is not None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(artifact_note)
+                break
+
+            user_id = metadata.training_user_ids[0]
+            if metadata.lambda_value is None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(
+                    f"Invalid scheduler artifact metadata {metadata_path}: "
+                    "lambda_value is required for sweep."
+                )
+                break
+            lambda_value = metadata.lambda_value
+            lambda_token = _format_lambda_token(lambda_value)
+            output_dir = outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
+            command_record = (
+                commands_root / f"user_{user_id}_lambda_{lambda_token}_command.json"
+            )
+            stdout_path = (
+                commands_root / f"user_{user_id}_lambda_{lambda_token}_stdout.txt"
+            )
+            stderr_path = (
+                commands_root / f"user_{user_id}_lambda_{lambda_token}_stderr.txt"
+            )
+            try:
+                sweep_command = _format_sweep_command(
+                    config=config,
+                    config_path=config_path,
+                    repo_root=repo_root,
+                    run_id=run_id,
+                    stage_root=stage_root,
+                    output_dir=output_dir,
+                    metadata_path=metadata_path,
+                    metadata=metadata,
+                    command_record_path=command_record,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                )
+            except ValueError as exc:
+                failures.append(FailureClass.INVALID_CONFIG)
+                notes.append(
+                    "Invalid sweep.command_template for "
+                    f"artifact={metadata_path}: {exc}"
+                )
+                break
+
+            output_dir.mkdir(parents=True, exist_ok=True)
+            commands_attempted += 1
+            sweep_command_record = _run_recorded_command(
+                command=sweep_command,
+                cwd=repo_root,
+                command_record_path=command_record,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+            )
+            exit_code = _record_exit_code(sweep_command_record)
+            command_records.append(command_record)
+            stdout_paths.append(stdout_path)
+            stderr_paths.append(stderr_path)
+            command_results.append(
+                {
+                    "artifact_metadata_path": str(metadata_path),
+                    "artifact_id": metadata.artifact_id,
+                    "user_id": user_id,
+                    "lambda_value": lambda_value,
+                    "lambda_token": lambda_token,
+                    "output_dir": str(output_dir),
+                    "command_record_path": str(command_record),
+                    "stdout_path": str(stdout_path),
+                    "stderr_path": str(stderr_path),
+                    "exit_code": exit_code,
+                }
+            )
+            if exit_code != 0:
+                failures.append(FailureClass.RUNNER_FAILED)
+                notes.append(f"Sweep command failed for artifact={metadata_path}.")
+                break
+
+            commands_succeeded += 1
+            matched_logs, log_note = _collect_sweep_logs(
+                output_dir=output_dir,
+                log_glob=config.sweep_log_glob,
+            )
+            if log_note is not None:
+                failures.append(FailureClass.INVALID_CONFIG)
+                notes.append(log_note)
+                break
+            if not matched_logs:
+                failures.append(FailureClass.INCOMPLETE_OUTPUT)
+                notes.append(
+                    f"No sweep JSONL logs matched {config.sweep_log_glob!r} "
+                    f"in {output_dir}."
+                )
+                break
+            log_note = _validate_sweep_logs(
+                log_paths=matched_logs,
+                config=config,
+                metadata=metadata,
+                metadata_path=metadata_path,
+            )
+            if log_note is not None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(log_note)
+                break
+            log_paths.extend(matched_logs)
+
+    unique_failures = tuple(dict.fromkeys(failures))
+    passed = not unique_failures
+    gate_summary = GateSummary(
+        gate_name=StageName.SWEEP.value,
+        passed=passed,
+        failures=unique_failures,
+        metrics={
+            "input_artifacts": float(len(train_artifact_paths)),
+            "commands_attempted": float(commands_attempted),
+            "commands_succeeded": float(commands_succeeded),
+            "logs_validated": float(len(log_paths)),
+        },
+        thresholds={},
+    )
+    _write_json(gate_summary_path, gate_summary.to_dict())
+
+    finished_at = utc_timestamp()
+    exit_code = 0 if passed else 1
+    command_record = CommandRecord(
+        command=tuple(command),
+        cwd=repo_root,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=None,
+        stderr_path=None,
+    )
+    _write_json(command_record_path, command_record.to_dict())
+
+    provenance = collect_environment_summary(repo_root)
+    summary = {
+        "type": "sweep",
+        "run_id": run_id,
+        "stage": StageName.SWEEP.value,
+        "passed": passed,
+        "failures": [failure.value for failure in unique_failures],
+        "notes": notes,
+        "repo_root": str(repo_root),
+        "output_root": str(output_root),
+        "stage_root": str(stage_root),
+        "commands_root": str(commands_root),
+        "outputs_root": str(outputs_root),
+        "train_summary_path": str(train_summary_path),
+        "command_template": list(config.sweep_command_template),
+        "log_glob": config.sweep_log_glob,
+        "input_artifact_paths": [str(path) for path in artifact_paths],
+        "log_paths": [str(path) for path in log_paths],
+        "command_results": command_results,
+        "config_snapshot_path": str(config_snapshot_path),
+        "resolved_config_path": str(resolved_config_path),
+        "gate_summary_path": str(gate_summary_path),
+        "command_record_path": str(command_record_path),
+        "run_record_path": str(run_record_path),
+        "manifest_path": str(manifest_path),
+        "environment": provenance,
+    }
+    _write_json(sweep_summary_path, summary)
+
+    run_record = RunRecord(
+        run_id=run_id,
+        stage=StageName.SWEEP,
+        command=command_record,
+        config_path=config_path,
+        config_snapshot_path=config_snapshot_path,
+        resolved_config_path=resolved_config_path,
+        git_commit=provenance["git_commit"],
+        dirty=bool(provenance["dirty"]),
+        uv_lock_hash=provenance["uv_lock_hash"],
+        python_version=provenance["python_version"],
+        torch_version=provenance["torch_version"],
+        cuda_version=provenance["cuda_version"],
+        artifact_paths=(
+            gate_summary_path,
+            sweep_summary_path,
+            manifest_path,
+            *artifact_paths,
+            *command_records,
+            *stdout_paths,
+            *stderr_paths,
+            *log_paths,
+        ),
+    )
+    _write_json(run_record_path, run_record.to_dict())
+
+    manifest_artifacts: dict[str, Path] = {
+        "config_snapshot": config_snapshot_path,
+        "resolved_config": resolved_config_path,
+        "gate_summary": gate_summary_path,
+        "command_record": command_record_path,
+        "run_record": run_record_path,
+        "sweep_summary": sweep_summary_path,
+    }
+    manifest_artifacts.update(
+        {
+            f"scheduler_artifact_metadata_{index}": path
+            for index, path in enumerate(artifact_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"sweep_command_record_{index}": path
+            for index, path in enumerate(command_records)
+        }
+    )
+    manifest_artifacts.update(
+        {f"sweep_stdout_{index}": path for index, path in enumerate(stdout_paths)}
+    )
+    manifest_artifacts.update(
+        {f"sweep_stderr_{index}": path for index, path in enumerate(stderr_paths)}
+    )
+    manifest_artifacts.update(
+        {f"sweep_log_{index}": path for index, path in enumerate(log_paths)}
+    )
+    manifest = ArtifactManifest(
+        run_id=run_id,
+        artifacts=manifest_artifacts,
+        config_snapshot_path=config_snapshot_path,
+        gate_summary_path=gate_summary_path,
+        command_record_paths=(command_record_path, *command_records),
+    )
+    _write_json(manifest_path, manifest.to_dict())
+
+    return StageExecutionResult(
+        exit_code=exit_code,
+        stage=StageName.SWEEP,
         run_id=run_id,
         stage_root=stage_root,
         summary=summary,
@@ -992,35 +1295,12 @@ def _read_log_meta(path: Path) -> dict[str, Any] | None:
 def _baseline_metadata_errors(
     *, config: ExperimentConfig, meta: dict[str, Any]
 ) -> list[str]:
-    errors: list[str] = []
-    expected: dict[str, Any] = {
-        "scheduler": config.baseline.scheduler,
-        "engine": config.baseline.expected_engine,
-        "days": config.simulation.days,
-        "deck_size": config.simulation.deck,
-        "learn_limit": config.simulation.learn_limit,
-        "review_limit": config.simulation.review_limit,
-        "cost_limit_minutes": config.simulation.cost_limit_minutes,
-        "priority": config.simulation.priority,
-        "scheduler_priority": config.simulation.scheduler_priority,
-        "seed": config.seed,
-        "fuzz": config.simulation.fuzz,
-        "short_term": bool(config.simulation.short_term_source),
-        "short_term_source": config.simulation.short_term_source,
-    }
-    for key, expected_value in expected.items():
-        actual_value = meta.get(key)
-        if isinstance(expected_value, float):
-            if not isinstance(actual_value, (float, int)) or not math.isclose(
-                float(actual_value), expected_value, rel_tol=0.0, abs_tol=1e-9
-            ):
-                errors.append(
-                    f"metadata {key} expected {expected_value!r}, got {actual_value!r}"
-                )
-        elif actual_value != expected_value:
-            errors.append(
-                f"metadata {key} expected {expected_value!r}, got {actual_value!r}"
-            )
+    errors = _simulation_metadata_errors(
+        config=config,
+        meta=meta,
+        expected_engine=config.baseline.expected_engine,
+        expected_scheduler=config.baseline.scheduler,
+    )
     if config.baseline.desired_retention_values:
         actual_retention = meta.get("desired_retention")
         if (
@@ -1033,6 +1313,49 @@ def _baseline_metadata_errors(
                 "metadata desired_retention expected one of "
                 f"{list(config.baseline.desired_retention_values)!r}, "
                 f"got {actual_retention!r}"
+            )
+    return errors
+
+
+def _simulation_metadata_errors(
+    *,
+    config: ExperimentConfig,
+    meta: dict[str, Any],
+    expected_engine: str,
+    expected_scheduler: str | None = None,
+    expected_user_id: int | None = None,
+) -> list[str]:
+    expected: dict[str, Any] = {
+        "engine": expected_engine,
+        "days": config.simulation.days,
+        "deck_size": config.simulation.deck,
+        "learn_limit": config.simulation.learn_limit,
+        "review_limit": config.simulation.review_limit,
+        "cost_limit_minutes": config.simulation.cost_limit_minutes,
+        "priority": config.simulation.priority,
+        "scheduler_priority": config.simulation.scheduler_priority,
+        "seed": config.seed,
+        "fuzz": config.simulation.fuzz,
+        "short_term": bool(config.simulation.short_term_source),
+        "short_term_source": config.simulation.short_term_source,
+    }
+    if expected_scheduler is not None:
+        expected["scheduler"] = expected_scheduler
+    if expected_user_id is not None:
+        expected["user_id"] = expected_user_id
+    errors: list[str] = []
+    for key, expected_value in expected.items():
+        actual_value = meta.get(key)
+        if isinstance(expected_value, float):
+            if not isinstance(actual_value, (float, int)) or not math.isclose(
+                float(actual_value), expected_value, rel_tol=0.0, abs_tol=1e-9
+            ):
+                errors.append(
+                    f"metadata {key} expected {expected_value!r}, got {actual_value!r}"
+                )
+        elif actual_value != expected_value:
+            errors.append(
+                f"metadata {key} expected {expected_value!r}, got {actual_value!r}"
             )
     return errors
 
@@ -1059,6 +1382,51 @@ def _stage_baseline_file(*, source: Path, dest: Path, mode: str) -> None:
         dest.hardlink_to(source)
     else:
         shutil.copy2(source, dest)
+
+
+def _run_recorded_command(
+    *,
+    command: list[str],
+    cwd: Path,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> CommandRecord:
+    command_record_path.parent.mkdir(parents=True, exist_ok=True)
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    started_at = utc_timestamp()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        exit_code = completed.returncode
+        stdout_path.write_text(completed.stdout, encoding="utf-8")
+        stderr_path.write_text(completed.stderr, encoding="utf-8")
+    except OSError as exc:
+        exit_code = 127
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text(str(exc), encoding="utf-8")
+    finished_at = utc_timestamp()
+    command_record = CommandRecord(
+        command=tuple(command),
+        cwd=cwd,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+    )
+    _write_json(command_record_path, command_record.to_dict())
+    return command_record
+
+
+def _record_exit_code(command_record: CommandRecord) -> int:
+    return 1 if command_record.exit_code is None else command_record.exit_code
 
 
 def _format_train_command(
@@ -1096,6 +1464,53 @@ def _format_train_command(
     }
     try:
         return [item.format(**values) for item in config.train_command_template]
+    except KeyError as exc:
+        raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
+    except IndexError as exc:
+        raise ValueError("positional format fields are not supported") from exc
+
+
+def _format_sweep_command(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    output_dir: Path,
+    metadata_path: Path,
+    metadata: SchedulerArtifactMetadata,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> list[str]:
+    user_id = metadata.training_user_ids[0]
+    assert metadata.lambda_value is not None
+    lambda_value = metadata.lambda_value
+    lambda_token = _format_lambda_token(lambda_value)
+    values: dict[str, Any] = {
+        "artifact_id": metadata.artifact_id,
+        "artifact_metadata_path": str(metadata_path),
+        "policy_path": str(metadata.policy_path),
+        "scheduler_name": metadata.scheduler_name,
+        "user_id": user_id,
+        "lambda_value": lambda_value,
+        "lambda_token": lambda_token,
+        "run_id": run_id,
+        "seed": config.seed,
+        "family": config.family,
+        "engine": config.simulation.engine,
+        "repo_root": str(repo_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "config_path": str(config_path),
+        "config_snapshot_path": str(stage_root / "config_snapshot.toml"),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+    try:
+        return [item.format(**values) for item in config.sweep_command_template]
     except KeyError as exc:
         raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
     except IndexError as exc:
@@ -1149,6 +1564,135 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: lambda_value expected "
                 f"{lambda_value}, got {metadata.lambda_value}."
             )
+    return None
+
+
+def _read_train_artifact_paths(summary_path: Path) -> tuple[list[Path], list[str]]:
+    if not summary_path.exists():
+        return [], [f"Missing train-overfit summary: {summary_path}"]
+    try:
+        with summary_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        return [], [f"Cannot read train-overfit summary {summary_path}: {exc}"]
+    if not isinstance(payload, dict):
+        return [], [f"Train-overfit summary must be an object: {summary_path}"]
+    if payload.get("passed") is not True:
+        return [], [f"Train-overfit summary did not pass: {summary_path}"]
+    raw_paths = payload.get("artifact_paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        return [], [f"Train-overfit summary has no artifact_paths: {summary_path}"]
+    paths: list[Path] = []
+    notes: list[str] = []
+    for index, raw_path in enumerate(raw_paths):
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            notes.append(
+                f"Train-overfit artifact_paths[{index}] must be a non-empty string."
+            )
+            continue
+        paths.append(Path(raw_path))
+    return paths, notes
+
+
+def _validate_sweep_artifact_metadata(
+    *,
+    metadata_path: Path,
+    metadata: SchedulerArtifactMetadata,
+    config: ExperimentConfig,
+) -> str | None:
+    if metadata.family != config.family:
+        return (
+            f"Invalid scheduler artifact metadata {metadata_path}: family expected "
+            f"{config.family!r}, got {metadata.family!r}."
+        )
+    if metadata.seed != config.seed:
+        return (
+            f"Invalid scheduler artifact metadata {metadata_path}: seed expected "
+            f"{config.seed}, got {metadata.seed}."
+        )
+    if metadata.engine.value != config.simulation.engine:
+        return (
+            f"Invalid scheduler artifact metadata {metadata_path}: engine expected "
+            f"{config.simulation.engine!r}, got {metadata.engine.value!r}."
+        )
+    if len(metadata.training_user_ids) != 1:
+        return (
+            f"Invalid scheduler artifact metadata {metadata_path}: sweep requires "
+            "exactly one training_user_id."
+        )
+    if metadata.lambda_value is None:
+        return (
+            f"Invalid scheduler artifact metadata {metadata_path}: lambda_value is "
+            "required for sweep."
+        )
+    return None
+
+
+def _collect_sweep_logs(
+    *,
+    output_dir: Path,
+    log_glob: str,
+) -> tuple[list[Path], str | None]:
+    try:
+        paths = sorted(path for path in output_dir.glob(log_glob) if path.is_file())
+    except ValueError as exc:
+        return [], f"Invalid sweep.log_glob {log_glob!r}: {exc}"
+    return paths, None
+
+
+def _validate_sweep_logs(
+    *,
+    log_paths: list[Path],
+    config: ExperimentConfig,
+    metadata: SchedulerArtifactMetadata,
+    metadata_path: Path,
+) -> str | None:
+    user_id = metadata.training_user_ids[0]
+    for path in log_paths:
+        records = _read_log_meta_and_totals(path)
+        if records is None:
+            return f"Sweep log is missing meta or totals record: {path}"
+        meta, _ = records
+        errors = _simulation_metadata_errors(
+            config=config,
+            meta=meta,
+            expected_engine=config.simulation.engine,
+            expected_scheduler=metadata.scheduler_name,
+            expected_user_id=user_id,
+        )
+        if errors:
+            return (
+                f"Sweep log metadata mismatch for {path} "
+                f"(artifact {metadata_path}): " + "; ".join(errors)
+            )
+    return None
+
+
+def _read_log_meta_and_totals(
+    path: Path,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    meta: dict[str, Any] | None = None
+    totals: dict[str, Any] | None = None
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    return None
+                if not isinstance(record, dict):
+                    continue
+                data = record.get("data")
+                if record.get("type") == "meta" and isinstance(data, dict):
+                    meta = data
+                elif record.get("type") == "totals" and isinstance(data, dict):
+                    totals = data
+                if meta is not None and totals is not None:
+                    return meta, totals
+    except OSError:
+        return None
     return None
 
 

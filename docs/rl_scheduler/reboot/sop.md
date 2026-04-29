@@ -184,6 +184,26 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 - Do not write retention_sweep daily CSV sidecars or batched GPU CSV logs unless
   `--diagnostic-csv-logs` is explicitly enabled for simulation-environment
   diagnosis.
+- Configure `sweep.command_template` in TOML. The runner reads the current run's
+  `train-overfit/training_summary.json`, validates every scheduler artifact, and
+  executes the command once per artifact.
+- Supported placeholders include `{artifact_id}`, `{artifact_metadata_path}`,
+  `{policy_path}`, `{scheduler_name}`, `{user_id}`, `{lambda_value}`,
+  `{lambda_token}`, `{run_id}`, `{seed}`, `{family}`, `{engine}`, `{repo_root}`,
+  `{stage_root}`, `{output_dir}`, `{config_path}`, `{config_snapshot_path}`,
+  `{command_record_path}`, `{stdout_path}`, and `{stderr_path}`.
+- The command must write JSONL logs matching `sweep.log_glob` under
+  `{output_dir}`. The default glob is `*.jsonl`.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage sweep --run-id <id>
+  ```
+
+- Current evidence files: `config_snapshot.toml`, `resolved_config.json`,
+  `command_record.json`, per-sweep-command records plus stdout/stderr,
+  `gate_summary.json`, `sweep_summary.json`, `run_record.json`, and
+  `manifest.json`.
 
 `pareto`:
 

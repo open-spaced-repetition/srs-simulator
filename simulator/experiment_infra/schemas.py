@@ -341,6 +341,8 @@ class ExperimentConfig:
     lambda_grid: tuple[float, ...]
     train_command_template: tuple[str, ...] = ()
     train_artifact_glob: str = "metadata.json"
+    sweep_command_template: tuple[str, ...] = ()
+    sweep_log_glob: str = "*.jsonl"
     config_path: Path | None = None
     schema_version: int = SCHEMA_VERSION
 
@@ -360,6 +362,7 @@ class ExperimentConfig:
                 f"schema_version must be {SCHEMA_VERSION}, got {schema_version}."
             )
         training = _require_mapping(raw.get("training"), "training")
+        sweep = _require_mapping(raw.get("sweep", {}), "sweep")
         return cls(
             name=_require_str(raw.get("name"), "name"),
             family=_require_str(raw.get("family"), "family"),
@@ -384,6 +387,12 @@ class ExperimentConfig:
                 training.get("artifact_metadata_glob", "metadata.json"),
                 "training.artifact_metadata_glob",
             ),
+            sweep_command_template=_str_tuple(
+                sweep.get("command_template", []), "sweep.command_template"
+            ),
+            sweep_log_glob=_require_str(
+                sweep.get("log_glob", "*.jsonl"), "sweep.log_glob"
+            ),
             config_path=config_path,
             schema_version=schema_version,
         )
@@ -404,6 +413,10 @@ class ExperimentConfig:
                 "lambda_grid": list(self.lambda_grid),
                 "command_template": list(self.train_command_template),
                 "artifact_metadata_glob": self.train_artifact_glob,
+            },
+            "sweep": {
+                "command_template": list(self.sweep_command_template),
+                "log_glob": self.sweep_log_glob,
             },
             "config_path": str(self.config_path) if self.config_path else None,
         }

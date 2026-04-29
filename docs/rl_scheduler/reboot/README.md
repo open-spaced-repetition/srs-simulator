@@ -42,12 +42,13 @@ uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_sc
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 ```
 
-`dry-run`, `preflight`, `stage-baseline`, and `train-overfit` are implemented.
-`train-overfit` requires `training.command_template`; the checked-in smoke TOML
-does not include a real trainer command, so `all` stops there until the profile
-is wired to a trainer that emits valid scheduler artifact metadata. Later stages
-must remain explicit non-zero unsupported stages until their artifact contracts
-and gates are implemented.
+`dry-run`, `preflight`, `stage-baseline`, `train-overfit`, and `sweep` are
+implemented. `train-overfit` and `sweep` require profile-specific command
+templates; the checked-in smoke TOML does not include real trainer or sweep
+commands, so `all` stops at the first missing command template until the profile
+is wired to commands that emit valid scheduler metadata and JSONL logs. Later
+stages must remain explicit non-zero unsupported stages until their artifact
+contracts and gates are implemented.
 
 `all` runs configured stages in order, writes `all_summary.json`, and stops at
 the first non-zero stage result.

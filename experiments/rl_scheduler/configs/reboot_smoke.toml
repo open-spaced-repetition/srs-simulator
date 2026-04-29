@@ -53,3 +53,22 @@ artifact_metadata_glob = "metadata.json"
 #   "--output-dir",
 #   "{output_dir}",
 # ]
+
+[sweep]
+log_glob = "*.jsonl"
+# sweep requires a real external evaluation command after train-overfit has
+# emitted scheduler artifacts. Example shape:
+# command_template = [
+#   "uv",
+#   "run",
+#   "python",
+#   "experiments/retention_sweep/run_sweep_users_batched.py",
+#   "--start-user",
+#   "{user_id}",
+#   "--end-user",
+#   "{user_id}",
+#   "--sched",
+#   "{scheduler_name}",
+#   "--log-dir",
+#   "{output_dir}",
+# ]
