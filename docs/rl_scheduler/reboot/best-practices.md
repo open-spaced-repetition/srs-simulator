@@ -58,6 +58,9 @@
 
 ## GPU And Performance
 
+See [GPU Utilization Plan](./gpu-utilization-plan.md) for the implementation
+roadmap and profiling SOP.
+
 - Increase GPU utilization by batching within a job before adding competing
   processes on one GPU.
 - Prefer batching along `(user, lambda)`, scheduler parameter, candidate, or

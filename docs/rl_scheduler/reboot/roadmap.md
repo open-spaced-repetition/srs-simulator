@@ -46,6 +46,9 @@ Deliverables:
 - `ExperimentConfig` schema for TOML profiles.
 - `RunRecord`, `CommandRecord`, `ArtifactManifest`, `GateSummary`, and
   `GpuGuardSummary` schemas.
+- GPU performance summary schema for workload shape, effective batch shape,
+  elapsed time, throughput, peak memory, shared-memory growth, and fallback
+  status.
 - Versioned scheduler artifact metadata schemas for any new RL/FQI family.
 - Unified scheduler capability registry for event/vectorized/batched support.
 - First slice may use stdlib typed dataclasses to avoid dependency churn; migrate
@@ -77,12 +80,18 @@ Deliverables:
   `dry-run`, `preflight`, `stage-baseline`, `train-overfit`, `sweep`,
   `pareto`, `select`, `aggregate`, `reserved-test`.
 - Initial implementation supports `dry-run`, `preflight`, `stage-baseline`,
-  `train-overfit`, and `sweep`; later stages must return explicit non-zero
-  unsupported-stage results until their contracts are implemented.
+  `train-overfit`, `sweep`, and `pareto`; later stages must return explicit
+  non-zero unsupported-stage results until their contracts are implemented.
 - Stage state is machine-readable and includes command, exit code, stdout/stderr
   paths, config snapshot, git commit, dirty status, and environment summary.
 - `all` fails fast when any required stage, artifact audit, or aggregate gate
   fails.
+- Add the GPU utilization measurement contract from
+  [GPU Utilization Plan](./gpu-utilization-plan.md): every formal GPU stage
+  records workload shape, batch size, elapsed time, throughput, peak memory, and
+  fallback status.
+- Add a batch-size tuning harness or documented profile for the current
+  batched retention sweep path.
 
 Gate:
 
@@ -94,6 +103,10 @@ Gate:
 - Retention sweep stages must not write daily or batch CSV simulation logs by
   default. Enable CSV output only through an explicit diagnostic flag, and record
   the reason/path once the formal runner exists.
+- A formal GPU run that silently falls back to CPU fails preflight or the stage
+  gate.
+- Performance-related changes report before/after throughput for the affected
+  engine/path.
 
 Stop conditions:
 
@@ -110,6 +123,9 @@ Deliverables:
 - Same-user external sweep and Pareto build against exact FSRS6 baseline.
 - Aggregate gate focused on strict dominance, high-memory wins, DR95 wins,
   near-overlap, and time-worse feasible rate.
+- Prototype `(user, scheduler_param)` super-batching for homogeneous scheduler
+  parameter grids, starting with FSRS6 desired-retention sweeps.
+- Preserve per-point logs and metadata for every `(user, scheduler_param)` pair.
 
 Research rule:
 
@@ -122,6 +138,8 @@ Gate:
 - Passes on train users with predeclared thresholds.
 - Produces config snapshot, run record, GPU summary, Pareto JSON/PNG, manifest,
   and gate summary.
+- One-parameter super-batched output matches the existing batched path within
+  deterministic tolerance before multi-parameter runs are trusted.
 
 Stop conditions:
 
@@ -148,6 +166,7 @@ Stop conditions:
 - Train-user pass does not reproduce on independent users.
 - Seed sensitivity flips the conclusion.
 - High-memory/DR95 wins disappear.
+- GPU batching changes alter promotion metrics without equivalence evidence.
 
 ## Phase 5: Reserved Test And Archival
 
@@ -187,3 +206,5 @@ Gate:
 
 - Library adoption reduces custom code and preserves existing domain gates.
 - New dependency is documented in `README.md` when user-facing.
+- Multi-GPU scheduling reports per-device work assignment, elapsed time, peak
+  memory, and failures.
