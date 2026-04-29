@@ -73,6 +73,7 @@ uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage stage-baseline --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage all --run-id smoke
 uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/reboot_smoke/smoke
+uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 ```
 
 `dry-run` validates the TOML and prints resolved commands without writing formal
@@ -82,7 +83,9 @@ configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata,
 including configured `baseline.desired_retention_values`, and stages exact
 baseline logs by copy or hardlink without staging CSV sidecars. Both formal
 stages fail if the exact baseline log root is missing. `all` runs the configured
-stages in order and stops at the first non-zero stage result.
+stages in order and stops at the first non-zero stage result. Scheduler policy
+artifacts must validate against the metadata contract before they can be used by
+formal stages.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):

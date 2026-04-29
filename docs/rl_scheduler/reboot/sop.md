@@ -91,6 +91,12 @@ Inspect a run root with:
 uv run python experiments/rl_scheduler/inspect_run.py --run-root <output_root>/<run_id>
 ```
 
+Validate scheduler artifact metadata with:
+
+```bash
+uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
+```
+
 ## 4. Stage Definitions
 
 `dry-run`:

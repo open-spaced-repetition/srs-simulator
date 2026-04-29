@@ -1,3 +1,14 @@
+from simulator.experiment_infra.artifacts import (
+    ArtifactKind,
+    SchedulerArtifactMetadata,
+    validate_scheduler_artifact,
+)
+from simulator.experiment_infra.capabilities import (
+    EngineName,
+    SchedulerCapability,
+    get_scheduler_capability,
+    supports_scheduler,
+)
 from simulator.experiment_infra.schemas import (
     SCHEMA_VERSION,
     ArtifactManifest,
@@ -16,16 +27,23 @@ from simulator.experiment_infra.schemas import (
 
 __all__ = [
     "SCHEMA_VERSION",
+    "ArtifactKind",
     "ArtifactManifest",
     "BaselineSource",
     "CommandRecord",
+    "EngineName",
     "ExperimentConfig",
     "FailureClass",
     "GpuGuardConfig",
     "GateSummary",
     "GpuGuardSummary",
     "RunRecord",
+    "SchedulerArtifactMetadata",
+    "SchedulerCapability",
     "SimulationScope",
     "StageName",
     "UserSplit",
+    "get_scheduler_capability",
+    "supports_scheduler",
+    "validate_scheduler_artifact",
 ]
