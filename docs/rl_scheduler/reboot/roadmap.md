@@ -80,9 +80,9 @@ Deliverables:
   `dry-run`, `preflight`, `stage-baseline`, `train-overfit`, `sweep`,
   `pareto`, `select`, `aggregate`, `reserved-test`.
 - Initial implementation supports `dry-run`, `preflight`, `stage-baseline`,
-  `train-overfit`, `sweep`, `pareto`, `select`, and `aggregate`; later stages
-  must return explicit non-zero unsupported-stage results until their contracts
-  are implemented.
+  `train-overfit`, `sweep`, `pareto`, `select`, `aggregate`, and
+  `reserved-test`; unsupported-stage handling is retained for future stage enum
+  additions.
 - Stage state is machine-readable and includes command, exit code, stdout/stderr
   paths, config snapshot, git commit, dirty status, and environment summary.
 - `all` fails fast when any required stage, artifact audit, or aggregate gate

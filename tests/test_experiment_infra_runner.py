@@ -29,6 +29,7 @@ def _write_config(
     pareto_command_template: list[str] | None = None,
     select_command_template: list[str] | None = None,
     aggregate_command_template: list[str] | None = None,
+    reserved_test_command_template: list[str] | None = None,
     stages: list[str] | None = None,
 ) -> Path:
     config_path = root / "experiment.toml"
@@ -65,6 +66,11 @@ def _write_config(
     if aggregate_command_template is not None:
         aggregate_command_template_line = (
             f"command_template = {json.dumps(aggregate_command_template)}\n"
+        )
+    reserved_test_command_template_line = ""
+    if reserved_test_command_template is not None:
+        reserved_test_command_template_line = (
+            f"command_template = {json.dumps(reserved_test_command_template)}\n"
         )
     config_path.write_text(
         f"""
@@ -120,6 +126,9 @@ result_glob = "selection.json"
 [aggregate]
 result_glob = "aggregate.json"
 {aggregate_command_template_line}
+[reserved_test]
+log_glob = "*.jsonl"
+{reserved_test_command_template_line}
 """.lstrip(),
         encoding="utf-8",
     )
@@ -392,6 +401,67 @@ def _aggregate_writer_template(script_path: Path) -> list[str]:
         sys.executable,
         str(script_path),
         "{output_dir}",
+    ]
+
+
+def _write_reserved_test_writer(path: Path) -> None:
+    path.write_text(
+        """
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+output_dir = Path(sys.argv[1])
+user_ids = [int(item) for item in sys.argv[2].split(",") if item]
+seed = int(sys.argv[3])
+engine = sys.argv[4]
+scheduler = sys.argv[5]
+output_dir.mkdir(parents=True, exist_ok=True)
+for user_id in user_ids:
+    meta = {
+        "type": "meta",
+        "data": {
+            "engine": engine,
+            "days": 30,
+            "deck_size": 100,
+            "learn_limit": 10,
+            "review_limit": 999,
+            "cost_limit_minutes": 60.0,
+            "priority": "review-first",
+            "environment": "lstm",
+            "scheduler": scheduler,
+            "scheduler_spec": scheduler,
+            "user_id": user_id,
+            "desired_retention": 0.9,
+            "scheduler_priority": "low_retrievability",
+            "seed": seed,
+            "fuzz": False,
+            "short_term": True,
+            "short_term_source": "steps",
+        },
+    }
+    totals = {"type": "totals", "data": {"reviews": 1, "elapsed_minutes": 1.0}}
+    (output_dir / f"reserved_user_{user_id}.jsonl").write_text(
+        json.dumps(meta) + "\\n" + json.dumps(totals) + "\\n",
+        encoding="utf-8",
+    )
+print("wrote reserved-test logs")
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _reserved_test_writer_template(script_path: Path) -> list[str]:
+    return [
+        sys.executable,
+        str(script_path),
+        "{output_dir}",
+        "{reserved_user_ids}",
+        "{seed}",
+        "{engine}",
+        "{scheduler_name}",
     ]
 
 
@@ -687,7 +757,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertFalse(gate["passed"])
             self.assertIn("invalid-config", gate["failures"])
 
-    def test_all_stops_at_reserved_test_after_valid_aggregate(self) -> None:
+    def test_all_stops_at_reserved_test_without_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             baseline_root = root / "baseline"
@@ -724,7 +794,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                 run_id="test-run",
             )
 
-            self.assertEqual(result.exit_code, 2)
+            self.assertEqual(result.exit_code, 1)
             self.assertEqual(result.summary["stopped_at"], "reserved-test")
             stages = [item["stage"] for item in result.summary["stage_results"]]
             self.assertEqual(
@@ -748,6 +818,83 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             )
             self.assertTrue(summary["passed"])
             self.assertTrue(summary["aggregate_gate_passed"])
+            gate = json.loads(
+                (
+                    output_root / "test-run" / "reserved-test" / "gate_summary.json"
+                ).read_text()
+            )
+            self.assertFalse(gate["passed"])
+            self.assertIn("invalid-config", gate["failures"])
+
+    def test_all_passes_after_valid_reserved_test(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            artifact_script = root / "write_artifact.py"
+            sweep_script = root / "write_sweep.py"
+            pareto_script = root / "write_pareto.py"
+            select_script = root / "write_select.py"
+            aggregate_script = root / "write_aggregate.py"
+            reserved_script = root / "write_reserved.py"
+            _write_artifact_writer(artifact_script)
+            _write_sweep_writer(sweep_script)
+            _write_pareto_writer(pareto_script)
+            _write_select_writer(select_script)
+            _write_aggregate_writer(aggregate_script)
+            _write_reserved_test_writer(reserved_script)
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                command_template=_artifact_writer_template(artifact_script),
+                sweep_command_template=_sweep_writer_template(sweep_script),
+                pareto_command_template=_pareto_writer_template(pareto_script),
+                select_command_template=_select_writer_template(select_script),
+                aggregate_command_template=_aggregate_writer_template(aggregate_script),
+                reserved_test_command_template=_reserved_test_writer_template(
+                    reserved_script
+                ),
+            )
+
+            result = run_all(
+                config_path=config_path,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 0)
+            self.assertIsNone(result.summary["stopped_at"])
+            stages = [item["stage"] for item in result.summary["stage_results"]]
+            self.assertEqual(
+                stages,
+                [
+                    "dry-run",
+                    "preflight",
+                    "stage-baseline",
+                    "train-overfit",
+                    "sweep",
+                    "pareto",
+                    "select",
+                    "aggregate",
+                    "reserved-test",
+                ],
+            )
+            summary = json.loads(
+                (
+                    output_root
+                    / "test-run"
+                    / "reserved-test"
+                    / "reserved_test_summary.json"
+                ).read_text()
+            )
+            self.assertTrue(summary["passed"])
+            self.assertEqual(len(summary["log_paths"]), 1)
 
     def test_aggregate_result_false_fails_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -882,29 +1029,6 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             gate = json.loads((stage_root / "gate_summary.json").read_text())
             self.assertFalse(gate["passed"])
             self.assertIn("invalid-baseline", gate["failures"])
-
-    def test_unsupported_stage_returns_nonzero_without_outputs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            baseline_root = root / "baseline"
-            output_root = root / "out"
-            baseline_root.mkdir()
-            config_path = _write_config(
-                root=root,
-                baseline_root=baseline_root,
-                output_root=output_root,
-            )
-
-            result = run_stage(
-                config_path=config_path,
-                stage=StageName.RESERVED_TEST,
-                repo_root=root,
-                run_id="test-run",
-            )
-
-            self.assertEqual(result.exit_code, 2)
-            self.assertEqual(result.summary["type"], "unsupported-stage")
-            self.assertFalse(output_root.exists())
 
     def test_sweep_rejects_missing_train_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

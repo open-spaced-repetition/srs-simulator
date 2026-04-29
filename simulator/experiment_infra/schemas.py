@@ -350,6 +350,8 @@ class ExperimentConfig:
     select_result_glob: str = "selection.json"
     aggregate_command_template: tuple[str, ...] = ()
     aggregate_result_glob: str = "aggregate.json"
+    reserved_test_command_template: tuple[str, ...] = ()
+    reserved_test_log_glob: str = "*.jsonl"
     config_path: Path | None = None
     schema_version: int = SCHEMA_VERSION
 
@@ -373,6 +375,7 @@ class ExperimentConfig:
         pareto = _require_mapping(raw.get("pareto", {}), "pareto")
         select = _require_mapping(raw.get("select", {}), "select")
         aggregate = _require_mapping(raw.get("aggregate", {}), "aggregate")
+        reserved_test = _require_mapping(raw.get("reserved_test", {}), "reserved_test")
         return cls(
             name=_require_str(raw.get("name"), "name"),
             family=_require_str(raw.get("family"), "family"),
@@ -426,6 +429,14 @@ class ExperimentConfig:
                 aggregate.get("result_glob", "aggregate.json"),
                 "aggregate.result_glob",
             ),
+            reserved_test_command_template=_str_tuple(
+                reserved_test.get("command_template", []),
+                "reserved_test.command_template",
+            ),
+            reserved_test_log_glob=_require_str(
+                reserved_test.get("log_glob", "*.jsonl"),
+                "reserved_test.log_glob",
+            ),
             config_path=config_path,
             schema_version=schema_version,
         )
@@ -463,6 +474,10 @@ class ExperimentConfig:
             "aggregate": {
                 "command_template": list(self.aggregate_command_template),
                 "result_glob": self.aggregate_result_glob,
+            },
+            "reserved_test": {
+                "command_template": list(self.reserved_test_command_template),
+                "log_glob": self.reserved_test_log_glob,
             },
             "config_path": str(self.config_path) if self.config_path else None,
         }

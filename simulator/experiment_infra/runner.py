@@ -37,6 +37,7 @@ SUPPORTED_RUNNER_STAGES = {
     StageName.PARETO,
     StageName.SELECT,
     StageName.AGGREGATE,
+    StageName.RESERVED_TEST,
 }
 
 
@@ -209,6 +210,17 @@ def run_stage(
         )
     if stage == StageName.AGGREGATE:
         return run_aggregate(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=command
+            or stage_command(
+                config_path=config_path, stage=stage, run_id=actual_run_id
+            ),
+        )
+    if stage == StageName.RESERVED_TEST:
+        return run_reserved_test(
             config=config,
             config_path=config_path,
             repo_root=repo_root,
@@ -1642,6 +1654,314 @@ def run_aggregate(
     )
 
 
+def run_reserved_test(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    command: list[str],
+) -> StageExecutionResult:
+    started_at = utc_timestamp()
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    stage_root = output_root / run_id / StageName.RESERVED_TEST.value
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    config_snapshot_path = stage_root / "config_snapshot.toml"
+    resolved_config_path = stage_root / "resolved_config.json"
+    gate_summary_path = stage_root / "gate_summary.json"
+    command_record_path = stage_root / "command_record.json"
+    reserved_command_record_path = (
+        stage_root / "commands" / "reserved_test_command.json"
+    )
+    reserved_stdout_path = stage_root / "commands" / "reserved_test_stdout.txt"
+    reserved_stderr_path = stage_root / "commands" / "reserved_test_stderr.txt"
+    run_record_path = stage_root / "run_record.json"
+    reserved_summary_path = stage_root / "reserved_test_summary.json"
+    manifest_path = stage_root / "manifest.json"
+    output_dir = stage_root / "reserved_test_outputs"
+    select_stage_root = output_root / run_id / StageName.SELECT.value
+    aggregate_stage_root = output_root / run_id / StageName.AGGREGATE.value
+    select_summary_path = select_stage_root / "select_summary.json"
+    aggregate_summary_path = aggregate_stage_root / "aggregate_summary.json"
+
+    shutil.copyfile(config_path, config_snapshot_path)
+    _write_json(resolved_config_path, config.to_dict())
+
+    failures: list[FailureClass] = []
+    notes: list[str] = []
+    log_paths: list[Path] = []
+    selected_artifact_paths: list[Path] = []
+    command_results: list[dict[str, Any]] = []
+    command_records: list[Path] = []
+    stdout_paths: list[Path] = []
+    stderr_paths: list[Path] = []
+    commands_attempted = 0
+    commands_succeeded = 0
+
+    if not config.users.reserved_test:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append("users.reserved_test is required for reserved-test.")
+    if not config.reserved_test_command_template:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append("reserved_test.command_template is required for reserved-test.")
+    for summary_path, stage_name in (
+        (select_summary_path, StageName.SELECT),
+        (aggregate_summary_path, StageName.AGGREGATE),
+    ):
+        if not failures:
+            summary_notes = _read_passed_stage_summary(summary_path, stage_name)
+            if summary_notes:
+                failures.append(FailureClass.INCOMPLETE_OUTPUT)
+                notes.extend(summary_notes)
+
+    metadata_path: Path | None = None
+    metadata: SchedulerArtifactMetadata | None = None
+    if not failures:
+        selected_artifact_paths, selected_notes = _read_selected_artifact_paths(
+            select_summary_path
+        )
+        if selected_notes:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.extend(selected_notes)
+        elif len(selected_artifact_paths) != 1:
+            failures.append(FailureClass.INVALID_ARTIFACT)
+            notes.append(
+                "reserved-test requires exactly one selected artifact, got "
+                f"{len(selected_artifact_paths)}."
+            )
+        else:
+            metadata_path = selected_artifact_paths[0]
+            try:
+                metadata = validate_scheduler_artifact(
+                    metadata_path, require_files=True
+                )
+            except ValueError as exc:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(
+                    f"Invalid selected scheduler artifact {metadata_path}: {exc}"
+                )
+            else:
+                artifact_note = _validate_sweep_artifact_metadata(
+                    metadata_path=metadata_path,
+                    metadata=metadata,
+                    config=config,
+                )
+                if artifact_note is not None:
+                    failures.append(FailureClass.INVALID_ARTIFACT)
+                    notes.append(artifact_note)
+
+    if not failures and metadata_path is not None and metadata is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            reserved_command = _format_reserved_test_command(
+                config=config,
+                config_path=config_path,
+                repo_root=repo_root,
+                run_id=run_id,
+                stage_root=stage_root,
+                output_dir=output_dir,
+                metadata_path=metadata_path,
+                metadata=metadata,
+                command_record_path=reserved_command_record_path,
+                stdout_path=reserved_stdout_path,
+                stderr_path=reserved_stderr_path,
+            )
+        except ValueError as exc:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(f"Invalid reserved_test.command_template: {exc}")
+        else:
+            commands_attempted = 1
+            reserved_command_record = _run_recorded_command(
+                command=reserved_command,
+                cwd=repo_root,
+                command_record_path=reserved_command_record_path,
+                stdout_path=reserved_stdout_path,
+                stderr_path=reserved_stderr_path,
+            )
+            exit_code = _record_exit_code(reserved_command_record)
+            command_records.append(reserved_command_record_path)
+            stdout_paths.append(reserved_stdout_path)
+            stderr_paths.append(reserved_stderr_path)
+            command_results.append(
+                {
+                    "output_dir": str(output_dir),
+                    "command_record_path": str(reserved_command_record_path),
+                    "stdout_path": str(reserved_stdout_path),
+                    "stderr_path": str(reserved_stderr_path),
+                    "exit_code": exit_code,
+                }
+            )
+            if exit_code != 0:
+                failures.append(FailureClass.RUNNER_FAILED)
+                notes.append("Reserved-test command failed.")
+            else:
+                commands_succeeded = 1
+
+    if not failures and metadata is not None and metadata_path is not None:
+        log_paths, log_note = _collect_paths(
+            root=output_dir,
+            path_glob=config.reserved_test_log_glob,
+            field_name="reserved_test.log_glob",
+        )
+        if log_note is not None:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(log_note)
+        elif not log_paths:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.append(
+                "No reserved-test JSONL logs matched "
+                f"{config.reserved_test_log_glob!r} in {output_dir}."
+            )
+        else:
+            log_note = _validate_reserved_test_logs(
+                log_paths=log_paths,
+                config=config,
+                metadata=metadata,
+                metadata_path=metadata_path,
+            )
+            if log_note is not None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(log_note)
+
+    unique_failures = tuple(dict.fromkeys(failures))
+    passed = not unique_failures
+    gate_summary = GateSummary(
+        gate_name=StageName.RESERVED_TEST.value,
+        passed=passed,
+        failures=unique_failures,
+        metrics={
+            "commands_attempted": float(commands_attempted),
+            "commands_succeeded": float(commands_succeeded),
+            "reserved_users": float(len(config.users.reserved_test)),
+            "logs_validated": float(len(log_paths)),
+            "selected_artifacts": float(len(selected_artifact_paths)),
+        },
+        thresholds={},
+    )
+    _write_json(gate_summary_path, gate_summary.to_dict())
+
+    finished_at = utc_timestamp()
+    exit_code = 0 if passed else 1
+    command_record = CommandRecord(
+        command=tuple(command),
+        cwd=repo_root,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=None,
+        stderr_path=None,
+    )
+    _write_json(command_record_path, command_record.to_dict())
+
+    provenance = collect_environment_summary(repo_root)
+    summary = {
+        "type": "reserved-test",
+        "run_id": run_id,
+        "stage": StageName.RESERVED_TEST.value,
+        "passed": passed,
+        "failures": [failure.value for failure in unique_failures],
+        "notes": notes,
+        "repo_root": str(repo_root),
+        "output_root": str(output_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "select_stage_root": str(select_stage_root),
+        "aggregate_stage_root": str(aggregate_stage_root),
+        "command_template": list(config.reserved_test_command_template),
+        "log_glob": config.reserved_test_log_glob,
+        "selected_artifact_paths": [str(path) for path in selected_artifact_paths],
+        "log_paths": [str(path) for path in log_paths],
+        "command_results": command_results,
+        "config_snapshot_path": str(config_snapshot_path),
+        "resolved_config_path": str(resolved_config_path),
+        "gate_summary_path": str(gate_summary_path),
+        "command_record_path": str(command_record_path),
+        "run_record_path": str(run_record_path),
+        "manifest_path": str(manifest_path),
+        "environment": provenance,
+    }
+    _write_json(reserved_summary_path, summary)
+
+    run_record = RunRecord(
+        run_id=run_id,
+        stage=StageName.RESERVED_TEST,
+        command=command_record,
+        config_path=config_path,
+        config_snapshot_path=config_snapshot_path,
+        resolved_config_path=resolved_config_path,
+        git_commit=provenance["git_commit"],
+        dirty=bool(provenance["dirty"]),
+        uv_lock_hash=provenance["uv_lock_hash"],
+        python_version=provenance["python_version"],
+        torch_version=provenance["torch_version"],
+        cuda_version=provenance["cuda_version"],
+        artifact_paths=(
+            gate_summary_path,
+            reserved_summary_path,
+            manifest_path,
+            *selected_artifact_paths,
+            *command_records,
+            *stdout_paths,
+            *stderr_paths,
+            *log_paths,
+        ),
+    )
+    _write_json(run_record_path, run_record.to_dict())
+
+    manifest_artifacts: dict[str, Path] = {
+        "config_snapshot": config_snapshot_path,
+        "resolved_config": resolved_config_path,
+        "gate_summary": gate_summary_path,
+        "command_record": command_record_path,
+        "run_record": run_record_path,
+        "reserved_test_summary": reserved_summary_path,
+    }
+    manifest_artifacts.update(
+        {
+            f"selected_artifact_metadata_{index}": path
+            for index, path in enumerate(selected_artifact_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"reserved_test_command_record_{index}": path
+            for index, path in enumerate(command_records)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"reserved_test_stdout_{index}": path
+            for index, path in enumerate(stdout_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"reserved_test_stderr_{index}": path
+            for index, path in enumerate(stderr_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {f"reserved_test_log_{index}": path for index, path in enumerate(log_paths)}
+    )
+    manifest = ArtifactManifest(
+        run_id=run_id,
+        artifacts=manifest_artifacts,
+        config_snapshot_path=config_snapshot_path,
+        gate_summary_path=gate_summary_path,
+        command_record_paths=(command_record_path, *command_records),
+    )
+    _write_json(manifest_path, manifest.to_dict())
+
+    return StageExecutionResult(
+        exit_code=exit_code,
+        stage=StageName.RESERVED_TEST,
+        run_id=run_id,
+        stage_root=stage_root,
+        summary=summary,
+    )
+
+
 def run_stage_baseline(
     *,
     config: ExperimentConfig,
@@ -2449,6 +2769,51 @@ def _format_aggregate_command(
         raise ValueError("positional format fields are not supported") from exc
 
 
+def _format_reserved_test_command(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    output_dir: Path,
+    metadata_path: Path,
+    metadata: SchedulerArtifactMetadata,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> list[str]:
+    reserved_user_ids = ",".join(str(user_id) for user_id in config.users.reserved_test)
+    values: dict[str, Any] = {
+        "artifact_id": metadata.artifact_id,
+        "artifact_metadata_path": str(metadata_path),
+        "policy_path": str(metadata.policy_path),
+        "scheduler_name": metadata.scheduler_name,
+        "reserved_user_ids": reserved_user_ids,
+        "reserved_user_start": min(config.users.reserved_test),
+        "reserved_user_end": max(config.users.reserved_test),
+        "run_id": run_id,
+        "seed": config.seed,
+        "family": config.family,
+        "engine": config.simulation.engine,
+        "repo_root": str(repo_root),
+        "run_root": str(stage_root.parent),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "config_path": str(config_path),
+        "config_snapshot_path": str(stage_root / "config_snapshot.toml"),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+    try:
+        return [item.format(**values) for item in config.reserved_test_command_template]
+    except KeyError as exc:
+        raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
+    except IndexError as exc:
+        raise ValueError("positional format fields are not supported") from exc
+
+
 def _format_lambda_token(value: float) -> str:
     token = format(value, ".12g")
     return token.replace("-", "neg_").replace("+", "").replace(".", "p")
@@ -2643,6 +3008,32 @@ def _read_passed_stage_summary(summary_path: Path, stage_name: StageName) -> lis
     return []
 
 
+def _read_selected_artifact_paths(summary_path: Path) -> tuple[list[Path], list[str]]:
+    if not summary_path.exists():
+        return [], [f"Missing select summary: {summary_path}"]
+    try:
+        with summary_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        return [], [f"Cannot read select summary {summary_path}: {exc}"]
+    if not isinstance(payload, dict):
+        return [], [f"Select summary must be an object: {summary_path}"]
+    raw_paths = payload.get("selected_artifact_paths")
+    if not isinstance(raw_paths, list) or not raw_paths:
+        return [], [f"Select summary has no selected_artifact_paths: {summary_path}"]
+    paths: list[Path] = []
+    notes: list[str] = []
+    for index, raw_path in enumerate(raw_paths):
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            notes.append(
+                f"Select summary selected_artifact_paths[{index}] must be a "
+                "non-empty string."
+            )
+            continue
+        paths.append(Path(raw_path))
+    return paths, notes
+
+
 def _collect_paths(
     *,
     root: Path,
@@ -2663,6 +3054,49 @@ def _validate_json_files(paths: list[Path]) -> str | None:
                 json.load(handle)
         except (OSError, json.JSONDecodeError) as exc:
             return f"Invalid JSON artifact {path}: {exc}"
+    return None
+
+
+def _validate_reserved_test_logs(
+    *,
+    log_paths: list[Path],
+    config: ExperimentConfig,
+    metadata: SchedulerArtifactMetadata,
+    metadata_path: Path,
+) -> str | None:
+    expected_users = set(config.users.reserved_test)
+    seen_users: set[int] = set()
+    for path in log_paths:
+        records = _read_log_meta_and_totals(path)
+        if records is None:
+            return f"Reserved-test log is missing meta or totals record: {path}"
+        meta, _ = records
+        user_id = meta.get("user_id")
+        if isinstance(user_id, bool) or not isinstance(user_id, int):
+            return f"Reserved-test log has invalid user_id: {path}"
+        if user_id not in expected_users:
+            return (
+                f"Reserved-test log {path} has unexpected user_id {user_id}; "
+                f"expected one of {sorted(expected_users)}."
+            )
+        seen_users.add(user_id)
+        errors = _simulation_metadata_errors(
+            config=config,
+            meta=meta,
+            expected_engine=config.simulation.engine,
+            expected_scheduler=metadata.scheduler_name,
+            expected_user_id=user_id,
+        )
+        if errors:
+            return (
+                f"Reserved-test log metadata mismatch for {path} "
+                f"(artifact {metadata_path}): " + "; ".join(errors)
+            )
+    missing_users = sorted(expected_users - seen_users)
+    if missing_users:
+        return "Missing reserved-test logs for users: " + ", ".join(
+            str(user_id) for user_id in missing_users
+        )
     return None
 
 

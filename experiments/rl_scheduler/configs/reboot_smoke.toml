@@ -86,6 +86,25 @@ result_glob = "aggregate.json"
 #   "{output_dir}/aggregate.json",
 # ]
 
+[reserved_test]
+log_glob = "*.jsonl"
+# reserved-test requires the frozen selected artifact and reserved users only.
+# Example shape:
+# command_template = [
+#   "uv",
+#   "run",
+#   "python",
+#   "experiments/retention_sweep/run_sweep_users_batched.py",
+#   "--start-user",
+#   "{reserved_user_start}",
+#   "--end-user",
+#   "{reserved_user_end}",
+#   "--sched",
+#   "{scheduler_name}",
+#   "--log-dir",
+#   "{output_dir}",
+# ]
+
 [pareto]
 result_glob = "*.json"
 plot_glob = "*.png"
