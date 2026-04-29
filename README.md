@@ -72,6 +72,7 @@ uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage preflight --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage stage-baseline --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage all --run-id smoke
+uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/reboot_smoke/smoke
 ```
 
 `dry-run` validates the TOML and prints resolved commands without writing formal

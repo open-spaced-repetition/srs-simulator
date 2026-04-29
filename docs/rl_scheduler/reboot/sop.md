@@ -85,6 +85,12 @@ The `all` runner executes configured stages in order and stops on the first
 non-zero stage result. It writes `all_summary.json` under
 `<output_root>/<run_id>/all/`.
 
+Inspect a run root with:
+
+```bash
+uv run python experiments/rl_scheduler/inspect_run.py --run-root <output_root>/<run_id>
+```
+
 ## 4. Stage Definitions
 
 `dry-run`:
