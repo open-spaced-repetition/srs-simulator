@@ -264,6 +264,27 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 - Aggregate strict dominance, high-memory wins, DR95 wins, user coverage,
   near-overlap, and time-worse feasible rate.
 - In formal mode, gate failure exits non-zero.
+- Configure `aggregate.command_template` in TOML. The runner requires a passed
+  selector summary before executing the command.
+- Supported placeholders include `{run_id}`, `{seed}`, `{family}`, `{engine}`,
+  `{repo_root}`, `{run_root}`, `{stage_root}`, `{output_dir}`,
+  `{train_stage_root}`, `{sweep_stage_root}`, `{pareto_stage_root}`,
+  `{select_stage_root}`, `{select_outputs_dir}`, `{select_summary_path}`,
+  `{config_path}`, `{config_snapshot_path}`, `{command_record_path}`,
+  `{stdout_path}`, and `{stderr_path}`.
+- The command must write aggregate JSON matching `aggregate.result_glob`; the
+  default is `aggregate.json`. Aggregate JSON must include boolean `passed`.
+  `passed=false` is a formal `gate-failed` result.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage aggregate --run-id <id>
+  ```
+
+- Current evidence files: `config_snapshot.toml`, `resolved_config.json`,
+  `command_record.json`, aggregate command record plus stdout/stderr,
+  `gate_summary.json`, `aggregate_summary.json`, `run_record.json`, and
+  `manifest.json`.
 
 `reserved-test`:
 

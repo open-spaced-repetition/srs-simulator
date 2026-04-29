@@ -45,13 +45,14 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 ```
 
 `dry-run`, `preflight`, `stage-baseline`, `train-overfit`, `sweep`, `pareto`,
-and `select` are implemented. `train-overfit`, `sweep`, `pareto`, and `select`
-require profile-specific command templates; the checked-in smoke TOML does not
-include real trainer, sweep, Pareto, or selector commands, so `all` stops at the
-first missing command template until the profile is wired to commands that emit
-valid scheduler metadata, JSONL logs, Pareto artifacts, and selection JSON.
-Later stages must remain explicit non-zero unsupported stages until their
-artifact contracts and gates are implemented.
+`select`, and `aggregate` are implemented. `train-overfit`, `sweep`, `pareto`,
+`select`, and `aggregate` require profile-specific command templates; the
+checked-in smoke TOML does not include real trainer, sweep, Pareto, selector, or
+aggregate commands, so `all` stops at the first missing command template until
+the profile is wired to commands that emit valid scheduler metadata, JSONL logs,
+Pareto artifacts, selection JSON, and aggregate gate JSON. Later stages must
+remain explicit non-zero unsupported stages until their artifact contracts and
+gates are implemented.
 
 `all` runs configured stages in order, writes `all_summary.json`, and stops at
 the first non-zero stage result.

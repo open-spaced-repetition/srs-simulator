@@ -348,6 +348,8 @@ class ExperimentConfig:
     pareto_plot_glob: str = "*.png"
     select_command_template: tuple[str, ...] = ()
     select_result_glob: str = "selection.json"
+    aggregate_command_template: tuple[str, ...] = ()
+    aggregate_result_glob: str = "aggregate.json"
     config_path: Path | None = None
     schema_version: int = SCHEMA_VERSION
 
@@ -370,6 +372,7 @@ class ExperimentConfig:
         sweep = _require_mapping(raw.get("sweep", {}), "sweep")
         pareto = _require_mapping(raw.get("pareto", {}), "pareto")
         select = _require_mapping(raw.get("select", {}), "select")
+        aggregate = _require_mapping(raw.get("aggregate", {}), "aggregate")
         return cls(
             name=_require_str(raw.get("name"), "name"),
             family=_require_str(raw.get("family"), "family"),
@@ -415,6 +418,14 @@ class ExperimentConfig:
             select_result_glob=_require_str(
                 select.get("result_glob", "selection.json"), "select.result_glob"
             ),
+            aggregate_command_template=_str_tuple(
+                aggregate.get("command_template", []),
+                "aggregate.command_template",
+            ),
+            aggregate_result_glob=_require_str(
+                aggregate.get("result_glob", "aggregate.json"),
+                "aggregate.result_glob",
+            ),
             config_path=config_path,
             schema_version=schema_version,
         )
@@ -448,6 +459,10 @@ class ExperimentConfig:
             "select": {
                 "command_template": list(self.select_command_template),
                 "result_glob": self.select_result_glob,
+            },
+            "aggregate": {
+                "command_template": list(self.aggregate_command_template),
+                "result_glob": self.aggregate_result_glob,
             },
             "config_path": str(self.config_path) if self.config_path else None,
         }

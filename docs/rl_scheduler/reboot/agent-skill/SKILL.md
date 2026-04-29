@@ -66,15 +66,17 @@ uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml>
 ```
 
 `dry-run`, `preflight`, `stage-baseline`, `train-overfit`, `sweep`, `pareto`,
-and `select` are implemented. `train-overfit` requires
+`select`, and `aggregate` are implemented. `train-overfit` requires
 `training.command_template`, executes it once per training user and lambda value,
 and validates scheduler policy metadata under `{output_dir}`. `sweep` requires
 `sweep.command_template`, executes it once per trained artifact, and validates
 JSONL logs under `{output_dir}`. `pareto` requires `pareto.command_template` and
 validates Pareto JSON/PNG artifacts under `{output_dir}`. `select` requires
 `select.command_template` and validates selection JSON pointing to a scheduler
-artifact. Treat later stages as unavailable until they return machine-readable
-evidence and enforce their gates. `all` is fail-fast and writes
+artifact. `aggregate` requires `aggregate.command_template` and fails the gate
+when aggregate JSON reports `passed=false`. Treat later stages as unavailable
+until they return machine-readable evidence and enforce their gates. `all` is
+fail-fast and writes
 `all_summary.json`.
 
 ## Required Metrics

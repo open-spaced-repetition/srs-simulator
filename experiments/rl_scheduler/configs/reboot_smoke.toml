@@ -71,6 +71,21 @@ result_glob = "selection.json"
 #   "{output_dir}/selection.json",
 # ]
 
+[aggregate]
+result_glob = "aggregate.json"
+# aggregate requires a formal metrics/gate command after selection passes.
+# Example shape:
+# command_template = [
+#   "uv",
+#   "run",
+#   "python",
+#   "experiments/rl_scheduler/aggregate_results.py",
+#   "--select-summary",
+#   "{select_summary_path}",
+#   "--output",
+#   "{output_dir}/aggregate.json",
+# ]
+
 [pareto]
 result_glob = "*.json"
 plot_glob = "*.png"

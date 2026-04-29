@@ -88,10 +88,12 @@ output directory. `sweep` reads those artifacts, runs `sweep.command_template`,
 and validates the resulting JSONL logs. `pareto` runs `pareto.command_template`
 after baseline and sweep evidence pass, then requires Pareto JSON and PNG
 artifacts. `select` runs `select.command_template` after Pareto passes and
-requires selection JSON pointing to a valid scheduler artifact. Formal stages
-fail if required inputs are missing. `all` runs the configured stages in order
-and stops at the first non-zero stage result. Scheduler policy artifacts must
-validate against the metadata contract before they can be used by formal stages.
+requires selection JSON pointing to a valid scheduler artifact. `aggregate` runs
+`aggregate.command_template` and treats aggregate JSON `passed=false` as a gate
+failure. Formal stages fail if required inputs are missing. `all` runs the
+configured stages in order and stops at the first non-zero stage result.
+Scheduler policy artifacts must validate against the metadata contract before
+they can be used by formal stages.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
