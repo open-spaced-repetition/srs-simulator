@@ -81,6 +81,10 @@ Every non-dry stage must write:
 - environment summary
 - produced artifact paths
 
+The `all` runner executes configured stages in order and stops on the first
+non-zero stage result. It writes `all_summary.json` under
+`<output_root>/<run_id>/all/`.
+
 ## 4. Stage Definitions
 
 `dry-run`:

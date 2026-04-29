@@ -62,11 +62,12 @@ Current runner entry point:
 uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage dry-run --run-id <id>
 uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage preflight --run-id <id>
 uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage stage-baseline --run-id <id>
+uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage all --run-id <id>
 ```
 
 Only `dry-run`, `preflight`, and `stage-baseline` are implemented. Treat later
 stages as unavailable until they return machine-readable evidence and enforce
-their gates.
+their gates. `all` is fail-fast and writes `all_summary.json`.
 
 ## Required Metrics
 

@@ -40,6 +40,14 @@ class StageExecutionResult:
     summary: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class AllExecutionResult:
+    exit_code: int
+    run_id: str
+    all_root: Path
+    summary: dict[str, Any]
+
+
 def utc_timestamp() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
@@ -158,6 +166,65 @@ def run_stage(
                 stage.value for stage in SUPPORTED_RUNNER_STAGES
             ),
         },
+    )
+
+
+def run_all(
+    *,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str | None = None,
+) -> AllExecutionResult:
+    config = ExperimentConfig.from_toml(config_path)
+    actual_run_id = run_id or default_run_id(config)
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    all_root = output_root / actual_run_id / "all"
+    all_root.mkdir(parents=True, exist_ok=True)
+
+    results: list[dict[str, Any]] = []
+    exit_code = 0
+    stopped_at: str | None = None
+    for stage in config.stages:
+        result = run_stage(
+            config_path=config_path,
+            stage=stage,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=stage_command(
+                config_path=config_path,
+                stage=stage,
+                run_id=actual_run_id,
+            ),
+        )
+        stage_summary = {
+            "stage": stage.value,
+            "exit_code": result.exit_code,
+            "stage_root": str(result.stage_root) if result.stage_root else None,
+            "summary_type": result.summary.get("type"),
+        }
+        results.append(stage_summary)
+        if result.exit_code != 0:
+            exit_code = result.exit_code
+            stopped_at = stage.value
+            break
+
+    summary = {
+        "type": "all",
+        "run_id": actual_run_id,
+        "passed": exit_code == 0,
+        "exit_code": exit_code,
+        "stopped_at": stopped_at,
+        "repo_root": str(repo_root),
+        "config_path": str(config_path),
+        "all_root": str(all_root),
+        "stage_results": results,
+    }
+    _write_json(all_root / "all_summary.json", summary)
+    return AllExecutionResult(
+        exit_code=exit_code,
+        run_id=actual_run_id,
+        all_root=all_root,
+        summary=summary,
     )
 
 

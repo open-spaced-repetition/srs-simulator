@@ -37,8 +37,12 @@ The second slice adds a minimal TOML runner:
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage dry-run --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage preflight --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage stage-baseline --run-id smoke
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage all --run-id smoke
 ```
 
 Only `dry-run`, `preflight`, and `stage-baseline` are implemented at this point.
 Later stages must remain explicit non-zero unsupported stages until their
 artifact contracts and gates are implemented.
+
+`all` runs configured stages in order, writes `all_summary.json`, and stops at
+the first non-zero stage result.

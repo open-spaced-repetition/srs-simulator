@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.experiment_infra import StageName
-from simulator.experiment_infra.runner import run_stage
+from simulator.experiment_infra.runner import run_all, run_stage
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--stage",
-        choices=[stage.value for stage in StageName],
+        choices=[stage.value for stage in StageName] + ["all"],
         default=StageName.DRY_RUN.value,
         help="Experiment stage to execute.",
     )
@@ -40,8 +40,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    stage = StageName(args.stage)
     command = ["uv", "run", "python", *sys.argv]
+    if args.stage == "all":
+        result = run_all(
+            config_path=args.config,
+            repo_root=REPO_ROOT,
+            run_id=args.run_id,
+        )
+        print(json.dumps(result.summary, indent=2, sort_keys=True))
+        return result.exit_code
+
+    stage = StageName(args.stage)
     result = run_stage(
         config_path=args.config,
         stage=stage,

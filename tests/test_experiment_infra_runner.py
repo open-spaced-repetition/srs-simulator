@@ -11,7 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.experiment_infra import StageName
-from simulator.experiment_infra.runner import run_stage
+from simulator.experiment_infra.runner import run_all, run_stage
 
 
 def _toml_path(path: Path) -> str:
@@ -33,7 +33,7 @@ name = "runner-smoke"
 family = "rl_scheduler"
 seed = 42
 output_root = "{_toml_path(output_root)}"
-stages = ["dry-run", "preflight", "train-overfit"]
+stages = ["dry-run", "preflight", "stage-baseline", "train-overfit"]
 
 [users]
 train = [1]
@@ -125,6 +125,61 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertEqual(result.summary["run_id"], "test-run")
             planned = result.summary["planned_stages"]
             self.assertFalse(planned[0]["writes_formal_outputs"])
+
+    def test_all_fails_fast_at_first_unsupported_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+            )
+
+            result = run_all(
+                config_path=config_path,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 2)
+            self.assertEqual(result.summary["stopped_at"], "train-overfit")
+            stages = [item["stage"] for item in result.summary["stage_results"]]
+            self.assertEqual(
+                stages, ["dry-run", "preflight", "stage-baseline", "train-overfit"]
+            )
+            self.assertTrue((output_root / "test-run" / "preflight").exists())
+            self.assertTrue((output_root / "test-run" / "stage-baseline").exists())
+            all_summary = output_root / "test-run" / "all" / "all_summary.json"
+            self.assertTrue(all_summary.exists())
+
+    def test_all_stops_before_baseline_stage_when_preflight_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_root = root / "out"
+            config_path = _write_config(
+                root=root,
+                baseline_root=root / "missing",
+                output_root=output_root,
+            )
+
+            result = run_all(
+                config_path=config_path,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            self.assertEqual(result.summary["stopped_at"], "preflight")
+            stages = [item["stage"] for item in result.summary["stage_results"]]
+            self.assertEqual(stages, ["dry-run", "preflight"])
+            self.assertFalse((output_root / "test-run" / "stage-baseline").exists())
 
     def test_preflight_writes_machine_readable_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
