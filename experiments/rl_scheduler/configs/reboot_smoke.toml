@@ -36,3 +36,20 @@ smoke = false
 
 [training]
 lambda_grid = [0.0, 0.25, 0.5, 0.75, 1.0]
+artifact_metadata_glob = "metadata.json"
+# train-overfit requires a real trainer command before running this profile
+# through --stage train-overfit or --stage all. Example shape:
+# command_template = [
+#   "uv",
+#   "run",
+#   "python",
+#   "experiments/rl_scheduler/train_policy.py",
+#   "--config",
+#   "{config_path}",
+#   "--user-id",
+#   "{user_id}",
+#   "--lambda",
+#   "{lambda_value}",
+#   "--output-dir",
+#   "{output_dir}",
+# ]

@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from simulator.experiment_infra.artifacts import validate_scheduler_artifact
 from simulator.experiment_infra.schemas import (
     ArtifactManifest,
     CommandRecord,
@@ -28,6 +29,7 @@ SUPPORTED_RUNNER_STAGES = {
     StageName.DRY_RUN,
     StageName.PREFLIGHT,
     StageName.STAGE_BASELINE,
+    StageName.TRAIN_OVERFIT,
 }
 
 
@@ -154,6 +156,17 @@ def run_stage(
                 config_path=config_path, stage=stage, run_id=actual_run_id
             ),
         )
+    if stage == StageName.TRAIN_OVERFIT:
+        return run_train_overfit(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=command
+            or stage_command(
+                config_path=config_path, stage=stage, run_id=actual_run_id
+            ),
+        )
     return StageExecutionResult(
         exit_code=2,
         stage=stage,
@@ -224,6 +237,297 @@ def run_all(
         exit_code=exit_code,
         run_id=actual_run_id,
         all_root=all_root,
+        summary=summary,
+    )
+
+
+def run_train_overfit(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    command: list[str],
+) -> StageExecutionResult:
+    started_at = utc_timestamp()
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    stage_root = output_root / run_id / StageName.TRAIN_OVERFIT.value
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    config_snapshot_path = stage_root / "config_snapshot.toml"
+    resolved_config_path = stage_root / "resolved_config.json"
+    gate_summary_path = stage_root / "gate_summary.json"
+    command_record_path = stage_root / "command_record.json"
+    run_record_path = stage_root / "run_record.json"
+    training_summary_path = stage_root / "training_summary.json"
+    manifest_path = stage_root / "manifest.json"
+    commands_root = stage_root / "commands"
+    outputs_root = stage_root / "train_outputs"
+
+    shutil.copyfile(config_path, config_snapshot_path)
+    _write_json(resolved_config_path, config.to_dict())
+
+    failures: list[FailureClass] = []
+    notes: list[str] = []
+    command_records: list[Path] = []
+    stdout_paths: list[Path] = []
+    stderr_paths: list[Path] = []
+    artifact_paths: list[Path] = []
+    command_results: list[dict[str, Any]] = []
+    commands_attempted = 0
+    commands_succeeded = 0
+
+    if not config.train_command_template:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append("training.command_template is required for train-overfit.")
+    else:
+        for user_id in config.users.train:
+            for lambda_value in config.lambda_grid:
+                lambda_token = _format_lambda_token(lambda_value)
+                output_dir = outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
+                command_record = (
+                    commands_root / f"user_{user_id}_lambda_{lambda_token}_command.json"
+                )
+                stdout_path = (
+                    commands_root / f"user_{user_id}_lambda_{lambda_token}_stdout.txt"
+                )
+                stderr_path = (
+                    commands_root / f"user_{user_id}_lambda_{lambda_token}_stderr.txt"
+                )
+                try:
+                    train_command = _format_train_command(
+                        config=config,
+                        config_path=config_path,
+                        repo_root=repo_root,
+                        run_id=run_id,
+                        stage_root=stage_root,
+                        output_dir=output_dir,
+                        user_id=user_id,
+                        lambda_value=lambda_value,
+                        command_record_path=command_record,
+                        stdout_path=stdout_path,
+                        stderr_path=stderr_path,
+                    )
+                except (KeyError, ValueError) as exc:
+                    failures.append(FailureClass.INVALID_CONFIG)
+                    notes.append(
+                        "Invalid training.command_template for "
+                        f"user={user_id}, lambda={lambda_value}: {exc}"
+                    )
+                    break
+
+                output_dir.mkdir(parents=True, exist_ok=True)
+                commands_root.mkdir(parents=True, exist_ok=True)
+                command_started_at = utc_timestamp()
+                commands_attempted += 1
+                try:
+                    completed = subprocess.run(
+                        train_command,
+                        cwd=repo_root,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    exit_code = completed.returncode
+                    stdout_path.write_text(completed.stdout, encoding="utf-8")
+                    stderr_path.write_text(completed.stderr, encoding="utf-8")
+                except OSError as exc:
+                    exit_code = 127
+                    stdout_path.write_text("", encoding="utf-8")
+                    stderr_path.write_text(str(exc), encoding="utf-8")
+
+                command_finished_at = utc_timestamp()
+                train_command_record = CommandRecord(
+                    command=tuple(train_command),
+                    cwd=repo_root,
+                    started_at=command_started_at,
+                    finished_at=command_finished_at,
+                    exit_code=exit_code,
+                    stdout_path=stdout_path,
+                    stderr_path=stderr_path,
+                )
+                _write_json(command_record, train_command_record.to_dict())
+                command_records.append(command_record)
+                stdout_paths.append(stdout_path)
+                stderr_paths.append(stderr_path)
+                command_results.append(
+                    {
+                        "user_id": user_id,
+                        "lambda_value": lambda_value,
+                        "lambda_token": lambda_token,
+                        "output_dir": str(output_dir),
+                        "command_record_path": str(command_record),
+                        "stdout_path": str(stdout_path),
+                        "stderr_path": str(stderr_path),
+                        "exit_code": exit_code,
+                    }
+                )
+                if exit_code != 0:
+                    failures.append(FailureClass.RUNNER_FAILED)
+                    notes.append(
+                        "Training command failed for "
+                        f"user={user_id}, lambda={lambda_value}."
+                    )
+                    break
+
+                commands_succeeded += 1
+                try:
+                    matched_artifacts = sorted(
+                        path
+                        for path in output_dir.glob(config.train_artifact_glob)
+                        if path.is_file()
+                    )
+                except ValueError as exc:
+                    failures.append(FailureClass.INVALID_CONFIG)
+                    notes.append(
+                        "Invalid training.artifact_metadata_glob "
+                        f"{config.train_artifact_glob!r}: {exc}"
+                    )
+                    break
+                if not matched_artifacts:
+                    failures.append(FailureClass.INVALID_ARTIFACT)
+                    notes.append(
+                        "No scheduler artifact metadata matched "
+                        f"{config.train_artifact_glob!r} in {output_dir}."
+                    )
+                    break
+
+                invalid_artifact_note = _validate_train_artifacts(
+                    artifact_paths=matched_artifacts,
+                    config=config,
+                    user_id=user_id,
+                    lambda_value=lambda_value,
+                )
+                if invalid_artifact_note is not None:
+                    failures.append(FailureClass.INVALID_ARTIFACT)
+                    notes.append(invalid_artifact_note)
+                    break
+                artifact_paths.extend(matched_artifacts)
+            if failures:
+                break
+
+    unique_failures = tuple(dict.fromkeys(failures))
+    passed = not unique_failures
+    gate_summary = GateSummary(
+        gate_name=StageName.TRAIN_OVERFIT.value,
+        passed=passed,
+        failures=unique_failures,
+        metrics={
+            "training_users": float(len(config.users.train)),
+            "lambda_values": float(len(config.lambda_grid)),
+            "commands_attempted": float(commands_attempted),
+            "commands_succeeded": float(commands_succeeded),
+            "artifacts_validated": float(len(artifact_paths)),
+        },
+        thresholds={},
+    )
+    _write_json(gate_summary_path, gate_summary.to_dict())
+
+    finished_at = utc_timestamp()
+    exit_code = 0 if passed else 1
+    command_record = CommandRecord(
+        command=tuple(command),
+        cwd=repo_root,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=None,
+        stderr_path=None,
+    )
+    _write_json(command_record_path, command_record.to_dict())
+
+    provenance = collect_environment_summary(repo_root)
+    summary = {
+        "type": "train-overfit",
+        "run_id": run_id,
+        "stage": StageName.TRAIN_OVERFIT.value,
+        "passed": passed,
+        "failures": [failure.value for failure in unique_failures],
+        "notes": notes,
+        "repo_root": str(repo_root),
+        "output_root": str(output_root),
+        "stage_root": str(stage_root),
+        "commands_root": str(commands_root),
+        "outputs_root": str(outputs_root),
+        "command_template": list(config.train_command_template),
+        "artifact_metadata_glob": config.train_artifact_glob,
+        "command_results": command_results,
+        "artifact_paths": [str(path) for path in artifact_paths],
+        "config_snapshot_path": str(config_snapshot_path),
+        "resolved_config_path": str(resolved_config_path),
+        "gate_summary_path": str(gate_summary_path),
+        "command_record_path": str(command_record_path),
+        "run_record_path": str(run_record_path),
+        "manifest_path": str(manifest_path),
+        "environment": provenance,
+    }
+    _write_json(training_summary_path, summary)
+
+    run_record = RunRecord(
+        run_id=run_id,
+        stage=StageName.TRAIN_OVERFIT,
+        command=command_record,
+        config_path=config_path,
+        config_snapshot_path=config_snapshot_path,
+        resolved_config_path=resolved_config_path,
+        git_commit=provenance["git_commit"],
+        dirty=bool(provenance["dirty"]),
+        uv_lock_hash=provenance["uv_lock_hash"],
+        python_version=provenance["python_version"],
+        torch_version=provenance["torch_version"],
+        cuda_version=provenance["cuda_version"],
+        artifact_paths=(
+            gate_summary_path,
+            training_summary_path,
+            manifest_path,
+            *command_records,
+            *stdout_paths,
+            *stderr_paths,
+            *artifact_paths,
+        ),
+    )
+    _write_json(run_record_path, run_record.to_dict())
+
+    manifest_artifacts: dict[str, Path] = {
+        "config_snapshot": config_snapshot_path,
+        "resolved_config": resolved_config_path,
+        "gate_summary": gate_summary_path,
+        "command_record": command_record_path,
+        "run_record": run_record_path,
+        "training_summary": training_summary_path,
+    }
+    manifest_artifacts.update(
+        {
+            f"training_command_record_{index}": path
+            for index, path in enumerate(command_records)
+        }
+    )
+    manifest_artifacts.update(
+        {f"training_stdout_{index}": path for index, path in enumerate(stdout_paths)}
+    )
+    manifest_artifacts.update(
+        {f"training_stderr_{index}": path for index, path in enumerate(stderr_paths)}
+    )
+    manifest_artifacts.update(
+        {
+            f"scheduler_artifact_metadata_{index}": path
+            for index, path in enumerate(artifact_paths)
+        }
+    )
+    manifest = ArtifactManifest(
+        run_id=run_id,
+        artifacts=manifest_artifacts,
+        config_snapshot_path=config_snapshot_path,
+        gate_summary_path=gate_summary_path,
+        command_record_paths=(command_record_path, *command_records),
+    )
+    _write_json(manifest_path, manifest.to_dict())
+
+    return StageExecutionResult(
+        exit_code=exit_code,
+        stage=StageName.TRAIN_OVERFIT,
+        run_id=run_id,
+        stage_root=stage_root,
         summary=summary,
     )
 
@@ -755,6 +1059,97 @@ def _stage_baseline_file(*, source: Path, dest: Path, mode: str) -> None:
         dest.hardlink_to(source)
     else:
         shutil.copy2(source, dest)
+
+
+def _format_train_command(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    output_dir: Path,
+    user_id: int,
+    lambda_value: float,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> list[str]:
+    lambda_token = _format_lambda_token(lambda_value)
+    values: dict[str, Any] = {
+        "user_id": user_id,
+        "lambda_value": lambda_value,
+        "lambda_token": lambda_token,
+        "run_id": run_id,
+        "seed": config.seed,
+        "family": config.family,
+        "engine": config.simulation.engine,
+        "scheduler": config.baseline.scheduler,
+        "repo_root": str(repo_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "config_path": str(config_path),
+        "config_snapshot_path": str(stage_root / "config_snapshot.toml"),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+    try:
+        return [item.format(**values) for item in config.train_command_template]
+    except KeyError as exc:
+        raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
+    except IndexError as exc:
+        raise ValueError("positional format fields are not supported") from exc
+
+
+def _format_lambda_token(value: float) -> str:
+    token = format(value, ".12g")
+    return token.replace("-", "neg_").replace("+", "").replace(".", "p")
+
+
+def _validate_train_artifacts(
+    *,
+    artifact_paths: list[Path],
+    config: ExperimentConfig,
+    user_id: int,
+    lambda_value: float,
+) -> str | None:
+    for path in artifact_paths:
+        try:
+            metadata = validate_scheduler_artifact(path, require_files=True)
+        except ValueError as exc:
+            return f"Invalid scheduler artifact metadata {path}: {exc}"
+        if metadata.family != config.family:
+            return (
+                f"Invalid scheduler artifact metadata {path}: family expected "
+                f"{config.family!r}, got {metadata.family!r}."
+            )
+        if metadata.seed != config.seed:
+            return (
+                f"Invalid scheduler artifact metadata {path}: seed expected "
+                f"{config.seed}, got {metadata.seed}."
+            )
+        if metadata.engine.value != config.simulation.engine:
+            return (
+                f"Invalid scheduler artifact metadata {path}: engine expected "
+                f"{config.simulation.engine!r}, got {metadata.engine.value!r}."
+            )
+        if metadata.training_user_ids != (user_id,):
+            return (
+                f"Invalid scheduler artifact metadata {path}: training_user_ids "
+                f"expected [{user_id}], got {list(metadata.training_user_ids)}."
+            )
+        if metadata.lambda_value is None or not math.isclose(
+            metadata.lambda_value,
+            lambda_value,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            return (
+                f"Invalid scheduler artifact metadata {path}: lambda_value expected "
+                f"{lambda_value}, got {metadata.lambda_value}."
+            )
+    return None
 
 
 def _file_sha256(path: Path) -> str | None:

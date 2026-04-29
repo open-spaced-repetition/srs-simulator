@@ -81,11 +81,13 @@ outputs. `preflight` writes a config snapshot, resolved config, command record,
 run record, GPU summary, gate summary, manifest, and preflight summary under the
 configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata,
 including configured `baseline.desired_retention_values`, and stages exact
-baseline logs by copy or hardlink without staging CSV sidecars. Both formal
-stages fail if the exact baseline log root is missing. `all` runs the configured
-stages in order and stops at the first non-zero stage result. Scheduler policy
-artifacts must validate against the metadata contract before they can be used by
-formal stages.
+baseline logs by copy or hardlink without staging CSV sidecars. `train-overfit`
+runs the user-provided `training.command_template` once per training user and
+lambda value, then requires scheduler policy artifact metadata under the command
+output directory. Formal stages fail if required inputs are missing. `all` runs
+the configured stages in order and stops at the first non-zero stage result.
+Scheduler policy artifacts must validate against the metadata contract before
+they can be used by formal stages.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):

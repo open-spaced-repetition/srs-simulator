@@ -65,9 +65,12 @@ uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml>
 uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage all --run-id <id>
 ```
 
-Only `dry-run`, `preflight`, and `stage-baseline` are implemented. Treat later
-stages as unavailable until they return machine-readable evidence and enforce
-their gates. `all` is fail-fast and writes `all_summary.json`.
+`dry-run`, `preflight`, `stage-baseline`, and `train-overfit` are implemented.
+`train-overfit` requires `training.command_template`, executes it once per
+training user and lambda value, and validates scheduler policy metadata under
+`{output_dir}`. Treat later stages as unavailable until they return
+machine-readable evidence and enforce their gates. `all` is fail-fast and writes
+`all_summary.json`.
 
 ## Required Metrics
 

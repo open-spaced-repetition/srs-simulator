@@ -146,6 +146,13 @@ def _float_tuple(
     return result
 
 
+def _str_tuple(value: Any, field_name: str) -> tuple[str, ...]:
+    return tuple(
+        _require_str(item, f"{field_name}[{index}]")
+        for index, item in enumerate(_require_sequence(value, field_name))
+    )
+
+
 def _stage_tuple(value: Any, field_name: str) -> tuple[StageName, ...]:
     stages: list[StageName] = []
     for index, item in enumerate(_require_sequence(value, field_name)):
@@ -332,6 +339,8 @@ class ExperimentConfig:
     simulation: SimulationScope
     gpu_guard: GpuGuardConfig
     lambda_grid: tuple[float, ...]
+    train_command_template: tuple[str, ...] = ()
+    train_artifact_glob: str = "metadata.json"
     config_path: Path | None = None
     schema_version: int = SCHEMA_VERSION
 
@@ -368,6 +377,13 @@ class ExperimentConfig:
             lambda_grid=_float_tuple(
                 training.get("lambda_grid"), "training.lambda_grid"
             ),
+            train_command_template=_str_tuple(
+                training.get("command_template", []), "training.command_template"
+            ),
+            train_artifact_glob=_require_str(
+                training.get("artifact_metadata_glob", "metadata.json"),
+                "training.artifact_metadata_glob",
+            ),
             config_path=config_path,
             schema_version=schema_version,
         )
@@ -384,7 +400,11 @@ class ExperimentConfig:
             "baseline": self.baseline.to_dict(),
             "simulation": self.simulation.to_dict(),
             "gpu_guard": self.gpu_guard.to_dict(),
-            "training": {"lambda_grid": list(self.lambda_grid)},
+            "training": {
+                "lambda_grid": list(self.lambda_grid),
+                "command_template": list(self.train_command_template),
+                "artifact_metadata_glob": self.train_artifact_glob,
+            },
             "config_path": str(self.config_path) if self.config_path else None,
         }
 

@@ -154,7 +154,27 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 - Train one policy per training user or per small training-user group.
 - Allow overfit for feasibility diagnosis.
 - Save checkpoints and full artifact metadata.
-- Record GPU summary and training command record.
+- Configure `training.command_template` in TOML. The runner formats and executes
+  this command once per `users.train` and `training.lambda_grid` pair.
+- Supported placeholders include `{user_id}`, `{lambda_value}`, `{lambda_token}`,
+  `{run_id}`, `{seed}`, `{family}`, `{engine}`, `{scheduler}`, `{repo_root}`,
+  `{stage_root}`, `{output_dir}`, `{config_path}`, `{config_snapshot_path}`,
+  `{command_record_path}`, `{stdout_path}`, and `{stderr_path}`.
+- The command must write scheduler policy artifact metadata matching
+  `training.artifact_metadata_glob` under `{output_dir}`. The default glob is
+  `metadata.json`.
+- The runner validates artifact files, family, seed, engine, training user, and
+  lambda value before passing the stage.
+- Current command:
+
+  ```bash
+  uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage train-overfit --run-id <id>
+  ```
+
+- Current evidence files: `config_snapshot.toml`, `resolved_config.json`,
+  `command_record.json`, per-training-command records plus stdout/stderr,
+  `gate_summary.json`, `training_summary.json`, `run_record.json`, and
+  `manifest.json`.
 
 `sweep`:
 
