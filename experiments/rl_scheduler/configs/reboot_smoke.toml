@@ -15,6 +15,7 @@ scheduler = "fsrs6"
 log_root = "logs/retention_sweep"
 expected_engine = "batched"
 stage_mode = "copy"
+desired_retention_values = [0.9]
 
 [simulation]
 engine = "batched"

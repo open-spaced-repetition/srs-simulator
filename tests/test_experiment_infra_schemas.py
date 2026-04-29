@@ -30,6 +30,7 @@ scheduler = "fsrs6"
 log_root = "logs/baseline/fsrs6"
 expected_engine = "batched"
 stage_mode = "copy"
+desired_retention_values = [0.9]
 
 [simulation]
 engine = "batched"
@@ -68,6 +69,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
             str(config.output_root), "artifacts/rl_scheduler/rl-overfit-smoke"
         )
         self.assertEqual(config.lambda_grid, (0.0, 0.25, 0.5))
+        self.assertEqual(config.baseline.desired_retention_values, (0.9,))
         self.assertEqual(config.to_dict()["baseline"]["scheduler"], "fsrs6")
 
     def test_rejects_overlapping_user_splits(self) -> None:

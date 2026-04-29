@@ -45,6 +45,7 @@ scheduler = "fsrs6"
 log_root = "{_toml_path(baseline_root)}"
 expected_engine = "batched"
 stage_mode = "copy"
+desired_retention_values = [0.9]
 
 [simulation]
 engine = "batched"
@@ -71,7 +72,13 @@ lambda_grid = [0.0, 0.5, 1.0]
     return config_path
 
 
-def _write_baseline_log(path: Path, *, user_id: int, scheduler: str = "fsrs6") -> None:
+def _write_baseline_log(
+    path: Path,
+    *,
+    user_id: int,
+    scheduler: str = "fsrs6",
+    desired_retention: float = 0.9,
+) -> None:
     meta = {
         "type": "meta",
         "data": {
@@ -86,7 +93,7 @@ def _write_baseline_log(path: Path, *, user_id: int, scheduler: str = "fsrs6") -
             "scheduler": scheduler,
             "scheduler_spec": scheduler,
             "user_id": user_id,
-            "desired_retention": 0.9,
+            "desired_retention": desired_retention,
             "scheduler_priority": "low_retrievability",
             "seed": 42,
             "fuzz": False,
@@ -331,6 +338,38 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertFalse(gate["passed"])
             self.assertIn("invalid-baseline", gate["failures"])
             self.assertEqual(list((stage_root / "baseline_logs").rglob("*.jsonl")), [])
+
+    def test_stage_baseline_rejects_missing_retention_grid_points(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                    desired_retention=0.8,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.STAGE_BASELINE,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            stage_root = output_root / "test-run" / "stage-baseline"
+            summary = json.loads((stage_root / "baseline_summary.json").read_text())
+            self.assertFalse(summary["passed"])
+            self.assertTrue(
+                any("desired_retention" in note for note in summary["notes"])
+            )
 
 
 if __name__ == "__main__":

@@ -77,10 +77,11 @@ uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl
 `dry-run` validates the TOML and prints resolved commands without writing formal
 outputs. `preflight` writes a config snapshot, resolved config, command record,
 run record, GPU summary, gate summary, manifest, and preflight summary under the
-configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata
-and stages exact baseline logs by copy or hardlink without staging CSV sidecars.
-Both formal stages fail if the exact baseline log root is missing. `all` runs
-the configured stages in order and stops at the first non-zero stage result.
+configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata,
+including configured `baseline.desired_retention_values`, and stages exact
+baseline logs by copy or hardlink without staging CSV sidecars. Both formal
+stages fail if the exact baseline log root is missing. `all` runs the configured
+stages in order and stops at the first non-zero stage result.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):

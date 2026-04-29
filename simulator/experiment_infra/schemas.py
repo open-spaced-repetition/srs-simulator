@@ -129,7 +129,9 @@ def _positive_int_tuple(value: Any, field_name: str) -> tuple[int, ...]:
     return values
 
 
-def _float_tuple(value: Any, field_name: str) -> tuple[float, ...]:
+def _float_tuple(
+    value: Any, field_name: str, *, allow_empty: bool = False
+) -> tuple[float, ...]:
     values = tuple(
         _optional_float(item, f"{field_name}[{index}]")
         for index, item in enumerate(_require_sequence(value, field_name))
@@ -137,7 +139,7 @@ def _float_tuple(value: Any, field_name: str) -> tuple[float, ...]:
     if any(item is None for item in values):
         raise ValueError(f"{field_name} must contain only numbers.")
     result = tuple(float(item) for item in values if item is not None)
-    if not result:
+    if not result and not allow_empty:
         raise ValueError(f"{field_name} must not be empty.")
     if len(set(result)) != len(result):
         raise ValueError(f"{field_name} must not contain duplicate values.")
@@ -211,6 +213,7 @@ class BaselineSource:
     log_root: Path
     expected_engine: str = "batched"
     stage_mode: str = "copy"
+    desired_retention_values: tuple[float, ...] = ()
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> BaselineSource:
@@ -223,6 +226,11 @@ class BaselineSource:
             stage_mode=_require_str(
                 raw.get("stage_mode", "copy"), "baseline.stage_mode"
             ),
+            desired_retention_values=_float_tuple(
+                raw.get("desired_retention_values", []),
+                "baseline.desired_retention_values",
+                allow_empty=True,
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -233,12 +241,13 @@ class BaselineSource:
         if self.stage_mode not in {"copy", "hardlink"}:
             raise ValueError("baseline.stage_mode must be copy or hardlink.")
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "scheduler": self.scheduler,
             "log_root": str(self.log_root),
             "expected_engine": self.expected_engine,
             "stage_mode": self.stage_mode,
+            "desired_retention_values": list(self.desired_retention_values),
         }
 
 

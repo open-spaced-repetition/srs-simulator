@@ -126,6 +126,8 @@ non-zero stage result. It writes `all_summary.json` under
 - Copy or hardlink exact FSRS6 baseline logs into the run-specific root.
 - Validate metadata for user, DR, seed, engine, short-term, fuzz, limits,
   priority, scheduler priority, days, deck, and button usage.
+- Baseline TOML must declare `baseline.desired_retention_values`; staging
+  requires every configured user to have exact JSONL logs for those DR points.
 - Do not rerun FSRS6 automatically when exact logs are missing.
 - Current implementation stages JSONL logs only. CSV sidecars remain diagnostic
   artifacts and are not copied into formal baseline staging.

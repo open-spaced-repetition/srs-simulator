@@ -258,6 +258,7 @@ def run_stage_baseline(
     notes: list[str] = []
     staged_logs: list[Path] = []
     logs_by_user: dict[int, list[Path]] = {}
+    retentions_by_user: dict[int, set[float]] = {}
 
     if not baseline_root.exists():
         failures.append(FailureClass.INVALID_BASELINE)
@@ -276,6 +277,12 @@ def run_stage_baseline(
                 notes.extend(f"{path}: {error}" for error in metadata_errors)
                 continue
             logs_by_user.setdefault(user_id, []).append(path)
+            retention_value = _matched_retention_value(
+                meta.get("desired_retention"),
+                config.baseline.desired_retention_values,
+            )
+            if retention_value is not None:
+                retentions_by_user.setdefault(user_id, set()).add(retention_value)
 
         required_users = (
             set(config.users.train)
@@ -292,6 +299,21 @@ def run_stage_baseline(
         if not logs_by_user:
             failures.append(FailureClass.INVALID_BASELINE)
             notes.append("No exact baseline logs matched the config.")
+        if config.baseline.desired_retention_values:
+            missing_pairs: list[str] = []
+            required_retentions = set(config.baseline.desired_retention_values)
+            for user_id in sorted(required_users):
+                missing_retentions = sorted(
+                    required_retentions - retentions_by_user.get(user_id, set())
+                )
+                for retention in missing_retentions:
+                    missing_pairs.append(f"user={user_id},ret={retention:.2f}")
+            if missing_pairs:
+                failures.append(FailureClass.INVALID_BASELINE)
+                notes.append(
+                    "Missing exact baseline retention points: "
+                    + ", ".join(missing_pairs)
+                )
 
         if not failures:
             for user_id in sorted(logs_by_user):
@@ -312,6 +334,9 @@ def run_stage_baseline(
         failures=unique_failures,
         metrics={
             "matched_users": float(len(logs_by_user)),
+            "matched_user_retention_pairs": float(
+                sum(len(values) for values in retentions_by_user.values())
+            ),
             "staged_logs": float(len(staged_logs)),
         },
         thresholds={},
@@ -345,6 +370,10 @@ def run_stage_baseline(
         "stage_root": str(stage_root),
         "stage_mode": config.baseline.stage_mode,
         "matched_users": sorted(logs_by_user),
+        "matched_retentions_by_user": {
+            str(user_id): sorted(values)
+            for user_id, values in sorted(retentions_by_user.items())
+        },
         "staged_logs": [str(path) for path in staged_logs],
         "config_snapshot_path": str(config_snapshot_path),
         "resolved_config_path": str(resolved_config_path),
@@ -688,7 +717,34 @@ def _baseline_metadata_errors(
             errors.append(
                 f"metadata {key} expected {expected_value!r}, got {actual_value!r}"
             )
+    if config.baseline.desired_retention_values:
+        actual_retention = meta.get("desired_retention")
+        if (
+            _matched_retention_value(
+                actual_retention, config.baseline.desired_retention_values
+            )
+            is None
+        ):
+            errors.append(
+                "metadata desired_retention expected one of "
+                f"{list(config.baseline.desired_retention_values)!r}, "
+                f"got {actual_retention!r}"
+            )
     return errors
+
+
+def _matched_retention_value(
+    value: Any, expected_values: tuple[float, ...]
+) -> float | None:
+    if not expected_values:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (float, int)):
+        return None
+    actual = float(value)
+    for expected in expected_values:
+        if math.isclose(actual, expected, rel_tol=0.0, abs_tol=1e-9):
+            return expected
+    return None
 
 
 def _stage_baseline_file(*, source: Path, dest: Path, mode: str) -> None:
