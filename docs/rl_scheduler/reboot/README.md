@@ -44,6 +44,12 @@ uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_sc
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 ```
 
+For any run that needs a current Pareto chart, the profile must include
+`stage-baseline`, `sweep`, and `pareto`. Run `pareto` after the candidate sweep;
+the PNG path is recorded in
+`<output_root>/<run_id>/pareto/pareto_summary.json` as `plot_paths`, and the
+default plot directory is `<output_root>/<run_id>/pareto/pareto_outputs/`.
+
 `dry-run`, `preflight`, `stage-baseline`, `train-overfit`, `sweep`, `pareto`,
 `select`, `aggregate`, and `reserved-test` are implemented. `train-overfit`,
 `sweep`, `pareto`, `select`, `aggregate`, and `reserved-test` require

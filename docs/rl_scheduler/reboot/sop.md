@@ -85,6 +85,22 @@ The `all` runner executes configured stages in order and stops on the first
 non-zero stage result. It writes `all_summary.json` under
 `<output_root>/<run_id>/all/`.
 
+Pareto plot generation is a required part of the external evaluation flow, not
+an optional report-only action:
+
+1. The checked-in TOML must include `stage-baseline`, `sweep`, and `pareto` in
+   `stages` before a run can produce a current Pareto chart.
+2. `stage-baseline` stages exact FSRS6 JSONL logs into the run root.
+3. `sweep` writes candidate JSONL logs under the run root. Keep retention_sweep
+   CSV output disabled unless diagnosing simulator behavior.
+4. `pareto` runs `experiments/retention_sweep/build_pareto.py` against a log
+   root that contains both staged baseline logs and candidate sweep logs. In the
+   current runner, use `{stage_root}/..` in `pareto.command_template` for that
+   run root.
+5. The generated chart path is recorded in `pareto/pareto_summary.json` under
+   `plot_paths`; by default the PNG is under
+   `<output_root>/<run_id>/pareto/pareto_outputs/`.
+
 Inspect a run root with:
 
 ```bash
@@ -210,8 +226,13 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 - Build combined FSRS6 + candidate Pareto JSON and PNG.
 - Validate FSRS DR grid, candidate lambda grid, artifact path, scheduler fields,
   engine, short-term, fuzz, and user id.
+- Do not treat `train-overfit` or `sweep` as a complete external comparison
+  until this stage has produced both Pareto JSON and at least one PNG.
 - Configure `pareto.command_template` in TOML. The runner requires passed
   `stage-baseline` and `sweep` summaries before executing the command.
+- The command's `--log-dir` must see both baseline and candidate logs. For the
+  current one-root `build_pareto.py` CLI, set it to the run root, for example
+  `{stage_root}/..`.
 - Supported placeholders include `{run_id}`, `{seed}`, `{family}`, `{engine}`,
   `{repo_root}`, `{stage_root}`, `{output_dir}`, `{baseline_stage_root}`,
   `{baseline_logs_dir}`, `{sweep_stage_root}`, `{sweep_outputs_dir}`,
@@ -225,6 +246,16 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
   ```bash
   uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml> --stage pareto --run-id <id>
   ```
+
+- Inspect outputs:
+
+  ```bash
+  uv run python experiments/rl_scheduler/inspect_run.py --run-root <output_root>/<run_id>
+  ```
+
+  Then read `pareto/pareto_summary.json`. `result_paths` points to the Pareto
+  metrics JSON, and `plot_paths` points to the generated PNG such as
+  `pareto/pareto_outputs/Pareto frontier.png`.
 
 - Current evidence files: `config_snapshot.toml`, `resolved_config.json`,
   `command_record.json`, Pareto command record plus stdout/stderr,

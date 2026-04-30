@@ -71,7 +71,11 @@ uv run python experiments/rl_scheduler/run_experiment.py --config <profile.toml>
 and validates scheduler policy metadata under `{output_dir}`. `sweep` requires
 `sweep.command_template`, executes it once per trained artifact, and validates
 JSONL logs under `{output_dir}`. `pareto` requires `pareto.command_template` and
-validates Pareto JSON/PNG artifacts under `{output_dir}`. `select` requires
+validates Pareto JSON/PNG artifacts under `{output_dir}`. Configure Pareto so
+`build_pareto.py --log-dir` sees both `stage-baseline/baseline_logs` and
+`sweep/sweep_outputs`; with the current placeholders, use `{stage_root}/..` for
+the run root. The generated PNG path must appear in
+`pareto/pareto_summary.json` under `plot_paths`. `select` requires
 `select.command_template` and validates selection JSON pointing to a scheduler
 artifact. `aggregate` requires `aggregate.command_template` and fails the gate
 when aggregate JSON reports `passed=false`. `reserved-test` requires
