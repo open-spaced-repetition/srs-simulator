@@ -32,6 +32,7 @@ class FailureClass(StrEnum):
     INCOMPLETE_OUTPUT = "incomplete-output"
     GATE_FAILED = "gate-failed"
     RUNNER_FAILED = "runner-failed"
+    TIMEOUT = "timeout"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +64,90 @@ class GpuGuardConfig:
             "required": self.required,
             "device": self.device,
             "smoke": self.smoke,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceConfig:
+    device: str | None = None
+    memory_budget_fraction: float | None = None
+    nvml_sample_interval_seconds: float = 2.0
+    timeout_seconds: float | None = None
+    progress_interval_seconds: float = 30.0
+    write_performance_summary: bool = True
+    diagnostic_csv_logs: bool = False
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> PerformanceConfig:
+        raw = raw or {}
+        device = raw.get("device")
+        if device is not None:
+            device = _require_str(device, "performance.device")
+        nvml_sample_interval_seconds = _optional_float(
+            raw.get("nvml_sample_interval_seconds", 2.0),
+            "performance.nvml_sample_interval_seconds",
+            minimum=0.0,
+        )
+        progress_interval_seconds = _optional_float(
+            raw.get("progress_interval_seconds", 30.0),
+            "performance.progress_interval_seconds",
+            minimum=0.0,
+        )
+        return cls(
+            device=device,
+            memory_budget_fraction=_optional_float(
+                raw.get("memory_budget_fraction"),
+                "performance.memory_budget_fraction",
+                minimum=0.0,
+            ),
+            nvml_sample_interval_seconds=float(nvml_sample_interval_seconds or 0.0),
+            timeout_seconds=_optional_float(
+                raw.get("timeout_seconds"),
+                "performance.timeout_seconds",
+                minimum=0.0,
+            ),
+            progress_interval_seconds=float(progress_interval_seconds or 0.0),
+            write_performance_summary=_require_bool(
+                raw.get("write_performance_summary", True),
+                "performance.write_performance_summary",
+            ),
+            diagnostic_csv_logs=_require_bool(
+                raw.get("diagnostic_csv_logs", False),
+                "performance.diagnostic_csv_logs",
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        if self.device is not None and not (
+            self.device == "cpu" or self.device.startswith("cuda")
+        ):
+            raise ValueError("performance.device must be cpu, cuda, or cuda:<index>.")
+        if self.memory_budget_fraction is not None and not (
+            0.0 < self.memory_budget_fraction <= 1.0
+        ):
+            raise ValueError("performance.memory_budget_fraction must be in (0, 1].")
+        if (
+            self.nvml_sample_interval_seconds is not None
+            and self.nvml_sample_interval_seconds <= 0.0
+        ):
+            raise ValueError("performance.nvml_sample_interval_seconds must be > 0.")
+        if self.timeout_seconds is not None and self.timeout_seconds <= 0.0:
+            raise ValueError("performance.timeout_seconds must be > 0.")
+        if (
+            self.progress_interval_seconds is not None
+            and self.progress_interval_seconds <= 0.0
+        ):
+            raise ValueError("performance.progress_interval_seconds must be > 0.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "device": self.device,
+            "memory_budget_fraction": self.memory_budget_fraction,
+            "nvml_sample_interval_seconds": self.nvml_sample_interval_seconds,
+            "timeout_seconds": self.timeout_seconds,
+            "progress_interval_seconds": self.progress_interval_seconds,
+            "write_performance_summary": self.write_performance_summary,
+            "diagnostic_csv_logs": self.diagnostic_csv_logs,
         }
 
 
@@ -351,6 +436,7 @@ class ExperimentConfig:
     baseline: BaselineSource
     simulation: SimulationScope
     gpu_guard: GpuGuardConfig
+    performance: PerformanceConfig
     lambda_grid: tuple[float, ...]
     training_sa: Mapping[str, Any] = field(default_factory=dict)
     train_command_template: tuple[str, ...] = ()
@@ -404,6 +490,7 @@ class ExperimentConfig:
                 _require_mapping(raw.get("simulation"), "simulation")
             ),
             gpu_guard=GpuGuardConfig.from_mapping(raw.get("gpu_guard")),
+            performance=PerformanceConfig.from_mapping(raw.get("performance")),
             lambda_grid=_float_tuple(
                 training.get("lambda_grid"), "training.lambda_grid"
             ),
@@ -468,6 +555,7 @@ class ExperimentConfig:
             "baseline": self.baseline.to_dict(),
             "simulation": self.simulation.to_dict(),
             "gpu_guard": self.gpu_guard.to_dict(),
+            "performance": self.performance.to_dict(),
             "training": {
                 "lambda_grid": list(self.lambda_grid),
                 "sa": dict(self.training_sa),
@@ -570,6 +658,34 @@ class GpuGuardSummary:
             "peak_dedicated_memory_bytes": self.peak_dedicated_memory_bytes,
             "shared_memory_growth_bytes": self.shared_memory_growth_bytes,
             "fallback_used": self.fallback_used,
+            "notes": list(self.notes),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PerformanceSummary:
+    stage: StageName
+    passed: bool
+    device: str
+    workload_shape: Mapping[str, Any] = field(default_factory=dict)
+    execution_shape: Mapping[str, Any] = field(default_factory=dict)
+    runtime_metrics: Mapping[str, Any] = field(default_factory=dict)
+    gpu_metrics: Mapping[str, Any] = field(default_factory=dict)
+    disk_metrics: Mapping[str, Any] = field(default_factory=dict)
+    failure_class: FailureClass | None = None
+    notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage.value,
+            "passed": self.passed,
+            "device": self.device,
+            "workload_shape": dict(self.workload_shape),
+            "execution_shape": dict(self.execution_shape),
+            "runtime_metrics": dict(self.runtime_metrics),
+            "gpu_metrics": dict(self.gpu_metrics),
+            "disk_metrics": dict(self.disk_metrics),
+            "failure_class": self.failure_class.value if self.failure_class else None,
             "notes": list(self.notes),
         }
 

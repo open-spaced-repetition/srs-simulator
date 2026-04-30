@@ -50,6 +50,13 @@ required = false
 device = "cpu"
 smoke = false
 
+[performance]
+device = "cpu"
+timeout_seconds = 120.0
+progress_interval_seconds = 10.0
+write_performance_summary = true
+diagnostic_csv_logs = false
+
 [training]
 lambda_grid = [0.0, 0.25, 0.5]
 
@@ -78,6 +85,9 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertEqual(config.training_sa["chains"], 4)
         self.assertEqual(config.baseline.desired_retention_values, (0.9,))
         self.assertEqual(config.to_dict()["baseline"]["scheduler"], "fsrs6")
+        self.assertEqual(config.performance.device, "cpu")
+        self.assertEqual(config.performance.timeout_seconds, 120.0)
+        self.assertTrue(config.performance.write_performance_summary)
 
     def test_rejects_overlapping_user_splits(self) -> None:
         raw = VALID_CONFIG.replace("validation = [2, 3]", "validation = [1, 3]")
@@ -86,6 +96,18 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
             path.write_text(raw, encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "disjoint"):
+                ExperimentConfig.from_toml(path)
+
+    def test_rejects_invalid_performance_memory_budget(self) -> None:
+        raw = VALID_CONFIG.replace(
+            "write_performance_summary = true",
+            "memory_budget_fraction = 1.5\nwrite_performance_summary = true",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "memory_budget_fraction"):
                 ExperimentConfig.from_toml(path)
 
     def test_rejects_duplicate_lambda_grid(self) -> None:

@@ -5,6 +5,7 @@ import json
 import math
 import subprocess
 import sys
+import time
 import tomllib
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -152,6 +153,32 @@ class SimulationBundle:
     relearning_steps: list[float]
 
 
+class TrainingProgress:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._started = time.monotonic()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write(
+        self,
+        event: str,
+        *,
+        device: torch.device | None = None,
+        **payload: Any,
+    ) -> None:
+        record: dict[str, Any] = {
+            "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+            "elapsed_seconds": time.monotonic() - self._started,
+            "event": event,
+            **payload,
+        }
+        gpu = _progress_gpu_snapshot(device)
+        if gpu is not None:
+            record["gpu"] = gpu
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train an SA FSRS-6 log-polynomial scheduler policy.",
@@ -176,11 +203,24 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    progress = TrainingProgress(output_dir / "training_progress.jsonl")
+    progress.write(
+        "started",
+        config_path=str(args.config),
+        user_id=args.user_id,
+        lambda_value=args.lambda_value,
+    )
     config = ExperimentConfig.from_toml(args.config)
     settings = SASettings.from_mapping(config.training_sa)
     raw_training_sa = _read_training_sa(args.config)
-    output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
+    progress.write(
+        "config_loaded",
+        settings=asdict(settings),
+        simulation=config.simulation.to_dict(),
+        seed=config.seed,
+    )
 
     benchmark_root = resolve_benchmark_root(
         REPO_ROOT, args.srs_benchmark_root
@@ -196,6 +236,7 @@ def main() -> int:
         short_term_args
     )
     device = torch.device(settings.torch_device)
+    progress.write("device_resolved", device=device, torch_device=str(device))
 
     baseline_bundle = _build_bundle(
         config=config,
@@ -217,6 +258,12 @@ def main() -> int:
         bundle=baseline_bundle,
         seed=config.seed,
     )
+    progress.write(
+        "baseline_evaluated",
+        device=baseline_bundle.device,
+        effective_lanes=1,
+        metrics=asdict(baseline_metrics),
+    )
 
     train_bundle = _build_bundle(
         config=config,
@@ -232,12 +279,24 @@ def main() -> int:
         learning_steps=learning_steps,
         relearning_steps=relearning_steps,
     )
+    progress.write(
+        "train_bundle_built",
+        device=train_bundle.device,
+        effective_lanes=settings.chains,
+    )
     best_coefficients, best_metrics, history = _anneal(
         config=config,
         settings=settings,
         bundle=train_bundle,
         lambda_value=args.lambda_value,
         baseline=baseline_metrics,
+        progress=progress,
+    )
+    progress.write(
+        "annealing_completed",
+        device=train_bundle.device,
+        best=asdict(best_metrics),
+        iterations=len(history),
     )
     rel_mem = _relative_gain(
         best_metrics.memorized_average,
@@ -299,7 +358,16 @@ def main() -> int:
         "metrics_path": "metrics.json",
         "capabilities": ["event", "vectorized", "batched"],
     }
-    _write_json(output_dir / "metadata.json", metadata)
+    metadata_path = output_dir / "metadata.json"
+    _write_json(metadata_path, metadata)
+    progress.write(
+        "artifacts_written",
+        device=train_bundle.device,
+        passed=passed,
+        policy_path=str(policy_path),
+        metrics_path=str(metrics_path),
+        metadata_path=str(metadata_path),
+    )
     return 0 if passed else 1
 
 
@@ -463,6 +531,7 @@ def _anneal(
     bundle: SimulationBundle,
     lambda_value: float,
     baseline: CandidateMetrics,
+    progress: TrainingProgress,
 ) -> tuple[torch.Tensor, CandidateMetrics, list[dict[str, float]]]:
     device = bundle.device
     generator = torch.Generator(device=device)
@@ -505,6 +574,21 @@ def _anneal(
     best_metrics = current_metrics[best_idx]
     best_score = float(current_scores[best_idx].item())
     history: list[dict[str, float]] = []
+    progress.write(
+        "initial_candidates_evaluated",
+        device=device,
+        effective_lanes=settings.chains,
+        best_score=best_score,
+        best=asdict(best_metrics),
+        best_relative_memorized_gain=_relative_gain(
+            best_metrics.memorized_average,
+            baseline.memorized_average,
+        ),
+        best_relative_efficiency_gain=_relative_gain(
+            best_metrics.memorized_per_minute,
+            baseline.memorized_per_minute,
+        ),
+    )
 
     for iteration in range(settings.iterations):
         temp = _temperature(settings, iteration)
@@ -531,6 +615,7 @@ def _anneal(
         accept = (delta >= 0) | (
             torch.rand(delta.shape, device=device, generator=generator) < accept_prob
         )
+        accepted_count = int(accept.sum().item())
         if accept.any():
             current[accept] = proposal[accept]
             current_scores[accept] = proposal_scores[accept]
@@ -557,6 +642,23 @@ def _anneal(
                     baseline.memorized_per_minute,
                 ),
             }
+        )
+        progress.write(
+            "annealing_iteration",
+            device=device,
+            iteration=iteration,
+            temperature=float(temp),
+            accepted_count=accepted_count,
+            effective_lanes=settings.chains,
+            best_score=best_score,
+            best_relative_memorized_gain=_relative_gain(
+                best_metrics.memorized_average,
+                baseline.memorized_average,
+            ),
+            best_relative_efficiency_gain=_relative_gain(
+                best_metrics.memorized_per_minute,
+                baseline.memorized_per_minute,
+            ),
         )
     return best_coefficients.cpu(), best_metrics, history
 
@@ -668,6 +770,17 @@ def _clamp_coefficients(
         min=settings.coefficient_min,
         max=settings.coefficient_max,
     )
+
+
+def _progress_gpu_snapshot(device: torch.device | None) -> dict[str, int] | None:
+    if device is None or device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    return {
+        "current_allocated_memory_bytes": int(torch.cuda.memory_allocated(device)),
+        "current_reserved_memory_bytes": int(torch.cuda.memory_reserved(device)),
+        "peak_allocated_memory_bytes": int(torch.cuda.max_memory_allocated(device)),
+        "peak_reserved_memory_bytes": int(torch.cuda.max_memory_reserved(device)),
+    }
 
 
 def _read_training_sa(config_path: Path) -> Mapping[str, Any]:

@@ -35,6 +35,13 @@ required = false
 device = "cpu"
 smoke = false
 
+[performance]
+device = "cpu"
+timeout_seconds = 900.0
+progress_interval_seconds = 30.0
+write_performance_summary = true
+diagnostic_csv_logs = false
+
 [training]
 lambda_grid = [0.0, 0.5, 1.0]
 artifact_metadata_glob = "metadata.json"

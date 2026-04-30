@@ -30,6 +30,7 @@ def _write_config(
     select_command_template: list[str] | None = None,
     aggregate_command_template: list[str] | None = None,
     reserved_test_command_template: list[str] | None = None,
+    performance_timeout_seconds: float | None = None,
     stages: list[str] | None = None,
 ) -> Path:
     config_path = root / "experiment.toml"
@@ -72,6 +73,9 @@ def _write_config(
         reserved_test_command_template_line = (
             f"command_template = {json.dumps(reserved_test_command_template)}\n"
         )
+    performance_timeout_line = ""
+    if performance_timeout_seconds is not None:
+        performance_timeout_line = f"timeout_seconds = {performance_timeout_seconds}\n"
     config_path.write_text(
         f"""
 schema_version = 1
@@ -109,6 +113,12 @@ fuzz = false
 required = {str(gpu_required).lower()}
 device = "cpu"
 smoke = false
+
+[performance]
+device = "cpu"
+{performance_timeout_line}
+write_performance_summary = true
+diagnostic_csv_logs = false
 
 [training]
 lambda_grid = [0.0, 0.5, 1.0]
@@ -185,6 +195,10 @@ family = sys.argv[5]
 engine = sys.argv[6]
 output_dir.mkdir(parents=True, exist_ok=True)
 (output_dir / "policy.pt").write_bytes(b"policy")
+(output_dir / "training_progress.jsonl").write_text(
+    json.dumps({"event": "artifacts_written"}) + "\\n",
+    encoding="utf-8",
+)
 (output_dir / "metadata.json").write_text(
     json.dumps(
         {
@@ -1097,6 +1111,14 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertTrue(summary["passed"])
             self.assertEqual(len(summary["command_results"]), 3)
             self.assertEqual(len(summary["log_paths"]), 3)
+            performance = json.loads(
+                (stage_root / "performance_summary.json").read_text()
+            )
+            self.assertTrue(performance["passed"])
+            self.assertEqual(performance["stage"], "sweep")
+            self.assertEqual(performance["disk_metrics"]["csv_count"], 0)
+            manifest = json.loads((stage_root / "manifest.json").read_text())
+            self.assertIn("performance_summary", manifest["artifacts"])
 
     def test_train_overfit_requires_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1151,11 +1173,20 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertTrue(summary["passed"])
             self.assertEqual(len(summary["command_results"]), 3)
             self.assertEqual(len(summary["artifact_paths"]), 3)
+            self.assertEqual(len(summary["training_progress_paths"]), 3)
             self.assertEqual(
                 len(list((stage_root / "train_outputs").rglob("metadata.json"))),
                 3,
             )
+            performance = json.loads(
+                (stage_root / "performance_summary.json").read_text()
+            )
+            self.assertTrue(performance["passed"])
+            self.assertEqual(performance["stage"], "train-overfit")
+            self.assertEqual(performance["disk_metrics"]["csv_count"], 0)
             manifest = json.loads((stage_root / "manifest.json").read_text())
+            self.assertIn("performance_summary", manifest["artifacts"])
+            self.assertIn("training_progress_0", manifest["artifacts"])
             self.assertIn("scheduler_artifact_metadata_0", manifest["artifacts"])
 
     def test_train_overfit_rejects_missing_artifact(self) -> None:
@@ -1188,6 +1219,43 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             gate = json.loads((stage_root / "gate_summary.json").read_text())
             self.assertFalse(gate["passed"])
             self.assertIn("invalid-artifact", gate["failures"])
+
+    def test_train_overfit_classifies_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            baseline_root.mkdir()
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                performance_timeout_seconds=0.1,
+                command_template=[
+                    sys.executable,
+                    "-c",
+                    "import time; time.sleep(5)",
+                ],
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.TRAIN_OVERFIT,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            stage_root = output_root / "test-run" / "train-overfit"
+            gate = json.loads((stage_root / "gate_summary.json").read_text())
+            self.assertFalse(gate["passed"])
+            self.assertIn("timeout", gate["failures"])
+            summary = json.loads((stage_root / "training_summary.json").read_text())
+            self.assertTrue(summary["command_results"][0]["timed_out"])
+            performance = json.loads(
+                (stage_root / "performance_summary.json").read_text()
+            )
+            self.assertEqual(performance["failure_class"], "timeout")
 
     def test_stage_baseline_copies_exact_jsonl_logs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -35,6 +35,14 @@ required = true
 device = "cuda"
 smoke = true
 
+[performance]
+device = "cuda"
+memory_budget_fraction = 0.80
+timeout_seconds = 900.0
+progress_interval_seconds = 30.0
+write_performance_summary = true
+diagnostic_csv_logs = false
+
 [training]
 lambda_grid = [0.5]
 artifact_metadata_glob = "metadata.json"

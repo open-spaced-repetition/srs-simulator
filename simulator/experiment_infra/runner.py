@@ -7,6 +7,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from simulator.experiment_infra.schemas import (
     FailureClass,
     GateSummary,
     GpuGuardSummary,
+    PerformanceSummary,
     RunRecord,
     StageName,
 )
@@ -40,6 +42,8 @@ SUPPORTED_RUNNER_STAGES = {
     StageName.AGGREGATE,
     StageName.RESERVED_TEST,
 }
+
+COMMAND_TIMEOUT_EXIT_CODE = 124
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +318,7 @@ def run_train_overfit(
     command: list[str],
 ) -> StageExecutionResult:
     started_at = utc_timestamp()
+    perf_started = time.monotonic()
     output_root = _resolve_repo_path(repo_root, config.output_root)
     stage_root = output_root / run_id / StageName.TRAIN_OVERFIT.value
     stage_root.mkdir(parents=True, exist_ok=True)
@@ -324,6 +329,7 @@ def run_train_overfit(
     command_record_path = stage_root / "command_record.json"
     run_record_path = stage_root / "run_record.json"
     training_summary_path = stage_root / "training_summary.json"
+    performance_summary_path = stage_root / "performance_summary.json"
     manifest_path = stage_root / "manifest.json"
     commands_root = stage_root / "commands"
     outputs_root = stage_root / "train_outputs"
@@ -336,6 +342,7 @@ def run_train_overfit(
     command_records: list[Path] = []
     stdout_paths: list[Path] = []
     stderr_paths: list[Path] = []
+    progress_paths: list[Path] = []
     artifact_paths: list[Path] = []
     command_results: list[dict[str, Any]] = []
     commands_attempted = 0
@@ -388,8 +395,14 @@ def run_train_overfit(
                     command_record_path=command_record,
                     stdout_path=stdout_path,
                     stderr_path=stderr_path,
+                    timeout_seconds=config.performance.timeout_seconds,
                 )
                 exit_code = _record_exit_code(train_command_record)
+                timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
+                progress_path = output_dir / "training_progress.jsonl"
+                progress_path_exists = progress_path.exists()
+                if progress_path_exists:
+                    progress_paths.append(progress_path)
                 command_records.append(command_record)
                 stdout_paths.append(stdout_path)
                 stderr_paths.append(stderr_path)
@@ -402,15 +415,29 @@ def run_train_overfit(
                         "command_record_path": str(command_record),
                         "stdout_path": str(stdout_path),
                         "stderr_path": str(stderr_path),
+                        "training_progress_path": str(progress_path)
+                        if progress_path_exists
+                        else None,
                         "exit_code": exit_code,
+                        "timed_out": timed_out,
                     }
                 )
                 if exit_code != 0:
-                    failures.append(FailureClass.RUNNER_FAILED)
-                    notes.append(
-                        "Training command failed for "
-                        f"user={user_id}, lambda={lambda_value}."
+                    failures.append(
+                        FailureClass.TIMEOUT
+                        if timed_out
+                        else FailureClass.RUNNER_FAILED
                     )
+                    if timed_out:
+                        notes.append(
+                            "Training command timed out for "
+                            f"user={user_id}, lambda={lambda_value}."
+                        )
+                    else:
+                        notes.append(
+                            "Training command failed for "
+                            f"user={user_id}, lambda={lambda_value}."
+                        )
                     break
 
                 commands_succeeded += 1
@@ -465,6 +492,27 @@ def run_train_overfit(
         thresholds={},
     )
     _write_json(gate_summary_path, gate_summary.to_dict())
+    performance_summary = _build_stage_performance_summary(
+        config=config,
+        stage=StageName.TRAIN_OVERFIT,
+        passed=passed,
+        elapsed_seconds=time.monotonic() - perf_started,
+        stage_root=stage_root,
+        failures=unique_failures,
+        notes=notes,
+        runtime_metrics={
+            "commands_attempted": commands_attempted,
+            "commands_succeeded": commands_succeeded,
+            "artifacts_validated": len(artifact_paths),
+        },
+        execution_shape={
+            "process_count": 1,
+            "subprocess_count": commands_attempted,
+            "timeout_seconds": config.performance.timeout_seconds,
+        },
+    )
+    if config.performance.write_performance_summary:
+        _write_json(performance_summary_path, performance_summary.to_dict())
 
     finished_at = utc_timestamp()
     exit_code = 0 if passed else 1
@@ -496,11 +544,15 @@ def run_train_overfit(
         "artifact_metadata_glob": config.train_artifact_glob,
         "command_results": command_results,
         "artifact_paths": [str(path) for path in artifact_paths],
+        "training_progress_paths": [str(path) for path in progress_paths],
         "config_snapshot_path": str(config_snapshot_path),
         "resolved_config_path": str(resolved_config_path),
         "gate_summary_path": str(gate_summary_path),
         "command_record_path": str(command_record_path),
         "run_record_path": str(run_record_path),
+        "performance_summary_path": str(performance_summary_path)
+        if config.performance.write_performance_summary
+        else None,
         "manifest_path": str(manifest_path),
         "environment": provenance,
     }
@@ -522,10 +574,16 @@ def run_train_overfit(
         artifact_paths=(
             gate_summary_path,
             training_summary_path,
+            *(
+                (performance_summary_path,)
+                if config.performance.write_performance_summary
+                else ()
+            ),
             manifest_path,
             *command_records,
             *stdout_paths,
             *stderr_paths,
+            *progress_paths,
             *artifact_paths,
         ),
     )
@@ -539,6 +597,8 @@ def run_train_overfit(
         "run_record": run_record_path,
         "training_summary": training_summary_path,
     }
+    if config.performance.write_performance_summary:
+        manifest_artifacts["performance_summary"] = performance_summary_path
     manifest_artifacts.update(
         {
             f"training_command_record_{index}": path
@@ -550,6 +610,12 @@ def run_train_overfit(
     )
     manifest_artifacts.update(
         {f"training_stderr_{index}": path for index, path in enumerate(stderr_paths)}
+    )
+    manifest_artifacts.update(
+        {
+            f"training_progress_{index}": path
+            for index, path in enumerate(progress_paths)
+        }
     )
     manifest_artifacts.update(
         {
@@ -584,6 +650,7 @@ def run_sweep(
     command: list[str],
 ) -> StageExecutionResult:
     started_at = utc_timestamp()
+    perf_started = time.monotonic()
     output_root = _resolve_repo_path(repo_root, config.output_root)
     stage_root = output_root / run_id / StageName.SWEEP.value
     stage_root.mkdir(parents=True, exist_ok=True)
@@ -594,6 +661,7 @@ def run_sweep(
     command_record_path = stage_root / "command_record.json"
     run_record_path = stage_root / "run_record.json"
     sweep_summary_path = stage_root / "sweep_summary.json"
+    performance_summary_path = stage_root / "performance_summary.json"
     manifest_path = stage_root / "manifest.json"
     commands_root = stage_root / "commands"
     outputs_root = stage_root / "sweep_outputs"
@@ -701,8 +769,10 @@ def run_sweep(
                 command_record_path=command_record,
                 stdout_path=stdout_path,
                 stderr_path=stderr_path,
+                timeout_seconds=config.performance.timeout_seconds,
             )
             exit_code = _record_exit_code(sweep_command_record)
+            timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
             command_records.append(command_record)
             stdout_paths.append(stdout_path)
             stderr_paths.append(stderr_path)
@@ -718,11 +788,18 @@ def run_sweep(
                     "stdout_path": str(stdout_path),
                     "stderr_path": str(stderr_path),
                     "exit_code": exit_code,
+                    "timed_out": timed_out,
                 }
             )
             if exit_code != 0:
-                failures.append(FailureClass.RUNNER_FAILED)
-                notes.append(f"Sweep command failed for artifact={metadata_path}.")
+                failures.append(
+                    FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+                )
+                notes.append(
+                    f"Sweep command timed out for artifact={metadata_path}."
+                    if timed_out
+                    else f"Sweep command failed for artifact={metadata_path}."
+                )
                 break
 
             commands_succeeded += 1
@@ -768,6 +845,28 @@ def run_sweep(
         thresholds={},
     )
     _write_json(gate_summary_path, gate_summary.to_dict())
+    performance_summary = _build_stage_performance_summary(
+        config=config,
+        stage=StageName.SWEEP,
+        passed=passed,
+        elapsed_seconds=time.monotonic() - perf_started,
+        stage_root=stage_root,
+        failures=unique_failures,
+        notes=notes,
+        runtime_metrics={
+            "input_artifacts": len(train_artifact_paths),
+            "commands_attempted": commands_attempted,
+            "commands_succeeded": commands_succeeded,
+            "logs_validated": len(log_paths),
+        },
+        execution_shape={
+            "process_count": 1,
+            "subprocess_count": commands_attempted,
+            "timeout_seconds": config.performance.timeout_seconds,
+        },
+    )
+    if config.performance.write_performance_summary:
+        _write_json(performance_summary_path, performance_summary.to_dict())
 
     finished_at = utc_timestamp()
     exit_code = 0 if passed else 1
@@ -806,6 +905,9 @@ def run_sweep(
         "gate_summary_path": str(gate_summary_path),
         "command_record_path": str(command_record_path),
         "run_record_path": str(run_record_path),
+        "performance_summary_path": str(performance_summary_path)
+        if config.performance.write_performance_summary
+        else None,
         "manifest_path": str(manifest_path),
         "environment": provenance,
     }
@@ -827,6 +929,11 @@ def run_sweep(
         artifact_paths=(
             gate_summary_path,
             sweep_summary_path,
+            *(
+                (performance_summary_path,)
+                if config.performance.write_performance_summary
+                else ()
+            ),
             manifest_path,
             *artifact_paths,
             *command_records,
@@ -845,6 +952,8 @@ def run_sweep(
         "run_record": run_record_path,
         "sweep_summary": sweep_summary_path,
     }
+    if config.performance.write_performance_summary:
+        manifest_artifacts["performance_summary"] = performance_summary_path
     manifest_artifacts.update(
         {
             f"scheduler_artifact_metadata_{index}": path
@@ -967,8 +1076,10 @@ def run_pareto(
                 command_record_path=pareto_command_record_path,
                 stdout_path=pareto_stdout_path,
                 stderr_path=pareto_stderr_path,
+                timeout_seconds=config.performance.timeout_seconds,
             )
             exit_code = _record_exit_code(pareto_command_record)
+            timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
             command_records.append(pareto_command_record_path)
             stdout_paths.append(pareto_stdout_path)
             stderr_paths.append(pareto_stderr_path)
@@ -979,11 +1090,18 @@ def run_pareto(
                     "stdout_path": str(pareto_stdout_path),
                     "stderr_path": str(pareto_stderr_path),
                     "exit_code": exit_code,
+                    "timed_out": timed_out,
                 }
             )
             if exit_code != 0:
-                failures.append(FailureClass.RUNNER_FAILED)
-                notes.append("Pareto command failed.")
+                failures.append(
+                    FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+                )
+                notes.append(
+                    "Pareto command timed out."
+                    if timed_out
+                    else "Pareto command failed."
+                )
             else:
                 commands_succeeded = 1
 
@@ -1230,8 +1348,10 @@ def run_select(
                 command_record_path=select_command_record_path,
                 stdout_path=select_stdout_path,
                 stderr_path=select_stderr_path,
+                timeout_seconds=config.performance.timeout_seconds,
             )
             exit_code = _record_exit_code(select_command_record)
+            timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
             command_records.append(select_command_record_path)
             stdout_paths.append(select_stdout_path)
             stderr_paths.append(select_stderr_path)
@@ -1242,11 +1362,18 @@ def run_select(
                     "stdout_path": str(select_stdout_path),
                     "stderr_path": str(select_stderr_path),
                     "exit_code": exit_code,
+                    "timed_out": timed_out,
                 }
             )
             if exit_code != 0:
-                failures.append(FailureClass.RUNNER_FAILED)
-                notes.append("Select command failed.")
+                failures.append(
+                    FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+                )
+                notes.append(
+                    "Select command timed out."
+                    if timed_out
+                    else "Select command failed."
+                )
             else:
                 commands_succeeded = 1
 
@@ -1482,8 +1609,10 @@ def run_aggregate(
                 command_record_path=aggregate_command_record_path,
                 stdout_path=aggregate_stdout_path,
                 stderr_path=aggregate_stderr_path,
+                timeout_seconds=config.performance.timeout_seconds,
             )
             exit_code = _record_exit_code(aggregate_command_record)
+            timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
             command_records.append(aggregate_command_record_path)
             stdout_paths.append(aggregate_stdout_path)
             stderr_paths.append(aggregate_stderr_path)
@@ -1494,11 +1623,18 @@ def run_aggregate(
                     "stdout_path": str(aggregate_stdout_path),
                     "stderr_path": str(aggregate_stderr_path),
                     "exit_code": exit_code,
+                    "timed_out": timed_out,
                 }
             )
             if exit_code != 0:
-                failures.append(FailureClass.RUNNER_FAILED)
-                notes.append("Aggregate command failed.")
+                failures.append(
+                    FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+                )
+                notes.append(
+                    "Aggregate command timed out."
+                    if timed_out
+                    else "Aggregate command failed."
+                )
             else:
                 commands_succeeded = 1
 
@@ -1779,8 +1915,10 @@ def run_reserved_test(
                 command_record_path=reserved_command_record_path,
                 stdout_path=reserved_stdout_path,
                 stderr_path=reserved_stderr_path,
+                timeout_seconds=config.performance.timeout_seconds,
             )
             exit_code = _record_exit_code(reserved_command_record)
+            timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
             command_records.append(reserved_command_record_path)
             stdout_paths.append(reserved_stdout_path)
             stderr_paths.append(reserved_stderr_path)
@@ -1791,11 +1929,18 @@ def run_reserved_test(
                     "stdout_path": str(reserved_stdout_path),
                     "stderr_path": str(reserved_stderr_path),
                     "exit_code": exit_code,
+                    "timed_out": timed_out,
                 }
             )
             if exit_code != 0:
-                failures.append(FailureClass.RUNNER_FAILED)
-                notes.append("Reserved-test command failed.")
+                failures.append(
+                    FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+                )
+                notes.append(
+                    "Reserved-test command timed out."
+                    if timed_out
+                    else "Reserved-test command failed."
+                )
             else:
                 commands_succeeded = 1
 
@@ -2360,6 +2505,194 @@ def _build_gpu_summary(config: ExperimentConfig) -> GpuGuardSummary:
     )
 
 
+def _build_stage_performance_summary(
+    *,
+    config: ExperimentConfig,
+    stage: StageName,
+    passed: bool,
+    elapsed_seconds: float,
+    stage_root: Path,
+    failures: tuple[FailureClass, ...],
+    notes: list[str],
+    runtime_metrics: dict[str, Any],
+    execution_shape: dict[str, Any],
+) -> PerformanceSummary:
+    device = _resolve_performance_device(config)
+    runtime = {
+        "elapsed_seconds": elapsed_seconds,
+        **runtime_metrics,
+    }
+    candidate_days = _candidate_days(config=config, stage=stage)
+    if candidate_days is not None:
+        runtime["candidate_days"] = candidate_days
+        runtime["candidate_days_per_second"] = candidate_days / max(
+            elapsed_seconds, 1e-9
+        )
+    user_days = _user_days(config=config, stage=stage)
+    if user_days is not None:
+        runtime["user_days"] = user_days
+        runtime["user_days_per_second"] = user_days / max(elapsed_seconds, 1e-9)
+
+    return PerformanceSummary(
+        stage=stage,
+        passed=passed,
+        device=device,
+        workload_shape=_performance_workload_shape(config, stage),
+        execution_shape={
+            "device": device,
+            "write_performance_summary": config.performance.write_performance_summary,
+            "diagnostic_csv_logs": config.performance.diagnostic_csv_logs,
+            **execution_shape,
+        },
+        runtime_metrics=runtime,
+        gpu_metrics=_gpu_performance_metrics(device),
+        disk_metrics=_disk_metrics(stage_root),
+        failure_class=failures[0] if failures else None,
+        notes=tuple(notes),
+    )
+
+
+def _resolve_performance_device(config: ExperimentConfig) -> str:
+    if config.performance.device:
+        return config.performance.device
+    if config.gpu_guard.device:
+        return config.gpu_guard.device
+    torch_device = config.training_sa.get("torch_device")
+    if isinstance(torch_device, str) and torch_device.strip():
+        return torch_device.strip()
+    return "cuda" if config.gpu_guard.required else "cpu"
+
+
+def _performance_workload_shape(
+    config: ExperimentConfig, stage: StageName
+) -> dict[str, Any]:
+    shape: dict[str, Any] = {
+        "days": config.simulation.days,
+        "deck": config.simulation.deck,
+        "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
+        "train_users": len(config.users.train),
+        "validation_users": len(config.users.validation),
+        "reserved_test_users": len(config.users.reserved_test),
+        "lambda_values": len(config.lambda_grid),
+        "baseline_retention_values": len(config.baseline.desired_retention_values),
+    }
+    chains = _training_chains(config)
+    if chains is not None:
+        shape["chains"] = chains
+    if stage == StageName.TRAIN_OVERFIT and chains is not None:
+        shape["effective_lanes"] = (
+            len(config.users.train) * len(config.lambda_grid) * chains
+        )
+    elif stage == StageName.SWEEP:
+        shape["effective_lanes"] = len(config.users.train) * max(
+            len(config.lambda_grid), 1
+        )
+    return shape
+
+
+def _training_chains(config: ExperimentConfig) -> int | None:
+    value = config.training_sa.get("chains")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def _candidate_days(*, config: ExperimentConfig, stage: StageName) -> int | None:
+    if stage != StageName.TRAIN_OVERFIT:
+        return None
+    chains = _training_chains(config)
+    if chains is None:
+        return None
+    return (
+        config.simulation.days
+        * len(config.users.train)
+        * len(config.lambda_grid)
+        * chains
+    )
+
+
+def _user_days(*, config: ExperimentConfig, stage: StageName) -> int | None:
+    if stage == StageName.TRAIN_OVERFIT:
+        return (
+            config.simulation.days * len(config.users.train) * len(config.lambda_grid)
+        )
+    if stage == StageName.SWEEP:
+        return (
+            config.simulation.days
+            * len(config.users.train)
+            * max(len(config.lambda_grid), 1)
+        )
+    return None
+
+
+def _gpu_performance_metrics(device: str) -> dict[str, Any]:
+    metrics: dict[str, Any] = {
+        "torch_cuda_available": False,
+        "cuda_device_count": 0,
+        "fallback_used": device.startswith("cuda"),
+        "peak_allocated_memory_bytes": None,
+        "peak_reserved_memory_bytes": None,
+        "current_allocated_memory_bytes": None,
+        "current_reserved_memory_bytes": None,
+    }
+    try:
+        import torch
+
+        cuda_available = torch.cuda.is_available()
+        metrics["torch_cuda_available"] = cuda_available
+        metrics["cuda_device_count"] = (
+            torch.cuda.device_count() if cuda_available else 0
+        )
+        metrics["fallback_used"] = device.startswith("cuda") and not cuda_available
+        if device.startswith("cuda") and cuda_available:
+            torch_device = torch.device(device)
+            if torch_device.index is not None:
+                torch.cuda.set_device(torch_device)
+            current_device = torch.cuda.current_device()
+            metrics["device_index"] = current_device
+            metrics["device_name"] = torch.cuda.get_device_name(current_device)
+            metrics["peak_allocated_memory_bytes"] = torch.cuda.max_memory_allocated(
+                current_device
+            )
+            metrics["peak_reserved_memory_bytes"] = torch.cuda.max_memory_reserved(
+                current_device
+            )
+            metrics["current_allocated_memory_bytes"] = torch.cuda.memory_allocated(
+                current_device
+            )
+            metrics["current_reserved_memory_bytes"] = torch.cuda.memory_reserved(
+                current_device
+            )
+    except Exception as exc:  # pragma: no cover - hardware-dependent.
+        metrics["notes"] = [f"torch CUDA metrics unavailable: {exc}"]
+    return metrics
+
+
+def _disk_metrics(stage_root: Path) -> dict[str, Any]:
+    files = [path for path in stage_root.rglob("*") if path.is_file()]
+    jsonl_files = [path for path in files if path.suffix == ".jsonl"]
+    csv_files = [path for path in files if path.suffix == ".csv"]
+    json_files = [path for path in files if path.suffix == ".json"]
+    return {
+        "file_count": len(files),
+        "total_bytes": sum(_file_size(path) for path in files),
+        "json_count": len(json_files),
+        "json_bytes": sum(_file_size(path) for path in json_files),
+        "jsonl_count": len(jsonl_files),
+        "jsonl_bytes": sum(_file_size(path) for path in jsonl_files),
+        "csv_count": len(csv_files),
+        "csv_bytes": sum(_file_size(path) for path in csv_files),
+    }
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
 def _run_cuda_smoke(device: str) -> tuple[bool, str]:
     try:
         import torch
@@ -2575,6 +2908,7 @@ def _run_recorded_command(
     command_record_path: Path,
     stdout_path: Path,
     stderr_path: Path,
+    timeout_seconds: float | None = None,
 ) -> CommandRecord:
     command_record_path.parent.mkdir(parents=True, exist_ok=True)
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2587,10 +2921,21 @@ def _run_recorded_command(
             check=False,
             capture_output=True,
             text=True,
+            timeout=timeout_seconds,
         )
         exit_code = completed.returncode
         stdout_path.write_text(completed.stdout, encoding="utf-8")
         stderr_path.write_text(completed.stderr, encoding="utf-8")
+    except subprocess.TimeoutExpired as exc:
+        exit_code = COMMAND_TIMEOUT_EXIT_CODE
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        timeout_note = f"Command timed out after {timeout_seconds} seconds."
+        stdout_path.write_text(stdout, encoding="utf-8")
+        stderr_path.write_text(
+            f"{stderr}\n{timeout_note}\n" if stderr else f"{timeout_note}\n",
+            encoding="utf-8",
+        )
     except OSError as exc:
         exit_code = 127
         stdout_path.write_text("", encoding="utf-8")
