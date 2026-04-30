@@ -64,7 +64,7 @@ command_template = [
 ]
 
 [training.sa]
-chains = 64
+chains = 2048
 iterations = 4
 initial_temp = 0.05
 final_temp = 0.005

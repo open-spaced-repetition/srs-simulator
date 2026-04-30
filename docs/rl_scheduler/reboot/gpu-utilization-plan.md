@@ -486,3 +486,40 @@ Exit criteria:
   overhead, memory pressure, CPU fallback, or disk I/O.
 - A train-user overfit failure blocks broad validation unless the report points
   to a specific implementation bug.
+
+## Initial SA FSRS-6 Lane Probe
+
+Probe context:
+
+- Date: 2026-04-30
+- GPU: NVIDIA GeForce RTX 4090 D, 24 GB
+- Config: `experiments/rl_scheduler/configs/sa_fsrs6_overfit_probe.toml`
+- Workload: LSTM environment, user 1, 365 days, deck 5000, short-term steps
+- Command family: `experiments/rl_scheduler/tune_sa_fsrs6_lanes.py`
+
+Results:
+
+| Lanes | Elapsed sec | Candidate-days/sec | Peak reserved bytes |
+| ---: | ---: | ---: | ---: |
+| 1 | 21.47 | 17.0 | 27,262,976 |
+| 8 | 42.38 | 68.9 | 75,497,472 |
+| 16 | 49.84 | 117.2 | 274,726,912 |
+| 32 | 59.02 | 197.9 | 1,161,822,208 |
+| 64 | 60.62 | 385.4 | 4,261,412,864 |
+| 128 | 64.06 | 729.3 | 8,176,795,648 |
+| 256 | 65.12 | 1,434.9 | 8,589,934,592 |
+| 512 | 58.10 | 3,216.8 | 2,518,679,552 |
+| 1024 | 67.74 | 5,517.9 | 3,185,573,888 |
+| 2048 | 87.52 | 8,541.6 | 5,809,111,040 |
+| 4096 | 103.68 | 14,420.2 | 22,978,494,464 |
+
+Decision:
+
+- Use `chains = 2048` for the first overfit-probe profile. It has strong
+  throughput while staying comfortably below the 80% memory-budget target by
+  PyTorch reserved memory.
+- Treat `chains = 4096` as a diagnostic upper bound for this workload. It was
+  fastest, but PyTorch reserved memory exceeded the configured 80% budget on a
+  24 GB GPU.
+- Do not extrapolate these values to the 1825-day, deck-10000 formal profile;
+  rerun lane tuning for that workload before increasing its chains.
