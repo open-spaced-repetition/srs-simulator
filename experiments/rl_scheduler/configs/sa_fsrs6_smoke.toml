@@ -1,0 +1,147 @@
+schema_version = 1
+name = "sa_fsrs6_smoke"
+family = "rl_scheduler"
+seed = 42
+output_root = "artifacts/rl_scheduler/sa_fsrs6_smoke"
+stages = ["dry-run", "preflight", "stage-baseline", "train-overfit", "sweep", "pareto"]
+
+[users]
+train = [1]
+validation = [2, 3]
+reserved_test = [4]
+
+[baseline]
+scheduler = "fsrs6"
+log_root = "logs/retention_sweep"
+expected_engine = "batched"
+stage_mode = "copy"
+desired_retention_values = [0.9]
+
+[simulation]
+engine = "batched"
+environment = "lstm"
+days = 1825
+deck = 10000
+learn_limit = 10
+review_limit = 9999
+cost_limit_minutes = 720.0
+priority = "new-first"
+scheduler_priority = "low_retrievability"
+short_term_source = "steps"
+fuzz = false
+
+[gpu_guard]
+required = false
+device = "cpu"
+smoke = false
+
+[training]
+lambda_grid = [0.0, 0.5, 1.0]
+artifact_metadata_glob = "metadata.json"
+command_template = [
+  "uv",
+  "run",
+  "python",
+  "experiments/rl_scheduler/train_sa_fsrs6.py",
+  "--config",
+  "{config_path}",
+  "--user-id",
+  "{user_id}",
+  "--lambda",
+  "{lambda_value}",
+  "--output-dir",
+  "{output_dir}",
+  "--training-command-path",
+  "{command_record_path}",
+]
+
+[training.sa]
+chains = 4
+iterations = 8
+initial_temp = 0.05
+final_temp = 0.005
+proposal_scale = 0.35
+coefficient_min = -8.0
+coefficient_max = 8.0
+retention_min = 0.70
+retention_max = 0.98
+baseline_desired_retention = 0.90
+torch_device = "cpu"
+short_term_threshold = 0.5
+short_term_loops_limit = 10
+
+[sweep]
+log_glob = "**/*.jsonl"
+command_template = [
+  "uv",
+  "run",
+  "python",
+  "experiments/retention_sweep/run_sweep_users_batched.py",
+  "--start-user",
+  "{user_id}",
+  "--end-user",
+  "{user_id}",
+  "--batch-size",
+  "1",
+  "--env",
+  "{environment}",
+  "--sched",
+  "{scheduler_name}",
+  "--sa-fsrs6-policy",
+  "{policy_path}",
+  "--start-retention",
+  "0.9",
+  "--end-retention",
+  "0.9",
+  "--step",
+  "0.01",
+  "--days",
+  "1825",
+  "--deck",
+  "10000",
+  "--learn-limit",
+  "10",
+  "--review-limit",
+  "9999",
+  "--cost-limit-minutes",
+  "720",
+  "--priority",
+  "new-first",
+  "--short-term-source",
+  "steps",
+  "--short-term-loops-limit",
+  "10",
+  "--log-dir",
+  "{output_dir}",
+  "--no-progress",
+  "--torch-device",
+  "cpu",
+]
+
+[pareto]
+result_glob = "*.json"
+plot_glob = "*.png"
+command_template = [
+  "uv",
+  "run",
+  "python",
+  "experiments/retention_sweep/build_pareto.py",
+  "--log-dir",
+  "{stage_root}/..",
+  "--env",
+  "lstm",
+  "--sched",
+  "fsrs6,sa_fsrs6",
+  "--start-retention",
+  "0.9",
+  "--end-retention",
+  "0.9",
+  "--engine",
+  "batched",
+  "--short-term-source",
+  "steps",
+  "--results-path",
+  "{output_dir}/pareto.json",
+  "--plot-dir",
+  "{output_dir}",
+]

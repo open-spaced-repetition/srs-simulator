@@ -34,6 +34,7 @@ desired_retention_values = [0.9]
 
 [simulation]
 engine = "batched"
+environment = "lstm"
 days = 365
 deck = 10000
 learn_limit = 10
@@ -51,6 +52,10 @@ smoke = false
 
 [training]
 lambda_grid = [0.0, 0.25, 0.5]
+
+[training.sa]
+chains = 4
+iterations = 8
 """
 
 
@@ -69,6 +74,8 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
             str(config.output_root), "artifacts/rl_scheduler/rl-overfit-smoke"
         )
         self.assertEqual(config.lambda_grid, (0.0, 0.25, 0.5))
+        self.assertEqual(config.simulation.environment, "lstm")
+        self.assertEqual(config.training_sa["chains"], 4)
         self.assertEqual(config.baseline.desired_retention_values, (0.9,))
         self.assertEqual(config.to_dict()["baseline"]["scheduler"], "fsrs6")
 

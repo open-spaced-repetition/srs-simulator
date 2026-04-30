@@ -26,6 +26,7 @@ from simulator.experiment_infra.schemas import (
     RunRecord,
     StageName,
 )
+from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 
 SUPPORTED_RUNNER_STAGES = {
@@ -1998,7 +1999,18 @@ def run_stage_baseline(
         failures.append(FailureClass.INVALID_BASELINE)
         notes.append(f"Baseline log root does not exist: {baseline_root}")
     else:
-        for path in sorted(baseline_root.rglob("*.jsonl")):
+        required_users = (
+            set(config.users.train)
+            | set(config.users.validation)
+            | set(config.users.reserved_test)
+        )
+        filename_filter = _baseline_filename_filter(config)
+        candidate_paths = _baseline_candidate_paths(
+            baseline_root=baseline_root,
+            required_users=required_users,
+            filename_filter=filename_filter,
+        )
+        for path in candidate_paths:
             meta = _read_log_meta(path)
             if meta is None:
                 continue
@@ -2018,11 +2030,6 @@ def run_stage_baseline(
             if retention_value is not None:
                 retentions_by_user.setdefault(user_id, set()).add(retention_value)
 
-        required_users = (
-            set(config.users.train)
-            | set(config.users.validation)
-            | set(config.users.reserved_test)
-        )
         missing_users = sorted(required_users - set(logs_by_user))
         if missing_users:
             failures.append(FailureClass.INVALID_BASELINE)
@@ -2444,6 +2451,55 @@ def _baseline_metadata_errors(
     return errors
 
 
+def _baseline_filename_filter(config: ExperimentConfig) -> LogFilenameFilter:
+    short_term = "on" if config.simulation.short_term_source else "off"
+    short_term_source = config.simulation.short_term_source or "any"
+    retention_values_by_scheduler = None
+    if len(config.baseline.desired_retention_values) == 1:
+        retention_values_by_scheduler = {
+            config.baseline.scheduler: round(
+                config.baseline.desired_retention_values[0], 2
+            )
+        }
+    return LogFilenameFilter(
+        envs=[config.simulation.environment],
+        scheds=[config.baseline.scheduler],
+        engine=config.baseline.expected_engine,
+        short_term=short_term,
+        short_term_source=short_term_source,
+        start_retention=min(config.baseline.desired_retention_values)
+        if config.baseline.desired_retention_values
+        else None,
+        end_retention=max(config.baseline.desired_retention_values)
+        if config.baseline.desired_retention_values
+        else None,
+        priority=config.simulation.priority,
+        retention_values_by_scheduler=retention_values_by_scheduler,
+    )
+
+
+def _baseline_candidate_paths(
+    *,
+    baseline_root: Path,
+    required_users: set[int],
+    filename_filter: LogFilenameFilter,
+) -> list[Path]:
+    user_dir_paths: list[Path] = []
+    for user_id in sorted(required_users):
+        user_dir = baseline_root / f"user_{user_id}"
+        if user_dir.is_dir():
+            user_dir_paths.extend(sorted(user_dir.glob("*.jsonl")))
+    if user_dir_paths:
+        filtered = [
+            path for path in user_dir_paths if filename_filter.matches(path.name)
+        ]
+        return filtered or user_dir_paths
+
+    all_paths = sorted(baseline_root.rglob("*.jsonl"))
+    filtered = [path for path in all_paths if filename_filter.matches(path.name)]
+    return filtered or all_paths
+
+
 def _simulation_metadata_errors(
     *,
     config: ExperimentConfig,
@@ -2460,6 +2516,7 @@ def _simulation_metadata_errors(
         "review_limit": config.simulation.review_limit,
         "cost_limit_minutes": config.simulation.cost_limit_minutes,
         "priority": config.simulation.priority,
+        "environment": config.simulation.environment,
         "scheduler_priority": config.simulation.scheduler_priority,
         "seed": config.seed,
         "fuzz": config.simulation.fuzz,
@@ -2579,6 +2636,7 @@ def _format_train_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
         "scheduler": config.baseline.scheduler,
         "repo_root": str(repo_root),
         "stage_root": str(stage_root),
@@ -2627,6 +2685,7 @@ def _format_sweep_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
         "repo_root": str(repo_root),
         "stage_root": str(stage_root),
         "output_dir": str(output_dir),
@@ -2846,6 +2905,11 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: engine expected "
                 f"{config.simulation.engine!r}, got {metadata.engine.value!r}."
             )
+        if metadata.environment != config.simulation.environment:
+            return (
+                f"Invalid scheduler artifact metadata {path}: environment expected "
+                f"{config.simulation.environment!r}, got {metadata.environment!r}."
+            )
         if metadata.training_user_ids != (user_id,):
             return (
                 f"Invalid scheduler artifact metadata {path}: training_user_ids "
@@ -2911,6 +2975,11 @@ def _validate_sweep_artifact_metadata(
         return (
             f"Invalid scheduler artifact metadata {metadata_path}: engine expected "
             f"{config.simulation.engine!r}, got {metadata.engine.value!r}."
+        )
+    if metadata.environment != config.simulation.environment:
+        return (
+            f"Invalid scheduler artifact metadata {metadata_path}: environment "
+            f"expected {config.simulation.environment!r}, got {metadata.environment!r}."
         )
     if len(metadata.training_user_ids) != 1:
         return (

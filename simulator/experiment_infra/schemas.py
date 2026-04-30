@@ -263,6 +263,7 @@ class SimulationScope:
     engine: str
     days: int
     deck: int
+    environment: str = "lstm"
     learn_limit: int | None = None
     review_limit: int | None = None
     cost_limit_minutes: float | None = None
@@ -280,6 +281,9 @@ class SimulationScope:
             )
         return cls(
             engine=_require_str(raw.get("engine"), "simulation.engine"),
+            environment=_require_str(
+                raw.get("environment", "lstm"), "simulation.environment"
+            ),
             days=_require_int(raw.get("days"), "simulation.days", minimum=1),
             deck=_require_int(raw.get("deck"), "simulation.deck", minimum=1),
             learn_limit=_optional_int(
@@ -307,6 +311,14 @@ class SimulationScope:
     def __post_init__(self) -> None:
         if self.engine not in {"event", "vectorized", "batched"}:
             raise ValueError("simulation.engine is invalid.")
+        if self.environment not in {
+            "lstm",
+            "fsrs6",
+            "fsrs6_default",
+            "fsrs3",
+            "fsrs3_default",
+        }:
+            raise ValueError("simulation.environment is invalid.")
         if self.priority not in {"review-first", "new-first"}:
             raise ValueError("simulation.priority is invalid.")
         if self.short_term_source not in {None, "steps", "sched"}:
@@ -315,6 +327,7 @@ class SimulationScope:
     def to_dict(self) -> dict[str, Any]:
         return {
             "engine": self.engine,
+            "environment": self.environment,
             "days": self.days,
             "deck": self.deck,
             "learn_limit": self.learn_limit,
@@ -339,6 +352,7 @@ class ExperimentConfig:
     simulation: SimulationScope
     gpu_guard: GpuGuardConfig
     lambda_grid: tuple[float, ...]
+    training_sa: Mapping[str, Any] = field(default_factory=dict)
     train_command_template: tuple[str, ...] = ()
     train_artifact_glob: str = "metadata.json"
     sweep_command_template: tuple[str, ...] = ()
@@ -393,6 +407,7 @@ class ExperimentConfig:
             lambda_grid=_float_tuple(
                 training.get("lambda_grid"), "training.lambda_grid"
             ),
+            training_sa=dict(_require_mapping(training.get("sa", {}), "training.sa")),
             train_command_template=_str_tuple(
                 training.get("command_template", []), "training.command_template"
             ),
@@ -455,6 +470,7 @@ class ExperimentConfig:
             "gpu_guard": self.gpu_guard.to_dict(),
             "training": {
                 "lambda_grid": list(self.lambda_grid),
+                "sa": dict(self.training_sa),
                 "command_template": list(self.train_command_template),
                 "artifact_metadata_glob": self.train_artifact_glob,
             },

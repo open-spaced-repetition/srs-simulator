@@ -6,14 +6,18 @@ import sys
 import tempfile
 import unittest
 
+import torch
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.core import CardView
+from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
+from simulator.math.fsrs import Bounds
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
 from simulator.schedulers.fsrs import FSRS6Scheduler
-from simulator.schedulers.sa_fsrs6 import SAFSRS6Scheduler
+from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps, SAFSRS6Scheduler
 
 
 def _view(state, *, last_review: float = 0.0, interval: float = 1.0) -> CardView:
@@ -69,6 +73,35 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
 
         self.assertGreaterEqual(policy.evaluate(0.1, 1.0), 0.7)
         self.assertLessEqual(policy.evaluate(100.0, 10.0), 0.98)
+
+    def test_batch_ops_accept_per_user_coefficients(self) -> None:
+        policy = SAFSRS6Policy.baseline(desired_retention=0.9)
+        weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
+        coefficients = torch.tensor(
+            [
+                list(policy.coefficients),
+                [policy.coefficients[0] - 4.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        ops = SAFSRS6BatchSchedulerOps(
+            weights=weights,
+            policy=policy,
+            coefficients=coefficients,
+            bounds=Bounds(),
+            priority_mode="low_retrievability",
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        state = ops.init_state(user_count=2, deck_size=1)
+        intervals = ops.update_learn(
+            state,
+            user_idx=torch.tensor([0, 1]),
+            card_idx=torch.tensor([0, 0]),
+            rating=torch.tensor([3, 3]),
+        )
+
+        self.assertGreater(float(intervals[1]), float(intervals[0]))
 
 
 if __name__ == "__main__":

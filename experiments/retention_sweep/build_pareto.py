@@ -299,7 +299,7 @@ def _iter_log_entries(
     engine_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
-    for path in sorted(log_dir.glob("*.jsonl")):
+    for path in sorted(log_dir.rglob("*.jsonl")):
         try:
             meta, totals = _load_meta_totals(path)
         except ValueError:

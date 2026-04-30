@@ -72,6 +72,7 @@ uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage preflight --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage stage-baseline --run-id smoke
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/reboot_smoke.toml --stage all --run-id smoke
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_smoke.toml --stage dry-run --run-id sa-smoke
 uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/reboot_smoke/smoke
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 ```
@@ -96,17 +97,26 @@ inputs are missing. `all` runs the configured stages in order and stops at the
 first non-zero stage result. Scheduler policy artifacts must validate against
 the metadata contract before they can be used by formal stages.
 
+`sa_fsrs6_smoke.toml` is the first concrete policy experiment. It trains
+`sa_fsrs6`, a simulated-annealing scheduler whose policy is a checked-in
+JSON artifact for `f(S,D)->R`. The scheduler maintains its own FSRS-6
+stability/difficulty state and does not read environment memory state. The
+`train-overfit` stage first checks whether a single-user policy can beat FSRS-6
+DR=90% on both memorized-average and memorized-per-minute; if it cannot, the
+stage exits non-zero and later generalization stages should not be run.
+
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
 
 ```bash
 uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6
 uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched sspmmc
+uv run experiments/retention_sweep/run_sweep.py --env lstm --sched sa_fsrs6 --sa-fsrs6-policy <policy.json>
 uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6,sspmmc
 uv run experiments/retention_sweep/build_pareto.py --env fsrs6,lstm --sched fsrs6,sspmmc
 ```
 
-By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. Retention sweeps write JSONL summaries by default but skip daily CSV sidecars to limit disk usage; pass `--diagnostic-csv-logs` when diagnosing simulation behavior or when using CSV-based plotting helpers. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
+By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` or `sa_fsrs6` to add policy curves. For `sa_fsrs6`, pass `--sa-fsrs6-policy <policy.json>`; the policy maps scheduler-side FSRS-6 `S,D` to desired retention. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. Retention sweeps write JSONL summaries by default but skip daily CSV sidecars to limit disk usage; pass `--diagnostic-csv-logs` when diagnosing simulation behavior or when using CSV-based plotting helpers. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` recursively scans JSONL logs under `--log-dir`, annotates points by default, and can compare staged baseline logs with nested sweep outputs. Pass `--hide-labels` to disable labels, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
 
 Short-term scheduling (event or vectorized engines):
 
@@ -135,6 +145,7 @@ Additional retention sweep helpers:
 ```bash
 uv run experiments/retention_sweep/run_sweep_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,anki_sm2,memrise --max-parallel 4
 uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 200 --env lstm --sched fsrs6,anki_sm2,memrise --batch-size 100
+uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 10 --env lstm --sched sa_fsrs6 --sa-fsrs6-policy <policy.json> --batch-size 10
 uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,sspmmc
 uv run experiments/retention_sweep/aggregate_users.py --env lstm --sched fsrs6,anki_sm2,memrise
 uv run experiments/retention_sweep/dominance.py --env lstm
@@ -158,32 +169,32 @@ Legend: ✓ supported, — not supported.
 
 Event engine:
 
-| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| lstm | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| fsrs3 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| hlr | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| dash | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc | sa_fsrs6 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| lstm | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs3 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| hlr | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| dash | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Vectorized engine:
 
-| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| lstm | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| fsrs6 | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc | sa_fsrs6 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| lstm | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs6 | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Batched (multi-user vectorized in `run_sweep_users_batched.py`):
 
-| env \\ sched | fsrs6 | fsrs3 | lstm | anki_sm2 | memrise | fixed |
-| --- | --- | --- | --- | --- | --- | --- |
-| lstm | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| env \\ sched | fsrs6 | fsrs3 | lstm | anki_sm2 | memrise | fixed | sa_fsrs6 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| lstm | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Notes:
 - Event engine is the reference implementation and supports all scheduler/environment combinations, even if some pairings are not meaningful.
 - Vectorized engine supports only LSTM and FSRS6 environments and does not implement DASHScheduler.
-- Batched mode is intended for retention sweeps; it is vectorized-only and currently limited to the schedulers listed above.
+- Batched mode is intended for retention sweeps; it is vectorized-only and currently limited to the schedulers listed above. `sa_fsrs6` requires `--sa-fsrs6-policy`.
 
 ## Evaluation
 `experiments/retention_sweep/aggregate_users.py` compares scheduler efficiency by aggregating retention_sweep logs across users for each environment, scheduler, and target setting (desired retention or fixed interval) and restricting to the intersection of user IDs so each config is compared on the same users.

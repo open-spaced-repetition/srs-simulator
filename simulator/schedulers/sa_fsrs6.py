@@ -320,6 +320,7 @@ class SAFSRS6BatchSchedulerOps:
         priority_mode: str,
         device: "torch.device",
         dtype: "torch.dtype",
+        coefficients: "torch.Tensor | None" = None,
     ) -> None:
         import torch
 
@@ -335,9 +336,18 @@ class SAFSRS6BatchSchedulerOps:
         self._weights = weights.to(device=device, dtype=dtype)
         self._bounds = bounds
         self._policy = policy
-        self._coefficients = torch.tensor(
-            policy.coefficients, device=device, dtype=dtype
-        )
+        if coefficients is None:
+            self._coefficients = torch.tensor(
+                policy.coefficients, device=device, dtype=dtype
+            )
+            self._per_user_coefficients = False
+        else:
+            if coefficients.ndim != 2 or coefficients.shape != (weights.shape[0], 6):
+                raise ValueError(
+                    "SA FSRS-6 batch coefficients must have shape (users, 6)."
+                )
+            self._coefficients = coefficients.to(device=device, dtype=dtype)
+            self._per_user_coefficients = True
         self._retention_min = float(policy.retention_min)
         self._retention_max = float(policy.retention_max)
         self._log_s_min = float(torch.log(torch.tensor(bounds.s_min)).item())
@@ -478,7 +488,7 @@ class SAFSRS6BatchSchedulerOps:
         )
 
     def _retention_for_state(
-        self, s: "torch.Tensor", d: "torch.Tensor"
+        self, s: "torch.Tensor", d: "torch.Tensor", user_idx: "torch.Tensor"
     ) -> "torch.Tensor":
         s_norm = (
             self._torch.log(
@@ -492,14 +502,25 @@ class SAFSRS6BatchSchedulerOps:
         ) / self._d_span
         s_norm = self._torch.clamp(s_norm, 0.0, 1.0)
         d_norm = self._torch.clamp(d_norm, 0.0, 1.0)
-        logit = (
-            self._coefficients[0]
-            + self._coefficients[1] * s_norm
-            + self._coefficients[2] * d_norm
-            + self._coefficients[3] * s_norm * d_norm
-            + self._coefficients[4] * s_norm * s_norm
-            + self._coefficients[5] * d_norm * d_norm
-        )
+        if self._per_user_coefficients:
+            coefficients = self._coefficients.index_select(0, user_idx)
+            logit = (
+                coefficients[:, 0]
+                + coefficients[:, 1] * s_norm
+                + coefficients[:, 2] * d_norm
+                + coefficients[:, 3] * s_norm * d_norm
+                + coefficients[:, 4] * s_norm * s_norm
+                + coefficients[:, 5] * d_norm * d_norm
+            )
+        else:
+            logit = (
+                self._coefficients[0]
+                + self._coefficients[1] * s_norm
+                + self._coefficients[2] * d_norm
+                + self._coefficients[3] * s_norm * d_norm
+                + self._coefficients[4] * s_norm * s_norm
+                + self._coefficients[5] * d_norm * d_norm
+            )
         return self._retention_min + (
             self._retention_max - self._retention_min
         ) * self._torch.sigmoid(logit)
@@ -509,7 +530,7 @@ class SAFSRS6BatchSchedulerOps:
     ) -> "torch.Tensor":
         decay = self._decay.index_select(0, user_idx)
         factor = self._factor.index_select(0, user_idx)
-        retention = self._retention_for_state(s, d)
+        retention = self._retention_for_state(s, d, user_idx)
         interval = s / factor * (self._torch.pow(retention, 1.0 / decay) - 1.0)
         return self._torch.clamp(interval, min=1.0)
 
