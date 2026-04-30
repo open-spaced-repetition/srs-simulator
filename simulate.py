@@ -31,6 +31,7 @@ from simulator.schedulers import (
     FixedIntervalScheduler,
     AnkiSM2Scheduler,
     MemriseScheduler,
+    SAFSRS6Scheduler,
     SSPMMCScheduler,
 )
 from simulator.core import Action, Event, new_first_priority, review_first_priority
@@ -114,6 +115,14 @@ def _require_policy(path: Path | None) -> Path:
     return path
 
 
+def _require_sa_fsrs6_policy(path: Path | None) -> Path:
+    if path is None:
+        raise ValueError(
+            "SA FSRS-6 scheduler requires --sa-fsrs6-policy pointing to a policy JSON."
+        )
+    return path
+
+
 SCHEDULER_FACTORIES = {
     "fsrs6": lambda args: FSRS6Scheduler(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
@@ -157,6 +166,11 @@ SCHEDULER_FACTORIES = {
     "sspmmc": lambda args: SSPMMCScheduler(
         policy_json=_require_policy(args.sspmmc_policy),
         fsrs_weights=None,
+    ),
+    "sa_fsrs6": lambda args: SAFSRS6Scheduler(
+        policy_json=_require_sa_fsrs6_policy(args.sa_fsrs6_policy),
+        fsrs_weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
+        priority_mode=args.scheduler_priority,
     ),
 }
 
@@ -342,6 +356,12 @@ def main() -> None:
         type=Path,
         default=None,
         help="Path to an SSP-MMC policy metadata JSON when using --sched sspmmc.",
+    )
+    parser.add_argument(
+        "--sa-fsrs6-policy",
+        type=Path,
+        default=None,
+        help="Path to an SA FSRS-6 policy JSON when using --sched sa_fsrs6.",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed.")
     args = parser.parse_args()
@@ -555,8 +575,12 @@ def _format_plot_footer(args: argparse.Namespace) -> str:
     extra: list[str] = []
     if fixed_interval is not None:
         extra.append(f"fixed-interval={format_float(fixed_interval)}")
-    if args.sspmmc_policy:
-        extra.append(f"sspmmc-policy={args.sspmmc_policy.stem}")
+    sspmmc_policy = getattr(args, "sspmmc_policy", None)
+    sa_fsrs6_policy = getattr(args, "sa_fsrs6_policy", None)
+    if sspmmc_policy:
+        extra.append(f"sspmmc-policy={sspmmc_policy.stem}")
+    if sa_fsrs6_policy:
+        extra.append(f"sa-fsrs6-policy={sa_fsrs6_policy.stem}")
     if short_term_source != "off":
         extra.append(f"learning-steps={','.join(str(step) for step in learning_steps)}")
         extra.append(
@@ -769,8 +793,12 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             parts.append(f"stloops={short_term_max_loops}")
     if fixed_interval is not None:
         parts.append(f"ivl={format_float(fixed_interval)}")
-    if args.sspmmc_policy:
-        parts.append(f"policy={args.sspmmc_policy.stem}")
+    sspmmc_policy = getattr(args, "sspmmc_policy", None)
+    sa_fsrs6_policy = getattr(args, "sa_fsrs6_policy", None)
+    if sspmmc_policy:
+        parts.append(f"policy={sspmmc_policy.stem}")
+    if sa_fsrs6_policy:
+        parts.append(f"policy={sa_fsrs6_policy.stem}")
     parts.extend(
         [
             f"user={args.user_id or 1}",
@@ -801,7 +829,8 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "button_usage": str(args.button_usage) if args.button_usage else None,
         "desired_retention": desired_retention,
         "scheduler_priority": args.scheduler_priority,
-        "sspmmc_policy": str(args.sspmmc_policy) if args.sspmmc_policy else None,
+        "sspmmc_policy": str(sspmmc_policy) if sspmmc_policy else None,
+        "sa_fsrs6_policy": str(sa_fsrs6_policy) if sa_fsrs6_policy else None,
         "fixed_interval": fixed_interval,
         "seed": args.seed,
         "fuzz": bool(getattr(args, "fuzz", False)),
