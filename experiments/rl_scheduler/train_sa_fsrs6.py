@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 import tomllib
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -124,7 +124,7 @@ class SASettings:
         if not (0.0 < self.retention_min < self.retention_max < 1.0):
             raise ValueError("retention bounds must satisfy 0 < min < max < 1.")
         if not (
-            self.retention_min < self.baseline_desired_retention < self.retention_max
+            self.retention_min <= self.baseline_desired_retention <= self.retention_max
         ):
             raise ValueError(
                 "baseline_desired_retention must be inside the retention bounds."
@@ -187,6 +187,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--user-id", type=int, required=True)
     parser.add_argument("--lambda", dest="lambda_value", type=float, required=True)
+    parser.add_argument(
+        "--baseline-desired-retention",
+        type=float,
+        default=None,
+        help="Override training.sa.baseline_desired_retention for DR-grid runs.",
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--button-usage",
@@ -214,6 +220,12 @@ def main() -> int:
     )
     config = ExperimentConfig.from_toml(args.config)
     settings = SASettings.from_mapping(config.training_sa)
+    if args.baseline_desired_retention is not None:
+        settings = replace(
+            settings,
+            baseline_desired_retention=args.baseline_desired_retention,
+        )
+        settings.__post_init__()
     raw_training_sa = _read_training_sa(args.config)
     progress.write(
         "config_loaded",
@@ -313,7 +325,10 @@ def main() -> int:
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         baseline_desired_retention=settings.baseline_desired_retention,
-        title=f"sa_fsrs6_u{args.user_id}_lambda_{args.lambda_value:g}",
+        title=(
+            f"sa_fsrs6_u{args.user_id}_dr_"
+            f"{settings.baseline_desired_retention:.2f}_lambda_{args.lambda_value:g}"
+        ),
     )
     policy_path = output_dir / "policy.json"
     policy.write_json(policy_path)
@@ -337,7 +352,12 @@ def main() -> int:
     metadata = {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "scheduler-policy",
-        "artifact_id": _artifact_id(args.user_id, args.lambda_value, config.seed),
+        "artifact_id": _artifact_id(
+            args.user_id,
+            args.lambda_value,
+            settings.baseline_desired_retention,
+            config.seed,
+        ),
         "family": config.family,
         "scheduler_name": "sa_fsrs6",
         "environment": config.simulation.environment,
@@ -351,6 +371,7 @@ def main() -> int:
         "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "code_commit": _git_commit(),
         "lambda_value": args.lambda_value,
+        "baseline_desired_retention": settings.baseline_desired_retention,
         "config_snapshot_path": str(args.config.resolve()),
         "training_command_path": str(args.training_command_path)
         if args.training_command_path
@@ -793,9 +814,19 @@ def _read_training_sa(config_path: Path) -> Mapping[str, Any]:
     return sa if isinstance(sa, Mapping) else {}
 
 
-def _artifact_id(user_id: int, lambda_value: float, seed: int) -> str:
-    token = str(lambda_value).replace(".", "p").replace("-", "m")
-    return f"sa-fsrs6-user-{user_id}-lambda-{token}-seed-{seed}"
+def _artifact_id(
+    user_id: int,
+    lambda_value: float,
+    baseline_desired_retention: float,
+    seed: int,
+) -> str:
+    lambda_token = _float_token(lambda_value)
+    dr_token = _float_token(baseline_desired_retention)
+    return f"sa-fsrs6-user-{user_id}-dr-{dr_token}-lambda-{lambda_token}-seed-{seed}"
+
+
+def _float_token(value: float) -> str:
+    return format(value, ".12g").replace("-", "m").replace(".", "p")
 
 
 def _git_commit() -> str:

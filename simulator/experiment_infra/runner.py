@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -347,132 +348,162 @@ def run_train_overfit(
     command_results: list[dict[str, Any]] = []
     commands_attempted = 0
     commands_succeeded = 0
+    baseline_dr_values = _training_baseline_desired_retention_values(config)
+    include_baseline_dr_in_path = _training_uses_baseline_dr_grid(config)
 
     if not config.train_command_template:
         failures.append(FailureClass.INVALID_CONFIG)
         notes.append("training.command_template is required for train-overfit.")
+    elif not baseline_dr_values:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append(
+            "training.sa.baseline_desired_retention_values must contain numbers "
+            "without duplicates."
+        )
     else:
         for user_id in config.users.train:
-            for lambda_value in config.lambda_grid:
-                lambda_token = _format_lambda_token(lambda_value)
-                output_dir = outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
-                command_record = (
-                    commands_root / f"user_{user_id}_lambda_{lambda_token}_command.json"
-                )
-                stdout_path = (
-                    commands_root / f"user_{user_id}_lambda_{lambda_token}_stdout.txt"
-                )
-                stderr_path = (
-                    commands_root / f"user_{user_id}_lambda_{lambda_token}_stderr.txt"
-                )
-                try:
-                    train_command = _format_train_command(
-                        config=config,
-                        config_path=config_path,
-                        repo_root=repo_root,
-                        run_id=run_id,
-                        stage_root=stage_root,
-                        output_dir=output_dir,
-                        user_id=user_id,
-                        lambda_value=lambda_value,
+            for baseline_dr in baseline_dr_values:
+                baseline_dr_token = _format_retention_token(baseline_dr)
+                for lambda_value in config.lambda_grid:
+                    lambda_token = _format_lambda_token(lambda_value)
+                    if include_baseline_dr_in_path:
+                        output_dir = (
+                            outputs_root
+                            / f"user_{user_id}"
+                            / f"dr_{baseline_dr_token}"
+                            / f"lambda_{lambda_token}"
+                        )
+                        command_stem = (
+                            f"user_{user_id}_dr_{baseline_dr_token}_"
+                            f"lambda_{lambda_token}"
+                        )
+                    else:
+                        output_dir = (
+                            outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
+                        )
+                        command_stem = f"user_{user_id}_lambda_{lambda_token}"
+                    command_record = commands_root / f"{command_stem}_command.json"
+                    stdout_path = commands_root / f"{command_stem}_stdout.txt"
+                    stderr_path = commands_root / f"{command_stem}_stderr.txt"
+                    try:
+                        train_command = _format_train_command(
+                            config=config,
+                            config_path=config_path,
+                            repo_root=repo_root,
+                            run_id=run_id,
+                            stage_root=stage_root,
+                            output_dir=output_dir,
+                            user_id=user_id,
+                            lambda_value=lambda_value,
+                            baseline_desired_retention=baseline_dr,
+                            command_record_path=command_record,
+                            stdout_path=stdout_path,
+                            stderr_path=stderr_path,
+                        )
+                    except (KeyError, ValueError) as exc:
+                        failures.append(FailureClass.INVALID_CONFIG)
+                        notes.append(
+                            "Invalid training.command_template for "
+                            f"user={user_id}, baseline_dr={baseline_dr}, "
+                            f"lambda={lambda_value}: {exc}"
+                        )
+                        break
+
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    commands_attempted += 1
+                    train_command_record = _run_recorded_command(
+                        command=train_command,
+                        cwd=repo_root,
                         command_record_path=command_record,
                         stdout_path=stdout_path,
                         stderr_path=stderr_path,
+                        timeout_seconds=config.performance.timeout_seconds,
                     )
-                except (KeyError, ValueError) as exc:
-                    failures.append(FailureClass.INVALID_CONFIG)
-                    notes.append(
-                        "Invalid training.command_template for "
-                        f"user={user_id}, lambda={lambda_value}: {exc}"
+                    exit_code = _record_exit_code(train_command_record)
+                    timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
+                    progress_path = output_dir / "training_progress.jsonl"
+                    progress_path_exists = progress_path.exists()
+                    if progress_path_exists:
+                        progress_paths.append(progress_path)
+                    command_records.append(command_record)
+                    stdout_paths.append(stdout_path)
+                    stderr_paths.append(stderr_path)
+                    command_results.append(
+                        {
+                            "user_id": user_id,
+                            "baseline_desired_retention": baseline_dr,
+                            "baseline_desired_retention_token": baseline_dr_token,
+                            "lambda_value": lambda_value,
+                            "lambda_token": lambda_token,
+                            "output_dir": str(output_dir),
+                            "command_record_path": str(command_record),
+                            "stdout_path": str(stdout_path),
+                            "stderr_path": str(stderr_path),
+                            "training_progress_path": str(progress_path)
+                            if progress_path_exists
+                            else None,
+                            "exit_code": exit_code,
+                            "timed_out": timed_out,
+                        }
                     )
-                    break
+                    if exit_code != 0:
+                        failures.append(
+                            FailureClass.TIMEOUT
+                            if timed_out
+                            else FailureClass.RUNNER_FAILED
+                        )
+                        if timed_out:
+                            notes.append(
+                                "Training command timed out for "
+                                f"user={user_id}, baseline_dr={baseline_dr}, "
+                                f"lambda={lambda_value}."
+                            )
+                        else:
+                            notes.append(
+                                "Training command failed for "
+                                f"user={user_id}, baseline_dr={baseline_dr}, "
+                                f"lambda={lambda_value}."
+                            )
+                        break
 
-                output_dir.mkdir(parents=True, exist_ok=True)
-                commands_attempted += 1
-                train_command_record = _run_recorded_command(
-                    command=train_command,
-                    cwd=repo_root,
-                    command_record_path=command_record,
-                    stdout_path=stdout_path,
-                    stderr_path=stderr_path,
-                    timeout_seconds=config.performance.timeout_seconds,
-                )
-                exit_code = _record_exit_code(train_command_record)
-                timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
-                progress_path = output_dir / "training_progress.jsonl"
-                progress_path_exists = progress_path.exists()
-                if progress_path_exists:
-                    progress_paths.append(progress_path)
-                command_records.append(command_record)
-                stdout_paths.append(stdout_path)
-                stderr_paths.append(stderr_path)
-                command_results.append(
-                    {
-                        "user_id": user_id,
-                        "lambda_value": lambda_value,
-                        "lambda_token": lambda_token,
-                        "output_dir": str(output_dir),
-                        "command_record_path": str(command_record),
-                        "stdout_path": str(stdout_path),
-                        "stderr_path": str(stderr_path),
-                        "training_progress_path": str(progress_path)
-                        if progress_path_exists
+                    commands_succeeded += 1
+                    try:
+                        matched_artifacts = sorted(
+                            path
+                            for path in output_dir.glob(config.train_artifact_glob)
+                            if path.is_file()
+                        )
+                    except ValueError as exc:
+                        failures.append(FailureClass.INVALID_CONFIG)
+                        notes.append(
+                            "Invalid training.artifact_metadata_glob "
+                            f"{config.train_artifact_glob!r}: {exc}"
+                        )
+                        break
+                    if not matched_artifacts:
+                        failures.append(FailureClass.INVALID_ARTIFACT)
+                        notes.append(
+                            "No scheduler artifact metadata matched "
+                            f"{config.train_artifact_glob!r} in {output_dir}."
+                        )
+                        break
+
+                    invalid_artifact_note = _validate_train_artifacts(
+                        artifact_paths=matched_artifacts,
+                        config=config,
+                        user_id=user_id,
+                        lambda_value=lambda_value,
+                        baseline_desired_retention=baseline_dr
+                        if _training_metadata_requires_baseline_dr(config)
                         else None,
-                        "exit_code": exit_code,
-                        "timed_out": timed_out,
-                    }
-                )
-                if exit_code != 0:
-                    failures.append(
-                        FailureClass.TIMEOUT
-                        if timed_out
-                        else FailureClass.RUNNER_FAILED
                     )
-                    if timed_out:
-                        notes.append(
-                            "Training command timed out for "
-                            f"user={user_id}, lambda={lambda_value}."
-                        )
-                    else:
-                        notes.append(
-                            "Training command failed for "
-                            f"user={user_id}, lambda={lambda_value}."
-                        )
+                    if invalid_artifact_note is not None:
+                        failures.append(FailureClass.INVALID_ARTIFACT)
+                        notes.append(invalid_artifact_note)
+                        break
+                    artifact_paths.extend(matched_artifacts)
+                if failures:
                     break
-
-                commands_succeeded += 1
-                try:
-                    matched_artifacts = sorted(
-                        path
-                        for path in output_dir.glob(config.train_artifact_glob)
-                        if path.is_file()
-                    )
-                except ValueError as exc:
-                    failures.append(FailureClass.INVALID_CONFIG)
-                    notes.append(
-                        "Invalid training.artifact_metadata_glob "
-                        f"{config.train_artifact_glob!r}: {exc}"
-                    )
-                    break
-                if not matched_artifacts:
-                    failures.append(FailureClass.INVALID_ARTIFACT)
-                    notes.append(
-                        "No scheduler artifact metadata matched "
-                        f"{config.train_artifact_glob!r} in {output_dir}."
-                    )
-                    break
-
-                invalid_artifact_note = _validate_train_artifacts(
-                    artifact_paths=matched_artifacts,
-                    config=config,
-                    user_id=user_id,
-                    lambda_value=lambda_value,
-                )
-                if invalid_artifact_note is not None:
-                    failures.append(FailureClass.INVALID_ARTIFACT)
-                    notes.append(invalid_artifact_note)
-                    break
-                artifact_paths.extend(matched_artifacts)
             if failures:
                 break
 
@@ -485,6 +516,7 @@ def run_train_overfit(
         metrics={
             "training_users": float(len(config.users.train)),
             "lambda_values": float(len(config.lambda_grid)),
+            "baseline_desired_retention_values": float(len(baseline_dr_values)),
             "commands_attempted": float(commands_attempted),
             "commands_succeeded": float(commands_succeeded),
             "artifacts_validated": float(len(artifact_paths)),
@@ -542,6 +574,7 @@ def run_train_overfit(
         "outputs_root": str(outputs_root),
         "command_template": list(config.train_command_template),
         "artifact_metadata_glob": config.train_artifact_glob,
+        "baseline_desired_retention_values": list(baseline_dr_values),
         "command_results": command_results,
         "artifact_paths": [str(path) for path in artifact_paths],
         "training_progress_paths": [str(path) for path in progress_paths],
@@ -729,16 +762,25 @@ def run_sweep(
                 break
             lambda_value = metadata.lambda_value
             lambda_token = _format_lambda_token(lambda_value)
-            output_dir = outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
-            command_record = (
-                commands_root / f"user_{user_id}_lambda_{lambda_token}_command.json"
-            )
-            stdout_path = (
-                commands_root / f"user_{user_id}_lambda_{lambda_token}_stdout.txt"
-            )
-            stderr_path = (
-                commands_root / f"user_{user_id}_lambda_{lambda_token}_stderr.txt"
-            )
+            baseline_dr = metadata.baseline_desired_retention
+            if baseline_dr is not None:
+                baseline_dr_token = _format_retention_token(baseline_dr)
+                output_dir = (
+                    outputs_root
+                    / f"user_{user_id}"
+                    / f"dr_{baseline_dr_token}"
+                    / f"lambda_{lambda_token}"
+                )
+                command_stem = (
+                    f"user_{user_id}_dr_{baseline_dr_token}_lambda_{lambda_token}"
+                )
+            else:
+                baseline_dr_token = None
+                output_dir = outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
+                command_stem = f"user_{user_id}_lambda_{lambda_token}"
+            command_record = commands_root / f"{command_stem}_command.json"
+            stdout_path = commands_root / f"{command_stem}_stdout.txt"
+            stderr_path = commands_root / f"{command_stem}_stderr.txt"
             try:
                 sweep_command = _format_sweep_command(
                     config=config,
@@ -781,6 +823,8 @@ def run_sweep(
                     "artifact_metadata_path": str(metadata_path),
                     "artifact_id": metadata.artifact_id,
                     "user_id": user_id,
+                    "baseline_desired_retention": baseline_dr,
+                    "baseline_desired_retention_token": baseline_dr_token,
                     "lambda_value": lambda_value,
                     "lambda_token": lambda_token,
                     "output_dir": str(output_dir),
@@ -2575,6 +2619,9 @@ def _performance_workload_shape(
         "validation_users": len(config.users.validation),
         "reserved_test_users": len(config.users.reserved_test),
         "lambda_values": len(config.lambda_grid),
+        "training_baseline_desired_retention_values": len(
+            _training_baseline_desired_retention_values(config)
+        ),
         "baseline_retention_values": len(config.baseline.desired_retention_values),
     }
     chains = _training_chains(config)
@@ -2582,11 +2629,16 @@ def _performance_workload_shape(
         shape["chains"] = chains
     if stage == StageName.TRAIN_OVERFIT and chains is not None:
         shape["effective_lanes"] = (
-            len(config.users.train) * len(config.lambda_grid) * chains
+            len(config.users.train)
+            * len(config.lambda_grid)
+            * len(_training_baseline_desired_retention_values(config))
+            * chains
         )
     elif stage == StageName.SWEEP:
-        shape["effective_lanes"] = len(config.users.train) * max(
-            len(config.lambda_grid), 1
+        shape["effective_lanes"] = (
+            len(config.users.train)
+            * max(len(config.lambda_grid), 1)
+            * len(_training_baseline_desired_retention_values(config))
         )
     return shape
 
@@ -2608,6 +2660,7 @@ def _candidate_days(*, config: ExperimentConfig, stage: StageName) -> int | None
         config.simulation.days
         * len(config.users.train)
         * len(config.lambda_grid)
+        * len(_training_baseline_desired_retention_values(config))
         * chains
     )
 
@@ -2615,13 +2668,17 @@ def _candidate_days(*, config: ExperimentConfig, stage: StageName) -> int | None
 def _user_days(*, config: ExperimentConfig, stage: StageName) -> int | None:
     if stage == StageName.TRAIN_OVERFIT:
         return (
-            config.simulation.days * len(config.users.train) * len(config.lambda_grid)
+            config.simulation.days
+            * len(config.users.train)
+            * len(config.lambda_grid)
+            * len(_training_baseline_desired_retention_values(config))
         )
     if stage == StageName.SWEEP:
         return (
             config.simulation.days
             * len(config.users.train)
             * max(len(config.lambda_grid), 1)
+            * len(_training_baseline_desired_retention_values(config))
         )
     return None
 
@@ -2968,15 +3025,19 @@ def _format_train_command(
     output_dir: Path,
     user_id: int,
     lambda_value: float,
+    baseline_desired_retention: float,
     command_record_path: Path,
     stdout_path: Path,
     stderr_path: Path,
 ) -> list[str]:
     lambda_token = _format_lambda_token(lambda_value)
+    baseline_dr_token = _format_retention_token(baseline_desired_retention)
     values: dict[str, Any] = {
         "user_id": user_id,
         "lambda_value": lambda_value,
         "lambda_token": lambda_token,
+        "baseline_desired_retention": baseline_desired_retention,
+        "baseline_desired_retention_token": baseline_dr_token,
         "run_id": run_id,
         "seed": config.seed,
         "family": config.family,
@@ -3018,6 +3079,7 @@ def _format_sweep_command(
     assert metadata.lambda_value is not None
     lambda_value = metadata.lambda_value
     lambda_token = _format_lambda_token(lambda_value)
+    baseline_dr = metadata.baseline_desired_retention
     values: dict[str, Any] = {
         "artifact_id": metadata.artifact_id,
         "artifact_metadata_path": str(metadata_path),
@@ -3026,6 +3088,10 @@ def _format_sweep_command(
         "user_id": user_id,
         "lambda_value": lambda_value,
         "lambda_token": lambda_token,
+        "baseline_desired_retention": baseline_dr if baseline_dr is not None else "",
+        "baseline_desired_retention_token": _format_retention_token(baseline_dr)
+        if baseline_dr is not None
+        else "",
         "run_id": run_id,
         "seed": config.seed,
         "family": config.family,
@@ -3223,12 +3289,49 @@ def _format_lambda_token(value: float) -> str:
     return token.replace("-", "neg_").replace("+", "").replace(".", "p")
 
 
+def _format_retention_token(value: float) -> str:
+    return _format_lambda_token(value)
+
+
+def _training_baseline_desired_retention_values(
+    config: ExperimentConfig,
+) -> tuple[float, ...]:
+    raw_values = config.training_sa.get("baseline_desired_retention_values")
+    if raw_values is None:
+        raw_single = config.training_sa.get("baseline_desired_retention", 0.90)
+        if isinstance(raw_single, bool) or not isinstance(raw_single, (float, int)):
+            return (0.90,)
+        return (float(raw_single),)
+    if isinstance(raw_values, str) or not isinstance(raw_values, Sequence):
+        return ()
+    values: list[float] = []
+    for raw_value in raw_values:
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (float, int)):
+            return ()
+        values.append(float(raw_value))
+    if len(set(values)) != len(values):
+        return ()
+    return tuple(values)
+
+
+def _training_uses_baseline_dr_grid(config: ExperimentConfig) -> bool:
+    return "baseline_desired_retention_values" in config.training_sa
+
+
+def _training_metadata_requires_baseline_dr(config: ExperimentConfig) -> bool:
+    return (
+        "baseline_desired_retention" in config.training_sa
+        or "baseline_desired_retention_values" in config.training_sa
+    )
+
+
 def _validate_train_artifacts(
     *,
     artifact_paths: list[Path],
     config: ExperimentConfig,
     user_id: int,
     lambda_value: float,
+    baseline_desired_retention: float | None = None,
 ) -> str | None:
     for path in artifact_paths:
         try:
@@ -3270,6 +3373,19 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: lambda_value expected "
                 f"{lambda_value}, got {metadata.lambda_value}."
             )
+        if baseline_desired_retention is not None:
+            if metadata.baseline_desired_retention is None or not math.isclose(
+                metadata.baseline_desired_retention,
+                baseline_desired_retention,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                return (
+                    f"Invalid scheduler artifact metadata {path}: "
+                    "baseline_desired_retention expected "
+                    f"{baseline_desired_retention}, "
+                    f"got {metadata.baseline_desired_retention}."
+                )
     return None
 
 
@@ -3336,6 +3452,18 @@ def _validate_sweep_artifact_metadata(
             f"Invalid scheduler artifact metadata {metadata_path}: lambda_value is "
             "required for sweep."
         )
+    baseline_dr_values = _training_baseline_desired_retention_values(config)
+    if _training_metadata_requires_baseline_dr(config):
+        actual_dr = metadata.baseline_desired_retention
+        if actual_dr is None or not any(
+            math.isclose(actual_dr, expected, rel_tol=0.0, abs_tol=1e-9)
+            for expected in baseline_dr_values
+        ):
+            return (
+                f"Invalid scheduler artifact metadata {metadata_path}: "
+                "baseline_desired_retention expected one of "
+                f"{list(baseline_dr_values)!r}, got {actual_dr!r}."
+            )
     return None
 
 

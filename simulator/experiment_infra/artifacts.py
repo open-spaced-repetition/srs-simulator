@@ -83,6 +83,7 @@ class SchedulerArtifactMetadata:
     created_at: str
     code_commit: str
     lambda_value: float | None = None
+    baseline_desired_retention: float | None = None
     config_snapshot_path: Path | None = None
     training_command_path: Path | None = None
     metrics_path: Path | None = None
@@ -143,6 +144,10 @@ class SchedulerArtifactMetadata:
             created_at=_require_str(raw.get("created_at"), "created_at"),
             code_commit=_require_str(raw.get("code_commit"), "code_commit"),
             lambda_value=_optional_float(raw.get("lambda_value"), "lambda_value"),
+            baseline_desired_retention=_optional_float(
+                raw.get("baseline_desired_retention"),
+                "baseline_desired_retention",
+            ),
             config_snapshot_path=_optional_path(
                 raw.get("config_snapshot_path"),
                 field_name="config_snapshot_path",
@@ -209,6 +214,7 @@ class SchedulerArtifactMetadata:
             "created_at": self.created_at,
             "code_commit": self.code_commit,
             "lambda_value": self.lambda_value,
+            "baseline_desired_retention": self.baseline_desired_retention,
             "config_snapshot_path": str(self.config_snapshot_path)
             if self.config_snapshot_path
             else None,
