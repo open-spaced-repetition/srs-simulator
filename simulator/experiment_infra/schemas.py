@@ -441,6 +441,7 @@ class ExperimentConfig:
     training_sa: Mapping[str, Any] = field(default_factory=dict)
     train_command_template: tuple[str, ...] = ()
     train_artifact_glob: str = "metadata.json"
+    train_max_parallel_commands: int = 1
     sweep_command_template: tuple[str, ...] = ()
     sweep_log_glob: str = "*.jsonl"
     pareto_command_template: tuple[str, ...] = ()
@@ -502,6 +503,11 @@ class ExperimentConfig:
                 training.get("artifact_metadata_glob", "metadata.json"),
                 "training.artifact_metadata_glob",
             ),
+            train_max_parallel_commands=_require_int(
+                training.get("max_parallel_commands", 1),
+                "training.max_parallel_commands",
+                minimum=1,
+            ),
             sweep_command_template=_str_tuple(
                 sweep.get("command_template", []), "sweep.command_template"
             ),
@@ -561,6 +567,7 @@ class ExperimentConfig:
                 "sa": dict(self.training_sa),
                 "command_template": list(self.train_command_template),
                 "artifact_metadata_glob": self.train_artifact_glob,
+                "max_parallel_commands": self.train_max_parallel_commands,
             },
             "sweep": {
                 "command_template": list(self.sweep_command_template),

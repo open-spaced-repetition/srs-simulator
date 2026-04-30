@@ -9,6 +9,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,6 +55,20 @@ class StageExecutionResult:
     run_id: str
     stage_root: Path | None
     summary: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class TrainCommandJob:
+    user_id: int
+    baseline_desired_retention: float
+    baseline_desired_retention_token: str
+    lambda_value: float
+    lambda_token: str
+    output_dir: Path
+    command_record_path: Path
+    stdout_path: Path
+    stderr_path: Path
+    command: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,7 +364,6 @@ def run_train_overfit(
     commands_attempted = 0
     commands_succeeded = 0
     baseline_dr_values = _training_baseline_desired_retention_values(config)
-    include_baseline_dr_in_path = _training_uses_baseline_dr_grid(config)
 
     if not config.train_command_template:
         failures.append(FailureClass.INVALID_CONFIG)
@@ -361,151 +375,65 @@ def run_train_overfit(
             "without duplicates."
         )
     else:
-        for user_id in config.users.train:
-            for baseline_dr in baseline_dr_values:
-                baseline_dr_token = _format_retention_token(baseline_dr)
-                for lambda_value in config.lambda_grid:
-                    lambda_token = _format_lambda_token(lambda_value)
-                    if include_baseline_dr_in_path:
-                        output_dir = (
-                            outputs_root
-                            / f"user_{user_id}"
-                            / f"dr_{baseline_dr_token}"
-                            / f"lambda_{lambda_token}"
-                        )
-                        command_stem = (
-                            f"user_{user_id}_dr_{baseline_dr_token}_"
-                            f"lambda_{lambda_token}"
-                        )
-                    else:
-                        output_dir = (
-                            outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
-                        )
-                        command_stem = f"user_{user_id}_lambda_{lambda_token}"
-                    command_record = commands_root / f"{command_stem}_command.json"
-                    stdout_path = commands_root / f"{command_stem}_stdout.txt"
-                    stderr_path = commands_root / f"{command_stem}_stderr.txt"
-                    try:
-                        train_command = _format_train_command(
-                            config=config,
-                            config_path=config_path,
-                            repo_root=repo_root,
-                            run_id=run_id,
-                            stage_root=stage_root,
-                            output_dir=output_dir,
-                            user_id=user_id,
-                            lambda_value=lambda_value,
-                            baseline_desired_retention=baseline_dr,
-                            command_record_path=command_record,
-                            stdout_path=stdout_path,
-                            stderr_path=stderr_path,
-                        )
-                    except (KeyError, ValueError) as exc:
-                        failures.append(FailureClass.INVALID_CONFIG)
-                        notes.append(
-                            "Invalid training.command_template for "
-                            f"user={user_id}, baseline_dr={baseline_dr}, "
-                            f"lambda={lambda_value}: {exc}"
-                        )
-                        break
-
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    commands_attempted += 1
-                    train_command_record = _run_recorded_command(
-                        command=train_command,
-                        cwd=repo_root,
-                        command_record_path=command_record,
-                        stdout_path=stdout_path,
-                        stderr_path=stderr_path,
-                        timeout_seconds=config.performance.timeout_seconds,
-                    )
-                    exit_code = _record_exit_code(train_command_record)
-                    timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
-                    progress_path = output_dir / "training_progress.jsonl"
-                    progress_path_exists = progress_path.exists()
-                    if progress_path_exists:
-                        progress_paths.append(progress_path)
-                    command_records.append(command_record)
-                    stdout_paths.append(stdout_path)
-                    stderr_paths.append(stderr_path)
-                    command_results.append(
-                        {
-                            "user_id": user_id,
-                            "baseline_desired_retention": baseline_dr,
-                            "baseline_desired_retention_token": baseline_dr_token,
-                            "lambda_value": lambda_value,
-                            "lambda_token": lambda_token,
-                            "output_dir": str(output_dir),
-                            "command_record_path": str(command_record),
-                            "stdout_path": str(stdout_path),
-                            "stderr_path": str(stderr_path),
-                            "training_progress_path": str(progress_path)
-                            if progress_path_exists
-                            else None,
-                            "exit_code": exit_code,
-                            "timed_out": timed_out,
-                        }
-                    )
-                    if exit_code != 0:
-                        failures.append(
-                            FailureClass.TIMEOUT
-                            if timed_out
-                            else FailureClass.RUNNER_FAILED
-                        )
-                        if timed_out:
-                            notes.append(
-                                "Training command timed out for "
-                                f"user={user_id}, baseline_dr={baseline_dr}, "
-                                f"lambda={lambda_value}."
-                            )
-                        else:
-                            notes.append(
-                                "Training command failed for "
-                                f"user={user_id}, baseline_dr={baseline_dr}, "
-                                f"lambda={lambda_value}."
-                            )
-                        break
-
-                    commands_succeeded += 1
-                    try:
-                        matched_artifacts = sorted(
-                            path
-                            for path in output_dir.glob(config.train_artifact_glob)
-                            if path.is_file()
-                        )
-                    except ValueError as exc:
-                        failures.append(FailureClass.INVALID_CONFIG)
-                        notes.append(
-                            "Invalid training.artifact_metadata_glob "
-                            f"{config.train_artifact_glob!r}: {exc}"
-                        )
-                        break
-                    if not matched_artifacts:
-                        failures.append(FailureClass.INVALID_ARTIFACT)
-                        notes.append(
-                            "No scheduler artifact metadata matched "
-                            f"{config.train_artifact_glob!r} in {output_dir}."
-                        )
-                        break
-
-                    invalid_artifact_note = _validate_train_artifacts(
-                        artifact_paths=matched_artifacts,
+        jobs, job_notes = _build_train_command_jobs(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=run_id,
+            stage_root=stage_root,
+            outputs_root=outputs_root,
+            commands_root=commands_root,
+            baseline_dr_values=baseline_dr_values,
+        )
+        if job_notes:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.extend(job_notes)
+        else:
+            max_parallel = min(config.train_max_parallel_commands, max(len(jobs), 1))
+            job_results: list[dict[str, Any]] = []
+            if max_parallel <= 1:
+                for job in jobs:
+                    result = _run_train_command_job(
+                        job=job,
                         config=config,
-                        user_id=user_id,
-                        lambda_value=lambda_value,
-                        baseline_desired_retention=baseline_dr
-                        if _training_metadata_requires_baseline_dr(config)
-                        else None,
+                        repo_root=repo_root,
                     )
-                    if invalid_artifact_note is not None:
-                        failures.append(FailureClass.INVALID_ARTIFACT)
-                        notes.append(invalid_artifact_note)
+                    job_results.append(result)
+                    if result["failure"] is not None:
                         break
-                    artifact_paths.extend(matched_artifacts)
-                if failures:
-                    break
-            if failures:
-                break
+            else:
+                ordered_results: list[dict[str, Any] | None] = [None] * len(jobs)
+                with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+                    future_to_index = {
+                        executor.submit(
+                            _run_train_command_job,
+                            job=job,
+                            config=config,
+                            repo_root=repo_root,
+                        ): index
+                        for index, job in enumerate(jobs)
+                    }
+                    for future in as_completed(future_to_index):
+                        ordered_results[future_to_index[future]] = future.result()
+                job_results = [result for result in ordered_results if result]
+
+            commands_attempted = len(job_results)
+            for result in job_results:
+                command_records.append(result["command_record_path"])
+                stdout_paths.append(result["stdout_path"])
+                stderr_paths.append(result["stderr_path"])
+                if result["progress_path"] is not None:
+                    progress_paths.append(result["progress_path"])
+                command_results.append(result["command_result"])
+                failure = result["failure"]
+                if failure is not None:
+                    failures.append(failure)
+                    note = result["note"]
+                    if note is not None:
+                        notes.append(note)
+                    continue
+                commands_succeeded += 1
+                artifact_paths.extend(result["artifact_paths"])
 
     unique_failures = tuple(dict.fromkeys(failures))
     passed = not unique_failures
@@ -540,6 +468,7 @@ def run_train_overfit(
         execution_shape={
             "process_count": 1,
             "subprocess_count": commands_attempted,
+            "max_parallel_commands": config.train_max_parallel_commands,
             "timeout_seconds": config.performance.timeout_seconds,
         },
     )
@@ -3059,6 +2988,186 @@ def _format_train_command(
         raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
     except IndexError as exc:
         raise ValueError("positional format fields are not supported") from exc
+
+
+def _build_train_command_jobs(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    outputs_root: Path,
+    commands_root: Path,
+    baseline_dr_values: tuple[float, ...],
+) -> tuple[list[TrainCommandJob], list[str]]:
+    jobs: list[TrainCommandJob] = []
+    notes: list[str] = []
+    include_baseline_dr_in_path = _training_uses_baseline_dr_grid(config)
+    for user_id in config.users.train:
+        for baseline_dr in baseline_dr_values:
+            baseline_dr_token = _format_retention_token(baseline_dr)
+            for lambda_value in config.lambda_grid:
+                lambda_token = _format_lambda_token(lambda_value)
+                if include_baseline_dr_in_path:
+                    output_dir = (
+                        outputs_root
+                        / f"user_{user_id}"
+                        / f"dr_{baseline_dr_token}"
+                        / f"lambda_{lambda_token}"
+                    )
+                    command_stem = (
+                        f"user_{user_id}_dr_{baseline_dr_token}_lambda_{lambda_token}"
+                    )
+                else:
+                    output_dir = (
+                        outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
+                    )
+                    command_stem = f"user_{user_id}_lambda_{lambda_token}"
+                command_record = commands_root / f"{command_stem}_command.json"
+                stdout_path = commands_root / f"{command_stem}_stdout.txt"
+                stderr_path = commands_root / f"{command_stem}_stderr.txt"
+                try:
+                    train_command = _format_train_command(
+                        config=config,
+                        config_path=config_path,
+                        repo_root=repo_root,
+                        run_id=run_id,
+                        stage_root=stage_root,
+                        output_dir=output_dir,
+                        user_id=user_id,
+                        lambda_value=lambda_value,
+                        baseline_desired_retention=baseline_dr,
+                        command_record_path=command_record,
+                        stdout_path=stdout_path,
+                        stderr_path=stderr_path,
+                    )
+                except (KeyError, ValueError) as exc:
+                    notes.append(
+                        "Invalid training.command_template for "
+                        f"user={user_id}, baseline_dr={baseline_dr}, "
+                        f"lambda={lambda_value}: {exc}"
+                    )
+                    return jobs, notes
+                jobs.append(
+                    TrainCommandJob(
+                        user_id=user_id,
+                        baseline_desired_retention=baseline_dr,
+                        baseline_desired_retention_token=baseline_dr_token,
+                        lambda_value=lambda_value,
+                        lambda_token=lambda_token,
+                        output_dir=output_dir,
+                        command_record_path=command_record,
+                        stdout_path=stdout_path,
+                        stderr_path=stderr_path,
+                        command=train_command,
+                    )
+                )
+    return jobs, notes
+
+
+def _run_train_command_job(
+    *,
+    job: TrainCommandJob,
+    config: ExperimentConfig,
+    repo_root: Path,
+) -> dict[str, Any]:
+    job.output_dir.mkdir(parents=True, exist_ok=True)
+    train_command_record = _run_recorded_command(
+        command=job.command,
+        cwd=repo_root,
+        command_record_path=job.command_record_path,
+        stdout_path=job.stdout_path,
+        stderr_path=job.stderr_path,
+        timeout_seconds=config.performance.timeout_seconds,
+    )
+    exit_code = _record_exit_code(train_command_record)
+    timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
+    progress_path = job.output_dir / "training_progress.jsonl"
+    progress_path_exists = progress_path.exists()
+    command_result = {
+        "user_id": job.user_id,
+        "baseline_desired_retention": job.baseline_desired_retention,
+        "baseline_desired_retention_token": job.baseline_desired_retention_token,
+        "lambda_value": job.lambda_value,
+        "lambda_token": job.lambda_token,
+        "output_dir": str(job.output_dir),
+        "command_record_path": str(job.command_record_path),
+        "stdout_path": str(job.stdout_path),
+        "stderr_path": str(job.stderr_path),
+        "training_progress_path": str(progress_path) if progress_path_exists else None,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+    }
+    result: dict[str, Any] = {
+        "job": job,
+        "command_record_path": job.command_record_path,
+        "stdout_path": job.stdout_path,
+        "stderr_path": job.stderr_path,
+        "progress_path": progress_path if progress_path_exists else None,
+        "command_result": command_result,
+        "artifact_paths": [],
+        "failure": None,
+        "note": None,
+        "succeeded": False,
+    }
+    if exit_code != 0:
+        result["failure"] = (
+            FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+        )
+        if timed_out:
+            result["note"] = (
+                "Training command timed out for "
+                f"user={job.user_id}, "
+                f"baseline_dr={job.baseline_desired_retention}, "
+                f"lambda={job.lambda_value}."
+            )
+        else:
+            result["note"] = (
+                "Training command failed for "
+                f"user={job.user_id}, "
+                f"baseline_dr={job.baseline_desired_retention}, "
+                f"lambda={job.lambda_value}."
+            )
+        return result
+
+    try:
+        matched_artifacts = sorted(
+            path
+            for path in job.output_dir.glob(config.train_artifact_glob)
+            if path.is_file()
+        )
+    except ValueError as exc:
+        result["failure"] = FailureClass.INVALID_CONFIG
+        result["note"] = (
+            "Invalid training.artifact_metadata_glob "
+            f"{config.train_artifact_glob!r}: {exc}"
+        )
+        return result
+    if not matched_artifacts:
+        result["failure"] = FailureClass.INVALID_ARTIFACT
+        result["note"] = (
+            "No scheduler artifact metadata matched "
+            f"{config.train_artifact_glob!r} in {job.output_dir}."
+        )
+        return result
+
+    invalid_artifact_note = _validate_train_artifacts(
+        artifact_paths=matched_artifacts,
+        config=config,
+        user_id=job.user_id,
+        lambda_value=job.lambda_value,
+        baseline_desired_retention=job.baseline_desired_retention
+        if _training_metadata_requires_baseline_dr(config)
+        else None,
+    )
+    if invalid_artifact_note is not None:
+        result["failure"] = FailureClass.INVALID_ARTIFACT
+        result["note"] = invalid_artifact_note
+        return result
+    result["artifact_paths"] = matched_artifacts
+    result["succeeded"] = True
+    return result
 
 
 def _format_sweep_command(

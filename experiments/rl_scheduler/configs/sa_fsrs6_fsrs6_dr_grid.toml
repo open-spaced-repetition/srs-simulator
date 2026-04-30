@@ -71,6 +71,7 @@ diagnostic_csv_logs = false
 [training]
 lambda_grid = [0.5]
 artifact_metadata_glob = "metadata.json"
+max_parallel_commands = 4
 command_template = [
   "uv",
   "run",
