@@ -347,7 +347,7 @@ class FSRS6BatchSchedulerOps:
         self,
         *,
         weights: "torch.Tensor",
-        desired_retention: float,
+        desired_retention: "float | torch.Tensor",
         bounds: Bounds,
         priority_mode: str,
         device: "torch.device",
@@ -365,13 +365,20 @@ class FSRS6BatchSchedulerOps:
         self._decay = -self._weights[:, 20]
         base = torch.tensor(0.9, device=device, dtype=dtype)
         self._factor = torch.pow(base, 1.0 / self._decay) - 1.0
-        self._retention_factor = (
-            torch.pow(
-                torch.tensor(desired_retention, device=device, dtype=dtype),
-                1.0 / self._decay,
+        desired = torch.as_tensor(desired_retention, device=device, dtype=dtype)
+        if desired.ndim == 0:
+            if not (0.0 < float(desired.item()) < 1.0):
+                raise ValueError("desired_retention must be between 0 and 1.")
+            desired = desired.expand(self._weights.shape[0])
+        elif desired.ndim == 1 and int(desired.shape[0]) == int(self._weights.shape[0]):
+            invalid = (desired <= 0.0) | (desired >= 1.0)
+            if bool(torch.any(invalid).item()):
+                raise ValueError("desired_retention values must be between 0 and 1.")
+        else:
+            raise ValueError(
+                "desired_retention must be a scalar or a tensor with shape (users,)."
             )
-            - 1.0
-        )
+        self._retention_factor = torch.pow(desired, 1.0 / self._decay) - 1.0
         self._init_d = torch.clamp(
             self._weights[:, 4] - torch.exp(self._weights[:, 5] * 3.0) + 1.0,
             self._bounds.d_min,

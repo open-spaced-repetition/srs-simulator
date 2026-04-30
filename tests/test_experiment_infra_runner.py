@@ -32,6 +32,8 @@ def _write_config(
     reserved_test_command_template: list[str] | None = None,
     performance_timeout_seconds: float | None = None,
     stages: list[str] | None = None,
+    training_extra: str = "",
+    training_sa_extra: str = "",
 ) -> Path:
     config_path = root / "experiment.toml"
     stage_values = stages or [
@@ -123,6 +125,8 @@ diagnostic_csv_logs = false
 [training]
 lambda_grid = [0.0, 0.5, 1.0]
 {command_template_line}
+{training_extra}
+{training_sa_extra}
 [sweep]
 log_glob = "*.jsonl"
 {sweep_command_template_line}
@@ -224,6 +228,62 @@ output_dir.mkdir(parents=True, exist_ok=True)
     encoding="utf-8",
 )
 print(f"wrote artifact for user={user_id} lambda={lambda_value}")
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _write_batch_artifact_writer(path: Path) -> None:
+    path.write_text(
+        """
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+output_dir = Path(sys.argv[1])
+user_id = int(sys.argv[2])
+lambda_value = float(sys.argv[3])
+seed = int(sys.argv[4])
+family = sys.argv[5]
+engine = sys.argv[6]
+output_dir.mkdir(parents=True, exist_ok=True)
+for desired_retention in (0.8, 0.9):
+    dr_token = str(desired_retention).replace(".", "p")
+    artifact_dir = output_dir / f"dr_{dr_token}"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "policy.pt").write_bytes(b"policy")
+    (artifact_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": "scheduler-policy",
+                "artifact_id": f"user-{user_id}-dr-{desired_retention}-lambda-{lambda_value}",
+                "family": family,
+                "scheduler_name": "fsrs6",
+                "environment": "lstm",
+                "engine": engine,
+                "training_user_ids": [user_id],
+                "validation_user_ids": [2],
+                "seed": seed,
+                "policy_path": "policy.pt",
+                "feature_version": "v1",
+                "action_space": "desired_retention_delta",
+                "created_at": "2026-04-29T00:00:00Z",
+                "code_commit": "test",
+                "lambda_value": lambda_value,
+                "baseline_desired_retention": desired_retention,
+                "capabilities": ["batched"],
+            }
+        ),
+        encoding="utf-8",
+    )
+(output_dir / "training_progress.jsonl").write_text(
+    json.dumps({"event": "artifacts_written"}) + "\\n",
+    encoding="utf-8",
+)
+print(f"wrote batched artifacts for user={user_id} lambda={lambda_value}")
 """.lstrip(),
         encoding="utf-8",
     )
@@ -1188,6 +1248,50 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertIn("performance_summary", manifest["artifacts"])
             self.assertIn("training_progress_0", manifest["artifacts"])
             self.assertIn("scheduler_artifact_metadata_0", manifest["artifacts"])
+
+    def test_train_overfit_batches_baseline_dr_grid_in_one_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            script_path = root / "write_batch_artifact.py"
+            _write_batch_artifact_writer(script_path)
+            baseline_root.mkdir()
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                command_template=_artifact_writer_template(script_path),
+                training_extra=(
+                    'artifact_metadata_glob = "**/metadata.json"\n'
+                    "batch_baseline_desired_retention_values = true\n"
+                ),
+                training_sa_extra=(
+                    "[training.sa]\n"
+                    "baseline_desired_retention = 0.9\n"
+                    "baseline_desired_retention_values = [0.8, 0.9]\n"
+                ),
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.TRAIN_OVERFIT,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 0)
+            stage_root = output_root / "test-run" / "train-overfit"
+            summary = json.loads((stage_root / "training_summary.json").read_text())
+            self.assertTrue(summary["passed"])
+            self.assertEqual(summary["baseline_desired_retention_values"], [0.8, 0.9])
+            self.assertEqual(len(summary["command_results"]), 3)
+            self.assertEqual(len(summary["artifact_paths"]), 6)
+            self.assertEqual(len(summary["training_progress_paths"]), 3)
+            self.assertEqual(
+                len(list((stage_root / "train_outputs").rglob("metadata.json"))),
+                6,
+            )
 
     def test_train_overfit_rejects_missing_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

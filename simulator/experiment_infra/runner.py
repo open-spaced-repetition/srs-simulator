@@ -3003,9 +3003,17 @@ def _build_train_command_jobs(
 ) -> tuple[list[TrainCommandJob], list[str]]:
     jobs: list[TrainCommandJob] = []
     notes: list[str] = []
-    include_baseline_dr_in_path = _training_uses_baseline_dr_grid(config)
+    batch_baseline_dr = _training_batches_baseline_dr_grid(config)
+    include_baseline_dr_in_path = (
+        _training_uses_baseline_dr_grid(config) and not batch_baseline_dr
+    )
+    job_baseline_dr_values = (
+        (_training_primary_baseline_desired_retention(config, baseline_dr_values),)
+        if batch_baseline_dr
+        else baseline_dr_values
+    )
     for user_id in config.users.train:
-        for baseline_dr in baseline_dr_values:
+        for baseline_dr in job_baseline_dr_values:
             baseline_dr_token = _format_retention_token(baseline_dr)
             for lambda_value in config.lambda_grid:
                 lambda_token = _format_lambda_token(lambda_value)
@@ -3157,8 +3165,14 @@ def _run_train_command_job(
         config=config,
         user_id=job.user_id,
         lambda_value=job.lambda_value,
+        allowed_baseline_desired_retentions=_training_baseline_desired_retention_values(
+            config
+        )
+        if _training_batches_baseline_dr_grid(config)
+        else None,
         baseline_desired_retention=job.baseline_desired_retention
         if _training_metadata_requires_baseline_dr(config)
+        and not _training_batches_baseline_dr_grid(config)
         else None,
     )
     if invalid_artifact_note is not None:
@@ -3427,6 +3441,23 @@ def _training_uses_baseline_dr_grid(config: ExperimentConfig) -> bool:
     return "baseline_desired_retention_values" in config.training_sa
 
 
+def _training_batches_baseline_dr_grid(config: ExperimentConfig) -> bool:
+    return (
+        config.train_batch_baseline_desired_retention_values
+        and _training_uses_baseline_dr_grid(config)
+    )
+
+
+def _training_primary_baseline_desired_retention(
+    config: ExperimentConfig,
+    baseline_dr_values: tuple[float, ...],
+) -> float:
+    raw_single = config.training_sa.get("baseline_desired_retention")
+    if isinstance(raw_single, bool) or not isinstance(raw_single, (float, int)):
+        return baseline_dr_values[0]
+    return float(raw_single)
+
+
 def _training_metadata_requires_baseline_dr(config: ExperimentConfig) -> bool:
     return (
         "baseline_desired_retention" in config.training_sa
@@ -3441,7 +3472,9 @@ def _validate_train_artifacts(
     user_id: int,
     lambda_value: float,
     baseline_desired_retention: float | None = None,
+    allowed_baseline_desired_retentions: tuple[float, ...] | None = None,
 ) -> str | None:
+    observed_baseline_desired_retentions: list[float] = []
     for path in artifact_paths:
         try:
             metadata = validate_scheduler_artifact(path, require_files=True)
@@ -3494,6 +3527,43 @@ def _validate_train_artifacts(
                     "baseline_desired_retention expected "
                     f"{baseline_desired_retention}, "
                     f"got {metadata.baseline_desired_retention}."
+                )
+        if allowed_baseline_desired_retentions is not None:
+            if metadata.baseline_desired_retention is None:
+                return (
+                    f"Invalid scheduler artifact metadata {path}: "
+                    "baseline_desired_retention is required for batched DR grid."
+                )
+            if not any(
+                math.isclose(
+                    metadata.baseline_desired_retention,
+                    expected,
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                )
+                for expected in allowed_baseline_desired_retentions
+            ):
+                return (
+                    f"Invalid scheduler artifact metadata {path}: "
+                    "baseline_desired_retention expected one of "
+                    f"{list(allowed_baseline_desired_retentions)}, "
+                    f"got {metadata.baseline_desired_retention}."
+                )
+            observed_baseline_desired_retentions.append(
+                metadata.baseline_desired_retention
+            )
+    if allowed_baseline_desired_retentions is not None:
+        for expected in allowed_baseline_desired_retentions:
+            matches = [
+                observed
+                for observed in observed_baseline_desired_retentions
+                if math.isclose(observed, expected, rel_tol=0.0, abs_tol=1e-9)
+            ]
+            if len(matches) != 1:
+                return (
+                    "Invalid scheduler artifact metadata set: "
+                    f"baseline_desired_retention {expected} expected exactly once, "
+                    f"got {len(matches)} matches."
                 )
     return None
 

@@ -70,21 +70,20 @@ diagnostic_csv_logs = false
 
 [training]
 lambda_grid = [0.5]
-artifact_metadata_glob = "metadata.json"
-max_parallel_commands = 4
+artifact_metadata_glob = "**/metadata.json"
+max_parallel_commands = 1
+batch_baseline_desired_retention_values = true
 command_template = [
   "uv",
   "run",
   "python",
-  "experiments/rl_scheduler/train_sa_fsrs6.py",
+  "experiments/rl_scheduler/train_sa_fsrs6_dr_grid.py",
   "--config",
   "{config_path}",
   "--user-id",
   "{user_id}",
   "--lambda",
   "{lambda_value}",
-  "--baseline-desired-retention",
-  "{baseline_desired_retention}",
   "--output-dir",
   "{output_dir}",
   "--training-command-path",
@@ -102,6 +101,7 @@ coefficient_max = 8.0
 retention_min = 0.50
 retention_max = 0.98
 baseline_desired_retention = 0.90
+dr_batch_size = 4
 baseline_desired_retention_values = [
   0.50,
   0.52,

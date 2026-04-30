@@ -88,6 +88,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertEqual(config.performance.device, "cpu")
         self.assertEqual(config.performance.timeout_seconds, 120.0)
         self.assertTrue(config.performance.write_performance_summary)
+        self.assertFalse(config.train_batch_baseline_desired_retention_values)
 
     def test_rejects_overlapping_user_splits(self) -> None:
         raw = VALID_CONFIG.replace("validation = [2, 3]", "validation = [1, 3]")
@@ -121,6 +122,25 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 ExperimentConfig.from_toml(path)
+
+    def test_loads_batched_baseline_retention_grid_flag(self) -> None:
+        raw = VALID_CONFIG.replace(
+            "lambda_grid = [0.0, 0.25, 0.5]",
+            (
+                "lambda_grid = [0.0, 0.25, 0.5]\n"
+                "batch_baseline_desired_retention_values = true"
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertTrue(config.train_batch_baseline_desired_retention_values)
+        self.assertTrue(
+            config.to_dict()["training"]["batch_baseline_desired_retention_values"]
+        )
 
 
 if __name__ == "__main__":
