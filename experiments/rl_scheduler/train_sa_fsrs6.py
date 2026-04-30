@@ -351,7 +351,7 @@ def main() -> int:
         "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "code_commit": _git_commit(),
         "lambda_value": args.lambda_value,
-        "config_snapshot_path": str(args.config),
+        "config_snapshot_path": str(args.config.resolve()),
         "training_command_path": str(args.training_command_path)
         if args.training_command_path
         else None,
