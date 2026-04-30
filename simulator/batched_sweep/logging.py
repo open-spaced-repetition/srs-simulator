@@ -175,6 +175,7 @@ def simulate_and_log(
             desired_retention=desired_retention,
             scheduler_priority=args.scheduler_priority,
             sspmmc_policy=None,
+            sa_fsrs6_policy=getattr(args, "sa_fsrs6_policy", None),
             fixed_interval=fixed_interval,
             seed=args.seed,
             fuzz=args.fuzz,

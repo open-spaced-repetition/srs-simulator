@@ -52,7 +52,8 @@ def parse_args() -> argparse.Namespace:
         env_help="Comma-separated list of environments to sweep.",
         sched_help=(
             "Comma-separated list of schedulers to sweep "
-            "(include sspmmc to run policies; use fixed@<days> for fixed intervals)."
+            "(include sspmmc or sa_fsrs6 to run policies; "
+            "use fixed@<days> for fixed intervals)."
         ),
     )
     add_common_sim_args(
@@ -110,6 +111,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.9,
         help="Desired retention value logged for SSP-MMC runs.",
+    )
+    parser.add_argument(
+        "--sa-fsrs6-policy",
+        type=Path,
+        default=None,
+        help="Path to an SA FSRS-6 policy JSON when using --sched sa_fsrs6.",
     )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
@@ -186,6 +193,9 @@ def _progress_label(args: argparse.Namespace) -> str:
     if args.scheduler == "sspmmc":
         if args.sspmmc_policy:
             label = f"{label}:{args.sspmmc_policy.stem}"
+    elif args.scheduler == "sa_fsrs6":
+        if args.sa_fsrs6_policy:
+            label = f"{label}:{args.sa_fsrs6_policy.stem}"
     elif scheduler_uses_desired_retention(args.scheduler):
         label = f"{label} dr={args.desired_retention:.2f}"
     return f"u{args.user_id} {label}" if args.user_id is not None else label
@@ -472,8 +482,9 @@ def main() -> None:
     non_dr_schedulers: List[str] = []
     fixed_schedulers = [spec for spec in scheduler_specs if spec[0] == "fixed"]
     has_sspmmc = any(spec[0] == "sspmmc" for spec in scheduler_specs)
+    has_sa_fsrs6 = any(spec[0] == "sa_fsrs6" for spec in scheduler_specs)
     for name, _, _ in scheduler_specs:
-        if name in {"sspmmc", "fixed"}:
+        if name in {"sspmmc", "sa_fsrs6", "fixed"}:
             continue
         if scheduler_uses_desired_retention(name):
             if name not in dr_schedulers:
@@ -483,14 +494,23 @@ def main() -> None:
                 non_dr_schedulers.append(name)
     run_dr = bool(dr_schedulers)
     run_sspmmc = has_sspmmc
+    run_sa_fsrs6 = has_sa_fsrs6
     run_fixed = bool(fixed_schedulers)
     run_non_dr = bool(non_dr_schedulers)
-    if not run_dr and not run_sspmmc and not run_fixed and not run_non_dr:
+    if (
+        not run_dr
+        and not run_sspmmc
+        and not run_sa_fsrs6
+        and not run_fixed
+        and not run_non_dr
+    ):
         raise SystemExit("No schedulers specified. Use --sched to select runs.")
 
     sspmmc_policies = _resolve_policy_paths(args, repo_root, run_sspmmc)
     if run_sspmmc and not sspmmc_policies:
         raise SystemExit("No SSP-MMC policies found. Provide --sspmmc-policy-dir.")
+    if run_sa_fsrs6 and args.sa_fsrs6_policy is None:
+        raise SystemExit("--sched sa_fsrs6 requires --sa-fsrs6-policy.")
 
     priority_fn = (
         review_first_priority if args.priority == "review-first" else new_first_priority
@@ -573,6 +593,22 @@ def main() -> None:
                         StochasticBehavior,
                         StatefulCostModel,
                     )
+
+            if run_sa_fsrs6:
+                run_args = argparse.Namespace(**vars(args))
+                run_args.environment = environment
+                run_args.scheduler = "sa_fsrs6"
+                run_args.desired_retention = None
+                run_args.scheduler_spec = "sa_fsrs6"
+                run_args.log_dir = log_dir
+                _run_once(
+                    run_args,
+                    priority_fn,
+                    run_simulation,
+                    simulate_cli,
+                    StochasticBehavior,
+                    StatefulCostModel,
+                )
     finally:
         elapsed = time.perf_counter() - start_time
         if not args.no_summary:

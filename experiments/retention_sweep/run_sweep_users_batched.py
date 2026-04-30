@@ -49,7 +49,8 @@ def parse_args() -> argparse.Namespace:
         env_help="Comma-separated environments to sweep (lstm, fsrs6, fsrs6_default).",
         sched_help=(
             "Comma-separated schedulers to sweep "
-            "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, anki_sm2, memrise, fixed)."
+            "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
+            "anki_sm2, memrise, fixed, sa_fsrs6)."
         ),
     )
     add_retention_range_args(parser)
@@ -58,6 +59,12 @@ def parse_args() -> argparse.Namespace:
     )
     add_button_usage_arg(parser, default_path=DEFAULT_BUTTON_USAGE_PATH)
     add_benchmark_args(parser)
+    parser.add_argument(
+        "--sa-fsrs6-policy",
+        type=Path,
+        default=None,
+        help="Path to an SA FSRS-6 policy JSON when using --sched sa_fsrs6.",
+    )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
     )

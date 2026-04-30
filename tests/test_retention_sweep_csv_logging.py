@@ -94,7 +94,12 @@ def _batched_args(diagnostic_csv_logs: bool) -> argparse.Namespace:
     )
 
 
-def _plan_args(log_dir: Path, diagnostic_csv_logs: bool) -> argparse.Namespace:
+def _plan_args(
+    log_dir: Path,
+    diagnostic_csv_logs: bool,
+    *,
+    sa_fsrs6_policy: Path | None = None,
+) -> argparse.Namespace:
     return argparse.Namespace(
         batch_size=2,
         torch_device=None,
@@ -109,6 +114,7 @@ def _plan_args(log_dir: Path, diagnostic_csv_logs: bool) -> argparse.Namespace:
         step=0.01,
         days=2,
         diagnostic_csv_logs=diagnostic_csv_logs,
+        sa_fsrs6_policy=sa_fsrs6_policy,
     )
 
 
@@ -230,6 +236,27 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             )
 
             self.assertTrue(plan.ctx.batch_log_root.exists())
+
+    def test_batched_plan_requires_sa_fsrs6_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "logs"
+            with self.assertRaisesRegex(ValueError, "--sa-fsrs6-policy"):
+                build_batched_sweep_plan(
+                    repo_root=REPO_ROOT,
+                    args=_plan_args(log_dir, False),
+                    envs=["lstm"],
+                    schedulers=["sa_fsrs6"],
+                )
+
+            policy_path = Path(tmp) / "policy.json"
+            plan = build_batched_sweep_plan(
+                repo_root=REPO_ROOT,
+                args=_plan_args(log_dir, False, sa_fsrs6_policy=policy_path),
+                envs=["lstm"],
+                schedulers=["sa_fsrs6"],
+            )
+
+            self.assertEqual(plan.ctx.sa_fsrs6_policy, policy_path)
 
 
 if __name__ == "__main__":

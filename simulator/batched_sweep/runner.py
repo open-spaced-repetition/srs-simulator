@@ -16,6 +16,8 @@ from simulator.schedulers.fixed import FixedBatchSchedulerOps
 from simulator.schedulers.fsrs import FSRS3BatchSchedulerOps, FSRS6BatchSchedulerOps
 from simulator.schedulers.lstm import LSTMBatchSchedulerOps
 from simulator.schedulers.memrise import MemriseBatchSchedulerOps, MemriseScheduler
+from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
+from simulator.sa_fsrs6_policy import SAFSRS6Policy
 from simulator.short_term_config import resolve_short_term_config
 
 from simulator.batched_sweep.behavior_cost import build_behavior_cost, load_usage
@@ -40,6 +42,7 @@ class BatchedSweepContext:
     envs: list[str]
     schedulers: list[str]
     dr_values: list[float]
+    sa_fsrs6_policy: Path | None = None
 
 
 def run_batch_core(
@@ -95,7 +98,11 @@ def run_batch_core(
         fsrs3_default_weights: torch.Tensor | None = None
 
         needs_lstm_weights = environment == "lstm" or "lstm" in scheduler_names
-        needs_fsrs_weights = environment == "fsrs6" or "fsrs6" in scheduler_names
+        needs_fsrs_weights = (
+            environment == "fsrs6"
+            or "fsrs6" in scheduler_names
+            or "sa_fsrs6" in scheduler_names
+        )
         needs_fsrs_default = (
             environment == "fsrs6_default" or "fsrs6_default" in scheduler_names
         )
@@ -268,6 +275,7 @@ def run_batch_core(
                 "memrise",
                 "fixed",
                 "lstm",
+                "sa_fsrs6",
             }:
                 raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
             label_prefix = f"{environment} u{active_batch[0]}-{active_batch[-1]} {name}"
@@ -475,6 +483,48 @@ def run_batch_core(
                         log_root=ctx.log_root,
                         batch_log_root=ctx.batch_log_root,
                     )
+                continue
+
+            if name == "sa_fsrs6":
+                if fsrs_weights is None:
+                    raise ValueError("Expected FSRS-6 weights for sa_fsrs6 scheduler.")
+                if ctx.sa_fsrs6_policy is None:
+                    raise ValueError("--sched sa_fsrs6 requires --sa-fsrs6-policy.")
+                policy = SAFSRS6Policy.from_json(ctx.sa_fsrs6_policy)
+                weights = fsrs_weights.to(env_ops.device)
+                sched_ops = SAFSRS6BatchSchedulerOps(
+                    weights=weights,
+                    policy=policy,
+                    bounds=Bounds(),
+                    priority_mode=args.scheduler_priority,
+                    device=env_ops.device,
+                    dtype=torch.float32,
+                )
+                simulate_and_log(
+                    write_log=simulate_cli._write_log,
+                    args=args,
+                    batch=active_batch,
+                    env_ops=env_ops,
+                    sched_ops=sched_ops,
+                    behavior=behavior,
+                    cost_model=cost_model,
+                    progress=progress,
+                    progress_queue=progress_queue,
+                    device_label=device_label,
+                    run_label=f"{label_prefix} policy={ctx.sa_fsrs6_policy.stem}",
+                    environment=environment,
+                    scheduler_name=name,
+                    scheduler_spec=raw,
+                    desired_retention=None,
+                    fixed_interval=fixed_interval,
+                    short_term_source=short_term_source,
+                    learning_steps=learning_steps,
+                    relearning_steps=relearning_steps,
+                    learning_steps_arg=learning_steps_arg,
+                    relearning_steps_arg=relearning_steps_arg,
+                    log_root=ctx.log_root,
+                    batch_log_root=ctx.batch_log_root,
+                )
                 continue
 
             if name == "anki_sm2":

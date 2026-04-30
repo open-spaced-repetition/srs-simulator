@@ -22,6 +22,7 @@ SUPPORTED_SCHEDS = {
     "anki_sm2",
     "memrise",
     "fixed",
+    "sa_fsrs6",
 }
 
 
@@ -55,6 +56,8 @@ def build_batched_sweep_plan(
         name, _, _ = parse_scheduler_spec(raw)
         if name not in SUPPORTED_SCHEDS:
             raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
+        if name == "sa_fsrs6" and getattr(args, "sa_fsrs6_policy", None) is None:
+            raise ValueError("--sched sa_fsrs6 requires --sa-fsrs6-policy.")
 
     if args.batch_size < 1:
         raise ValueError("--batch-size must be >= 1.")
@@ -105,6 +108,7 @@ def build_batched_sweep_plan(
         envs=envs,
         schedulers=schedulers,
         dr_values=drs,
+        sa_fsrs6_policy=getattr(args, "sa_fsrs6_policy", None),
     )
 
     return BatchedSweepPlan(

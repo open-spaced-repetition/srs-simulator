@@ -245,6 +245,30 @@ def _resolve_sspmmc_label(title: Optional[str], fallback: str) -> Optional[str]:
     return None
 
 
+def _resolve_sa_fsrs6_title(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> str:
+    policy_path = meta.get("sa_fsrs6_policy")
+    if not policy_path:
+        return "SA FSRS-6"
+    path = Path(policy_path)
+    if not path.is_absolute():
+        for base_dir in base_dirs:
+            candidate = (base_dir / path).resolve()
+            if candidate.exists():
+                path = candidate
+                break
+    title = None
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            raw_title = payload.get("title")
+            if isinstance(raw_title, str) and raw_title.strip():
+                title = raw_title.strip()
+        except (OSError, json.JSONDecodeError):
+            title = None
+    return f"SA {title or path.stem}"
+
+
 def _format_scheduler_title(scheduler: str) -> str:
     labels = {
         "anki_sm2": "Anki-SM-2",
@@ -347,6 +371,8 @@ def _iter_log_entries(
 
         if scheduler == "sspmmc":
             title = _resolve_policy_title(meta, base_dirs)
+        elif scheduler == "sa_fsrs6":
+            title = _resolve_sa_fsrs6_title(meta, base_dirs)
         elif scheduler == "fixed":
             title = f"Ivl={format_float(fixed_interval)}"
         elif scheduler_uses_desired_retention(scheduler):
