@@ -30,8 +30,11 @@ from simulator.experiment_infra.schemas import (
     RunRecord,
     StageName,
 )
-from simulator.fuzz import resolve_max_interval
 from simulator.retention_sweep.log_filter import LogFilenameFilter
+from simulator.vectorized.mixed_scheduler import (
+    MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
+    MixedSchedulerGroup as _MixedSchedulerGroup,
+)
 
 
 SUPPORTED_RUNNER_STAGES = {
@@ -88,153 +91,6 @@ class SweepBatchLane:
     baseline_desired_retention: float | None
     baseline_desired_retention_token: str | None
     output_dir: Path
-
-
-@dataclass(frozen=True, slots=True)
-class _MixedSchedulerGroup:
-    lane_indices: Any
-    ops: Any
-
-
-@dataclass(slots=True)
-class _MixedBatchSchedulerState:
-    states: tuple[Any, ...]
-
-
-class _MixedBatchSchedulerOps:
-    def __init__(
-        self,
-        *,
-        groups: Sequence[_MixedSchedulerGroup],
-        lane_count: int,
-        device: Any,
-        dtype: Any,
-    ) -> None:
-        import torch
-
-        if not groups:
-            raise ValueError("Mixed scheduler ops require at least one group.")
-        self._torch = torch
-        self._groups = tuple(groups)
-        self._lane_to_local = torch.empty(
-            lane_count,
-            device=device,
-            dtype=torch.int64,
-        )
-        self._lane_to_group = torch.empty(
-            lane_count,
-            device=device,
-            dtype=torch.int64,
-        )
-        for group_index, group in enumerate(self._groups):
-            local = torch.arange(
-                int(group.lane_indices.numel()),
-                device=device,
-                dtype=torch.int64,
-            )
-            self._lane_to_local[group.lane_indices] = local
-            self._lane_to_group[group.lane_indices] = group_index
-        self.device = device
-        self.dtype = dtype
-        self.max_interval = max(
-            resolve_max_interval(group.ops) for group in self._groups
-        )
-
-    def init_state(self, user_count: int, deck_size: int) -> _MixedBatchSchedulerState:
-        states = tuple(
-            group.ops.init_state(int(group.lane_indices.numel()), deck_size)
-            for group in self._groups
-        )
-        return _MixedBatchSchedulerState(states=states)
-
-    def review_priority(
-        self,
-        state: _MixedBatchSchedulerState,
-        elapsed: Any,
-    ) -> Any:
-        result = self._torch.empty_like(elapsed, device=self.device, dtype=self.dtype)
-        for group_index, group in enumerate(self._groups):
-            group_elapsed = elapsed.index_select(0, group.lane_indices)
-            group_priority = group.ops.review_priority(
-                state.states[group_index],
-                group_elapsed,
-            )
-            result[group.lane_indices] = group_priority
-        return result
-
-    def update_review(
-        self,
-        state: _MixedBatchSchedulerState,
-        user_idx: Any,
-        card_idx: Any,
-        elapsed: Any,
-        rating: Any,
-        prev_interval: Any,
-    ) -> Any:
-        return self._dispatch_update(
-            "update_review",
-            state,
-            user_idx,
-            card_idx,
-            elapsed,
-            rating,
-            prev_interval,
-        )
-
-    def update_learn(
-        self,
-        state: _MixedBatchSchedulerState,
-        user_idx: Any,
-        card_idx: Any,
-        rating: Any,
-    ) -> Any:
-        return self._dispatch_update(
-            "update_learn",
-            state,
-            user_idx,
-            card_idx,
-            rating,
-        )
-
-    def _dispatch_update(
-        self,
-        method_name: str,
-        state: _MixedBatchSchedulerState,
-        user_idx: Any,
-        card_idx: Any,
-        *args: Any,
-    ) -> Any:
-        if user_idx.numel() == 0:
-            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
-        result = self._torch.empty(
-            (int(user_idx.numel()),),
-            device=self.device,
-            dtype=self.dtype,
-        )
-        selected_groups = self._torch.unique(
-            self._lane_to_group.index_select(0, user_idx)
-        ).tolist()
-        for group_index in selected_groups:
-            group_mask = self._lane_to_group.index_select(0, user_idx) == int(
-                group_index
-            )
-            if not bool(group_mask.any().item()):
-                continue
-            local_user_idx = self._lane_to_local.index_select(
-                0,
-                user_idx[group_mask],
-            )
-            group_args = [
-                arg[group_mask] if hasattr(arg, "__getitem__") else arg for arg in args
-            ]
-            update = getattr(self._groups[int(group_index)].ops, method_name)
-            result[group_mask] = update(
-                state.states[int(group_index)],
-                local_user_idx,
-                card_idx[group_mask],
-                *group_args,
-            )
-        return result
 
 
 @dataclass(frozen=True, slots=True)

@@ -281,19 +281,7 @@ def _iter_log_paths(
 ) -> Iterable[Path]:
     if not log_root.exists():
         return []
-    user_dirs = sorted(
-        path
-        for path in log_root.iterdir()
-        if path.is_dir() and path.name.startswith("user_")
-    )
-    if user_dirs:
-        for user_dir in user_dirs:
-            for path in sorted(user_dir.glob("*.jsonl")):
-                if match_fn is not None and not match_fn(path.name):
-                    continue
-                yield path
-        return
-    for path in sorted(log_root.glob("*.jsonl")):
+    for path in sorted(log_root.rglob("*.jsonl")):
         if match_fn is not None and not match_fn(path.name):
             continue
         yield path

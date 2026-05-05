@@ -165,14 +165,12 @@ def simulate_and_log_lanes(
         raise ValueError("No sweep lanes were provided.")
 
     environment = lanes[0].environment
-    scheduler_name = lanes[0].scheduler_name
-    scheduler_spec = lanes[0].scheduler_spec
+    scheduler_names = {lane.scheduler_name for lane in lanes}
+    scheduler_specs = {lane.scheduler_spec for lane in lanes}
+    scheduler_name = lanes[0].scheduler_name if len(scheduler_names) == 1 else "mixed"
+    scheduler_spec = lanes[0].scheduler_spec if len(scheduler_specs) == 1 else "mixed"
     if any(lane.environment != environment for lane in lanes):
         raise ValueError("All sweep lanes must share the same environment.")
-    if any(lane.scheduler_name != scheduler_name for lane in lanes):
-        raise ValueError("All sweep lanes must share the same scheduler.")
-    if any(lane.scheduler_spec != scheduler_spec for lane in lanes):
-        raise ValueError("All sweep lanes must share the same scheduler spec.")
 
     batch = [lane.user_id for lane in lanes]
     progress_callback = progress_callback_from_queue(

@@ -70,10 +70,7 @@ def _parse_desired_retentions(value: str) -> list[float]:
 
 
 def _iter_log_paths(log_root: Path, user_id: int) -> list[Path]:
-    user_dir = log_root / f"user_{user_id}"
-    if user_dir.is_dir():
-        return sorted(user_dir.glob("*.jsonl"))
-    return sorted(log_root.glob("*.jsonl"))
+    return sorted(log_root.rglob("*.jsonl"))
 
 
 def _meta_matches(

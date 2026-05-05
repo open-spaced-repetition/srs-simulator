@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -19,11 +20,14 @@ from simulator.schedulers.memrise import MemriseBatchSchedulerOps, MemriseSchedu
 from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
 from simulator.short_term_config import resolve_short_term_config
+from simulator.vectorized.mixed_scheduler import (
+    MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
+    MixedSchedulerGroup as _MixedSchedulerGroup,
+)
 
 from simulator.batched_sweep.behavior_cost import build_behavior_cost, load_usage
 from simulator.batched_sweep.logging import (
     BatchedSweepLogLane,
-    simulate_and_log,
     simulate_and_log_lanes,
 )
 from simulator.batched_sweep.utils import format_id_list
@@ -47,6 +51,9 @@ class BatchedSweepContext:
     schedulers: list[str]
     dr_values: list[float]
     sa_fsrs6_policy: Path | None = None
+
+
+_DR_SCHEDULERS = {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}
 
 
 def _format_float_token(value: float) -> str:
@@ -86,6 +93,52 @@ def _build_dr_grid_lanes(
     return lanes
 
 
+def _build_sweep_lanes(
+    *,
+    batch: list[int],
+    ctx: BatchedSweepContext,
+    environment: str,
+) -> list[BatchedSweepLogLane]:
+    lanes: list[BatchedSweepLogLane] = []
+    for scheduler_spec in ctx.schedulers:
+        name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
+        if name in _DR_SCHEDULERS:
+            lanes.extend(
+                _build_dr_grid_lanes(
+                    batch=batch,
+                    log_root=ctx.log_root,
+                    environment=environment,
+                    scheduler_name=name,
+                    scheduler_spec=raw,
+                    dr_values=ctx.dr_values,
+                    fixed_interval=None,
+                )
+            )
+            continue
+
+        interval = normalize_fixed_interval(fixed_interval) if name == "fixed" else None
+        policy = ctx.sa_fsrs6_policy if name == "sa_fsrs6" else None
+        scheduler_root = ctx.log_root / f"sched_{name}"
+        if name == "fixed" and interval is not None:
+            scheduler_root = scheduler_root / f"ivl_{_format_float_token(interval)}"
+        elif name == "sa_fsrs6" and policy is not None:
+            scheduler_root = scheduler_root / f"policy_{policy.stem}"
+        lanes.extend(
+            BatchedSweepLogLane(
+                user_id=user_id,
+                log_root=scheduler_root,
+                environment=environment,
+                scheduler_name=name,
+                scheduler_spec=raw,
+                desired_retention=None,
+                fixed_interval=interval,
+                sa_fsrs6_policy=policy,
+            )
+            for user_id in batch
+        )
+    return lanes
+
+
 def _repeat_weights_for_lanes(
     *,
     weights: torch.Tensor,
@@ -101,108 +154,290 @@ def _repeat_weights_for_lanes(
     return weights.index_select(0, lane_indices)
 
 
-def _simulate_fsrs6_dr_grid_lanes(
+def _repeat_lstm_weights_for_lanes(
     *,
-    write_log,
+    weights: PackedLSTMWeights,
+    active_batch: list[int],
+    lanes: list[BatchedSweepLogLane],
+) -> PackedLSTMWeights:
+    index_by_user_id = {user_id: index for index, user_id in enumerate(active_batch)}
+    lane_indices = torch.tensor(
+        [index_by_user_id[lane.user_id] for lane in lanes],
+        device=weights.input_mean.device,
+        dtype=torch.int64,
+    )
+    updates: dict[str, Any] = {"n_users": len(lanes)}
+    for field in fields(PackedLSTMWeights):
+        value = getattr(weights, field.name)
+        if (
+            isinstance(value, torch.Tensor)
+            and value.ndim > 0
+            and int(value.shape[0]) == int(weights.n_users)
+        ):
+            updates[field.name] = value.index_select(0, lane_indices)
+    return replace(weights, **updates)
+
+
+def _required_desired_retention(lane: BatchedSweepLogLane) -> float:
+    if lane.desired_retention is None:
+        raise ValueError(f"{lane.scheduler_name} lanes require desired_retention.")
+    return float(lane.desired_retention)
+
+
+def _mixed_scheduler_group_key(lane: BatchedSweepLogLane) -> tuple[Any, ...]:
+    if lane.scheduler_name in {"fsrs6", "fsrs6_default"}:
+        return (lane.scheduler_name, lane.scheduler_spec)
+    if lane.scheduler_name in {"fsrs3", "fsrs3_default", "lstm"}:
+        return (
+            lane.scheduler_name,
+            lane.scheduler_spec,
+            _required_desired_retention(lane),
+        )
+    if lane.scheduler_name == "fixed":
+        return (lane.scheduler_name, lane.scheduler_spec, lane.fixed_interval)
+    if lane.scheduler_name == "sa_fsrs6":
+        return (lane.scheduler_name, lane.scheduler_spec, lane.sa_fsrs6_policy)
+    return (lane.scheduler_name, lane.scheduler_spec)
+
+
+def _group_lane_indices(lanes: list[BatchedSweepLogLane]) -> list[list[int]]:
+    grouped: dict[tuple[Any, ...], list[int]] = {}
+    for lane_index, lane in enumerate(lanes):
+        grouped.setdefault(_mixed_scheduler_group_key(lane), []).append(lane_index)
+    return list(grouped.values())
+
+
+def _build_env_ops_for_lanes(
+    *,
+    environment: str,
+    active_batch: list[int],
+    lanes: list[BatchedSweepLogLane],
+    fsrs_weights: torch.Tensor | None,
+    fsrs_default_weights: torch.Tensor | None,
+    lstm_packed: PackedLSTMWeights | None,
+    device: torch.device,
+) -> Any:
+    if environment == "lstm":
+        if lstm_packed is None:
+            raise ValueError("Expected LSTM weights when environment is lstm.")
+        lane_lstm = _repeat_lstm_weights_for_lanes(
+            weights=lstm_packed,
+            active_batch=active_batch,
+            lanes=lanes,
+        )
+        return LSTMBatchedEnvOps(
+            lane_lstm,
+            device=lane_lstm.process_0_weight.device,
+            dtype=torch.float32,
+        )
+
+    if environment == "fsrs6":
+        if fsrs_weights is None:
+            raise ValueError("Expected FSRS-6 weights when environment is fsrs6.")
+        lane_weights = _repeat_weights_for_lanes(
+            weights=fsrs_weights.to(device),
+            active_batch=active_batch,
+            lanes=lanes,
+        )
+        return FSRS6BatchEnvOps(
+            weights=lane_weights,
+            bounds=Bounds(),
+            device=lane_weights.device,
+            dtype=torch.float32,
+        )
+
+    if environment == "fsrs6_default":
+        if fsrs_default_weights is None:
+            raise ValueError("Expected default FSRS-6 weights for fsrs6_default.")
+        lane_weights = _repeat_weights_for_lanes(
+            weights=fsrs_default_weights.to(device),
+            active_batch=active_batch,
+            lanes=lanes,
+        )
+        return FSRS6BatchEnvOps(
+            weights=lane_weights,
+            bounds=Bounds(),
+            device=lane_weights.device,
+            dtype=torch.float32,
+        )
+
+    raise ValueError(f"Unsupported environment '{environment}' in batched run.")
+
+
+def _build_mixed_scheduler_ops(
+    *,
     args: argparse.Namespace,
     active_batch: list[int],
     lanes: list[BatchedSweepLogLane],
-    env_weights: torch.Tensor,
-    scheduler_weights: torch.Tensor,
-    short_term_enabled: bool,
+    fsrs_weights: torch.Tensor | None,
+    fsrs_default_weights: torch.Tensor | None,
+    fsrs3_weights: torch.Tensor | None,
+    fsrs3_default_weights: torch.Tensor | None,
+    lstm_packed: PackedLSTMWeights | None,
     short_term_source: str | None,
-    learning_steps: list[float],
-    relearning_steps: list[float],
-    learning_steps_arg: str | None,
-    relearning_steps_arg: str | None,
-    progress: bool,
-    progress_queue,
-    device_label: str,
-    run_label: str,
-    batch_log_root: Path,
-) -> None:
-    if not lanes:
-        raise ValueError("No FSRS-6 DR lanes were provided.")
-    device = env_weights.device
-    lane_env_weights = _repeat_weights_for_lanes(
-        weights=env_weights,
-        active_batch=active_batch,
-        lanes=lanes,
-    )
-    lane_scheduler_weights = _repeat_weights_for_lanes(
-        weights=scheduler_weights,
-        active_batch=active_batch,
-        lanes=lanes,
-    )
-    desired_retention_values: list[float] = []
-    for lane in lanes:
-        if lane.desired_retention is None:
-            raise ValueError("FSRS-6 DR lanes require desired_retention.")
-        desired_retention_values.append(lane.desired_retention)
-    desired_retention = torch.tensor(
-        desired_retention_values,
+    device: torch.device,
+) -> _MixedBatchSchedulerOps:
+    groups: list[_MixedSchedulerGroup] = []
+    policies: dict[Path, SAFSRS6Policy] = {}
+    for indices in _group_lane_indices(lanes):
+        group_lanes = [lanes[index] for index in indices]
+        sample = group_lanes[0]
+        lane_indices = torch.tensor(indices, device=device, dtype=torch.int64)
+        name = sample.scheduler_name
+
+        if name == "fsrs6":
+            if fsrs_weights is None:
+                raise ValueError("Expected FSRS-6 weights for fsrs6 scheduler.")
+            scheduler_weights = _repeat_weights_for_lanes(
+                weights=fsrs_weights.to(device),
+                active_batch=active_batch,
+                lanes=group_lanes,
+            )
+            desired_retention = torch.tensor(
+                [_required_desired_retention(lane) for lane in group_lanes],
+                device=device,
+                dtype=torch.float32,
+            )
+            ops = FSRS6BatchSchedulerOps(
+                weights=scheduler_weights,
+                desired_retention=desired_retention,
+                bounds=Bounds(),
+                priority_mode=args.scheduler_priority,
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "fsrs6_default":
+            if fsrs_default_weights is None:
+                raise ValueError(
+                    "Expected default FSRS-6 weights for fsrs6_default scheduler."
+                )
+            scheduler_weights = _repeat_weights_for_lanes(
+                weights=fsrs_default_weights.to(device),
+                active_batch=active_batch,
+                lanes=group_lanes,
+            )
+            desired_retention = torch.tensor(
+                [_required_desired_retention(lane) for lane in group_lanes],
+                device=device,
+                dtype=torch.float32,
+            )
+            ops = FSRS6BatchSchedulerOps(
+                weights=scheduler_weights,
+                desired_retention=desired_retention,
+                bounds=Bounds(),
+                priority_mode=args.scheduler_priority,
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "fsrs3":
+            if fsrs3_weights is None:
+                raise ValueError("Expected FSRS-3 weights for fsrs3 scheduler.")
+            scheduler_weights = _repeat_weights_for_lanes(
+                weights=fsrs3_weights.to(device),
+                active_batch=active_batch,
+                lanes=group_lanes,
+            )
+            ops = FSRS3BatchSchedulerOps(
+                weights=scheduler_weights,
+                desired_retention=_required_desired_retention(sample),
+                bounds=Bounds(),
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "fsrs3_default":
+            if fsrs3_default_weights is None:
+                raise ValueError(
+                    "Expected default FSRS-3 weights for fsrs3_default scheduler."
+                )
+            scheduler_weights = _repeat_weights_for_lanes(
+                weights=fsrs3_default_weights.to(device),
+                active_batch=active_batch,
+                lanes=group_lanes,
+            )
+            ops = FSRS3BatchSchedulerOps(
+                weights=scheduler_weights,
+                desired_retention=_required_desired_retention(sample),
+                bounds=Bounds(),
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "lstm":
+            if lstm_packed is None:
+                raise ValueError("Expected LSTM weights for lstm scheduler.")
+            scheduler_weights = _repeat_lstm_weights_for_lanes(
+                weights=lstm_packed,
+                active_batch=active_batch,
+                lanes=group_lanes,
+            )
+            interval_mode = "float" if short_term_source == "sched" else "integer"
+            min_interval = 0.0 if short_term_source == "sched" else 1.0
+            ops = LSTMBatchSchedulerOps(
+                scheduler_weights,
+                desired_retention=_required_desired_retention(sample),
+                min_interval=min_interval,
+                interval_mode=interval_mode,
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "sa_fsrs6":
+            if fsrs_weights is None:
+                raise ValueError("Expected FSRS-6 weights for sa_fsrs6 scheduler.")
+            policy_path = sample.sa_fsrs6_policy
+            if policy_path is None:
+                raise ValueError("--sched sa_fsrs6 requires --sa-fsrs6-policy.")
+            policy = policies.get(policy_path)
+            if policy is None:
+                policy = SAFSRS6Policy.from_json(policy_path)
+                policies[policy_path] = policy
+            scheduler_weights = _repeat_weights_for_lanes(
+                weights=fsrs_weights.to(device),
+                active_batch=active_batch,
+                lanes=group_lanes,
+            )
+            ops = SAFSRS6BatchSchedulerOps(
+                weights=scheduler_weights,
+                policy=policy,
+                bounds=Bounds(),
+                priority_mode=args.scheduler_priority,
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "anki_sm2":
+            scheduler = AnkiSM2Scheduler()
+            ops = AnkiSM2BatchSchedulerOps(
+                graduating_interval=scheduler.graduating_interval,
+                easy_interval=scheduler.easy_interval,
+                easy_bonus=scheduler.easy_bonus,
+                hard_interval_factor=scheduler.hard_interval_factor,
+                ease_start=scheduler.ease_start,
+                ease_min=scheduler.ease_min,
+                ease_max=scheduler.ease_max,
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "memrise":
+            ops = MemriseBatchSchedulerOps(
+                MemriseScheduler(),
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "fixed":
+            interval = normalize_fixed_interval(sample.fixed_interval)
+            ops = FixedBatchSchedulerOps(
+                interval=interval,
+                device=device,
+                dtype=torch.float32,
+            )
+        else:
+            raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
+
+        groups.append(_MixedSchedulerGroup(lane_indices=lane_indices, ops=ops))
+
+    return _MixedBatchSchedulerOps(
+        groups=groups,
+        lane_count=len(lanes),
         device=device,
         dtype=torch.float32,
-    )
-    env_ops = FSRS6BatchEnvOps(
-        weights=lane_env_weights,
-        bounds=Bounds(),
-        device=device,
-        dtype=torch.float32,
-    )
-    sched_ops = FSRS6BatchSchedulerOps(
-        weights=lane_scheduler_weights,
-        desired_retention=desired_retention,
-        bounds=Bounds(),
-        priority_mode=args.scheduler_priority,
-        device=device,
-        dtype=torch.float32,
-    )
-    lane_user_ids = [lane.user_id for lane in lanes]
-    (
-        learn_costs,
-        review_costs,
-        first_rating_prob,
-        review_rating_prob,
-        learning_rating_prob,
-        relearning_rating_prob,
-        state_rating_costs,
-        review_markov_success_weights,
-    ) = load_usage(lane_user_ids, args.button_usage)
-    behavior, cost_model = build_behavior_cost(
-        len(lane_user_ids),
-        deck_size=args.deck,
-        learn_limit=args.learn_limit,
-        review_limit=args.review_limit,
-        cost_limit_minutes=args.cost_limit_minutes,
-        learn_costs=learn_costs.to(device),
-        review_costs=review_costs.to(device),
-        first_rating_prob=first_rating_prob.to(device),
-        review_rating_prob=review_rating_prob.to(device),
-        learning_rating_prob=learning_rating_prob.to(device),
-        relearning_rating_prob=relearning_rating_prob.to(device),
-        state_rating_costs=state_rating_costs.to(device),
-        review_markov_success_weights=review_markov_success_weights.to(device),
-        short_term=short_term_enabled,
-    )
-    simulate_and_log_lanes(
-        write_log=write_log,
-        args=args,
-        lanes=lanes,
-        env_ops=env_ops,
-        sched_ops=sched_ops,
-        behavior=behavior,
-        cost_model=cost_model,
-        progress=progress,
-        progress_queue=progress_queue,
-        device_label=device_label,
-        run_label=run_label,
-        short_term_source=short_term_source,
-        learning_steps=learning_steps,
-        relearning_steps=relearning_steps,
-        learning_steps_arg=learning_steps_arg,
-        relearning_steps_arg=relearning_steps_arg,
-        batch_log_root=batch_log_root,
     )
 
 
@@ -236,7 +471,6 @@ def run_batch_core(
 
     schedulers = ctx.schedulers
     envs = ctx.envs
-    dr_values = ctx.dr_values
 
     if short_term_source == "sched":
         for raw in schedulers:
@@ -350,6 +584,32 @@ def run_batch_core(
                 device=base_device,
             )
 
+        if lstm_paths is not None and lstm_packed is None and needs_lstm_weights:
+            lstm_packed = PackedLSTMWeights.from_paths(
+                lstm_paths,
+                use_duration_feature=False,
+                device=base_device,
+                dtype=torch.float32,
+            )
+
+        lanes = _build_sweep_lanes(
+            batch=active_batch,
+            ctx=ctx,
+            environment=environment,
+        )
+        if not lanes:
+            continue
+
+        env_ops = _build_env_ops_for_lanes(
+            environment=environment,
+            active_batch=active_batch,
+            lanes=lanes,
+            fsrs_weights=fsrs_weights,
+            fsrs_default_weights=fsrs_default_weights,
+            lstm_packed=lstm_packed,
+            device=base_device,
+        )
+        lane_user_ids = [lane.user_id for lane in lanes]
         (
             learn_costs,
             review_costs,
@@ -359,56 +619,10 @@ def run_batch_core(
             relearning_rating_prob,
             state_rating_costs,
             review_markov_success_weights,
-        ) = load_usage(active_batch, args.button_usage)
-
-        env_weights: torch.Tensor | None = None
-        if environment == "lstm":
-            if lstm_paths is None:
-                raise ValueError("Expected LSTM weights when environment is lstm.")
-            lstm_packed = PackedLSTMWeights.from_paths(
-                lstm_paths,
-                use_duration_feature=False,
-                device=base_device,
-                dtype=torch.float32,
-            )
-            env_ops = LSTMBatchedEnvOps(
-                lstm_packed,
-                device=lstm_packed.process_0_weight.device,
-                dtype=torch.float32,
-            )
-        elif environment == "fsrs6":
-            if fsrs_weights is None:
-                raise ValueError("Expected FSRS-6 weights when environment is fsrs6.")
-            env_weights = fsrs_weights.to(base_device)
-            env_ops = FSRS6BatchEnvOps(
-                weights=env_weights,
-                bounds=Bounds(),
-                device=env_weights.device,
-                dtype=torch.float32,
-            )
-        elif environment == "fsrs6_default":
-            if fsrs_default_weights is None:
-                raise ValueError("Expected default FSRS-6 weights for fsrs6_default.")
-            env_weights = fsrs_default_weights.to(base_device)
-            env_ops = FSRS6BatchEnvOps(
-                weights=env_weights,
-                bounds=Bounds(),
-                device=env_weights.device,
-                dtype=torch.float32,
-            )
-        else:
-            raise ValueError(f"Unsupported environment '{environment}' in batched run.")
-
-        if lstm_paths is not None and lstm_packed is None and "lstm" in scheduler_names:
-            lstm_packed = PackedLSTMWeights.from_paths(
-                lstm_paths,
-                use_duration_feature=False,
-                device=env_ops.device,
-                dtype=torch.float32,
-            )
+        ) = load_usage(lane_user_ids, args.button_usage)
 
         behavior, cost_model = build_behavior_cost(
-            len(active_batch),
+            len(lane_user_ids),
             deck_size=args.deck,
             learn_limit=args.learn_limit,
             review_limit=args.review_limit,
@@ -425,434 +639,38 @@ def run_batch_core(
             ),
             short_term=short_term_enabled,
         )
-
-        for scheduler_spec in schedulers:
-            name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
-            if name not in {
-                "fsrs6",
-                "fsrs6_default",
-                "fsrs3_default",
-                "fsrs3",
-                "anki_sm2",
-                "memrise",
-                "fixed",
-                "lstm",
-                "sa_fsrs6",
-            }:
-                raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
-            label_prefix = f"{environment} u{active_batch[0]}-{active_batch[-1]} {name}"
-
-            if name == "fsrs6":
-                if fsrs_weights is None:
-                    raise ValueError("Expected FSRS-6 weights for fsrs6 scheduler.")
-                weights = fsrs_weights.to(env_ops.device)
-                if len(dr_values) > 1 and env_weights is not None:
-                    lanes = _build_dr_grid_lanes(
-                        batch=active_batch,
-                        log_root=ctx.log_root,
-                        environment=environment,
-                        scheduler_name=name,
-                        scheduler_spec=raw,
-                        dr_values=dr_values,
-                        fixed_interval=fixed_interval,
-                    )
-                    _simulate_fsrs6_dr_grid_lanes(
-                        write_log=simulate_cli._write_log,
-                        args=args,
-                        active_batch=active_batch,
-                        lanes=lanes,
-                        env_weights=env_weights.to(env_ops.device),
-                        scheduler_weights=weights,
-                        short_term_enabled=short_term_enabled,
-                        short_term_source=short_term_source,
-                        learning_steps=learning_steps,
-                        relearning_steps=relearning_steps,
-                        learning_steps_arg=learning_steps_arg,
-                        relearning_steps_arg=relearning_steps_arg,
-                        progress=progress,
-                        progress_queue=progress_queue,
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr-grid={len(dr_values)}",
-                        batch_log_root=ctx.batch_log_root,
-                    )
-                    continue
-                for dr in dr_values:
-                    scheduler_ops = FSRS6BatchSchedulerOps(
-                        weights=weights,
-                        desired_retention=dr,
-                        bounds=Bounds(),
-                        priority_mode=args.scheduler_priority,
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                    )
-                    simulate_and_log(
-                        write_log=simulate_cli._write_log,
-                        args=args,
-                        batch=active_batch,
-                        env_ops=env_ops,
-                        sched_ops=scheduler_ops,
-                        behavior=behavior,
-                        cost_model=cost_model,
-                        progress=progress,
-                        progress_queue=progress_queue,
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr={dr:.2f}",
-                        environment=environment,
-                        scheduler_name=name,
-                        scheduler_spec=raw,
-                        desired_retention=dr,
-                        fixed_interval=fixed_interval,
-                        short_term_source=short_term_source,
-                        learning_steps=learning_steps,
-                        relearning_steps=relearning_steps,
-                        learning_steps_arg=learning_steps_arg,
-                        relearning_steps_arg=relearning_steps_arg,
-                        log_root=ctx.log_root,
-                        batch_log_root=ctx.batch_log_root,
-                    )
-                continue
-
-            if name == "fsrs6_default":
-                if fsrs_default_weights is None:
-                    raise ValueError(
-                        "Expected default FSRS-6 weights for fsrs6_default scheduler."
-                    )
-                weights = fsrs_default_weights.to(env_ops.device)
-                if len(dr_values) > 1 and env_weights is not None:
-                    lanes = _build_dr_grid_lanes(
-                        batch=active_batch,
-                        log_root=ctx.log_root,
-                        environment=environment,
-                        scheduler_name=name,
-                        scheduler_spec=raw,
-                        dr_values=dr_values,
-                        fixed_interval=fixed_interval,
-                    )
-                    _simulate_fsrs6_dr_grid_lanes(
-                        write_log=simulate_cli._write_log,
-                        args=args,
-                        active_batch=active_batch,
-                        lanes=lanes,
-                        env_weights=env_weights.to(env_ops.device),
-                        scheduler_weights=weights,
-                        short_term_enabled=short_term_enabled,
-                        short_term_source=short_term_source,
-                        learning_steps=learning_steps,
-                        relearning_steps=relearning_steps,
-                        learning_steps_arg=learning_steps_arg,
-                        relearning_steps_arg=relearning_steps_arg,
-                        progress=progress,
-                        progress_queue=progress_queue,
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr-grid={len(dr_values)}",
-                        batch_log_root=ctx.batch_log_root,
-                    )
-                    continue
-                for dr in dr_values:
-                    scheduler_ops = FSRS6BatchSchedulerOps(
-                        weights=weights,
-                        desired_retention=dr,
-                        bounds=Bounds(),
-                        priority_mode=args.scheduler_priority,
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                    )
-                    simulate_and_log(
-                        write_log=simulate_cli._write_log,
-                        args=args,
-                        batch=active_batch,
-                        env_ops=env_ops,
-                        sched_ops=scheduler_ops,
-                        behavior=behavior,
-                        cost_model=cost_model,
-                        progress=progress,
-                        progress_queue=progress_queue,
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr={dr:.2f}",
-                        environment=environment,
-                        scheduler_name=name,
-                        scheduler_spec=raw,
-                        desired_retention=dr,
-                        fixed_interval=fixed_interval,
-                        short_term_source=short_term_source,
-                        learning_steps=learning_steps,
-                        relearning_steps=relearning_steps,
-                        learning_steps_arg=learning_steps_arg,
-                        relearning_steps_arg=relearning_steps_arg,
-                        log_root=ctx.log_root,
-                        batch_log_root=ctx.batch_log_root,
-                    )
-                continue
-
-            if name == "fsrs3":
-                if fsrs3_weights is None:
-                    raise ValueError("Expected FSRS-3 weights for fsrs3 scheduler.")
-                weights = fsrs3_weights.to(env_ops.device)
-                for dr in dr_values:
-                    scheduler_ops = FSRS3BatchSchedulerOps(
-                        weights=weights,
-                        desired_retention=dr,
-                        bounds=Bounds(),
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                    )
-                    simulate_and_log(
-                        write_log=simulate_cli._write_log,
-                        args=args,
-                        batch=active_batch,
-                        env_ops=env_ops,
-                        sched_ops=scheduler_ops,
-                        behavior=behavior,
-                        cost_model=cost_model,
-                        progress=progress,
-                        progress_queue=progress_queue,
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr={dr:.2f}",
-                        environment=environment,
-                        scheduler_name=name,
-                        scheduler_spec=raw,
-                        desired_retention=dr,
-                        fixed_interval=fixed_interval,
-                        short_term_source=short_term_source,
-                        learning_steps=learning_steps,
-                        relearning_steps=relearning_steps,
-                        learning_steps_arg=learning_steps_arg,
-                        relearning_steps_arg=relearning_steps_arg,
-                        log_root=ctx.log_root,
-                        batch_log_root=ctx.batch_log_root,
-                    )
-                continue
-
-            if name == "fsrs3_default":
-                if fsrs3_default_weights is None:
-                    raise ValueError(
-                        "Expected default FSRS-3 weights for fsrs3_default scheduler."
-                    )
-                weights = fsrs3_default_weights.to(env_ops.device)
-                for dr in dr_values:
-                    scheduler_ops = FSRS3BatchSchedulerOps(
-                        weights=weights,
-                        desired_retention=dr,
-                        bounds=Bounds(),
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                    )
-                    simulate_and_log(
-                        write_log=simulate_cli._write_log,
-                        args=args,
-                        batch=active_batch,
-                        env_ops=env_ops,
-                        sched_ops=scheduler_ops,
-                        behavior=behavior,
-                        cost_model=cost_model,
-                        progress=progress,
-                        progress_queue=progress_queue,
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr={dr:.2f}",
-                        environment=environment,
-                        scheduler_name=name,
-                        scheduler_spec=raw,
-                        desired_retention=dr,
-                        fixed_interval=fixed_interval,
-                        short_term_source=short_term_source,
-                        learning_steps=learning_steps,
-                        relearning_steps=relearning_steps,
-                        learning_steps_arg=learning_steps_arg,
-                        relearning_steps_arg=relearning_steps_arg,
-                        log_root=ctx.log_root,
-                        batch_log_root=ctx.batch_log_root,
-                    )
-                continue
-
-            if name == "lstm":
-                if lstm_packed is None:
-                    raise ValueError("Expected LSTM weights for lstm scheduler.")
-                for dr in dr_values:
-                    interval_mode = (
-                        "float" if short_term_source == "sched" else "integer"
-                    )
-                    min_interval = 0.0 if short_term_source == "sched" else 1.0
-                    sched_ops = LSTMBatchSchedulerOps(
-                        lstm_packed,
-                        desired_retention=dr,
-                        min_interval=min_interval,
-                        interval_mode=interval_mode,
-                        device=env_ops.device,
-                        dtype=torch.float32,
-                    )
-                    simulate_and_log(
-                        write_log=simulate_cli._write_log,
-                        args=args,
-                        batch=active_batch,
-                        env_ops=env_ops,
-                        sched_ops=sched_ops,
-                        behavior=behavior,
-                        cost_model=cost_model,
-                        progress=progress,
-                        progress_queue=progress_queue,
-                        device_label=device_label,
-                        run_label=f"{label_prefix} dr={dr:.2f}",
-                        environment=environment,
-                        scheduler_name=name,
-                        scheduler_spec=raw,
-                        desired_retention=dr,
-                        fixed_interval=fixed_interval,
-                        short_term_source=short_term_source,
-                        learning_steps=learning_steps,
-                        relearning_steps=relearning_steps,
-                        learning_steps_arg=learning_steps_arg,
-                        relearning_steps_arg=relearning_steps_arg,
-                        log_root=ctx.log_root,
-                        batch_log_root=ctx.batch_log_root,
-                    )
-                continue
-
-            if name == "sa_fsrs6":
-                if fsrs_weights is None:
-                    raise ValueError("Expected FSRS-6 weights for sa_fsrs6 scheduler.")
-                if ctx.sa_fsrs6_policy is None:
-                    raise ValueError("--sched sa_fsrs6 requires --sa-fsrs6-policy.")
-                policy = SAFSRS6Policy.from_json(ctx.sa_fsrs6_policy)
-                weights = fsrs_weights.to(env_ops.device)
-                sched_ops = SAFSRS6BatchSchedulerOps(
-                    weights=weights,
-                    policy=policy,
-                    bounds=Bounds(),
-                    priority_mode=args.scheduler_priority,
-                    device=env_ops.device,
-                    dtype=torch.float32,
-                )
-                simulate_and_log(
-                    write_log=simulate_cli._write_log,
-                    args=args,
-                    batch=active_batch,
-                    env_ops=env_ops,
-                    sched_ops=sched_ops,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    progress=progress,
-                    progress_queue=progress_queue,
-                    device_label=device_label,
-                    run_label=f"{label_prefix} policy={ctx.sa_fsrs6_policy.stem}",
-                    environment=environment,
-                    scheduler_name=name,
-                    scheduler_spec=raw,
-                    desired_retention=None,
-                    fixed_interval=fixed_interval,
-                    short_term_source=short_term_source,
-                    learning_steps=learning_steps,
-                    relearning_steps=relearning_steps,
-                    learning_steps_arg=learning_steps_arg,
-                    relearning_steps_arg=relearning_steps_arg,
-                    log_root=ctx.log_root,
-                    batch_log_root=ctx.batch_log_root,
-                )
-                continue
-
-            if name == "anki_sm2":
-                scheduler = AnkiSM2Scheduler()
-                sched_ops = AnkiSM2BatchSchedulerOps(
-                    graduating_interval=scheduler.graduating_interval,
-                    easy_interval=scheduler.easy_interval,
-                    easy_bonus=scheduler.easy_bonus,
-                    hard_interval_factor=scheduler.hard_interval_factor,
-                    ease_start=scheduler.ease_start,
-                    ease_min=scheduler.ease_min,
-                    ease_max=scheduler.ease_max,
-                    device=env_ops.device,
-                    dtype=torch.float32,
-                )
-                simulate_and_log(
-                    write_log=simulate_cli._write_log,
-                    args=args,
-                    batch=active_batch,
-                    env_ops=env_ops,
-                    sched_ops=sched_ops,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    progress=progress,
-                    progress_queue=progress_queue,
-                    device_label=device_label,
-                    run_label=label_prefix,
-                    environment=environment,
-                    scheduler_name=name,
-                    scheduler_spec=raw,
-                    desired_retention=None,
-                    fixed_interval=fixed_interval,
-                    short_term_source=short_term_source,
-                    learning_steps=learning_steps,
-                    relearning_steps=relearning_steps,
-                    learning_steps_arg=learning_steps_arg,
-                    relearning_steps_arg=relearning_steps_arg,
-                    log_root=ctx.log_root,
-                    batch_log_root=ctx.batch_log_root,
-                )
-                continue
-
-            if name == "memrise":
-                scheduler = MemriseScheduler()
-                sched_ops = MemriseBatchSchedulerOps(
-                    scheduler,
-                    device=env_ops.device,
-                    dtype=torch.float32,
-                )
-                simulate_and_log(
-                    write_log=simulate_cli._write_log,
-                    args=args,
-                    batch=active_batch,
-                    env_ops=env_ops,
-                    sched_ops=sched_ops,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    progress=progress,
-                    progress_queue=progress_queue,
-                    device_label=device_label,
-                    run_label=label_prefix,
-                    environment=environment,
-                    scheduler_name=name,
-                    scheduler_spec=raw,
-                    desired_retention=None,
-                    fixed_interval=fixed_interval,
-                    short_term_source=short_term_source,
-                    learning_steps=learning_steps,
-                    relearning_steps=relearning_steps,
-                    learning_steps_arg=learning_steps_arg,
-                    relearning_steps_arg=relearning_steps_arg,
-                    log_root=ctx.log_root,
-                    batch_log_root=ctx.batch_log_root,
-                )
-                continue
-
-            if name == "fixed":
-                interval = normalize_fixed_interval(fixed_interval)
-                sched_ops = FixedBatchSchedulerOps(
-                    interval=interval,
-                    device=env_ops.device,
-                    dtype=torch.float32,
-                )
-                simulate_and_log(
-                    write_log=simulate_cli._write_log,
-                    args=args,
-                    batch=active_batch,
-                    env_ops=env_ops,
-                    sched_ops=sched_ops,
-                    behavior=behavior,
-                    cost_model=cost_model,
-                    progress=progress,
-                    progress_queue=progress_queue,
-                    device_label=device_label,
-                    run_label=f"{label_prefix} ivl={interval:.2f}",
-                    environment=environment,
-                    scheduler_name=name,
-                    scheduler_spec=raw,
-                    desired_retention=None,
-                    fixed_interval=interval,
-                    short_term_source=short_term_source,
-                    learning_steps=learning_steps,
-                    relearning_steps=relearning_steps,
-                    learning_steps_arg=learning_steps_arg,
-                    relearning_steps_arg=relearning_steps_arg,
-                    log_root=ctx.log_root,
-                    batch_log_root=ctx.batch_log_root,
-                )
-                continue
+        sched_ops = _build_mixed_scheduler_ops(
+            args=args,
+            active_batch=active_batch,
+            lanes=lanes,
+            fsrs_weights=fsrs_weights,
+            fsrs_default_weights=fsrs_default_weights,
+            fsrs3_weights=fsrs3_weights,
+            fsrs3_default_weights=fsrs3_default_weights,
+            lstm_packed=lstm_packed,
+            short_term_source=short_term_source,
+            device=env_ops.device,
+        )
+        scheduler_label = ",".join(scheduler_names)
+        simulate_and_log_lanes(
+            write_log=simulate_cli._write_log,
+            args=args,
+            lanes=lanes,
+            env_ops=env_ops,
+            sched_ops=sched_ops,
+            behavior=behavior,
+            cost_model=cost_model,
+            progress=progress,
+            progress_queue=progress_queue,
+            device_label=device_label,
+            run_label=(
+                f"{environment} u{active_batch[0]}-{active_batch[-1]} "
+                f"sched={scheduler_label} lanes={len(lanes)}"
+            ),
+            short_term_source=short_term_source,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+            learning_steps_arg=learning_steps_arg,
+            relearning_steps_arg=relearning_steps_arg,
+            batch_log_root=ctx.batch_log_root,
+        )

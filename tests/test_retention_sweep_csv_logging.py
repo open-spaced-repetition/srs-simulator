@@ -24,8 +24,16 @@ from simulator.batched_sweep.logging import (
     simulate_and_log_lanes,
 )
 from simulator.batched_sweep.plan import build_batched_sweep_plan
-from simulator.batched_sweep.runner import _build_dr_grid_lanes
+from simulator.batched_sweep.runner import (
+    BatchedSweepContext,
+    _build_dr_grid_lanes,
+    _build_sweep_lanes,
+    _group_lane_indices,
+)
 from simulator.core import SimulationStats
+from experiments.retention_sweep.aggregate_users import (
+    _iter_log_paths as _iter_aggregate_log_paths,
+)
 
 
 def _stats(days: int = 2) -> SimulationStats:
@@ -285,6 +293,71 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             )
             self.assertEqual(list(root.rglob("*.csv")), [])
 
+    def test_batched_lanes_allow_mixed_scheduler_logs(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def fake_simulate_multiuser(**kwargs):
+            calls.append(kwargs)
+            return [_stats(), _stats()]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = _batched_args(False)
+            args.no_log = False
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "sched_fsrs6" / "dr_0p5",
+                    environment="fsrs6",
+                    scheduler_name="fsrs6",
+                    scheduler_spec="fsrs6",
+                    desired_retention=0.50,
+                    fixed_interval=None,
+                ),
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "sched_anki_sm2",
+                    environment="fsrs6",
+                    scheduler_name="anki_sm2",
+                    scheduler_spec="anki_sm2",
+                    desired_retention=None,
+                    fixed_interval=None,
+                ),
+            ]
+            with patch(
+                "simulator.batched_sweep.logging.simulate_multiuser",
+                side_effect=fake_simulate_multiuser,
+            ):
+                simulate_and_log_lanes(
+                    write_log=simulate_cli._write_log,
+                    args=args,
+                    lanes=lanes,
+                    env_ops=cast(Any, FakeEnvOps()),
+                    sched_ops=cast(Any, object()),
+                    behavior=cast(Any, object()),
+                    cost_model=cast(Any, object()),
+                    progress=False,
+                    progress_queue=None,
+                    device_label="cpu",
+                    run_label="mixed schedulers",
+                    short_term_source=None,
+                    learning_steps=[],
+                    relearning_steps=[],
+                    learning_steps_arg=None,
+                    relearning_steps_arg=None,
+                    batch_log_root=root / "batch_logs",
+                )
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(
+                len(list((root / "sched_fsrs6" / "dr_0p5" / "user_1").glob("*.jsonl"))),
+                1,
+            )
+            self.assertEqual(
+                len(list((root / "sched_anki_sm2" / "user_1").glob("*.jsonl"))),
+                1,
+            )
+
     def test_dr_grid_lanes_expand_user_and_retention_axes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             lanes = _build_dr_grid_lanes(
@@ -310,6 +383,72 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                     "sched_fsrs6/dr_0p6",
                 ],
             )
+
+    def test_sweep_lanes_expand_scheduler_and_parameter_axes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=root,
+                batch_log_root=root / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6", "fsrs3", "anki_sm2", "fixed@3"],
+                dr_values=[0.50, 0.60],
+            )
+            lanes = _build_sweep_lanes(
+                batch=[1, 2],
+                ctx=ctx,
+                environment="fsrs6",
+            )
+
+            self.assertEqual(len(lanes), 12)
+            self.assertEqual(
+                [
+                    (lane.scheduler_name, lane.user_id, lane.desired_retention)
+                    for lane in lanes[:8]
+                ],
+                [
+                    ("fsrs6", 1, 0.50),
+                    ("fsrs6", 2, 0.50),
+                    ("fsrs6", 1, 0.60),
+                    ("fsrs6", 2, 0.60),
+                    ("fsrs3", 1, 0.50),
+                    ("fsrs3", 2, 0.50),
+                    ("fsrs3", 1, 0.60),
+                    ("fsrs3", 2, 0.60),
+                ],
+            )
+            self.assertEqual(
+                [
+                    (lane.scheduler_name, lane.user_id, lane.fixed_interval)
+                    for lane in lanes[8:]
+                ],
+                [
+                    ("anki_sm2", 1, None),
+                    ("anki_sm2", 2, None),
+                    ("fixed", 1, 3.0),
+                    ("fixed", 2, 3.0),
+                ],
+            )
+            self.assertEqual(
+                [len(group) for group in _group_lane_indices(lanes)], [4, 2, 2, 2, 2]
+            )
+
+    def test_aggregate_log_iterator_recurses_nested_lane_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "sched_fsrs6" / "dr_0p5" / "user_1" / "a.jsonl"
+            second = root / "sched_anki_sm2" / "user_1" / "b.jsonl"
+            first.parent.mkdir(parents=True)
+            second.parent.mkdir(parents=True)
+            first.write_text("", encoding="utf-8")
+            second.write_text("", encoding="utf-8")
+
+            paths = list(_iter_aggregate_log_paths(root))
+
+            self.assertEqual(paths, sorted([first, second]))
 
     def test_batched_plan_creates_batch_log_dir_only_for_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
