@@ -1265,10 +1265,10 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                             "cost_limit_minutes": 60.0,
                             "priority": "review-first",
                             "environment": "lstm",
-                            "scheduler": "sa_fsrs6",
-                            "scheduler_spec": "sa_fsrs6",
+                            "scheduler": job.scheduler_name,
+                            "scheduler_spec": job.scheduler_spec,
                             "user_id": job.user_id,
-                            "desired_retention": None,
+                            "desired_retention": job.desired_retention,
                             "scheduler_priority": "low_retrievability",
                             "seed": 42,
                             "fuzz": False,
@@ -1299,13 +1299,18 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertTrue(summary["passed"])
             self.assertTrue(summary["batch_scheduler_artifacts"])
             self.assertEqual(summary["batch_runs_attempted"], 1)
-            self.assertEqual(len(summary["command_results"]), 2)
-            self.assertEqual(len(summary["log_paths"]), 2)
+            self.assertEqual(summary["batch_lanes"], 3)
+            self.assertEqual(len(summary["command_results"]), 3)
+            self.assertEqual(
+                {item["source"] for item in summary["command_results"]},
+                {"artifact", "baseline"},
+            )
+            self.assertEqual(len(summary["log_paths"]), 3)
             performance = json.loads(
                 (stage_root / "performance_summary.json").read_text()
             )
             self.assertEqual(performance["execution_shape"]["subprocess_count"], 0)
-            self.assertEqual(performance["execution_shape"]["batch_lane_count"], 2)
+            self.assertEqual(performance["execution_shape"]["batch_lane_count"], 3)
             manifest = json.loads((stage_root / "manifest.json").read_text())
             self.assertIn("batched_sweep_record", manifest["artifacts"])
 
