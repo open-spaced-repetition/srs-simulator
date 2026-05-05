@@ -142,6 +142,17 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
             config.to_dict()["training"]["batch_baseline_desired_retention_values"]
         )
 
+    def test_loads_batched_sweep_scheduler_artifacts_flag(self) -> None:
+        raw = VALID_CONFIG + "\n[sweep]\nbatch_scheduler_artifacts = true\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertTrue(config.sweep_batch_scheduler_artifacts)
+        self.assertTrue(config.to_dict()["sweep"]["batch_scheduler_artifacts"])
+
 
 if __name__ == "__main__":
     unittest.main()

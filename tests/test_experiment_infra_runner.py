@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -34,6 +35,7 @@ def _write_config(
     stages: list[str] | None = None,
     training_extra: str = "",
     training_sa_extra: str = "",
+    sweep_extra: str = "",
 ) -> Path:
     config_path = root / "experiment.toml"
     stage_values = stages or [
@@ -129,6 +131,7 @@ lambda_grid = [0.0, 0.5, 1.0]
 {training_sa_extra}
 [sweep]
 log_glob = "*.jsonl"
+{sweep_extra}
 {sweep_command_template_line}
 [pareto]
 result_glob = "*.json"
@@ -1179,6 +1182,132 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertEqual(performance["disk_metrics"]["csv_count"], 0)
             manifest = json.loads((stage_root / "manifest.json").read_text())
             self.assertIn("performance_summary", manifest["artifacts"])
+
+    def test_sweep_batches_scheduler_artifacts_in_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            baseline_root.mkdir()
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                training_extra=(
+                    "batch_baseline_desired_retention_values = true\n"
+                    'artifact_metadata_glob = "**/metadata.json"\n'
+                ),
+                training_sa_extra=(
+                    "[training.sa]\n"
+                    "baseline_desired_retention = 0.9\n"
+                    "baseline_desired_retention_values = [0.8, 0.9]\n"
+                ),
+                sweep_extra="batch_scheduler_artifacts = true\n",
+            )
+            train_root = output_root / "test-run" / "train-overfit"
+            artifact_paths = []
+            for desired_retention in (0.8, 0.9):
+                dr_token = str(desired_retention).replace(".", "p")
+                artifact_dir = (
+                    train_root / "train_outputs" / "user_1" / f"dr_{dr_token}"
+                )
+                artifact_dir.mkdir(parents=True)
+                (artifact_dir / "policy.json").write_text("{}", encoding="utf-8")
+                metadata_path = artifact_dir / "metadata.json"
+                metadata_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "artifact_kind": "scheduler-policy",
+                            "artifact_id": f"user-1-dr-{desired_retention}",
+                            "family": "rl_scheduler",
+                            "scheduler_name": "sa_fsrs6",
+                            "environment": "lstm",
+                            "engine": "batched",
+                            "training_user_ids": [1],
+                            "validation_user_ids": [2],
+                            "seed": 42,
+                            "policy_path": "policy.json",
+                            "feature_version": "v1",
+                            "action_space": "sd_retention_function",
+                            "created_at": "2026-04-29T00:00:00Z",
+                            "code_commit": "test",
+                            "lambda_value": 0.5,
+                            "baseline_desired_retention": desired_retention,
+                            "capabilities": ["batched"],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                artifact_paths.append(str(metadata_path))
+            train_root.mkdir(parents=True, exist_ok=True)
+            (train_root / "training_summary.json").write_text(
+                json.dumps({"passed": True, "artifact_paths": artifact_paths}),
+                encoding="utf-8",
+            )
+
+            def fake_batched_sweep_jobs(*, jobs, record_path, **_kwargs):
+                record_path.parent.mkdir(parents=True, exist_ok=True)
+                record_path.write_text(
+                    json.dumps({"batch_lane_count": len(jobs)}),
+                    encoding="utf-8",
+                )
+                for job in jobs:
+                    job.output_dir.mkdir(parents=True, exist_ok=True)
+                    meta = {
+                        "type": "meta",
+                        "data": {
+                            "engine": "batched",
+                            "days": 30,
+                            "deck_size": 100,
+                            "learn_limit": 10,
+                            "review_limit": 999,
+                            "cost_limit_minutes": 60.0,
+                            "priority": "review-first",
+                            "environment": "lstm",
+                            "scheduler": "sa_fsrs6",
+                            "scheduler_spec": "sa_fsrs6",
+                            "user_id": job.user_id,
+                            "desired_retention": None,
+                            "scheduler_priority": "low_retrievability",
+                            "seed": 42,
+                            "fuzz": False,
+                            "short_term": True,
+                            "short_term_source": "steps",
+                        },
+                    }
+                    totals = {"type": "totals", "data": {"reviews": 1}}
+                    (job.output_dir / "sweep.jsonl").write_text(
+                        json.dumps(meta) + "\n" + json.dumps(totals) + "\n",
+                        encoding="utf-8",
+                    )
+
+            with patch(
+                "simulator.experiment_infra.runner._run_batched_sweep_jobs",
+                side_effect=fake_batched_sweep_jobs,
+            ):
+                result = run_stage(
+                    config_path=config_path,
+                    stage=StageName.SWEEP,
+                    repo_root=root,
+                    run_id="test-run",
+                )
+
+            self.assertEqual(result.exit_code, 0)
+            stage_root = output_root / "test-run" / "sweep"
+            summary = json.loads((stage_root / "sweep_summary.json").read_text())
+            self.assertTrue(summary["passed"])
+            self.assertTrue(summary["batch_scheduler_artifacts"])
+            self.assertEqual(summary["batch_runs_attempted"], 1)
+            self.assertEqual(len(summary["command_results"]), 2)
+            self.assertEqual(len(summary["log_paths"]), 2)
+            performance = json.loads(
+                (stage_root / "performance_summary.json").read_text()
+            )
+            self.assertEqual(performance["execution_shape"]["subprocess_count"], 0)
+            self.assertEqual(performance["execution_shape"]["batch_lane_count"], 2)
+            manifest = json.loads((stage_root / "manifest.json").read_text())
+            self.assertIn("batched_sweep_record", manifest["artifacts"])
 
     def test_train_overfit_requires_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -72,6 +72,18 @@ class TrainCommandJob:
 
 
 @dataclass(frozen=True, slots=True)
+class SweepArtifactJob:
+    metadata_path: Path
+    metadata: SchedulerArtifactMetadata
+    user_id: int
+    lambda_value: float
+    lambda_token: str
+    baseline_desired_retention: float | None
+    baseline_desired_retention_token: str | None
+    output_dir: Path
+
+
+@dataclass(frozen=True, slots=True)
 class AllExecutionResult:
     exit_code: int
     run_id: str
@@ -627,6 +639,7 @@ def run_sweep(
     manifest_path = stage_root / "manifest.json"
     commands_root = stage_root / "commands"
     outputs_root = stage_root / "sweep_outputs"
+    batched_sweep_record_path = commands_root / "batched_sweep_record.json"
     train_summary_path = (
         output_root / run_id / StageName.TRAIN_OVERFIT.value / "training_summary.json"
     )
@@ -644,8 +657,10 @@ def run_sweep(
     command_results: list[dict[str, Any]] = []
     commands_attempted = 0
     commands_succeeded = 0
+    batch_runs_attempted = 0
+    batch_runs_succeeded = 0
 
-    if not config.sweep_command_template:
+    if not config.sweep_batch_scheduler_artifacts and not config.sweep_command_template:
         failures.append(FailureClass.INVALID_CONFIG)
         notes.append("sweep.command_template is required for sweep.")
 
@@ -658,7 +673,130 @@ def run_sweep(
             failures.append(FailureClass.INCOMPLETE_OUTPUT)
             notes.extend(artifact_notes)
 
-    if not failures:
+    if not failures and config.sweep_batch_scheduler_artifacts:
+        jobs: list[SweepArtifactJob] = []
+        for metadata_path in train_artifact_paths:
+            artifact_paths.append(metadata_path)
+            try:
+                metadata = validate_scheduler_artifact(
+                    metadata_path, require_files=True
+                )
+            except ValueError as exc:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(
+                    f"Invalid scheduler artifact metadata {metadata_path}: {exc}"
+                )
+                break
+            artifact_note = _validate_sweep_artifact_metadata(
+                metadata_path=metadata_path,
+                metadata=metadata,
+                config=config,
+            )
+            if artifact_note is not None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(artifact_note)
+                break
+
+            user_id = metadata.training_user_ids[0]
+            if metadata.lambda_value is None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(
+                    f"Invalid scheduler artifact metadata {metadata_path}: "
+                    "lambda_value is required for sweep."
+                )
+                break
+            lambda_value = metadata.lambda_value
+            lambda_token = _format_lambda_token(lambda_value)
+            baseline_dr = metadata.baseline_desired_retention
+            if baseline_dr is not None:
+                baseline_dr_token = _format_retention_token(baseline_dr)
+                output_dir = (
+                    outputs_root
+                    / f"user_{user_id}"
+                    / f"dr_{baseline_dr_token}"
+                    / f"lambda_{lambda_token}"
+                )
+            else:
+                baseline_dr_token = None
+                output_dir = outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
+            jobs.append(
+                SweepArtifactJob(
+                    metadata_path=metadata_path,
+                    metadata=metadata,
+                    user_id=user_id,
+                    lambda_value=lambda_value,
+                    lambda_token=lambda_token,
+                    baseline_desired_retention=baseline_dr,
+                    baseline_desired_retention_token=baseline_dr_token,
+                    output_dir=output_dir,
+                )
+            )
+
+        if not failures:
+            batch_runs_attempted = 1
+            try:
+                _run_batched_sweep_jobs(
+                    config=config,
+                    repo_root=repo_root,
+                    jobs=jobs,
+                    record_path=batched_sweep_record_path,
+                )
+            except Exception as exc:
+                failures.append(FailureClass.RUNNER_FAILED)
+                notes.append(f"Batched sweep failed: {exc}")
+            else:
+                batch_runs_succeeded = 1
+                for job in jobs:
+                    matched_logs, log_note = _collect_sweep_logs(
+                        output_dir=job.output_dir,
+                        log_glob=config.sweep_log_glob,
+                    )
+                    if log_note is not None:
+                        failures.append(FailureClass.INVALID_CONFIG)
+                        notes.append(log_note)
+                        break
+                    if not matched_logs:
+                        failures.append(FailureClass.INCOMPLETE_OUTPUT)
+                        notes.append(
+                            f"No sweep JSONL logs matched {config.sweep_log_glob!r} "
+                            f"in {job.output_dir}."
+                        )
+                        break
+                    log_note = _validate_sweep_logs(
+                        log_paths=matched_logs,
+                        config=config,
+                        metadata=job.metadata,
+                        metadata_path=job.metadata_path,
+                    )
+                    if log_note is not None:
+                        failures.append(FailureClass.INVALID_ARTIFACT)
+                        notes.append(log_note)
+                        break
+                    log_paths.extend(matched_logs)
+                    command_results.append(
+                        {
+                            "artifact_metadata_path": str(job.metadata_path),
+                            "artifact_id": job.metadata.artifact_id,
+                            "user_id": job.user_id,
+                            "baseline_desired_retention": (
+                                job.baseline_desired_retention
+                            ),
+                            "baseline_desired_retention_token": (
+                                job.baseline_desired_retention_token
+                            ),
+                            "lambda_value": job.lambda_value,
+                            "lambda_token": job.lambda_token,
+                            "output_dir": str(job.output_dir),
+                            "command_record_path": None,
+                            "stdout_path": None,
+                            "stderr_path": None,
+                            "exit_code": 0,
+                            "timed_out": False,
+                            "execution_mode": "batched-in-process",
+                        }
+                    )
+
+    if not failures and not config.sweep_batch_scheduler_artifacts:
         for metadata_path in train_artifact_paths:
             artifact_paths.append(metadata_path)
             try:
@@ -813,6 +951,8 @@ def run_sweep(
             "input_artifacts": float(len(train_artifact_paths)),
             "commands_attempted": float(commands_attempted),
             "commands_succeeded": float(commands_succeeded),
+            "batch_runs_attempted": float(batch_runs_attempted),
+            "batch_runs_succeeded": float(batch_runs_succeeded),
             "logs_validated": float(len(log_paths)),
         },
         thresholds={},
@@ -830,11 +970,17 @@ def run_sweep(
             "input_artifacts": len(train_artifact_paths),
             "commands_attempted": commands_attempted,
             "commands_succeeded": commands_succeeded,
+            "batch_runs_attempted": batch_runs_attempted,
+            "batch_runs_succeeded": batch_runs_succeeded,
             "logs_validated": len(log_paths),
         },
         execution_shape={
             "process_count": 1,
             "subprocess_count": commands_attempted,
+            "batch_scheduler_artifacts": config.sweep_batch_scheduler_artifacts,
+            "batch_lane_count": len(train_artifact_paths)
+            if config.sweep_batch_scheduler_artifacts
+            else 0,
             "timeout_seconds": config.performance.timeout_seconds,
         },
     )
@@ -870,6 +1016,9 @@ def run_sweep(
         "train_summary_path": str(train_summary_path),
         "command_template": list(config.sweep_command_template),
         "log_glob": config.sweep_log_glob,
+        "batch_scheduler_artifacts": config.sweep_batch_scheduler_artifacts,
+        "batch_runs_attempted": batch_runs_attempted,
+        "batch_runs_succeeded": batch_runs_succeeded,
         "input_artifact_paths": [str(path) for path in artifact_paths],
         "log_paths": [str(path) for path in log_paths],
         "command_results": command_results,
@@ -910,6 +1059,12 @@ def run_sweep(
             manifest_path,
             *artifact_paths,
             *command_records,
+            *(
+                (batched_sweep_record_path,)
+                if config.sweep_batch_scheduler_artifacts
+                and batched_sweep_record_path.exists()
+                else ()
+            ),
             *stdout_paths,
             *stderr_paths,
             *log_paths,
@@ -939,6 +1094,8 @@ def run_sweep(
             for index, path in enumerate(command_records)
         }
     )
+    if config.sweep_batch_scheduler_artifacts and batched_sweep_record_path.exists():
+        manifest_artifacts["batched_sweep_record"] = batched_sweep_record_path
     manifest_artifacts.update(
         {f"sweep_stdout_{index}": path for index, path in enumerate(stdout_paths)}
     )
@@ -3182,6 +3339,294 @@ def _run_train_command_job(
     result["artifact_paths"] = matched_artifacts
     result["succeeded"] = True
     return result
+
+
+def _run_batched_sweep_jobs(
+    *,
+    config: ExperimentConfig,
+    repo_root: Path,
+    jobs: Sequence[SweepArtifactJob],
+    record_path: Path,
+) -> None:
+    if not jobs:
+        raise ValueError("No scheduler artifacts were provided for batched sweep.")
+    if config.simulation.engine != "batched":
+        raise ValueError("Batched sweep requires simulation.engine = 'batched'.")
+    if config.simulation.environment not in {"fsrs6", "fsrs6_default"}:
+        raise ValueError(
+            "Batched scheduler-artifact sweep currently supports fsrs6 or "
+            "fsrs6_default environments."
+        )
+    unsupported = sorted(
+        {
+            job.metadata.scheduler_name
+            for job in jobs
+            if job.metadata.scheduler_name != "sa_fsrs6"
+        }
+    )
+    if unsupported:
+        raise ValueError(
+            "Batched scheduler-artifact sweep currently supports only sa_fsrs6 "
+            f"artifacts, got {unsupported}."
+        )
+
+    import argparse
+
+    import torch
+
+    import simulate as simulate_cli
+    from simulator.batched_sweep.behavior_cost import build_behavior_cost, load_usage
+    from simulator.batched_sweep.weights import (
+        build_default_fsrs6_weights,
+        load_fsrs6_weights,
+    )
+    from simulator.benchmark_loader import (
+        parse_result_overrides,
+        resolve_benchmark_root,
+    )
+    from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
+    from simulator.defaults import (
+        DEFAULT_COST_LIMIT_MINUTES,
+        DEFAULT_LEARN_LIMIT,
+        DEFAULT_REVIEW_LIMIT,
+        DEFAULT_SHORT_TERM_LOOPS_LIMIT,
+    )
+    from simulator.math.fsrs import Bounds
+    from simulator.models.fsrs import FSRS6BatchEnvOps
+    from simulator.sa_fsrs6_policy import SAFSRS6Policy
+    from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
+    from simulator.short_term_config import resolve_short_term_config
+    from simulator.vectorized.multiuser_engine import simulate_multiuser
+
+    device_name = _resolve_performance_device(config)
+    torch_device = config.training_sa.get("torch_device")
+    if isinstance(torch_device, str) and torch_device.strip():
+        device_name = torch_device.strip()
+    device = torch.device(device_name)
+
+    short_term_args = argparse.Namespace(
+        short_term_source=config.simulation.short_term_source,
+        learning_steps=config.training_sa.get("learning_steps"),
+        relearning_steps=config.training_sa.get("relearning_steps"),
+    )
+    short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
+        short_term_args
+    )
+    learning_steps_arg = (
+        ",".join(str(step) for step in learning_steps)
+        if short_term_source == "steps"
+        else None
+    )
+    relearning_steps_arg = (
+        ",".join(str(step) for step in relearning_steps)
+        if short_term_source == "steps"
+        else None
+    )
+
+    lane_user_ids = [job.user_id for job in jobs]
+    benchmark_root = resolve_benchmark_root(repo_root, None).resolve()
+    fsrs_weights, active_user_ids = load_fsrs6_weights(
+        repo_root=repo_root,
+        user_ids=lane_user_ids,
+        benchmark_root=benchmark_root,
+        benchmark_partition=None,
+        overrides=parse_result_overrides(None),
+        short_term=bool(short_term_source),
+        device=device,
+    )
+    if fsrs_weights is None or active_user_ids != lane_user_ids:
+        raise ValueError(
+            "Batched sweep could not load FSRS-6 weights for all policy lanes."
+        )
+
+    if config.simulation.environment == "fsrs6":
+        env_weights = fsrs_weights.to(device)
+    else:
+        env_weights = build_default_fsrs6_weights(
+            user_ids=lane_user_ids,
+            device=device,
+        )
+    env_ops = FSRS6BatchEnvOps(
+        weights=env_weights,
+        bounds=Bounds(),
+        device=device,
+        dtype=torch.float32,
+    )
+
+    policies = [SAFSRS6Policy.from_json(job.metadata.policy_path) for job in jobs]
+    template = policies[0]
+    for policy in policies[1:]:
+        if not math.isclose(
+            policy.retention_min,
+            template.retention_min,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ) or not math.isclose(
+            policy.retention_max,
+            template.retention_max,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                "Batched sa_fsrs6 sweep requires identical policy retention bounds."
+            )
+    coefficients = torch.tensor(
+        [policy.coefficients for policy in policies],
+        device=device,
+        dtype=torch.float32,
+    )
+    sched_ops = SAFSRS6BatchSchedulerOps(
+        weights=fsrs_weights.to(device),
+        policy=template,
+        coefficients=coefficients,
+        bounds=Bounds(),
+        priority_mode=config.simulation.scheduler_priority,
+        device=device,
+        dtype=torch.float32,
+    )
+
+    (
+        learn_costs,
+        review_costs,
+        first_rating_prob,
+        review_rating_prob,
+        learning_rating_prob,
+        relearning_rating_prob,
+        state_rating_costs,
+        review_markov_success_weights,
+    ) = load_usage(lane_user_ids, DEFAULT_BUTTON_USAGE_PATH)
+    learn_limit = (
+        config.simulation.learn_limit
+        if config.simulation.learn_limit is not None
+        else DEFAULT_LEARN_LIMIT
+    )
+    review_limit = (
+        config.simulation.review_limit
+        if config.simulation.review_limit is not None
+        else DEFAULT_REVIEW_LIMIT
+    )
+    cost_limit_minutes = (
+        config.simulation.cost_limit_minutes
+        if config.simulation.cost_limit_minutes is not None
+        else DEFAULT_COST_LIMIT_MINUTES
+    )
+    behavior, cost_model = build_behavior_cost(
+        len(lane_user_ids),
+        deck_size=config.simulation.deck,
+        learn_limit=learn_limit,
+        review_limit=review_limit,
+        cost_limit_minutes=cost_limit_minutes,
+        learn_costs=learn_costs.to(device),
+        review_costs=review_costs.to(device),
+        first_rating_prob=first_rating_prob.to(device),
+        review_rating_prob=review_rating_prob.to(device),
+        learning_rating_prob=learning_rating_prob.to(device),
+        relearning_rating_prob=relearning_rating_prob.to(device),
+        state_rating_costs=state_rating_costs.to(device),
+        review_markov_success_weights=review_markov_success_weights.to(device),
+        short_term=bool(short_term_source),
+    )
+
+    short_term_threshold = _training_sa_float(
+        config,
+        "short_term_threshold",
+        0.5,
+    )
+    short_term_loops_limit = _training_sa_int(
+        config,
+        "short_term_loops_limit",
+        DEFAULT_SHORT_TERM_LOOPS_LIMIT,
+    )
+    stats_list = simulate_multiuser(
+        days=config.simulation.days,
+        deck_size=config.simulation.deck,
+        env_ops=env_ops,
+        sched_ops=sched_ops,
+        behavior=behavior,
+        cost_model=cost_model,
+        seed=config.seed,
+        device=device,
+        dtype=torch.float32,
+        fuzz=config.simulation.fuzz,
+        priority_mode=config.simulation.priority,
+        progress=False,
+        short_term_source=short_term_source,
+        learning_steps=learning_steps,
+        relearning_steps=relearning_steps,
+        short_term_threshold=short_term_threshold,
+        short_term_loops_limit=short_term_loops_limit,
+    )
+
+    for job, stats in zip(jobs, stats_list, strict=True):
+        user_log_dir = job.output_dir / f"user_{job.user_id}"
+        log_args = argparse.Namespace(
+            engine="batched",
+            days=config.simulation.days,
+            deck=config.simulation.deck,
+            learn_limit=learn_limit,
+            review_limit=review_limit,
+            cost_limit_minutes=cost_limit_minutes,
+            priority=config.simulation.priority,
+            environment=config.simulation.environment,
+            scheduler=job.metadata.scheduler_name,
+            scheduler_spec=job.metadata.scheduler_name,
+            user_id=job.user_id,
+            button_usage=str(DEFAULT_BUTTON_USAGE_PATH),
+            desired_retention=None,
+            scheduler_priority=config.simulation.scheduler_priority,
+            sspmmc_policy=None,
+            sa_fsrs6_policy=job.metadata.policy_path,
+            fixed_interval=None,
+            seed=config.seed,
+            fuzz=config.simulation.fuzz,
+            short_term_source=short_term_source,
+            learning_steps=learning_steps_arg,
+            relearning_steps=relearning_steps_arg,
+            short_term_threshold=short_term_threshold,
+            short_term_loops_limit=short_term_loops_limit,
+            log_dir=user_log_dir,
+            log_reviews=False,
+            write_daily_csv=config.performance.diagnostic_csv_logs,
+        )
+        simulate_cli._write_log(log_args, stats)
+
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        record_path,
+        {
+            "type": "batched-sweep-record",
+            "batch_lane_count": len(jobs),
+            "scheduler_name": "sa_fsrs6",
+            "environment": config.simulation.environment,
+            "engine": config.simulation.engine,
+            "device": str(device),
+            "seed": config.seed,
+            "artifact_metadata_paths": [str(job.metadata_path) for job in jobs],
+            "output_dirs": [str(job.output_dir) for job in jobs],
+        },
+    )
+
+
+def _training_sa_float(
+    config: ExperimentConfig,
+    key: str,
+    default: float,
+) -> float:
+    value = config.training_sa.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (float, int)):
+        raise ValueError(f"training.sa.{key} must be a number.")
+    return float(value)
+
+
+def _training_sa_int(
+    config: ExperimentConfig,
+    key: str,
+    default: int,
+) -> int:
+    value = config.training_sa.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"training.sa.{key} must be an integer.")
+    return value
 
 
 def _format_sweep_command(

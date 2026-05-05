@@ -445,6 +445,7 @@ class ExperimentConfig:
     train_batch_baseline_desired_retention_values: bool = False
     sweep_command_template: tuple[str, ...] = ()
     sweep_log_glob: str = "*.jsonl"
+    sweep_batch_scheduler_artifacts: bool = False
     pareto_command_template: tuple[str, ...] = ()
     pareto_result_glob: str = "*.json"
     pareto_plot_glob: str = "*.png"
@@ -519,6 +520,10 @@ class ExperimentConfig:
             sweep_log_glob=_require_str(
                 sweep.get("log_glob", "*.jsonl"), "sweep.log_glob"
             ),
+            sweep_batch_scheduler_artifacts=_require_bool(
+                sweep.get("batch_scheduler_artifacts", False),
+                "sweep.batch_scheduler_artifacts",
+            ),
             pareto_command_template=_str_tuple(
                 pareto.get("command_template", []), "pareto.command_template"
             ),
@@ -580,6 +585,7 @@ class ExperimentConfig:
             "sweep": {
                 "command_template": list(self.sweep_command_template),
                 "log_glob": self.sweep_log_glob,
+                "batch_scheduler_artifacts": self.sweep_batch_scheduler_artifacts,
             },
             "pareto": {
                 "command_template": list(self.pareto_command_template),
