@@ -61,7 +61,9 @@ experiment should continue.
   SA FSRS-6 policies.
 - **Pareto**: the external efficiency frontier built from sweep logs. Internal
   reward, loss, acceptance rate, and promotion flags are diagnostics only; they
-  do not replace Pareto evidence.
+  do not replace Pareto evidence. Pareto charts should be generated per user;
+  do not generate a user-aggregated Pareto plot. Use aggregate JSON/statistics
+  for multi-user evidence instead.
 
 ## Standard Stage Flow
 
@@ -194,7 +196,8 @@ Advance a new policy family in this order:
    generalization pressure.
 2. Same-user external sweep: confirm the trained artifact still improves under
    the independent sweep path.
-3. Pareto: build baseline + candidate Pareto JSON and PNG from sweep logs.
+3. Pareto: build per-user baseline + candidate Pareto JSON and PNG from sweep
+   logs. Do not use a user-aggregated Pareto plot as evidence.
 4. Multi-user aggregate: compare means and distributions on the intersection of
    users.
 5. Validation and reserved test: unlock only after the earlier stages pass.
@@ -238,7 +241,8 @@ scheduler. Do not read hidden memory state from the environment.
   failure.
 - Sweep: `batch_lanes` matches the expected `(user, scheduler, parameter)` count;
   `subprocess_count = 0` means the in-process batched sweep path ran.
-- Pareto: `pareto_summary.json` contains both `result_paths` and `plot_paths`.
+- Pareto: `pareto_summary.json` contains both `result_paths` and `plot_paths`;
+  generated Pareto plots are per-user, not user-aggregated.
 - Aggregate: uses the user intersection and the intended equivalence-baseline
   settings.
 - Disk: CSV count should be zero unless the run is explicitly diagnostic.

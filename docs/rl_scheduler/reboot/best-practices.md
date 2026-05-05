@@ -41,6 +41,9 @@
 - External Pareto dominance is the promotion authority.
 - Internal reward, loss, action coverage, feasibility count, or
   `promotion_eligible` can diagnose but cannot promote.
+- Generate Pareto charts per user only. Do not generate user-aggregated Pareto
+  plots; multi-user evidence should come from aggregate JSON/statistics on a
+  clearly defined user intersection.
 - Always inspect high-memory, DR95, low-lambda, user coverage, near-overlap, and
   time-worse behavior.
 - Do train-user overfit feasibility before broad validation.

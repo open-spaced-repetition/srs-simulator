@@ -39,6 +39,8 @@ Use this skill for RL scheduler experiment infrastructure work in
 - Keep retention_sweep CSV output off by default; use `--diagnostic-csv-logs`
   only when diagnosing simulation behavior or generating CSV-specific plots.
 - External Pareto dominance is the promotion authority.
+- Generate Pareto charts per user only. Do not generate user-aggregated Pareto
+  plots; multi-user evidence belongs in aggregate JSON/statistics.
 - Internal reward, loss, action coverage, and feasibility are diagnostic only.
 - Train-user overfit feasibility must pass before broad validation.
 - Reserved test is never used for tuning.

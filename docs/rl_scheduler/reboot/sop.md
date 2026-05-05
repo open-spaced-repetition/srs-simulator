@@ -100,6 +100,8 @@ an optional report-only action:
 5. The generated chart path is recorded in `pareto/pareto_summary.json` under
    `plot_paths`; by default the PNG is under
    `<output_root>/<run_id>/pareto/pareto_outputs/`.
+6. Generate Pareto charts per user only. Do not generate a user-aggregated
+   Pareto chart; use aggregate JSON/statistics for multi-user conclusions.
 
 Inspect a run root with:
 
