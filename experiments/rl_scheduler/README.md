@@ -1,0 +1,244 @@
+# RL Scheduler Training Experiments
+
+This directory contains the training entry points, TOML profiles, and run
+inspection tools for scheduler-learning experiments. The `rl_scheduler` family
+name is broad by design: it covers PPO/DQN-style reinforcement learning, FQI,
+CEM, simulated annealing, and other policy-search methods as long as the output
+is a scheduler artifact that can enter the same external evaluation pipeline.
+
+The current implemented research line is SA FSRS-6: simulated annealing learns a
+function `f(S, D) -> desired_retention`, then uses scheduler-side FSRS-6
+stability `S` and difficulty `D` to compute the next interval. A core rule is
+that training and evaluation must not read the environment's hidden memory
+state. A learned scheduler must maintain its own scheduler state. For SA
+FSRS-6, that means the scheduler implements its own FSRS-6 state update to
+obtain `S` and `D`.
+
+## Directory Layout
+
+- `run_experiment.py`: TOML-driven stage runner.
+- `train_sa_fsrs6.py`: SA FSRS-6 overfit trainer for one baseline desired
+  retention value.
+- `train_sa_fsrs6_dr_grid.py`: SA FSRS-6 trainer that batches a desired
+  retention grid inside one process.
+- `tune_sa_fsrs6_lanes.py`: GPU lane/chains tuning and throughput probe.
+- `inspect_run.py`: reads machine-readable evidence under a run root.
+- `validate_artifact.py`: validates scheduler artifact metadata and referenced
+  files.
+- `configs/`: reproducible experiment profiles. Formal runs should start from a
+  checked-in TOML profile here.
+
+The restart roadmap and SOP live under `docs/rl_scheduler/reboot/`. This README
+focuses on how to train, evaluate, and decide whether a scheduler-learning
+experiment should continue.
+
+## Core Terms
+
+- **TOML profile**: the reproducible experiment configuration. User splits,
+  seed, days, deck size, limits, engine, environment, short-term mode, fuzz,
+  GPU guard, training settings, and sweep/Pareto/aggregate commands belong in
+  TOML.
+- **run id**: the stable identifier for one run. Stage outputs are written to
+  `<output_root>/<run_id>/<stage>/`. Use a fixed run id when continuing or
+  reproducing a run.
+- **preflight**: the machine and configuration check before formal execution.
+  It parses the profile, writes config snapshots, records git/uv/python/torch
+  and CUDA evidence, checks output and baseline roots, and runs CUDA smoke/guard
+  checks when the profile requires GPU.
+- **stage-baseline**: exact metadata-based staging of FSRS-6 baseline JSONL
+  logs from `baseline.log_root` into the current run. Formal workflows should
+  not silently rerun baselines as a fallback.
+- **train-overfit**: train a separate policy on the training user and compare it
+  against the training-user baseline. If a policy family cannot beat baseline
+  even when overfitting is allowed, stop that family before generalization
+  checks.
+- **scheduler artifact**: the trained policy package. It contains at least
+  `metadata.json` and a policy/checkpoint file. Metadata records scheduler name,
+  training users, seed, lambda, baseline DR, config snapshot, and policy path.
+- **sweep**: external simulation of artifacts and baselines. The current
+  batched sweep can batch `(user, scheduler, scheduler parameter)` lanes in one
+  simulator call, such as several FSRS-6 desired-retention values plus several
+  SA FSRS-6 policies.
+- **Pareto**: the external efficiency frontier built from sweep logs. Internal
+  reward, loss, acceptance rate, and promotion flags are diagnostics only; they
+  do not replace Pareto evidence.
+
+## Standard Stage Flow
+
+Prefer explicit stages over jumping straight to `all`:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/<profile>.toml \
+  --stage dry-run \
+  --run-id <run-id>
+
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/<profile>.toml \
+  --stage preflight \
+  --run-id <run-id>
+
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/<profile>.toml \
+  --stage stage-baseline \
+  --run-id <run-id>
+
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/<profile>.toml \
+  --stage train-overfit \
+  --run-id <run-id>
+
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/<profile>.toml \
+  --stage sweep \
+  --run-id <run-id>
+```
+
+If the profile includes Pareto or aggregate stages, continue with:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/<profile>.toml \
+  --stage pareto \
+  --run-id <run-id>
+
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/<profile>.toml \
+  --stage aggregate \
+  --run-id <run-id>
+```
+
+Inspect a run:
+
+```bash
+uv run python experiments/rl_scheduler/inspect_run.py \
+  --run-root <output_root>/<run-id>
+```
+
+Validate one artifact:
+
+```bash
+uv run python experiments/rl_scheduler/validate_artifact.py \
+  --metadata <metadata.json> \
+  --require-files
+```
+
+## Current Main Experiment: SA FSRS-6 DR Grid
+
+Representative profiles:
+
+- `configs/sa_fsrs6_fsrs6_dr_grid.toml`: single-user DR grid.
+- `configs/sa_fsrs6_fsrs6_dr_grid_users_1_16.toml`: first 16 users, FSRS-6
+  environment, short-term off, 1825 days, deck size 10000, learn limit 10, and
+  review limit 9999.
+
+Training target:
+
+- Baseline scheduler: FSRS-6.
+- Candidate scheduler: SA FSRS-6.
+- Action: emit desired retention from scheduler-side FSRS-6 `S,D`.
+- DR grid: typically `0.50..0.98`.
+- Overfit gate: on the training user, both memorized average and memorized per
+  minute must improve relative to the corresponding baseline.
+
+Batching model:
+
+- `training.batch_baseline_desired_retention_values = true` batches the DR grid
+  inside one training command.
+- `training.sa.dr_batch_size` controls how many DR values enter one GPU chunk.
+- Effective lanes are approximately `dr_batch_size * chains`.
+- `sweep.batch_scheduler_artifacts = true` evaluates artifacts without one
+  subprocess per artifact. Instead, one in-process batched simulation covers
+  users, schedulers, and scheduler parameters.
+
+## Reproducibility Requirements
+
+Formal experiments must satisfy these rules:
+
+- Add or copy a `configs/*.toml` profile before running a new experiment. Do not
+  rely on shell history for parameters.
+- Record `seed`, `users`, `simulation`, `gpu_guard`, `performance`, `training`,
+  `sweep`, and `pareto`/`aggregate` settings in TOML.
+- Preserve config snapshots, resolved configs, command records, manifests, gate
+  summaries, and performance summaries for each run.
+- Use a stable `--run-id` so later `sweep`, `pareto`, and `aggregate` stages
+  align with the same outputs.
+- Do not edit artifact metadata by hand to make a run pass. Metadata mismatch is
+  a run failure.
+
+## GPU And Throughput
+
+Prefer batch-level parallelism before same-GPU multiprocessing:
+
+- In training, increase `chains`, `dr_batch_size`, or candidate lanes until GPU
+  utilization and throughput approach the platform limit.
+- In sweep, batch `(user, scheduler, scheduler parameter)` lanes together.
+- Use same-GPU process fanout only after single-process batching has plateaued
+  and memory is still clearly underused.
+- Performance-related changes must report before/after results for the affected
+  path.
+
+Logging rules:
+
+- Retention sweeps write JSONL summaries by default.
+- Do not write daily CSV sidecars or batch GPU CSV logs unless diagnosing
+  simulation behavior or using a CSV-only plotting helper.
+- If CSV diagnostics are needed, set `performance.diagnostic_csv_logs = true`
+  explicitly and record the reason.
+
+## Promotion Order
+
+Advance a new policy family in this order:
+
+1. Training-user overfit: prove the direction can beat baseline even before
+   generalization pressure.
+2. Same-user external sweep: confirm the trained artifact still improves under
+   the independent sweep path.
+3. Pareto: build baseline + candidate Pareto JSON and PNG from sweep logs.
+4. Multi-user aggregate: compare means and distributions on the intersection of
+   users.
+5. Validation and reserved test: unlock only after the earlier stages pass.
+
+Stop conditions:
+
+- `train-overfit` cannot beat baseline on the training user.
+- Sweep log metadata does not match TOML/artifact metadata.
+- Pareto advantage disappears, or it depends on missing baselines or mismatched
+  user sets.
+- A formal GPU path silently falls back to CPU.
+- CSV diagnostics are produced without an explicit reason and output root.
+
+## Trainer Integration Contract
+
+New PPO/FQI/CEM/SA variants should emit the same scheduler artifact shape:
+
+- `metadata.json`
+- a policy file, such as `policy.json`, or a checkpoint
+- a training progress log, such as `training_progress.jsonl`
+- optional `metrics.json`
+
+Connect trainers through `training.command_template` in TOML. The template
+should support at least:
+
+- `{config_path}`
+- `{user_id}`
+- `{lambda_value}`
+- `{output_dir}`
+- `{command_record_path}`
+
+If the policy depends on scheduler state, implement that state update in the
+scheduler. Do not read hidden memory state from the environment.
+
+## Checklist
+
+- Before running: `dry-run` and `preflight` pass.
+- Baseline: `stage-baseline` matches exact engine, environment, scheduler, user,
+  and DR metadata.
+- Training: every user, lambda, and baseline DR has an artifact or an explicit
+  failure.
+- Sweep: `batch_lanes` matches the expected `(user, scheduler, parameter)` count;
+  `subprocess_count = 0` means the in-process batched sweep path ran.
+- Pareto: `pareto_summary.json` contains both `result_paths` and `plot_paths`.
+- Aggregate: uses the user intersection and the intended equivalence-baseline
+  settings.
+- Disk: CSV count should be zero unless the run is explicitly diagnostic.
