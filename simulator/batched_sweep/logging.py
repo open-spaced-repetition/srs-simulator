@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import argparse
 import csv
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -36,6 +37,18 @@ def progress_callback_from_queue(
         last = completed
 
     return _update
+
+
+@dataclass(frozen=True, slots=True)
+class BatchedSweepLogLane:
+    user_id: int
+    log_root: Path
+    environment: str
+    scheduler_name: str
+    scheduler_spec: str
+    desired_retention: float | None
+    fixed_interval: float | None
+    sa_fsrs6_policy: Path | None = None
 
 
 def _write_batch_stats_csv(
@@ -82,11 +95,57 @@ def _write_batch_stats_csv(
             writer.writerow([day, alloc, resv])
 
 
-def simulate_and_log(
+def _build_log_args(
+    *,
+    args: argparse.Namespace,
+    user_id: int,
+    environment: str,
+    scheduler_name: str,
+    scheduler_spec: str,
+    desired_retention: float | None,
+    fixed_interval: float | None,
+    short_term_source: str | None,
+    learning_steps_arg: str | None,
+    relearning_steps_arg: str | None,
+    log_dir: Path,
+    sa_fsrs6_policy: Path | None = None,
+) -> argparse.Namespace:
+    return argparse.Namespace(
+        engine="batched",
+        days=args.days,
+        deck=args.deck,
+        learn_limit=args.learn_limit,
+        review_limit=args.review_limit,
+        cost_limit_minutes=args.cost_limit_minutes,
+        priority=args.priority,
+        environment=environment,
+        scheduler=scheduler_name,
+        scheduler_spec=scheduler_spec,
+        user_id=user_id,
+        button_usage=str(args.button_usage) if args.button_usage is not None else None,
+        desired_retention=desired_retention,
+        scheduler_priority=args.scheduler_priority,
+        sspmmc_policy=None,
+        sa_fsrs6_policy=sa_fsrs6_policy,
+        fixed_interval=fixed_interval,
+        seed=args.seed,
+        fuzz=args.fuzz,
+        short_term_source=short_term_source,
+        learning_steps=learning_steps_arg,
+        relearning_steps=relearning_steps_arg,
+        short_term_threshold=args.short_term_threshold,
+        short_term_loops_limit=args.short_term_loops_limit,
+        log_dir=log_dir,
+        log_reviews=False,
+        write_daily_csv=bool(getattr(args, "diagnostic_csv_logs", False)),
+    )
+
+
+def simulate_and_log_lanes(
     *,
     write_log: Callable[[argparse.Namespace, SimulationStats], None],
     args: argparse.Namespace,
-    batch: list[int],
+    lanes: Sequence[BatchedSweepLogLane],
     env_ops,
     sched_ops,
     behavior: MultiUserBehavior,
@@ -95,19 +154,27 @@ def simulate_and_log(
     progress_queue,
     device_label: str,
     run_label: str,
-    environment: str,
-    scheduler_name: str,
-    scheduler_spec: str,
-    desired_retention: float | None,
-    fixed_interval: float | None,
     short_term_source: str | None,
     learning_steps: list[float],
     relearning_steps: list[float],
     learning_steps_arg: str | None,
     relearning_steps_arg: str | None,
-    log_root: Path,
     batch_log_root: Path,
 ) -> None:
+    if not lanes:
+        raise ValueError("No sweep lanes were provided.")
+
+    environment = lanes[0].environment
+    scheduler_name = lanes[0].scheduler_name
+    scheduler_spec = lanes[0].scheduler_spec
+    if any(lane.environment != environment for lane in lanes):
+        raise ValueError("All sweep lanes must share the same environment.")
+    if any(lane.scheduler_name != scheduler_name for lane in lanes):
+        raise ValueError("All sweep lanes must share the same scheduler.")
+    if any(lane.scheduler_spec != scheduler_spec for lane in lanes):
+        raise ValueError("All sweep lanes must share the same scheduler spec.")
+
+    batch = [lane.user_id for lane in lanes]
     progress_callback = progress_callback_from_queue(
         progress_queue,
         multiplier=len(batch),
@@ -140,52 +207,103 @@ def simulate_and_log(
         batch_stats=batch_stats,
     )
     if diagnostic_csv_logs and batch_stats:
+        desired_retentions = [lane.desired_retention for lane in lanes]
+        fixed_intervals = [lane.fixed_interval for lane in lanes]
         _write_batch_stats_csv(
             batch_stats=batch_stats,
             batch_log_root=batch_log_root,
             batch=batch,
             environment=environment,
             scheduler_name=scheduler_name,
-            desired_retention=desired_retention,
-            fixed_interval=fixed_interval,
+            desired_retention=desired_retentions[0]
+            if desired_retentions
+            and all(value == desired_retentions[0] for value in desired_retentions)
+            else None,
+            fixed_interval=fixed_intervals[0]
+            if fixed_intervals
+            and all(value == fixed_intervals[0] for value in fixed_intervals)
+            else None,
             short_term_source=short_term_source,
             short_term_loops_limit=args.short_term_loops_limit,
             seed=args.seed,
         )
     if args.no_log:
         return
-    for user_id, stats in zip(batch, stats_list):
-        user_log_dir = log_root / f"user_{user_id}"
+    for lane, stats in zip(lanes, stats_list, strict=True):
+        user_log_dir = lane.log_root / f"user_{lane.user_id}"
         user_log_dir.mkdir(parents=True, exist_ok=True)
-        log_args = argparse.Namespace(
-            engine="batched",
-            days=args.days,
-            deck=args.deck,
-            learn_limit=args.learn_limit,
-            review_limit=args.review_limit,
-            cost_limit_minutes=args.cost_limit_minutes,
-            priority=args.priority,
-            environment=environment,
-            scheduler=scheduler_name,
-            scheduler_spec=scheduler_spec,
-            user_id=user_id,
-            button_usage=str(args.button_usage)
-            if args.button_usage is not None
-            else None,
-            desired_retention=desired_retention,
-            scheduler_priority=args.scheduler_priority,
-            sspmmc_policy=None,
-            sa_fsrs6_policy=getattr(args, "sa_fsrs6_policy", None),
-            fixed_interval=fixed_interval,
-            seed=args.seed,
-            fuzz=args.fuzz,
+        log_args = _build_log_args(
+            args=args,
+            user_id=lane.user_id,
+            environment=lane.environment,
+            scheduler_name=lane.scheduler_name,
+            scheduler_spec=lane.scheduler_spec,
+            desired_retention=lane.desired_retention,
+            fixed_interval=lane.fixed_interval,
             short_term_source=short_term_source,
-            learning_steps=learning_steps_arg,
-            relearning_steps=relearning_steps_arg,
-            short_term_threshold=args.short_term_threshold,
-            short_term_loops_limit=args.short_term_loops_limit,
+            learning_steps_arg=learning_steps_arg,
+            relearning_steps_arg=relearning_steps_arg,
             log_dir=user_log_dir,
-            log_reviews=False,
-            write_daily_csv=diagnostic_csv_logs,
+            sa_fsrs6_policy=lane.sa_fsrs6_policy,
         )
         write_log(log_args, stats)
+
+
+def simulate_and_log(
+    *,
+    write_log: Callable[[argparse.Namespace, SimulationStats], None],
+    args: argparse.Namespace,
+    batch: list[int],
+    env_ops,
+    sched_ops,
+    behavior: MultiUserBehavior,
+    cost_model: MultiUserCost,
+    progress: bool,
+    progress_queue,
+    device_label: str,
+    run_label: str,
+    environment: str,
+    scheduler_name: str,
+    scheduler_spec: str,
+    desired_retention: float | None,
+    fixed_interval: float | None,
+    short_term_source: str | None,
+    learning_steps: list[float],
+    relearning_steps: list[float],
+    learning_steps_arg: str | None,
+    relearning_steps_arg: str | None,
+    log_root: Path,
+    batch_log_root: Path,
+) -> None:
+    lanes = [
+        BatchedSweepLogLane(
+            user_id=user_id,
+            log_root=log_root,
+            environment=environment,
+            scheduler_name=scheduler_name,
+            scheduler_spec=scheduler_spec,
+            desired_retention=desired_retention,
+            fixed_interval=fixed_interval,
+            sa_fsrs6_policy=getattr(args, "sa_fsrs6_policy", None),
+        )
+        for user_id in batch
+    ]
+    simulate_and_log_lanes(
+        write_log=write_log,
+        args=args,
+        lanes=lanes,
+        env_ops=env_ops,
+        sched_ops=sched_ops,
+        behavior=behavior,
+        cost_model=cost_model,
+        progress=progress,
+        progress_queue=progress_queue,
+        device_label=device_label,
+        run_label=run_label,
+        short_term_source=short_term_source,
+        learning_steps=learning_steps,
+        relearning_steps=relearning_steps,
+        learning_steps_arg=learning_steps_arg,
+        relearning_steps_arg=relearning_steps_arg,
+        batch_log_root=batch_log_root,
+    )

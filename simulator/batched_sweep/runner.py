@@ -21,7 +21,11 @@ from simulator.sa_fsrs6_policy import SAFSRS6Policy
 from simulator.short_term_config import resolve_short_term_config
 
 from simulator.batched_sweep.behavior_cost import build_behavior_cost, load_usage
-from simulator.batched_sweep.logging import simulate_and_log
+from simulator.batched_sweep.logging import (
+    BatchedSweepLogLane,
+    simulate_and_log,
+    simulate_and_log_lanes,
+)
 from simulator.batched_sweep.utils import format_id_list
 from simulator.batched_sweep.weights import (
     build_default_fsrs3_weights,
@@ -43,6 +47,163 @@ class BatchedSweepContext:
     schedulers: list[str]
     dr_values: list[float]
     sa_fsrs6_policy: Path | None = None
+
+
+def _format_float_token(value: float) -> str:
+    token = format(value, ".12g")
+    return token.replace("-", "neg_").replace("+", "").replace(".", "p")
+
+
+def _build_dr_grid_lanes(
+    *,
+    batch: list[int],
+    log_root: Path,
+    environment: str,
+    scheduler_name: str,
+    scheduler_spec: str,
+    dr_values: list[float],
+    fixed_interval: float | None,
+) -> list[BatchedSweepLogLane]:
+    lanes: list[BatchedSweepLogLane] = []
+    for desired_retention in dr_values:
+        dr_root = (
+            log_root
+            / f"sched_{scheduler_name}"
+            / f"dr_{_format_float_token(desired_retention)}"
+        )
+        lanes.extend(
+            BatchedSweepLogLane(
+                user_id=user_id,
+                log_root=dr_root,
+                environment=environment,
+                scheduler_name=scheduler_name,
+                scheduler_spec=scheduler_spec,
+                desired_retention=desired_retention,
+                fixed_interval=fixed_interval,
+            )
+            for user_id in batch
+        )
+    return lanes
+
+
+def _repeat_weights_for_lanes(
+    *,
+    weights: torch.Tensor,
+    active_batch: list[int],
+    lanes: list[BatchedSweepLogLane],
+) -> torch.Tensor:
+    index_by_user_id = {user_id: index for index, user_id in enumerate(active_batch)}
+    lane_indices = torch.tensor(
+        [index_by_user_id[lane.user_id] for lane in lanes],
+        device=weights.device,
+        dtype=torch.int64,
+    )
+    return weights.index_select(0, lane_indices)
+
+
+def _simulate_fsrs6_dr_grid_lanes(
+    *,
+    write_log,
+    args: argparse.Namespace,
+    active_batch: list[int],
+    lanes: list[BatchedSweepLogLane],
+    env_weights: torch.Tensor,
+    scheduler_weights: torch.Tensor,
+    short_term_enabled: bool,
+    short_term_source: str | None,
+    learning_steps: list[float],
+    relearning_steps: list[float],
+    learning_steps_arg: str | None,
+    relearning_steps_arg: str | None,
+    progress: bool,
+    progress_queue,
+    device_label: str,
+    run_label: str,
+    batch_log_root: Path,
+) -> None:
+    if not lanes:
+        raise ValueError("No FSRS-6 DR lanes were provided.")
+    device = env_weights.device
+    lane_env_weights = _repeat_weights_for_lanes(
+        weights=env_weights,
+        active_batch=active_batch,
+        lanes=lanes,
+    )
+    lane_scheduler_weights = _repeat_weights_for_lanes(
+        weights=scheduler_weights,
+        active_batch=active_batch,
+        lanes=lanes,
+    )
+    desired_retention_values: list[float] = []
+    for lane in lanes:
+        if lane.desired_retention is None:
+            raise ValueError("FSRS-6 DR lanes require desired_retention.")
+        desired_retention_values.append(lane.desired_retention)
+    desired_retention = torch.tensor(
+        desired_retention_values,
+        device=device,
+        dtype=torch.float32,
+    )
+    env_ops = FSRS6BatchEnvOps(
+        weights=lane_env_weights,
+        bounds=Bounds(),
+        device=device,
+        dtype=torch.float32,
+    )
+    sched_ops = FSRS6BatchSchedulerOps(
+        weights=lane_scheduler_weights,
+        desired_retention=desired_retention,
+        bounds=Bounds(),
+        priority_mode=args.scheduler_priority,
+        device=device,
+        dtype=torch.float32,
+    )
+    lane_user_ids = [lane.user_id for lane in lanes]
+    (
+        learn_costs,
+        review_costs,
+        first_rating_prob,
+        review_rating_prob,
+        learning_rating_prob,
+        relearning_rating_prob,
+        state_rating_costs,
+        review_markov_success_weights,
+    ) = load_usage(lane_user_ids, args.button_usage)
+    behavior, cost_model = build_behavior_cost(
+        len(lane_user_ids),
+        deck_size=args.deck,
+        learn_limit=args.learn_limit,
+        review_limit=args.review_limit,
+        cost_limit_minutes=args.cost_limit_minutes,
+        learn_costs=learn_costs.to(device),
+        review_costs=review_costs.to(device),
+        first_rating_prob=first_rating_prob.to(device),
+        review_rating_prob=review_rating_prob.to(device),
+        learning_rating_prob=learning_rating_prob.to(device),
+        relearning_rating_prob=relearning_rating_prob.to(device),
+        state_rating_costs=state_rating_costs.to(device),
+        review_markov_success_weights=review_markov_success_weights.to(device),
+        short_term=short_term_enabled,
+    )
+    simulate_and_log_lanes(
+        write_log=write_log,
+        args=args,
+        lanes=lanes,
+        env_ops=env_ops,
+        sched_ops=sched_ops,
+        behavior=behavior,
+        cost_model=cost_model,
+        progress=progress,
+        progress_queue=progress_queue,
+        device_label=device_label,
+        run_label=run_label,
+        short_term_source=short_term_source,
+        learning_steps=learning_steps,
+        relearning_steps=relearning_steps,
+        learning_steps_arg=learning_steps_arg,
+        relearning_steps_arg=relearning_steps_arg,
+        batch_log_root=batch_log_root,
+    )
 
 
 def run_batch_core(
@@ -200,6 +361,7 @@ def run_batch_core(
             review_markov_success_weights,
         ) = load_usage(active_batch, args.button_usage)
 
+        env_weights: torch.Tensor | None = None
         if environment == "lstm":
             if lstm_paths is None:
                 raise ValueError("Expected LSTM weights when environment is lstm.")
@@ -284,6 +446,36 @@ def run_batch_core(
                 if fsrs_weights is None:
                     raise ValueError("Expected FSRS-6 weights for fsrs6 scheduler.")
                 weights = fsrs_weights.to(env_ops.device)
+                if len(dr_values) > 1 and env_weights is not None:
+                    lanes = _build_dr_grid_lanes(
+                        batch=active_batch,
+                        log_root=ctx.log_root,
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        dr_values=dr_values,
+                        fixed_interval=fixed_interval,
+                    )
+                    _simulate_fsrs6_dr_grid_lanes(
+                        write_log=simulate_cli._write_log,
+                        args=args,
+                        active_batch=active_batch,
+                        lanes=lanes,
+                        env_weights=env_weights.to(env_ops.device),
+                        scheduler_weights=weights,
+                        short_term_enabled=short_term_enabled,
+                        short_term_source=short_term_source,
+                        learning_steps=learning_steps,
+                        relearning_steps=relearning_steps,
+                        learning_steps_arg=learning_steps_arg,
+                        relearning_steps_arg=relearning_steps_arg,
+                        progress=progress,
+                        progress_queue=progress_queue,
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr-grid={len(dr_values)}",
+                        batch_log_root=ctx.batch_log_root,
+                    )
+                    continue
                 for dr in dr_values:
                     scheduler_ops = FSRS6BatchSchedulerOps(
                         weights=weights,
@@ -326,6 +518,36 @@ def run_batch_core(
                         "Expected default FSRS-6 weights for fsrs6_default scheduler."
                     )
                 weights = fsrs_default_weights.to(env_ops.device)
+                if len(dr_values) > 1 and env_weights is not None:
+                    lanes = _build_dr_grid_lanes(
+                        batch=active_batch,
+                        log_root=ctx.log_root,
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        dr_values=dr_values,
+                        fixed_interval=fixed_interval,
+                    )
+                    _simulate_fsrs6_dr_grid_lanes(
+                        write_log=simulate_cli._write_log,
+                        args=args,
+                        active_batch=active_batch,
+                        lanes=lanes,
+                        env_weights=env_weights.to(env_ops.device),
+                        scheduler_weights=weights,
+                        short_term_enabled=short_term_enabled,
+                        short_term_source=short_term_source,
+                        learning_steps=learning_steps,
+                        relearning_steps=relearning_steps,
+                        learning_steps_arg=learning_steps_arg,
+                        relearning_steps_arg=relearning_steps_arg,
+                        progress=progress,
+                        progress_queue=progress_queue,
+                        device_label=device_label,
+                        run_label=f"{label_prefix} dr-grid={len(dr_values)}",
+                        batch_log_root=ctx.batch_log_root,
+                    )
+                    continue
                 for dr in dr_values:
                     scheduler_ops = FSRS6BatchSchedulerOps(
                         weights=weights,

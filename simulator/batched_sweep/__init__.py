@@ -16,8 +16,10 @@ from simulator.batched_sweep.behavior_cost import (
     load_usage,
 )
 from simulator.batched_sweep.logging import (
+    BatchedSweepLogLane,
     progress_callback_from_queue,
     simulate_and_log,
+    simulate_and_log_lanes,
 )
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
 from simulator.batched_sweep.execution import LocalProgressQueue, run_batches
@@ -38,8 +40,10 @@ __all__ = [
     "resolve_lstm_paths",
     "build_behavior_cost",
     "load_usage",
+    "BatchedSweepLogLane",
     "progress_callback_from_queue",
     "simulate_and_log",
+    "simulate_and_log_lanes",
     "BatchedSweepContext",
     "run_batch_core",
     "LocalProgressQueue",

@@ -18,8 +18,13 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import simulate as simulate_cli
-from simulator.batched_sweep.logging import simulate_and_log
+from simulator.batched_sweep.logging import (
+    BatchedSweepLogLane,
+    simulate_and_log,
+    simulate_and_log_lanes,
+)
 from simulator.batched_sweep.plan import build_batched_sweep_plan
+from simulator.batched_sweep.runner import _build_dr_grid_lanes
 from simulator.core import SimulationStats
 
 
@@ -212,6 +217,99 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                     batch_log_root=batch_log_root,
                 )
             self.assertEqual(len(list(batch_log_root.glob("batch_*.csv"))), 1)
+
+    def test_batched_lanes_write_distinct_logs_for_repeated_user(self) -> None:
+        calls: list[dict[str, Any]] = []
+
+        def fake_simulate_multiuser(**kwargs):
+            calls.append(kwargs)
+            return [_stats(), _stats()]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            args = _batched_args(False)
+            args.no_log = False
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "sched_fsrs6" / "dr_0p5",
+                    environment="fsrs6",
+                    scheduler_name="fsrs6",
+                    scheduler_spec="fsrs6",
+                    desired_retention=0.50,
+                    fixed_interval=None,
+                ),
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "sched_fsrs6" / "dr_0p6",
+                    environment="fsrs6",
+                    scheduler_name="fsrs6",
+                    scheduler_spec="fsrs6",
+                    desired_retention=0.60,
+                    fixed_interval=None,
+                ),
+            ]
+            with patch(
+                "simulator.batched_sweep.logging.simulate_multiuser",
+                side_effect=fake_simulate_multiuser,
+            ):
+                simulate_and_log_lanes(
+                    write_log=simulate_cli._write_log,
+                    args=args,
+                    lanes=lanes,
+                    env_ops=cast(Any, FakeEnvOps()),
+                    sched_ops=cast(Any, object()),
+                    behavior=cast(Any, object()),
+                    cost_model=cast(Any, object()),
+                    progress=False,
+                    progress_queue=None,
+                    device_label="cpu",
+                    run_label="fsrs6 dr-grid",
+                    short_term_source=None,
+                    learning_steps=[],
+                    relearning_steps=[],
+                    learning_steps_arg=None,
+                    relearning_steps_arg=None,
+                    batch_log_root=root / "batch_logs",
+                )
+
+            self.assertEqual(len(calls), 1)
+            self.assertIsNone(calls[0]["batch_stats"])
+            self.assertEqual(
+                len(list((root / "sched_fsrs6" / "dr_0p5" / "user_1").glob("*.jsonl"))),
+                1,
+            )
+            self.assertEqual(
+                len(list((root / "sched_fsrs6" / "dr_0p6" / "user_1").glob("*.jsonl"))),
+                1,
+            )
+            self.assertEqual(list(root.rglob("*.csv")), [])
+
+    def test_dr_grid_lanes_expand_user_and_retention_axes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lanes = _build_dr_grid_lanes(
+                batch=[1, 2],
+                log_root=Path(tmp),
+                environment="fsrs6",
+                scheduler_name="fsrs6",
+                scheduler_spec="fsrs6",
+                dr_values=[0.50, 0.60],
+                fixed_interval=None,
+            )
+
+            self.assertEqual(
+                [(lane.user_id, lane.desired_retention) for lane in lanes],
+                [(1, 0.50), (2, 0.50), (1, 0.60), (2, 0.60)],
+            )
+            self.assertEqual(
+                [lane.log_root.relative_to(Path(tmp)).as_posix() for lane in lanes],
+                [
+                    "sched_fsrs6/dr_0p5",
+                    "sched_fsrs6/dr_0p5",
+                    "sched_fsrs6/dr_0p6",
+                    "sched_fsrs6/dr_0p6",
+                ],
+            )
 
     def test_batched_plan_creates_batch_log_dir_only_for_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
