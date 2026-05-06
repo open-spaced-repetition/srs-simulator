@@ -330,6 +330,28 @@ def _format_scheduler_title(scheduler: str) -> str:
     return labels.get(scheduler, scheduler)
 
 
+def _policy_stem(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return Path(value).stem
+
+
+def _sa_fsrs6_dr_series_identity(entry: Dict[str, Any]) -> Optional[str]:
+    run_id = entry.get("run_id")
+    if isinstance(run_id, str) and run_id.strip():
+        return f"run={run_id.strip()}"
+    policy = _policy_stem(entry.get("sa_fsrs6_dr_policy"))
+    if policy is not None:
+        return f"policy={policy}"
+    return None
+
+
+def _desired_dedupe_identity(entry: Dict[str, Any]) -> Optional[str]:
+    if entry.get("scheduler") == "sa_fsrs6_dr":
+        return _sa_fsrs6_dr_series_identity(entry)
+    return None
+
+
 def _engine_rank(engine: Optional[str]) -> int:
     order = {
         "batched": 0,
@@ -499,6 +521,7 @@ def _iter_log_entries(
             "short_term": short_term_value,
             "short_term_source": meta.get("short_term_source"),
             "engine": engine_value,
+            "run_id": meta.get("run_id"),
         }
         if scheduler == "sa_fsrs6":
             entry.update(
@@ -508,6 +531,16 @@ def _iter_log_entries(
                     "sa_fsrs6_lambda_value": meta.get("sa_fsrs6_lambda_value"),
                 }
             )
+        elif scheduler == "sa_fsrs6_dr":
+            entry.update(
+                {
+                    "sa_fsrs6_dr_policy": meta.get("sa_fsrs6_dr_policy"),
+                    "sa_fsrs6_dr_lambda_value": meta.get("sa_fsrs6_dr_lambda_value"),
+                }
+            )
+            series_identity = _sa_fsrs6_dr_series_identity(entry)
+            entry["series_key"] = series_identity
+            entry["series_label"] = series_identity
         yield desired_value, entry
 
 
@@ -601,9 +634,16 @@ def _build_results(
         entry["environment"] = environment
         rank = _engine_rank(entry.get("engine")) if prefer_engine else 0
         if dedupe and desired is not None:
-            if dedupe_fuzz or dedupe_short_term or dedupe_engine:
+            identity = _desired_dedupe_identity(entry)
+            if (
+                identity is not None
+                or dedupe_fuzz
+                or dedupe_short_term
+                or dedupe_engine
+            ):
                 key = (
                     desired,
+                    identity,
                     entry.get("fuzz") if dedupe_fuzz else None,
                     entry.get("short_term") if dedupe_short_term else None,
                     entry.get("engine") if dedupe_engine else None,
@@ -669,6 +709,17 @@ def _build_results(
             by_no_desired[key] for key in sorted(by_no_desired, key=lambda k: k)
         )
     return results
+
+
+def _split_results_by_series(
+    results: List[Dict[str, Any]],
+) -> list[tuple[str | None, List[Dict[str, Any]]]]:
+    groups: dict[str | None, List[Dict[str, Any]]] = {}
+    for entry in results:
+        raw_key = entry.get("series_key")
+        key = raw_key if isinstance(raw_key, str) and raw_key.strip() else None
+        groups.setdefault(key, []).append(entry)
+    return [(key, groups[key]) for key in sorted(groups, key=lambda item: item or "")]
 
 
 def _format_title(title_base: str, user_ids: Sequence[int]) -> str:
@@ -744,12 +795,15 @@ def _plot_compare_frontier(
     use_engine_linestyles = any(item.get("engine") is not None for item in series)
     for item in series:
         scheduler = item.get("scheduler")
+        style_scheduler = item.get("style_key")
+        if not isinstance(style_scheduler, str) or not style_scheduler:
+            style_scheduler = scheduler
         environment = item.get("environment")
         fuzz_value = item.get("fuzz")
         short_term_value = item.get("short_term")
         engine_value = item.get("engine")
-        if scheduler and scheduler not in scheduler_order:
-            scheduler_order.append(scheduler)
+        if style_scheduler and style_scheduler not in scheduler_order:
+            scheduler_order.append(style_scheduler)
         if use_fuzz_linestyles or use_short_term_linestyles or use_engine_linestyles:
             key = (
                 environment,
@@ -819,6 +873,9 @@ def _plot_compare_frontier(
         scheduler = item.get("scheduler")
         if not isinstance(scheduler, str):
             scheduler = "unknown"
+        style_scheduler = item.get("style_key")
+        if not isinstance(style_scheduler, str) or not style_scheduler:
+            style_scheduler = scheduler
         environment = item.get("environment")
         if not isinstance(environment, str):
             environment = "unknown"
@@ -840,7 +897,7 @@ def _plot_compare_frontier(
             linewidth = 2
             markersize = 7.5
         else:
-            color = scheduler_colors.get(scheduler, colors[0])
+            color = scheduler_colors.get(style_scheduler, colors[0])
             linestyle = environment_linestyles.get(style_key, linestyles[0])
             marker = "o"
             linewidth = 2
@@ -1093,40 +1150,53 @@ def main() -> None:
                             )
                             if not results:
                                 continue
-                            label_parts = []
-                            if len(envs) > 1:
-                                label_parts.append(f"env={env}")
-                            if len(dr_schedulers) > 1:
-                                label_parts.append(f"sched={scheduler}")
-                            if args.compare_fuzz:
-                                label_parts.append(
-                                    "fuzz=on" if fuzz_value else "fuzz=off"
+                            for series_key, series_results in _split_results_by_series(
+                                results
+                            ):
+                                label_parts = []
+                                if len(envs) > 1:
+                                    label_parts.append(f"env={env}")
+                                if len(dr_schedulers) > 1:
+                                    label_parts.append(f"sched={scheduler}")
+                                if series_key is not None:
+                                    label_parts.append(series_key)
+                                if args.compare_fuzz:
+                                    label_parts.append(
+                                        "fuzz=on" if fuzz_value else "fuzz=off"
+                                    )
+                                if args.compare_short_term:
+                                    label_parts.append(
+                                        "short-term=on"
+                                        if short_term_value
+                                        else "short-term=off"
+                                    )
+                                if args.compare_engine:
+                                    label_parts.append(f"engine={engine_value}")
+                                label = " ".join(label_parts) or scheduler
+                                style_key = (
+                                    f"{scheduler}:{series_key}"
+                                    if series_key is not None
+                                    else scheduler
                                 )
-                            if args.compare_short_term:
-                                label_parts.append(
-                                    "short-term=on"
-                                    if short_term_value
-                                    else "short-term=off"
+                                series.append(
+                                    {
+                                        "label": label,
+                                        "entries": series_results,
+                                        "style": "dr",
+                                        "scheduler": scheduler,
+                                        "style_key": style_key,
+                                        "environment": env,
+                                        "fuzz": fuzz_value
+                                        if args.compare_fuzz
+                                        else None,
+                                        "short_term": short_term_value
+                                        if args.compare_short_term
+                                        else None,
+                                        "engine": engine_value
+                                        if args.compare_engine
+                                        else None,
+                                    }
                                 )
-                            if args.compare_engine:
-                                label_parts.append(f"engine={engine_value}")
-                            label = " ".join(label_parts) or scheduler
-                            series.append(
-                                {
-                                    "label": label,
-                                    "entries": results,
-                                    "style": "dr",
-                                    "scheduler": scheduler,
-                                    "environment": env,
-                                    "fuzz": fuzz_value if args.compare_fuzz else None,
-                                    "short_term": short_term_value
-                                    if args.compare_short_term
-                                    else None,
-                                    "engine": engine_value
-                                    if args.compare_engine
-                                    else None,
-                                }
-                            )
                             combined_results.extend(results)
         if run_fixed:
             interval_filter = None if include_all_fixed else fixed_intervals
@@ -1269,7 +1339,7 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 RetentionKey: TypeAlias = (
-    float | tuple[float, Optional[bool], Optional[bool], Optional[str]]
+    float | tuple[float, Optional[str], Optional[bool], Optional[bool], Optional[str]]
 )
 NoDesiredKey: TypeAlias = tuple[
     str,

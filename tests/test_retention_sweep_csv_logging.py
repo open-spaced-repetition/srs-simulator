@@ -33,7 +33,10 @@ from simulator.batched_sweep.runner import (
 )
 from simulator.core import SimulationStats
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
-from experiments.retention_sweep.build_pareto import _build_results
+from experiments.retention_sweep.build_pareto import (
+    _build_results,
+    _split_results_by_series,
+)
 from experiments.retention_sweep.aggregate_users import (
     _iter_log_paths as _iter_aggregate_log_paths,
 )
@@ -666,6 +669,42 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["user_id"], 1)
         self.assertEqual(results[0]["memorized_average"], 10.0)
+
+    def test_build_pareto_keeps_sa_fsrs6_dr_runs_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_log_dir = Path(tmp) / "user_1" / "sched_sa_fsrs6_dr" / "dr_0p9"
+            for run_id, memorized in (("poly-run", 10.0), ("linear-run", 20.0)):
+                args = _write_log_args(user_log_dir, False)
+                args.engine = "batched"
+                args.scheduler = "sa_fsrs6_dr"
+                args.scheduler_spec = "sa_fsrs6_dr"
+                args.desired_retention = 0.90
+                args.run_id = run_id
+                args.sa_fsrs6_dr_policy = Path(tmp) / run_id / "policy.json"
+                args.sa_fsrs6_dr_lambda_value = 0.5
+                simulate_cli._write_log(args, _stats(memorized=memorized))
+
+            results = _build_results(
+                user_log_dir.parents[1],
+                "fsrs6",
+                {"sa_fsrs6_dr"},
+                0.50,
+                0.98,
+                [REPO_ROOT, user_log_dir],
+                None,
+                None,
+                None,
+                "batched",
+                user_id_filter=1,
+            )
+            series = _split_results_by_series(results)
+
+        self.assertEqual(len(results), 2)
+        self.assertCountEqual(
+            [entry["series_key"] for entry in results],
+            ["run=poly-run", "run=linear-run"],
+        )
+        self.assertEqual([len(entries) for _key, entries in series], [1, 1])
 
     def test_build_pareto_labels_sa_fsrs6_by_baseline_dr_without_deduping_policies(
         self,
