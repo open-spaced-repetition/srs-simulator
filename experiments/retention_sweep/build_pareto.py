@@ -410,6 +410,40 @@ def _iter_log_entries(
         yield desired_value, entry
 
 
+def _no_desired_dedupe_key(
+    entry: Dict[str, Any],
+    *,
+    fuzz_filter: Optional[bool],
+    short_term_filter: Optional[bool],
+    short_term_source_filter: Optional[str],
+    engine_filter: Optional[str],
+    dedupe_fuzz: bool,
+    dedupe_short_term: bool,
+    dedupe_engine: bool,
+) -> Optional[NoDesiredKey]:
+    scheduler_name = entry.get("scheduler")
+    title = entry.get("title")
+    if not isinstance(scheduler_name, str) or not isinstance(title, str):
+        return None
+
+    short_term_source = entry.get("short_term_source")
+    engine = entry.get("engine")
+    return (
+        scheduler_name,
+        title,
+        entry.get("fuzz") if dedupe_fuzz or fuzz_filter is not None else None,
+        entry.get("short_term")
+        if dedupe_short_term or short_term_filter is not None
+        else None,
+        short_term_source
+        if short_term_source_filter is not None and isinstance(short_term_source, str)
+        else None,
+        engine
+        if (dedupe_engine or engine_filter is not None) and isinstance(engine, str)
+        else None,
+    )
+
+
 def _build_results(
     log_dir: Path,
     environment: str,
@@ -477,19 +511,28 @@ def _build_results(
         else:
             if (
                 dedupe
-                and prefer_engine
                 and desired is None
                 and entry.get("scheduler") not in {"fixed", "sspmmc"}
             ):
-                scheduler_name = entry.get("scheduler")
-                title = entry.get("title")
-                if not isinstance(scheduler_name, str) or not isinstance(title, str):
+                key = _no_desired_dedupe_key(
+                    entry,
+                    fuzz_filter=fuzz_filter,
+                    short_term_filter=short_term_filter,
+                    short_term_source_filter=short_term_source_filter,
+                    engine_filter=engine_filter,
+                    dedupe_fuzz=dedupe_fuzz,
+                    dedupe_short_term=dedupe_short_term,
+                    dedupe_engine=dedupe_engine,
+                )
+                if key is None:
                     continue
-                key = (scheduler_name, title)
-                existing = by_no_desired_rank.get(key)
-                if existing is None or rank < existing:
+                if not prefer_engine:
                     by_no_desired[key] = entry
-                    by_no_desired_rank[key] = rank
+                else:
+                    existing = by_no_desired_rank.get(key)
+                    if existing is None or rank < existing:
+                        by_no_desired[key] = entry
+                        by_no_desired_rank[key] = rank
             else:
                 results.append(entry)
 
@@ -1109,4 +1152,11 @@ if __name__ == "__main__":
 RetentionKey: TypeAlias = (
     float | tuple[float, Optional[bool], Optional[bool], Optional[str]]
 )
-NoDesiredKey: TypeAlias = tuple[str, str]
+NoDesiredKey: TypeAlias = tuple[
+    str,
+    str,
+    Optional[bool],
+    Optional[bool],
+    Optional[str],
+    Optional[str],
+]

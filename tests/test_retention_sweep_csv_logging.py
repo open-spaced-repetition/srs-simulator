@@ -38,18 +38,18 @@ from experiments.retention_sweep.aggregate_users import (
 )
 
 
-def _stats(days: int = 2) -> SimulationStats:
+def _stats(days: int = 2, memorized: float = 10.0) -> SimulationStats:
     return SimulationStats(
         daily_reviews=[1 for _ in range(days)],
         daily_new=[1 for _ in range(days)],
         daily_retention=[1.0 for _ in range(days)],
         daily_cost=[60.0 for _ in range(days)],
-        daily_memorized=[10.0 for _ in range(days)],
+        daily_memorized=[memorized for _ in range(days)],
         total_reviews=days,
         total_lapses=0,
         total_cost=60.0 * days,
         events=[],
-        total_projected_retrievability=10.0,
+        total_projected_retrievability=memorized,
         daily_phase_reviews=[1 for _ in range(days)],
         daily_phase_lapses=[0 for _ in range(days)],
         daily_short_loops=[0 for _ in range(days)],
@@ -620,6 +620,36 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
 
         self.assertEqual([entry["scheduler"] for entry in fsrs_results], ["fsrs6"])
         self.assertEqual([entry["scheduler"] for entry in sa_results], ["sa_fsrs6"])
+
+    def test_build_pareto_dedupes_no_desired_scheduler_by_key_with_engine_filter(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_log_dir = Path(tmp) / "user_1"
+            flat_args = _write_log_args(user_log_dir, False)
+            flat_args.engine = "batched"
+            simulate_cli._write_log(flat_args, _stats(memorized=7.0))
+
+            nested_args = _write_log_args(user_log_dir / "sched_anki_sm2", False)
+            nested_args.engine = "batched"
+            simulate_cli._write_log(nested_args, _stats(memorized=11.0))
+
+            results = _build_results(
+                user_log_dir,
+                "fsrs6",
+                {"anki_sm2"},
+                0.50,
+                0.98,
+                [REPO_ROOT, user_log_dir],
+                None,
+                False,
+                None,
+                "batched",
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["scheduler"], "anki_sm2")
+        self.assertEqual(results[0]["memorized_average"], 11.0)
 
     def test_batched_plan_requires_sa_fsrs6_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
