@@ -9,6 +9,7 @@ DEFAULT_SEED = 42
 DEFAULT_PRIORITY = "new-first"
 DEFAULT_SCHEDULER_PRIORITY = "low_retrievability"
 DEFAULT_SHORT_TERM_LOOPS_LIMIT = 10
+DEFAULT_MAX_LANES_PER_BATCH = 10000
 DEFAULT_END_USER = 10000
 
 # Retention sweep defaults (used by experiments/retention_sweep/* CLIs).

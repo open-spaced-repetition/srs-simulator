@@ -288,10 +288,26 @@ def _split_lanes(
         return [lanes]
     if max_lanes_per_batch < 1:
         raise ValueError("--max-lanes-per-batch must be >= 1.")
-    return [
-        lanes[index : index + max_lanes_per_batch]
-        for index in range(0, len(lanes), max_lanes_per_batch)
-    ]
+
+    lanes_by_user: dict[int, list[BatchedSweepLogLane]] = {}
+    user_order: list[int] = []
+    for lane in lanes:
+        if lane.user_id not in lanes_by_user:
+            lanes_by_user[lane.user_id] = []
+            user_order.append(lane.user_id)
+        lanes_by_user[lane.user_id].append(lane)
+
+    chunks: list[list[BatchedSweepLogLane]] = []
+    current: list[BatchedSweepLogLane] = []
+    for user_id in user_order:
+        user_lanes = lanes_by_user[user_id]
+        if current and len(current) + len(user_lanes) > max_lanes_per_batch:
+            chunks.append(current)
+            current = []
+        current.extend(user_lanes)
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _same_sa_policy_bounds(lhs: SAFSRS6Policy, rhs: SAFSRS6Policy) -> bool:

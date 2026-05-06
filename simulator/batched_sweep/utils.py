@@ -5,7 +5,10 @@ from collections.abc import Iterable
 from simulator.sweep_utils import parse_cuda_devices
 
 
-def chunked(values: list[int], batch_size: int) -> Iterable[list[int]]:
+def chunked(values: list[int], batch_size: int | None) -> Iterable[list[int]]:
+    if batch_size is None:
+        yield values
+        return
     for i in range(0, len(values), batch_size):
         yield values[i : i + batch_size]
 

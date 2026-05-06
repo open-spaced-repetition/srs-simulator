@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
+from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH
 from simulator.batched_sweep.config import load_batched_sweep_config
 from simulator.batched_sweep.plan import build_batched_sweep_plan
 from simulator.batched_sweep.execution import run_batches
@@ -50,16 +51,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=1000,
-        help="Number of users to simulate in parallel per batch.",
+        default=None,
+        help=(
+            "Number of users per outer batch. Defaults to all selected users; "
+            "use --max-lanes-per-batch to cap simulation lane chunks."
+        ),
     )
     parser.add_argument(
         "--max-lanes-per-batch",
         type=int,
-        default=None,
+        default=DEFAULT_MAX_LANES_PER_BATCH,
         help=(
             "Maximum expanded simulation lanes per in-process batch. "
-            "Use this to split very large policy grids without multiprocessing."
+            f"Defaults to {DEFAULT_MAX_LANES_PER_BATCH}."
         ),
     )
     add_env_sched_args(

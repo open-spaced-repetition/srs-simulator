@@ -14,6 +14,7 @@ from simulator.defaults import (
     DEFAULT_DAYS,
     DEFAULT_END_RETENTION,
     DEFAULT_LEARN_LIMIT,
+    DEFAULT_MAX_LANES_PER_BATCH,
     DEFAULT_PRIORITY,
     DEFAULT_RETENTION_STEP,
     DEFAULT_REVIEW_LIMIT,
@@ -83,9 +84,11 @@ class BatchedSweepConfig:
             user_ids=list(user_ids) if user_ids is not None else None,
             start_user=start_user,
             end_user=end_user,
-            batch_size=_int(execution.get("batch_size", 1000), "execution.batch_size"),
+            batch_size=_optional_int(
+                execution.get("batch_size"), "execution.batch_size"
+            ),
             max_lanes_per_batch=_optional_int(
-                execution.get("max_lanes_per_batch"),
+                execution.get("max_lanes_per_batch", DEFAULT_MAX_LANES_PER_BATCH),
                 "execution.max_lanes_per_batch",
             ),
             env=",".join(envs),

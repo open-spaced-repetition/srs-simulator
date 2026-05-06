@@ -22,11 +22,13 @@ from simulator.batched_sweep.runner import (
     BatchedSweepContext,
     _build_mixed_scheduler_ops,
     _build_sweep_lanes,
+    _split_lanes,
 )
 from simulator.batched_sweep.sa_policy import (
     format_float_token,
     resolve_sa_fsrs6_policy_specs,
 )
+from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
 
@@ -137,6 +139,29 @@ class BatchedSweepConfigTests(unittest.TestCase):
             config = load_batched_sweep_config(path)
 
         self.assertEqual(config.args.log_layout, "sweep")
+
+    def test_defaults_to_single_user_batch_with_lane_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sweep.toml"
+            log_dir = Path(tmp) / "logs"
+            raw = (
+                _valid_config(log_dir)
+                .replace("end = 2", "end = 3")
+                .replace("batch_size = 2\n", "")
+            )
+            path.write_text(raw, encoding="utf-8")
+
+            config = load_batched_sweep_config(path)
+            plan = build_batched_sweep_plan(
+                repo_root=REPO_ROOT,
+                args=config.args,
+                envs=list(config.envs),
+                schedulers=list(config.schedulers),
+            )
+
+        self.assertIsNone(config.args.batch_size)
+        self.assertEqual(config.args.max_lanes_per_batch, DEFAULT_MAX_LANES_PER_BATCH)
+        self.assertEqual(plan.batches, [[1, 2, 3]])
 
     def test_rejects_invalid_log_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -421,6 +446,44 @@ path = "policy.json"
                     policy_root=root,
                     lambda_values=[0.5],
                 )
+
+    def test_split_lanes_preserves_all_dr_lanes_for_each_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=root,
+                overrides={},
+                log_root=root / "logs",
+                batch_log_root=root / "logs" / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6"],
+                dr_values=[0.50, 0.52, 0.54],
+            )
+            lanes = _build_sweep_lanes(
+                batch=[1, 2, 3],
+                ctx=ctx,
+                environment="fsrs6",
+            )
+
+            chunks = _split_lanes(lanes, max_lanes_per_batch=4)
+
+        self.assertEqual(
+            [[lane.user_id for lane in chunk] for chunk in chunks],
+            [
+                [1, 1, 1],
+                [2, 2, 2],
+                [3, 3, 3],
+            ],
+        )
+        self.assertEqual(
+            [[lane.desired_retention for lane in chunk] for chunk in chunks],
+            [
+                [0.50, 0.52, 0.54],
+                [0.50, 0.52, 0.54],
+                [0.50, 0.52, 0.54],
+            ],
+        )
 
     def test_multiple_sa_policies_share_one_scheduler_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

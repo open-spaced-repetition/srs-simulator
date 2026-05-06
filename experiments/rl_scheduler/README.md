@@ -175,6 +175,10 @@ Prefer batch-level parallelism before same-GPU multiprocessing:
 - In training, increase `chains`, `dr_batch_size`, or candidate lanes until GPU
   utilization and throughput approach the platform limit.
 - In sweep, batch `(user, scheduler, scheduler parameter)` lanes together.
+- Tune `--max-lanes-per-batch` by trial runs for each sweep profile and GPU.
+  LSTM environments usually need smaller lane chunks because model state and
+  recurrent ops use more memory; FSRS environments can usually use larger lane
+  chunks before hitting OOM.
 - Use same-GPU process fanout only after single-process batching has plateaued
   and memory is still clearly underused.
 - Performance-related changes must report before/after results for the affected

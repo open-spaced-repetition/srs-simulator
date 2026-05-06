@@ -69,7 +69,8 @@ def build_batched_sweep_plan(
                 "--sa-fsrs6-train-run-root, or --sa-fsrs6-policy-manifest)."
             )
 
-    if args.batch_size < 1:
+    batch_size = getattr(args, "batch_size", None)
+    if batch_size is not None and batch_size < 1:
         raise ValueError("--batch-size must be >= 1.")
     max_lanes_per_batch = getattr(args, "max_lanes_per_batch", None)
     if max_lanes_per_batch is not None and max_lanes_per_batch < 1:
@@ -109,7 +110,7 @@ def build_batched_sweep_plan(
         raise ValueError("--cuda-devices was provided but CUDA is not available.")
     device = torch.device(args.torch_device) if args.torch_device else None
 
-    batches = list(chunked(user_ids, args.batch_size))
+    batches = list(chunked(user_ids, batch_size))
 
     sa_fsrs6_policy_specs = ()
     if any(parse_scheduler_spec(raw)[0] == "sa_fsrs6" for raw in schedulers):
