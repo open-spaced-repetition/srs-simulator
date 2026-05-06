@@ -163,6 +163,29 @@ class BatchedSweepConfigTests(unittest.TestCase):
         self.assertEqual(config.args.max_lanes_per_batch, DEFAULT_MAX_LANES_PER_BATCH)
         self.assertEqual(plan.batches, [[1, 2, 3]])
 
+    def test_auto_user_batches_respect_lane_cap_before_loading(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sweep.toml"
+            log_dir = Path(tmp) / "logs"
+            raw = (
+                _valid_config(log_dir)
+                .replace("end = 2", "end = 5")
+                .replace("batch_size = 2\n", "max_lanes_per_batch = 6\n")
+            )
+            path.write_text(raw, encoding="utf-8")
+
+            config = load_batched_sweep_config(path)
+            plan = build_batched_sweep_plan(
+                repo_root=REPO_ROOT,
+                args=config.args,
+                envs=list(config.envs),
+                schedulers=list(config.schedulers),
+            )
+
+        self.assertIsNone(config.args.batch_size)
+        self.assertEqual(plan.batches, [[1, 2], [3, 4], [5]])
+        self.assertEqual(plan.total_lanes, 15)
+
     def test_rejects_invalid_log_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sweep.toml"

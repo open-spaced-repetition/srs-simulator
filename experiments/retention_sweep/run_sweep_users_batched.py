@@ -53,8 +53,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help=(
-            "Number of users per outer batch. Defaults to all selected users; "
-            "use --max-lanes-per-batch to cap simulation lane chunks."
+            "Number of users per outer batch. Defaults to auto-sized batches "
+            "derived from --max-lanes-per-batch."
         ),
     )
     parser.add_argument(

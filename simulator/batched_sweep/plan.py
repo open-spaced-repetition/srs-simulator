@@ -110,8 +110,6 @@ def build_batched_sweep_plan(
         raise ValueError("--cuda-devices was provided but CUDA is not available.")
     device = torch.device(args.torch_device) if args.torch_device else None
 
-    batches = list(chunked(user_ids, batch_size))
-
     sa_fsrs6_policy_specs = ()
     if any(parse_scheduler_spec(raw)[0] == "sa_fsrs6" for raw in schedulers):
         if _uses_expanded_sa_fsrs6_source(args):
@@ -137,6 +135,12 @@ def build_batched_sweep_plan(
         sa_fsrs6_policy=getattr(args, "sa_fsrs6_policy", None),
         sa_fsrs6_policy_specs=sa_fsrs6_policy_specs,
     )
+    batches = _build_user_batches(
+        user_ids=user_ids,
+        batch_size=batch_size,
+        max_lanes_per_batch=max_lanes_per_batch,
+        ctx=ctx,
+    )
     total_lanes = 0
     example_log_dir: Path | None = None
     for batch in batches:
@@ -156,6 +160,57 @@ def build_batched_sweep_plan(
         total_lanes=int(total_lanes),
         example_log_dir=example_log_dir,
     )
+
+
+def _build_user_batches(
+    *,
+    user_ids: list[int],
+    batch_size: int | None,
+    max_lanes_per_batch: int | None,
+    ctx: BatchedSweepContext,
+) -> list[list[int]]:
+    if batch_size is not None:
+        return list(chunked(user_ids, batch_size))
+    if max_lanes_per_batch is None:
+        return [user_ids]
+
+    lane_counts_by_user = _lane_counts_by_user(ctx, user_ids)
+    batches: list[list[int]] = []
+    current: list[int] = []
+    current_lanes = 0
+    for user_id in user_ids:
+        user_lanes = lane_counts_by_user.get(user_id, 0)
+        if user_lanes <= 0:
+            continue
+        if current and current_lanes + user_lanes > max_lanes_per_batch:
+            batches.append(current)
+            current = []
+            current_lanes = 0
+        current.append(user_id)
+        current_lanes += user_lanes
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _lane_counts_by_user(
+    ctx: BatchedSweepContext, user_ids: list[int]
+) -> dict[int, int]:
+    lanes_per_user = 0
+    counts_by_user: dict[int, int] = {}
+    for raw in ctx.schedulers:
+        name, _, _ = parse_scheduler_spec(raw)
+        if name in {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}:
+            lanes_per_user += len(ctx.dr_values)
+            continue
+        if name == "sa_fsrs6" and ctx.sa_fsrs6_policy_specs:
+            for spec in ctx.sa_fsrs6_policy_specs:
+                counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
+            continue
+        lanes_per_user += 1
+    return {
+        user_id: lanes_per_user + counts_by_user.get(user_id, 0) for user_id in user_ids
+    }
 
 
 def _has_sa_fsrs6_source(args: argparse.Namespace) -> bool:
