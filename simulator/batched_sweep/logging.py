@@ -131,6 +131,7 @@ def _build_log_args(
         environment=environment,
         scheduler=scheduler_name,
         scheduler_spec=scheduler_spec,
+        run_id=getattr(args, "run_id", None),
         user_id=user_id,
         button_usage=str(args.button_usage) if args.button_usage is not None else None,
         desired_retention=desired_retention,

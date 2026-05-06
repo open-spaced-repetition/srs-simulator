@@ -97,6 +97,7 @@ class BatchedSweepConfig:
             ),
             env=",".join(envs),
             sched=",".join(schedulers),
+            run_id=_optional_str(_table_value(raw, sweep, "run_id", None), "run_id"),
             start_retention=start_retention,
             end_retention=end_retention,
             step=step,
@@ -302,6 +303,11 @@ def _adapt_experiment_config(
         sweep=sweep,
         base_path=base_path,
     )
+    run_id = _experiment_run_id(
+        raw,
+        sweep=sweep,
+        default_train_run_root=default_train_run_root,
+    )
     sa_fsrs6 = _adapt_experiment_policy_source(
         sweep,
         prefix="sa_fsrs6",
@@ -325,6 +331,7 @@ def _adapt_experiment_config(
         "sweep": {
             "envs": sweep.get("envs", ["lstm"]),
             "schedulers": schedulers,
+            "run_id": run_id,
         },
         "retention": {
             "start": sweep.get("start_retention", DEFAULT_START_RETENTION),
@@ -372,6 +379,20 @@ def _adapt_experiment_policy_source(
     if "lambda_values" not in adapted and lambda_grid is not None:
         adapted["lambda_values"] = lambda_grid
     return adapted
+
+
+def _experiment_run_id(
+    raw: Mapping[str, Any],
+    *,
+    sweep: Mapping[str, Any],
+    default_train_run_root: Path | None,
+) -> str | None:
+    run_id_raw = sweep.get("run_id", raw.get("run_id"))
+    if run_id_raw is not None:
+        return _str(run_id_raw, "run_id")
+    if default_train_run_root is not None:
+        return default_train_run_root.name
+    return None
 
 
 def _infer_experiment_train_run_root(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import sys
@@ -146,6 +147,20 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
 
             self.assertEqual(len(list(log_dir.glob("*.jsonl"))), 1)
             self.assertEqual(list(log_dir.glob("*.csv")), [])
+
+    def test_write_log_includes_run_id_in_filename_and_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            args = _write_log_args(log_dir, False)
+            args.run_id = "run/one"
+
+            simulate_cli._write_log(args, _stats())
+
+            json_logs = list(log_dir.glob("*.jsonl"))
+            self.assertEqual(len(json_logs), 1)
+            self.assertIn("run=run-one", json_logs[0].name)
+            meta = json.loads(json_logs[0].read_text().splitlines()[0])
+            self.assertEqual(meta["data"]["run_id"], "run/one")
 
     def test_write_log_preserves_default_daily_csv_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

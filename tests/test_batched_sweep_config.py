@@ -232,6 +232,8 @@ no_log = true
 """.lstrip(),
                 encoding="utf-8",
             )
+            config = load_batched_sweep_config(path)
+            self.assertEqual(config.args.run_id, "test-run")
             stdout = io.StringIO()
 
             with redirect_stdout(stdout):

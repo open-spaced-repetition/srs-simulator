@@ -624,6 +624,11 @@ def _format_plot_footer(args: argparse.Namespace) -> str:
     return "\n".join(lines)
 
 
+def _log_filename_token(value: object) -> str:
+    text = str(value).strip()
+    return "".join(char if char.isalnum() or char in "._=-" else "-" for char in text)
+
+
 def plot_simulation(stats, args: argparse.Namespace) -> None:
     days = list(range(len(stats.daily_reviews)))
 
@@ -811,6 +816,9 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         getattr(args, "env", None) or getattr(args, "environment", None) or "unknown"
     )
     parts = [f"env={env_name}", f"engine={args.engine}", f"sched={args.scheduler}"]
+    run_id = getattr(args, "run_id", None)
+    if run_id:
+        parts.append(f"run={_log_filename_token(run_id)}")
     if getattr(args, "fuzz", False):
         parts.append("fuzz=1")
     short_term_source = getattr(args, "short_term_source", None)
@@ -865,6 +873,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "environment": env_name,
         "scheduler": args.scheduler,
         "scheduler_spec": getattr(args, "scheduler_spec", args.scheduler),
+        "run_id": str(run_id) if run_id else None,
         "user_id": args.user_id or 1,
         "button_usage": str(args.button_usage) if args.button_usage else None,
         "desired_retention": desired_retention,

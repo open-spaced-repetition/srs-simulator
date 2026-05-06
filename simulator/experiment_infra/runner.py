@@ -786,6 +786,7 @@ def run_sweep(
                 _run_batched_sweep_jobs(
                     config=config,
                     repo_root=repo_root,
+                    run_id=run_id,
                     jobs=jobs,
                     record_path=batched_sweep_record_path,
                 )
@@ -4096,6 +4097,7 @@ def _run_batched_sweep_jobs(
     *,
     config: ExperimentConfig,
     repo_root: Path,
+    run_id: str,
     jobs: Sequence[SweepBatchLane],
     record_path: Path,
 ) -> None:
@@ -4387,6 +4389,7 @@ def _run_batched_sweep_jobs(
             environment=config.simulation.environment,
             scheduler=job.scheduler_name,
             scheduler_spec=job.scheduler_spec,
+            run_id=run_id,
             user_id=job.user_id,
             button_usage=str(DEFAULT_BUTTON_USAGE_PATH),
             desired_retention=job.desired_retention,
@@ -4469,6 +4472,7 @@ def _run_configured_batched_retention_sweep(
         benchmark_partition=sweep_config.benchmark_partition,
         log_dir=log_dir,
         log_layout=sweep_config.log_layout,
+        run_id=run_id,
         start_retention=sweep_config.start_retention,
         end_retention=sweep_config.end_retention,
         step=sweep_config.step,

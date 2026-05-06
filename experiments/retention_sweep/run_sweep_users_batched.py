@@ -46,6 +46,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Batched sweep TOML config. Direct CLI flags override config values.",
     )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional run identifier included in written JSONL log filenames.",
+    )
     add_user_range_args(parser)
     parser.set_defaults(user_ids=None)
     parser.add_argument(
@@ -280,6 +285,7 @@ def _merge_config_args(
         "max_lanes_per_batch": ("--max-lanes-per-batch",),
         "env": ("--env",),
         "sched": ("--sched",),
+        "run_id": ("--run-id",),
         "start_retention": ("--start-retention",),
         "end_retention": ("--end-retention",),
         "step": ("--step",),
