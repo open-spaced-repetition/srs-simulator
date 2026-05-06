@@ -26,6 +26,7 @@ uv run simulate.py --engine vectorized --env lstm --sched fsrs6 --no-log
 ## Requirements and data
 - Python 3.13+ (matches `pyproject.toml`).
 - Use `uv sync` to install dependencies. Torch is pulled from the uv indexes declared in `pyproject.toml` (CUDA builds on Windows/Linux, CPU builds on macOS).
+- Plotly is included for interactive SA FSRS-6 policy-surface HTML plots.
 - `srs-benchmark` repo is expected next to this repo at `../srs-benchmark` (override with `--srs-benchmark-root`). It provides FSRS/HLR/DASH weights in `result/*.jsonl` and LSTM weights in `weights/LSTM/<user_id>.pth`.
 - Generate LSTM weights in the `srs-benchmark` repo by running:
 
@@ -75,6 +76,7 @@ uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_smoke.toml --stage dry-run --run-id sa-smoke
 uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/reboot_smoke/smoke
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
+uv run python experiments/rl_scheduler/plot_sa_fsrs6_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
 ```
 
 `dry-run` validates the TOML and prints resolved commands without writing formal

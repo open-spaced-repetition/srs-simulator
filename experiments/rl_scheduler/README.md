@@ -21,6 +21,8 @@ obtain `S` and `D`.
   retention value.
 - `train_sa_fsrs6_dr_grid.py`: SA FSRS-6 trainer that batches a desired
   retention grid inside one process.
+- `plot_sa_fsrs6_policy_surfaces.py`: Plotly HTML visualizer for learned
+  `f(S, D) -> desired_retention` surfaces across DR values.
 - `tune_sa_fsrs6_lanes.py`: GPU lane/chains tuning and throughput probe.
 - `inspect_run.py`: reads machine-readable evidence under a run root.
 - `validate_artifact.py`: validates scheduler artifact metadata and referenced
@@ -124,6 +126,20 @@ uv run python experiments/rl_scheduler/validate_artifact.py \
   --metadata <metadata.json> \
   --require-files
 ```
+
+Visualize learned SA FSRS-6 policy surfaces:
+
+```bash
+uv run python experiments/rl_scheduler/plot_sa_fsrs6_policy_surfaces.py \
+  --train-run-root <output_root>/<run-id> \
+  --users 1,2,3 \
+  --lambda-values 0.5
+```
+
+The visualizer writes one interactive Plotly HTML per user/lambda under
+`experiments/rl_scheduler/plots/sa_fsrs6_policy_surfaces/`. Each figure uses
+stability `S` and difficulty `D` as the horizontal axes, policy output retention
+as the vertical axis, and one translucent surface per baseline DR.
 
 ## Current Main Experiment: SA FSRS-6 DR Grid
 
