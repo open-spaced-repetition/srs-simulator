@@ -31,6 +31,8 @@ from simulator.batched_sweep.runner import (
     _group_lane_indices,
 )
 from simulator.core import SimulationStats
+from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from experiments.retention_sweep.build_pareto import _build_results
 from experiments.retention_sweep.aggregate_users import (
     _iter_log_paths as _iter_aggregate_log_paths,
 )
@@ -122,6 +124,7 @@ def _plan_args(
         srs_benchmark_root=None,
         benchmark_result=None,
         log_dir=log_dir,
+        log_layout="user",
         start_retention=0.9,
         end_retention=0.9,
         step=0.01,
@@ -384,6 +387,60 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                 ],
             )
 
+    def test_default_user_layout_places_scheduler_logs_under_each_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy_path = root / "policy.json"
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=root,
+                batch_log_root=root / "batch_logs",
+                envs=["lstm"],
+                schedulers=["fsrs6", "sa_fsrs6", "fixed@3", "anki_sm2"],
+                dr_values=[0.90],
+                sa_fsrs6_policy=policy_path,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="lstm")
+
+        self.assertEqual(
+            [lane.final_log_dir.relative_to(root).as_posix() for lane in lanes],
+            [
+                "user_1/sched_fsrs6/dr_0p9",
+                "user_1/sched_sa_fsrs6/policy_policy",
+                "user_1/sched_fixed/ivl_3",
+                "user_1/sched_anki_sm2",
+            ],
+        )
+
+    def test_sweep_layout_preserves_scheduler_first_lane_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=root,
+                batch_log_root=root / "batch_logs",
+                envs=["lstm"],
+                schedulers=["fsrs6", "fixed@3", "anki_sm2"],
+                dr_values=[0.90],
+                log_layout="sweep",
+            )
+
+            lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="lstm")
+
+        self.assertEqual(
+            [lane.final_log_dir.relative_to(root).as_posix() for lane in lanes],
+            [
+                "sched_fsrs6/dr_0p9/user_1",
+                "sched_fixed/ivl_3/user_1",
+                "sched_anki_sm2/user_1",
+            ],
+        )
+
     def test_sweep_lanes_expand_scheduler_and_parameter_axes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -462,6 +519,7 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
 
             self.assertEqual(plan.ctx.batch_log_root, log_dir / "batch_logs")
             self.assertFalse(plan.ctx.batch_log_root.exists())
+            self.assertEqual(plan.ctx.log_layout, "user")
 
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp) / "logs"
@@ -473,6 +531,95 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             )
 
             self.assertTrue(plan.ctx.batch_log_root.exists())
+
+    def test_build_pareto_reads_default_user_layout_for_mixed_batched_sweep(
+        self,
+    ) -> None:
+        def fake_simulate_multiuser(**_kwargs):
+            return [_stats(), _stats()]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "logs" / "retention_sweep"
+            policy_path = Path(tmp) / "policy.json"
+            SAFSRS6Policy.baseline(desired_retention=0.90).write_json(policy_path)
+            args = _batched_args(False)
+            args.no_log = False
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "sched_fsrs6" / "dr_0p9",
+                    log_dir=root / "user_1" / "sched_fsrs6" / "dr_0p9",
+                    environment="lstm",
+                    scheduler_name="fsrs6",
+                    scheduler_spec="fsrs6",
+                    desired_retention=0.90,
+                    fixed_interval=None,
+                ),
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "sched_sa_fsrs6" / "policy_policy",
+                    log_dir=root / "user_1" / "sched_sa_fsrs6" / "policy_policy",
+                    environment="lstm",
+                    scheduler_name="sa_fsrs6",
+                    scheduler_spec="sa_fsrs6",
+                    desired_retention=None,
+                    fixed_interval=None,
+                    sa_fsrs6_policy=policy_path,
+                ),
+            ]
+
+            with patch(
+                "simulator.batched_sweep.logging.simulate_multiuser",
+                side_effect=fake_simulate_multiuser,
+            ):
+                simulate_and_log_lanes(
+                    write_log=simulate_cli._write_log,
+                    args=args,
+                    lanes=lanes,
+                    env_ops=cast(Any, FakeEnvOps()),
+                    sched_ops=cast(Any, object()),
+                    behavior=cast(Any, object()),
+                    cost_model=cast(Any, object()),
+                    progress=False,
+                    progress_queue=None,
+                    device_label="cpu",
+                    run_label="mixed schedulers",
+                    short_term_source=None,
+                    learning_steps=[],
+                    relearning_steps=[],
+                    learning_steps_arg=None,
+                    relearning_steps_arg=None,
+                    batch_log_root=root / "batch_logs",
+                )
+
+            user_log_dir = root / "user_1"
+            fsrs_results = _build_results(
+                user_log_dir,
+                "lstm",
+                {"fsrs6"},
+                0.50,
+                0.98,
+                [REPO_ROOT, user_log_dir],
+                None,
+                None,
+                None,
+                "batched",
+            )
+            sa_results = _build_results(
+                user_log_dir,
+                "lstm",
+                {"sa_fsrs6"},
+                0.50,
+                0.98,
+                [REPO_ROOT, user_log_dir],
+                None,
+                None,
+                None,
+                "batched",
+            )
+
+        self.assertEqual([entry["scheduler"] for entry in fsrs_results], ["fsrs6"])
+        self.assertEqual([entry["scheduler"] for entry in sa_results], ["sa_fsrs6"])
 
     def test_batched_plan_requires_sa_fsrs6_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

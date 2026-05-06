@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,7 @@ from simulator.batched_sweep.weights import (
     load_fsrs6_weights,
     resolve_lstm_paths,
 )
+from simulator.batched_sweep.sa_policy import SAFSRS6PolicySpec
 
 
 @dataclass(frozen=True)
@@ -50,15 +52,32 @@ class BatchedSweepContext:
     envs: list[str]
     schedulers: list[str]
     dr_values: list[float]
+    log_layout: str = "user"
     sa_fsrs6_policy: Path | None = None
+    sa_fsrs6_policy_specs: tuple[SAFSRS6PolicySpec, ...] = ()
 
 
 _DR_SCHEDULERS = {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}
+_LOG_LAYOUTS = {"user", "sweep"}
 
 
 def _format_float_token(value: float) -> str:
     token = format(value, ".12g")
     return token.replace("-", "neg_").replace("+", "").replace(".", "p")
+
+
+def _lane_log_dir(
+    *,
+    log_root: Path,
+    user_id: int,
+    scheduler_subpath: Path,
+    log_layout: str,
+) -> Path:
+    if log_layout == "user":
+        return log_root / f"user_{user_id}" / scheduler_subpath
+    if log_layout == "sweep":
+        return log_root / scheduler_subpath / f"user_{user_id}"
+    raise ValueError(f"log_layout must be one of {sorted(_LOG_LAYOUTS)}.")
 
 
 def _build_dr_grid_lanes(
@@ -70,18 +89,24 @@ def _build_dr_grid_lanes(
     scheduler_spec: str,
     dr_values: list[float],
     fixed_interval: float | None,
+    log_layout: str = "user",
 ) -> list[BatchedSweepLogLane]:
     lanes: list[BatchedSweepLogLane] = []
     for desired_retention in dr_values:
-        dr_root = (
-            log_root
-            / f"sched_{scheduler_name}"
-            / f"dr_{_format_float_token(desired_retention)}"
+        scheduler_subpath = Path(f"sched_{scheduler_name}") / (
+            f"dr_{_format_float_token(desired_retention)}"
         )
+        dr_root = log_root / scheduler_subpath
         lanes.extend(
             BatchedSweepLogLane(
                 user_id=user_id,
                 log_root=dr_root,
+                log_dir=_lane_log_dir(
+                    log_root=log_root,
+                    user_id=user_id,
+                    scheduler_subpath=scheduler_subpath,
+                    log_layout=log_layout,
+                ),
                 environment=environment,
                 scheduler_name=scheduler_name,
                 scheduler_spec=scheduler_spec,
@@ -99,6 +124,8 @@ def _build_sweep_lanes(
     ctx: BatchedSweepContext,
     environment: str,
 ) -> list[BatchedSweepLogLane]:
+    if ctx.log_layout not in _LOG_LAYOUTS:
+        raise ValueError(f"log_layout must be one of {sorted(_LOG_LAYOUTS)}.")
     lanes: list[BatchedSweepLogLane] = []
     for scheduler_spec in ctx.schedulers:
         name, fixed_interval, raw = parse_scheduler_spec(scheduler_spec)
@@ -107,6 +134,7 @@ def _build_sweep_lanes(
                 _build_dr_grid_lanes(
                     batch=batch,
                     log_root=ctx.log_root,
+                    log_layout=ctx.log_layout,
                     environment=environment,
                     scheduler_name=name,
                     scheduler_spec=raw,
@@ -117,16 +145,61 @@ def _build_sweep_lanes(
             continue
 
         interval = normalize_fixed_interval(fixed_interval) if name == "fixed" else None
+        if name == "sa_fsrs6" and ctx.sa_fsrs6_policy_specs:
+            batch_users = set(batch)
+            for spec in ctx.sa_fsrs6_policy_specs:
+                if spec.user_id not in batch_users:
+                    continue
+                dr_token = _format_float_token(spec.baseline_desired_retention)
+                scheduler_subpath = Path("sched_sa_fsrs6") / f"dr_{dr_token}"
+                if spec.lambda_value is not None:
+                    scheduler_subpath = scheduler_subpath / (
+                        f"lambda_{_format_float_token(spec.lambda_value)}"
+                    )
+                scheduler_root = ctx.log_root / scheduler_subpath
+                lanes.append(
+                    BatchedSweepLogLane(
+                        user_id=spec.user_id,
+                        log_root=scheduler_root,
+                        log_dir=_lane_log_dir(
+                            log_root=ctx.log_root,
+                            user_id=spec.user_id,
+                            scheduler_subpath=scheduler_subpath,
+                            log_layout=ctx.log_layout,
+                        ),
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=None,
+                        fixed_interval=None,
+                        sa_fsrs6_policy=spec.path,
+                        sa_fsrs6_baseline_desired_retention=(
+                            spec.baseline_desired_retention
+                        ),
+                        sa_fsrs6_lambda_value=spec.lambda_value,
+                    )
+                )
+            continue
+
         policy = ctx.sa_fsrs6_policy if name == "sa_fsrs6" else None
-        scheduler_root = ctx.log_root / f"sched_{name}"
+        scheduler_subpath = Path(f"sched_{name}")
         if name == "fixed" and interval is not None:
-            scheduler_root = scheduler_root / f"ivl_{_format_float_token(interval)}"
+            scheduler_subpath = scheduler_subpath / (
+                f"ivl_{_format_float_token(interval)}"
+            )
         elif name == "sa_fsrs6" and policy is not None:
-            scheduler_root = scheduler_root / f"policy_{policy.stem}"
+            scheduler_subpath = scheduler_subpath / f"policy_{policy.stem}"
+        scheduler_root = ctx.log_root / scheduler_subpath
         lanes.extend(
             BatchedSweepLogLane(
                 user_id=user_id,
                 log_root=scheduler_root,
+                log_dir=_lane_log_dir(
+                    log_root=ctx.log_root,
+                    user_id=user_id,
+                    scheduler_subpath=scheduler_subpath,
+                    log_layout=ctx.log_layout,
+                ),
                 environment=environment,
                 scheduler_name=name,
                 scheduler_spec=raw,
@@ -196,7 +269,7 @@ def _mixed_scheduler_group_key(lane: BatchedSweepLogLane) -> tuple[Any, ...]:
     if lane.scheduler_name == "fixed":
         return (lane.scheduler_name, lane.scheduler_spec, lane.fixed_interval)
     if lane.scheduler_name == "sa_fsrs6":
-        return (lane.scheduler_name, lane.scheduler_spec, lane.sa_fsrs6_policy)
+        return (lane.scheduler_name, lane.scheduler_spec)
     return (lane.scheduler_name, lane.scheduler_spec)
 
 
@@ -205,6 +278,33 @@ def _group_lane_indices(lanes: list[BatchedSweepLogLane]) -> list[list[int]]:
     for lane_index, lane in enumerate(lanes):
         grouped.setdefault(_mixed_scheduler_group_key(lane), []).append(lane_index)
     return list(grouped.values())
+
+
+def _split_lanes(
+    lanes: list[BatchedSweepLogLane],
+    max_lanes_per_batch: int | None,
+) -> list[list[BatchedSweepLogLane]]:
+    if max_lanes_per_batch is None:
+        return [lanes]
+    if max_lanes_per_batch < 1:
+        raise ValueError("--max-lanes-per-batch must be >= 1.")
+    return [
+        lanes[index : index + max_lanes_per_batch]
+        for index in range(0, len(lanes), max_lanes_per_batch)
+    ]
+
+
+def _same_sa_policy_bounds(lhs: SAFSRS6Policy, rhs: SAFSRS6Policy) -> bool:
+    return (
+        math.isclose(lhs.retention_min, rhs.retention_min, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(
+            lhs.retention_max, rhs.retention_max, rel_tol=0.0, abs_tol=1e-9
+        )
+        and math.isclose(lhs.bounds.s_min, rhs.bounds.s_min, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs.bounds.s_max, rhs.bounds.s_max, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs.bounds.d_min, rhs.bounds.d_min, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs.bounds.d_max, rhs.bounds.d_max, rel_tol=0.0, abs_tol=1e-9)
+    )
 
 
 def _build_env_ops_for_lanes(
@@ -278,7 +378,6 @@ def _build_mixed_scheduler_ops(
     device: torch.device,
 ) -> _MixedBatchSchedulerOps:
     groups: list[_MixedSchedulerGroup] = []
-    policies: dict[Path, SAFSRS6Policy] = {}
     for indices in _group_lane_indices(lanes):
         group_lanes = [lanes[index] for index in indices]
         sample = group_lanes[0]
@@ -382,13 +481,27 @@ def _build_mixed_scheduler_ops(
         elif name == "sa_fsrs6":
             if fsrs_weights is None:
                 raise ValueError("Expected FSRS-6 weights for sa_fsrs6 scheduler.")
-            policy_path = sample.sa_fsrs6_policy
-            if policy_path is None:
-                raise ValueError("--sched sa_fsrs6 requires --sa-fsrs6-policy.")
-            policy = policies.get(policy_path)
-            if policy is None:
-                policy = SAFSRS6Policy.from_json(policy_path)
-                policies[policy_path] = policy
+            policy_paths: list[Path] = []
+            for lane in group_lanes:
+                policy_path = lane.sa_fsrs6_policy
+                if policy_path is None:
+                    raise ValueError("--sched sa_fsrs6 requires an SA policy source.")
+                policy_paths.append(policy_path)
+            policies = [
+                SAFSRS6Policy.from_json(policy_path) for policy_path in policy_paths
+            ]
+            policy = policies[0]
+            for policy_path, candidate in zip(policy_paths, policies, strict=True):
+                if not _same_sa_policy_bounds(candidate, policy):
+                    raise ValueError(
+                        "Batched sa_fsrs6 sweep requires identical policy retention "
+                        f"and FSRS bounds. Mismatch at {policy_path}."
+                    )
+            coefficients = torch.tensor(
+                [candidate.coefficients for candidate in policies],
+                device=device,
+                dtype=torch.float32,
+            )
             scheduler_weights = _repeat_weights_for_lanes(
                 weights=fsrs_weights.to(device),
                 active_batch=active_batch,
@@ -397,7 +510,8 @@ def _build_mixed_scheduler_ops(
             ops = SAFSRS6BatchSchedulerOps(
                 weights=scheduler_weights,
                 policy=policy,
-                bounds=Bounds(),
+                coefficients=coefficients,
+                bounds=policy.bounds,
                 priority_mode=args.scheduler_priority,
                 device=device,
                 dtype=torch.float32,
@@ -600,77 +714,87 @@ def run_batch_core(
         if not lanes:
             continue
 
-        env_ops = _build_env_ops_for_lanes(
-            environment=environment,
-            active_batch=active_batch,
-            lanes=lanes,
-            fsrs_weights=fsrs_weights,
-            fsrs_default_weights=fsrs_default_weights,
-            lstm_packed=lstm_packed,
-            device=base_device,
-        )
-        lane_user_ids = [lane.user_id for lane in lanes]
-        (
-            learn_costs,
-            review_costs,
-            first_rating_prob,
-            review_rating_prob,
-            learning_rating_prob,
-            relearning_rating_prob,
-            state_rating_costs,
-            review_markov_success_weights,
-        ) = load_usage(lane_user_ids, args.button_usage)
-
-        behavior, cost_model = build_behavior_cost(
-            len(lane_user_ids),
-            deck_size=args.deck,
-            learn_limit=args.learn_limit,
-            review_limit=args.review_limit,
-            cost_limit_minutes=args.cost_limit_minutes,
-            learn_costs=learn_costs.to(env_ops.device),
-            review_costs=review_costs.to(env_ops.device),
-            first_rating_prob=first_rating_prob.to(env_ops.device),
-            review_rating_prob=review_rating_prob.to(env_ops.device),
-            learning_rating_prob=learning_rating_prob.to(env_ops.device),
-            relearning_rating_prob=relearning_rating_prob.to(env_ops.device),
-            state_rating_costs=state_rating_costs.to(env_ops.device),
-            review_markov_success_weights=review_markov_success_weights.to(
-                env_ops.device
-            ),
-            short_term=short_term_enabled,
-        )
-        sched_ops = _build_mixed_scheduler_ops(
-            args=args,
-            active_batch=active_batch,
-            lanes=lanes,
-            fsrs_weights=fsrs_weights,
-            fsrs_default_weights=fsrs_default_weights,
-            fsrs3_weights=fsrs3_weights,
-            fsrs3_default_weights=fsrs3_default_weights,
-            lstm_packed=lstm_packed,
-            short_term_source=short_term_source,
-            device=env_ops.device,
-        )
         scheduler_label = ",".join(scheduler_names)
-        simulate_and_log_lanes(
-            write_log=simulate_cli._write_log,
-            args=args,
-            lanes=lanes,
-            env_ops=env_ops,
-            sched_ops=sched_ops,
-            behavior=behavior,
-            cost_model=cost_model,
-            progress=progress,
-            progress_queue=progress_queue,
-            device_label=device_label,
-            run_label=(
-                f"{environment} u{active_batch[0]}-{active_batch[-1]} "
-                f"sched={scheduler_label} lanes={len(lanes)}"
-            ),
-            short_term_source=short_term_source,
-            learning_steps=learning_steps,
-            relearning_steps=relearning_steps,
-            learning_steps_arg=learning_steps_arg,
-            relearning_steps_arg=relearning_steps_arg,
-            batch_log_root=ctx.batch_log_root,
+        lane_chunks = _split_lanes(
+            lanes,
+            getattr(args, "max_lanes_per_batch", None),
         )
+        for chunk_index, lane_chunk in enumerate(lane_chunks, start=1):
+            env_ops = _build_env_ops_for_lanes(
+                environment=environment,
+                active_batch=active_batch,
+                lanes=lane_chunk,
+                fsrs_weights=fsrs_weights,
+                fsrs_default_weights=fsrs_default_weights,
+                lstm_packed=lstm_packed,
+                device=base_device,
+            )
+            lane_user_ids = [lane.user_id for lane in lane_chunk]
+            (
+                learn_costs,
+                review_costs,
+                first_rating_prob,
+                review_rating_prob,
+                learning_rating_prob,
+                relearning_rating_prob,
+                state_rating_costs,
+                review_markov_success_weights,
+            ) = load_usage(lane_user_ids, args.button_usage)
+
+            behavior, cost_model = build_behavior_cost(
+                len(lane_user_ids),
+                deck_size=args.deck,
+                learn_limit=args.learn_limit,
+                review_limit=args.review_limit,
+                cost_limit_minutes=args.cost_limit_minutes,
+                learn_costs=learn_costs.to(env_ops.device),
+                review_costs=review_costs.to(env_ops.device),
+                first_rating_prob=first_rating_prob.to(env_ops.device),
+                review_rating_prob=review_rating_prob.to(env_ops.device),
+                learning_rating_prob=learning_rating_prob.to(env_ops.device),
+                relearning_rating_prob=relearning_rating_prob.to(env_ops.device),
+                state_rating_costs=state_rating_costs.to(env_ops.device),
+                review_markov_success_weights=review_markov_success_weights.to(
+                    env_ops.device
+                ),
+                short_term=short_term_enabled,
+            )
+            sched_ops = _build_mixed_scheduler_ops(
+                args=args,
+                active_batch=active_batch,
+                lanes=lane_chunk,
+                fsrs_weights=fsrs_weights,
+                fsrs_default_weights=fsrs_default_weights,
+                fsrs3_weights=fsrs3_weights,
+                fsrs3_default_weights=fsrs3_default_weights,
+                lstm_packed=lstm_packed,
+                short_term_source=short_term_source,
+                device=env_ops.device,
+            )
+            chunk_label = (
+                f" chunk={chunk_index}/{len(lane_chunks)}"
+                if len(lane_chunks) > 1
+                else ""
+            )
+            simulate_and_log_lanes(
+                write_log=simulate_cli._write_log,
+                args=args,
+                lanes=lane_chunk,
+                env_ops=env_ops,
+                sched_ops=sched_ops,
+                behavior=behavior,
+                cost_model=cost_model,
+                progress=progress,
+                progress_queue=progress_queue,
+                device_label=device_label,
+                run_label=(
+                    f"{environment} u{active_batch[0]}-{active_batch[-1]} "
+                    f"sched={scheduler_label} lanes={len(lane_chunk)}{chunk_label}"
+                ),
+                short_term_source=short_term_source,
+                learning_steps=learning_steps,
+                relearning_steps=relearning_steps,
+                learning_steps_arg=learning_steps_arg,
+                relearning_steps_arg=relearning_steps_arg,
+                batch_log_root=ctx.batch_log_root,
+            )

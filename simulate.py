@@ -799,6 +799,12 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         parts.append(f"policy={sspmmc_policy.stem}")
     if sa_fsrs6_policy:
         parts.append(f"policy={sa_fsrs6_policy.stem}")
+        sa_baseline_dr = getattr(args, "sa_fsrs6_baseline_desired_retention", None)
+        sa_lambda = getattr(args, "sa_fsrs6_lambda_value", None)
+        if sa_baseline_dr is not None:
+            parts.append(f"policy-dr={format_float(sa_baseline_dr)}")
+        if sa_lambda is not None:
+            parts.append(f"lambda={format_float(sa_lambda)}")
     parts.extend(
         [
             f"user={args.user_id or 1}",
@@ -831,6 +837,10 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "scheduler_priority": args.scheduler_priority,
         "sspmmc_policy": str(sspmmc_policy) if sspmmc_policy else None,
         "sa_fsrs6_policy": str(sa_fsrs6_policy) if sa_fsrs6_policy else None,
+        "sa_fsrs6_baseline_desired_retention": getattr(
+            args, "sa_fsrs6_baseline_desired_retention", None
+        ),
+        "sa_fsrs6_lambda_value": getattr(args, "sa_fsrs6_lambda_value", None),
         "fixed_interval": fixed_interval,
         "seed": args.seed,
         "fuzz": bool(getattr(args, "fuzz", False)),

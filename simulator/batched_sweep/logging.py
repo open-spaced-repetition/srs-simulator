@@ -49,6 +49,13 @@ class BatchedSweepLogLane:
     desired_retention: float | None
     fixed_interval: float | None
     sa_fsrs6_policy: Path | None = None
+    sa_fsrs6_baseline_desired_retention: float | None = None
+    sa_fsrs6_lambda_value: float | None = None
+    log_dir: Path | None = None
+
+    @property
+    def final_log_dir(self) -> Path:
+        return self.log_dir or (self.log_root / f"user_{self.user_id}")
 
 
 def _write_batch_stats_csv(
@@ -127,6 +134,8 @@ def _build_log_args(
         scheduler_priority=args.scheduler_priority,
         sspmmc_policy=None,
         sa_fsrs6_policy=sa_fsrs6_policy,
+        sa_fsrs6_baseline_desired_retention=None,
+        sa_fsrs6_lambda_value=None,
         fixed_interval=fixed_interval,
         seed=args.seed,
         fuzz=args.fuzz,
@@ -228,7 +237,7 @@ def simulate_and_log_lanes(
     if args.no_log:
         return
     for lane, stats in zip(lanes, stats_list, strict=True):
-        user_log_dir = lane.log_root / f"user_{lane.user_id}"
+        user_log_dir = lane.final_log_dir
         user_log_dir.mkdir(parents=True, exist_ok=True)
         log_args = _build_log_args(
             args=args,
@@ -244,6 +253,10 @@ def simulate_and_log_lanes(
             log_dir=user_log_dir,
             sa_fsrs6_policy=lane.sa_fsrs6_policy,
         )
+        log_args.sa_fsrs6_baseline_desired_retention = (
+            lane.sa_fsrs6_baseline_desired_retention
+        )
+        log_args.sa_fsrs6_lambda_value = lane.sa_fsrs6_lambda_value
         write_log(log_args, stats)
 
 

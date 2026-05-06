@@ -12,6 +12,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
+from simulator.batched_sweep.config import load_batched_sweep_config
 from simulator.batched_sweep.plan import build_batched_sweep_plan
 from simulator.batched_sweep.execution import run_batches
 
@@ -26,21 +27,40 @@ from experiments.retention_sweep.cli_utils import (
     add_short_term_args,
     add_torch_device_arg,
     add_user_range_args,
+    has_flag,
     parse_csv,
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    if argv is None:
+        argv = sys.argv[1:]
     parser = argparse.ArgumentParser(
         description="Run multi-user retention sweeps with batched vectorized simulation.",
         allow_abbrev=False,
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Batched sweep TOML config. Direct CLI flags override config values.",
+    )
     add_user_range_args(parser)
+    parser.set_defaults(user_ids=None)
     parser.add_argument(
         "--batch-size",
         type=int,
         default=1000,
         help="Number of users to simulate in parallel per batch.",
+    )
+    parser.add_argument(
+        "--max-lanes-per-batch",
+        type=int,
+        default=None,
+        help=(
+            "Maximum expanded simulation lanes per in-process batch. "
+            "Use this to split very large policy grids without multiprocessing."
+        ),
     )
     add_env_sched_args(
         parser,
@@ -65,8 +85,49 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to an SA FSRS-6 policy JSON when using --sched sa_fsrs6.",
     )
+    parser.add_argument(
+        "--sa-fsrs6-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing trained SA FSRS-6 policy artifacts, usually "
+            "train-overfit/train_outputs."
+        ),
+    )
+    parser.add_argument(
+        "--sa-fsrs6-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "Training run root; treated as "
+            "<root>/train-overfit/train_outputs for SA FSRS-6 policy discovery."
+        ),
+    )
+    parser.add_argument(
+        "--sa-fsrs6-policy-manifest",
+        type=Path,
+        default=None,
+        help="TOML manifest with [[policies]] SA FSRS-6 entries.",
+    )
+    parser.add_argument(
+        "--sa-fsrs6-lambda-values",
+        default=None,
+        help=(
+            "Optional comma-separated lambda values to select from an SA FSRS-6 "
+            "policy root or manifest."
+        ),
+    )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
+    )
+    parser.add_argument(
+        "--log-layout",
+        choices=["user", "sweep"],
+        default="user",
+        help=(
+            "Log directory layout. user writes <log-dir>/user_<id>/sched_... "
+            "(default); sweep writes <log-dir>/sched_.../user_<id>."
+        ),
     )
     parser.add_argument(
         "--diagnostic-csv-logs",
@@ -98,11 +159,24 @@ def parse_args() -> argparse.Namespace:
             "(e.g. 0,1). Each batch is assigned a device round-robin."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate config and print expanded lane counts without simulation.",
+    )
+    args = parser.parse_args(argv)
+    if args.config is not None:
+        config = load_batched_sweep_config(args.config, repo_root=REPO_ROOT)
+        args = _merge_config_args(cli_args=args, config_args=config.args, argv=argv)
+    if isinstance(args.sa_fsrs6_lambda_values, str):
+        args.sa_fsrs6_lambda_values = tuple(
+            float(item) for item in parse_csv(args.sa_fsrs6_lambda_values)
+        )
+    return args
 
 
-def main() -> int:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     envs = parse_csv(args.env)
     schedulers = parse_csv(args.sched)
     plan = build_batched_sweep_plan(
@@ -111,6 +185,9 @@ def main() -> int:
         envs=envs,
         schedulers=schedulers,
     )
+    if args.dry_run:
+        _print_dry_run(plan)
+        return 0
     overall = None
     if not args.no_progress:
         overall = tqdm(
@@ -131,6 +208,83 @@ def main() -> int:
     if overall is not None:
         overall.close()
     return 0
+
+
+def _merge_config_args(
+    *,
+    cli_args: argparse.Namespace,
+    config_args: argparse.Namespace,
+    argv: list[str],
+) -> argparse.Namespace:
+    user_range_overridden = has_flag(argv, "--start-user") or has_flag(
+        argv, "--end-user"
+    )
+    if not user_range_overridden:
+        cli_args.user_ids = getattr(config_args, "user_ids", None)
+        cli_args.start_user = config_args.start_user
+        cli_args.end_user = config_args.end_user
+    else:
+        cli_args.user_ids = None
+
+    flag_map = {
+        "batch_size": ("--batch-size",),
+        "max_lanes_per_batch": ("--max-lanes-per-batch",),
+        "env": ("--env",),
+        "sched": ("--sched",),
+        "start_retention": ("--start-retention",),
+        "end_retention": ("--end-retention",),
+        "step": ("--step",),
+        "days": ("--days",),
+        "deck": ("--deck",),
+        "learn_limit": ("--learn-limit",),
+        "review_limit": ("--review-limit",),
+        "cost_limit_minutes": ("--cost-limit-minutes",),
+        "seed": ("--seed",),
+        "priority": ("--priority",),
+        "scheduler_priority": ("--scheduler-priority",),
+        "button_usage": ("--button-usage",),
+        "benchmark_result": ("--benchmark-result",),
+        "benchmark_partition": ("--benchmark-partition",),
+        "srs_benchmark_root": ("--srs-benchmark-root",),
+        "sa_fsrs6_policy": ("--sa-fsrs6-policy",),
+        "sa_fsrs6_policy_root": ("--sa-fsrs6-policy-root",),
+        "sa_fsrs6_train_run_root": ("--sa-fsrs6-train-run-root",),
+        "sa_fsrs6_policy_manifest": ("--sa-fsrs6-policy-manifest",),
+        "sa_fsrs6_lambda_values": ("--sa-fsrs6-lambda-values",),
+        "log_dir": ("--log-dir",),
+        "log_layout": ("--log-layout",),
+        "no_log": ("--no-log",),
+        "no_progress": ("--no-progress",),
+        "diagnostic_csv_logs": ("--diagnostic-csv-logs",),
+        "fuzz": ("--fuzz",),
+        "short_term_source": ("--short-term-source",),
+        "learning_steps": ("--learning-steps",),
+        "relearning_steps": ("--relearning-steps",),
+        "short_term_threshold": ("--short-term-threshold",),
+        "short_term_loops_limit": ("--short-term-loops-limit",),
+        "torch_device": ("--torch-device",),
+        "cuda_devices": ("--cuda-devices",),
+        "dry_run": ("--dry-run",),
+    }
+    for attr, flags in flag_map.items():
+        if not any(has_flag(argv, flag) for flag in flags):
+            setattr(cli_args, attr, getattr(config_args, attr))
+    return cli_args
+
+
+def _print_dry_run(plan) -> None:
+    print("Batched sweep dry run")
+    print(f"user batches: {len(plan.batches)}")
+    print(f"expanded lanes: {plan.total_lanes}")
+    print(f"user-days: {plan.total_user_days}")
+    print(f"envs: {','.join(plan.ctx.envs)}")
+    print(f"schedulers: {','.join(plan.ctx.schedulers)}")
+    print(f"log layout: {plan.ctx.log_layout}")
+    print(f"log root: {plan.ctx.log_root}")
+    if plan.example_log_dir is not None:
+        print(f"example log dir: {plan.example_log_dir}")
+    if plan.ctx.sa_fsrs6_policy_specs:
+        print(f"sa_fsrs6 policies: {len(plan.ctx.sa_fsrs6_policy_specs)}")
 
 
 if __name__ == "__main__":

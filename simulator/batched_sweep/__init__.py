@@ -15,11 +15,16 @@ from simulator.batched_sweep.behavior_cost import (
     build_behavior_cost,
     load_usage,
 )
+from simulator.batched_sweep.config import BatchedSweepConfig, load_batched_sweep_config
 from simulator.batched_sweep.logging import (
     BatchedSweepLogLane,
     progress_callback_from_queue,
     simulate_and_log,
     simulate_and_log_lanes,
+)
+from simulator.batched_sweep.sa_policy import (
+    SAFSRS6PolicySpec,
+    resolve_sa_fsrs6_policy_specs,
 )
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
 from simulator.batched_sweep.execution import LocalProgressQueue, run_batches
@@ -40,6 +45,8 @@ __all__ = [
     "resolve_lstm_paths",
     "build_behavior_cost",
     "load_usage",
+    "BatchedSweepConfig",
+    "load_batched_sweep_config",
     "BatchedSweepLogLane",
     "progress_callback_from_queue",
     "simulate_and_log",
@@ -50,4 +57,6 @@ __all__ = [
     "run_batches",
     "BatchedSweepPlan",
     "build_batched_sweep_plan",
+    "SAFSRS6PolicySpec",
+    "resolve_sa_fsrs6_policy_specs",
 ]
