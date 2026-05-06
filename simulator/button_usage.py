@@ -9,6 +9,7 @@ from typing import Any, Mapping, NotRequired, Sequence, TypedDict, cast
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
 
+_LOGGER = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BUTTON_USAGE_PATH = (
     _REPO_ROOT.parent / "Anki-button-usage" / "button_usage.jsonl"
@@ -175,17 +176,17 @@ def _normalize_prob(
     values: Sequence[float], key: str, *, fallback: Sequence[float]
 ) -> list[float]:
     if any((not math.isfinite(value)) or value < 0 for value in values):
-        logging.warning(
+        _LOGGER.debug(
             "%s contains invalid probabilities %s; using fallback.", key, values
         )
         values = fallback
     total = float(sum(values))
     if not math.isfinite(total) or total <= 0:
-        logging.warning("%s sums to invalid value %.6f; using fallback.", key, total)
+        _LOGGER.debug("%s sums to invalid value %.6f; using fallback.", key, total)
         values = fallback
         total = float(sum(values))
     if abs(total - 1.0) > 0.01:
-        logging.warning("%s does not sum to 1 (%.6f); normalizing.", key, total)
+        _LOGGER.debug("%s does not sum to 1 (%.6f); normalizing.", key, total)
         return [float(value) / total for value in values]
     return [float(value) for value in values]
 
