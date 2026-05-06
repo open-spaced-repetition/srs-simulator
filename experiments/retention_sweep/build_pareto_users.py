@@ -13,20 +13,36 @@ if str(REPO_ROOT) not in sys.path:
 
 from simulator.fanout import FanoutJob, create_fanout_bars, run_fanout
 from simulator.subprocess_runner import run_command_with_progress
+from simulator.experiment_infra import ExperimentConfig
 
 from experiments.retention_sweep.cli_utils import (
     add_user_range_args,
     build_retention_command,
+    has_flag,
     passthrough_args,
 )
 
 from tqdm import tqdm
 
 
-def parse_args() -> tuple[argparse.Namespace, list[str]]:
+def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[str]]:
+    if argv is None:
+        argv = sys.argv[1:]
     parser = argparse.ArgumentParser(
         description="Run retention_sweep.build_pareto.py for a range of user IDs.",
         allow_abbrev=False,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Unified rl_scheduler TOML config. Direct CLI flags override config values.",
+    )
+    parser.add_argument(
+        "--run-root",
+        type=Path,
+        default=None,
+        help="Formal experiment run root, used only for recorded command context.",
     )
     add_user_range_args(parser)
     parser.add_argument(
@@ -60,6 +76,33 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Engine filter passed to build_pareto.py.",
     )
     parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=None,
+        help="Root directory containing retention_sweep JSONL logs.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory for per-user Pareto JSON/PNG outputs. When set, each user "
+            "writes simulation_results_retention_sweep_user_<id>.json here."
+        ),
+    )
+    parser.add_argument(
+        "--start-retention",
+        type=float,
+        default=0.50,
+        help="Minimum desired retention passed to build_pareto.py.",
+    )
+    parser.add_argument(
+        "--end-retention",
+        type=float,
+        default=0.98,
+        help="Maximum desired retention passed to build_pareto.py.",
+    )
+    parser.add_argument(
         "--max-parallel",
         type=int,
         default=8,
@@ -88,6 +131,16 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         help="Pass --compare-engine to build_pareto.py.",
     )
     parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Pass --no-plot to build_pareto.py.",
+    )
+    parser.add_argument(
+        "--hide-labels",
+        action="store_true",
+        help="Pass --hide-labels to build_pareto.py.",
+    )
+    parser.add_argument(
         "--uv-cmd",
         default="uv",
         help="Command to invoke uv (override if needed).",
@@ -108,7 +161,74 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         action="store_true",
         help="Print commands without executing them.",
     )
-    return parser.parse_known_args()
+    args, extra = parser.parse_known_args(argv)
+    if args.config is not None:
+        args = _merge_config_args(cli_args=args, config=args.config, argv=argv)
+    return args, extra
+
+
+def _resolve_repo_path(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return expanded
+    return (REPO_ROOT / expanded).resolve()
+
+
+def _merge_config_args(
+    *,
+    cli_args: argparse.Namespace,
+    config: Path,
+    argv: list[str],
+) -> argparse.Namespace:
+    experiment = ExperimentConfig.from_toml(config)
+    build_config = experiment.build_pareto
+    sweep_config = experiment.sweep_batched
+
+    if not (has_flag(argv, "--start-user") or has_flag(argv, "--end-user")):
+        cli_args.start_user = min(experiment.users.train)
+        cli_args.end_user = max(experiment.users.train)
+
+    if not has_flag(argv, "--env"):
+        envs = (
+            build_config.envs
+            or sweep_config.envs
+            or (experiment.simulation.environment,)
+        )
+        cli_args.env = ",".join(envs)
+    if not has_flag(argv, "--sched"):
+        schedulers = build_config.schedulers or (
+            (experiment.baseline.scheduler, *sweep_config.schedulers)
+            if sweep_config.schedulers
+            else (experiment.baseline.scheduler,)
+        )
+        cli_args.sched = ",".join(dict.fromkeys(schedulers))
+    if not has_flag(argv, "--log-dir"):
+        cli_args.log_dir = _resolve_repo_path(
+            build_config.log_dir or sweep_config.log_dir
+        )
+    if not has_flag(argv, "--start-retention"):
+        cli_args.start_retention = build_config.start_retention
+    if not has_flag(argv, "--end-retention"):
+        cli_args.end_retention = build_config.end_retention
+    if not has_flag(argv, "--short-term"):
+        cli_args.short_term = build_config.short_term
+    if not has_flag(argv, "--short-term-source"):
+        cli_args.short_term_source = build_config.short_term_source
+    if not has_flag(argv, "--engine"):
+        cli_args.engine = build_config.engine
+    if not has_flag(argv, "--max-parallel"):
+        cli_args.max_parallel = build_config.max_parallel
+    if build_config.compare_short_term and not has_flag(argv, "--compare-short-term"):
+        cli_args.compare_short_term = True
+    if build_config.compare_engine and not has_flag(argv, "--compare-engine"):
+        cli_args.compare_engine = True
+    if build_config.no_plot and not has_flag(argv, "--no-plot"):
+        cli_args.no_plot = True
+    if build_config.hide_labels and not has_flag(argv, "--hide-labels"):
+        cli_args.hide_labels = True
+    return cli_args
 
 
 def _build_command(
@@ -122,6 +242,10 @@ def _build_command(
         sched=args.sched,
         user_id=user_id,
     )
+    if args.log_dir is not None:
+        cmd.extend(["--log-dir", str(args.log_dir)])
+    cmd.extend(["--start-retention", str(args.start_retention)])
+    cmd.extend(["--end-retention", str(args.end_retention)])
     if args.short_term != "any":
         cmd.extend(["--short-term", args.short_term])
     if args.short_term_source != "any":
@@ -132,6 +256,22 @@ def _build_command(
         cmd.append("--compare-short-term")
     if args.compare_engine:
         cmd.append("--compare-engine")
+    if args.no_plot:
+        cmd.append("--no-plot")
+    if args.hide_labels:
+        cmd.append("--hide-labels")
+    if args.output_dir is not None:
+        cmd.extend(
+            [
+                "--results-path",
+                str(
+                    args.output_dir
+                    / f"simulation_results_retention_sweep_user_{user_id}.json"
+                ),
+                "--plot-dir",
+                str(args.output_dir),
+            ]
+        )
     cmd.extend(extra_args)
     return cmd
 
@@ -169,11 +309,12 @@ def _run_command(
 
 
 def main() -> int:
-    args, _ = parse_args()
+    args, extra_args = parse_args()
     if args.start_user < 1 or args.end_user < args.start_user:
         raise ValueError("Invalid user range.")
 
-    extra_args = passthrough_args(sys.argv)
+    if not extra_args:
+        extra_args = passthrough_args(sys.argv)
 
     if args.max_parallel < 1:
         raise ValueError("--max-parallel must be >= 1.")

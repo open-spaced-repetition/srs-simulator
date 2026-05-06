@@ -381,7 +381,7 @@ Run profiling before and after any performance-related change.
 Useful commands:
 
 ```bash
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_gpu_trial.toml --stage preflight --run-id gpu-probe
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage preflight --run-id gpu-probe
 
 uv run python experiments/retention_sweep/run_sweep_users_batched.py \
   --start-user 1 --end-user 100 \
@@ -493,7 +493,7 @@ Probe context:
 
 - Date: 2026-04-30
 - GPU: NVIDIA GeForce RTX 4090 D, 24 GB
-- Config: `experiments/rl_scheduler/configs/sa_fsrs6_overfit_probe.toml`
+- Config: superseded by `experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml`
 - Workload: LSTM environment, user 1, 365 days, deck 5000, short-term steps
 - Command family: `experiments/rl_scheduler/tune_sa_fsrs6_lanes.py`
 

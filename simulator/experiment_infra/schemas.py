@@ -18,6 +18,8 @@ class StageName(StrEnum):
     STAGE_BASELINE = "stage-baseline"
     TRAIN_OVERFIT = "train-overfit"
     SWEEP = "sweep"
+    BUILD_PARETO = "build-pareto"
+    ANALYZE_PARETO = "analyze-pareto"
     PARETO = "pareto"
     SELECT = "select"
     AGGREGATE = "aggregate"
@@ -306,6 +308,7 @@ class BaselineSource:
     expected_engine: str = "batched"
     stage_mode: str = "copy"
     desired_retention_values: tuple[float, ...] = ()
+    environments: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> BaselineSource:
@@ -323,6 +326,9 @@ class BaselineSource:
                 "baseline.desired_retention_values",
                 allow_empty=True,
             ),
+            environments=_str_tuple(
+                raw.get("environments", []), "baseline.environments"
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -332,6 +338,17 @@ class BaselineSource:
             raise ValueError("baseline.expected_engine is invalid.")
         if self.stage_mode not in {"copy", "hardlink"}:
             raise ValueError("baseline.stage_mode must be copy or hardlink.")
+        for environment in self.environments:
+            if environment not in {
+                "lstm",
+                "fsrs6",
+                "fsrs6_default",
+                "fsrs3",
+                "fsrs3_default",
+            }:
+                raise ValueError(
+                    "baseline.environments contains an invalid environment."
+                )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -340,6 +357,7 @@ class BaselineSource:
             "expected_engine": self.expected_engine,
             "stage_mode": self.stage_mode,
             "desired_retention_values": list(self.desired_retention_values),
+            "environments": list(self.environments),
         }
 
 
@@ -426,6 +444,296 @@ class SimulationScope:
 
 
 @dataclass(frozen=True, slots=True)
+class BatchedSweepStageConfig:
+    envs: tuple[str, ...] = ()
+    schedulers: tuple[str, ...] = ()
+    log_dir: Path | None = None
+    log_layout: str = "user"
+    batch_size: int | None = None
+    max_lanes_per_batch: int | None = None
+    torch_device: str | None = None
+    cuda_devices: str | None = None
+    benchmark_partition: str = "0"
+    start_retention: float = 0.50
+    end_retention: float = 0.98
+    step: float = 0.02
+    no_progress: bool = True
+    no_log: bool = False
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> BatchedSweepStageConfig:
+        log_dir = raw.get("log_dir")
+        torch_device = raw.get("torch_device")
+        cuda_devices = raw.get("cuda_devices")
+        return cls(
+            envs=_str_tuple(raw.get("envs", []), "sweep.envs"),
+            schedulers=_str_tuple(raw.get("schedulers", []), "sweep.schedulers"),
+            log_dir=Path(_require_str(log_dir, "sweep.log_dir"))
+            if log_dir is not None
+            else None,
+            log_layout=_require_str(raw.get("log_layout", "user"), "sweep.log_layout"),
+            batch_size=_optional_int(
+                raw.get("batch_size"), "sweep.batch_size", minimum=1
+            ),
+            max_lanes_per_batch=_optional_int(
+                raw.get("max_lanes_per_batch"), "sweep.max_lanes_per_batch", minimum=1
+            ),
+            torch_device=_require_str(torch_device, "sweep.torch_device")
+            if torch_device is not None
+            else None,
+            cuda_devices=_require_str(cuda_devices, "sweep.cuda_devices")
+            if cuda_devices is not None
+            else None,
+            benchmark_partition=_require_str(
+                raw.get("benchmark_partition", "0"), "sweep.benchmark_partition"
+            ),
+            start_retention=float(
+                _optional_float(
+                    raw.get("start_retention", 0.50), "sweep.start_retention"
+                )
+                or 0.50
+            ),
+            end_retention=float(
+                _optional_float(raw.get("end_retention", 0.98), "sweep.end_retention")
+                or 0.98
+            ),
+            step=float(_optional_float(raw.get("step", 0.02), "sweep.step") or 0.02),
+            no_progress=_require_bool(
+                raw.get("no_progress", True), "sweep.no_progress"
+            ),
+            no_log=_require_bool(raw.get("no_log", False), "sweep.no_log"),
+        )
+
+    def __post_init__(self) -> None:
+        for environment in self.envs:
+            if environment not in {"lstm", "fsrs6", "fsrs6_default"}:
+                raise ValueError("sweep.envs contains an invalid batched environment.")
+        if self.log_layout not in {"user", "sweep"}:
+            raise ValueError("sweep.log_layout must be user or sweep.")
+        if self.start_retention <= 0.0 or self.end_retention >= 1.0:
+            raise ValueError("sweep retention bounds must satisfy 0 < value < 1.")
+        if self.end_retention < self.start_retention:
+            raise ValueError("sweep.end_retention must be >= sweep.start_retention.")
+        if self.step <= 0.0:
+            raise ValueError("sweep.step must be > 0.")
+        if self.torch_device and self.cuda_devices:
+            raise ValueError(
+                "sweep.torch_device cannot be combined with sweep.cuda_devices."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "envs": list(self.envs),
+            "schedulers": list(self.schedulers),
+            "log_dir": str(self.log_dir) if self.log_dir is not None else None,
+            "log_layout": self.log_layout,
+            "batch_size": self.batch_size,
+            "max_lanes_per_batch": self.max_lanes_per_batch,
+            "torch_device": self.torch_device,
+            "cuda_devices": self.cuda_devices,
+            "benchmark_partition": self.benchmark_partition,
+            "start_retention": self.start_retention,
+            "end_retention": self.end_retention,
+            "step": self.step,
+            "no_progress": self.no_progress,
+            "no_log": self.no_log,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BuildParetoConfig:
+    command_template: tuple[str, ...] = ()
+    envs: tuple[str, ...] = ()
+    schedulers: tuple[str, ...] = ()
+    log_dir: Path | None = None
+    result_glob: str = "simulation_results_retention_sweep_user_*.json"
+    plot_glob: str = "*.png"
+    start_retention: float = 0.50
+    end_retention: float = 0.98
+    short_term: str = "off"
+    short_term_source: str = "any"
+    engine: str = "batched"
+    max_parallel: int = 1
+    compare_short_term: bool = False
+    compare_engine: bool = False
+    no_plot: bool = False
+    hide_labels: bool = True
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> BuildParetoConfig:
+        log_dir = raw.get("log_dir")
+        return cls(
+            command_template=_str_tuple(
+                raw.get("command_template", []), "build_pareto.command_template"
+            ),
+            envs=_str_tuple(raw.get("envs", []), "build_pareto.envs"),
+            schedulers=_str_tuple(raw.get("schedulers", []), "build_pareto.schedulers"),
+            log_dir=Path(_require_str(log_dir, "build_pareto.log_dir"))
+            if log_dir is not None
+            else None,
+            result_glob=_require_str(
+                raw.get(
+                    "result_glob", "simulation_results_retention_sweep_user_*.json"
+                ),
+                "build_pareto.result_glob",
+            ),
+            plot_glob=_require_str(
+                raw.get("plot_glob", "*.png"), "build_pareto.plot_glob"
+            ),
+            start_retention=float(
+                _optional_float(
+                    raw.get("start_retention", 0.50), "build_pareto.start_retention"
+                )
+                or 0.50
+            ),
+            end_retention=float(
+                _optional_float(
+                    raw.get("end_retention", 0.98), "build_pareto.end_retention"
+                )
+                or 0.98
+            ),
+            short_term=_require_str(
+                raw.get("short_term", "off"), "build_pareto.short_term"
+            ),
+            short_term_source=_require_str(
+                raw.get("short_term_source", "any"), "build_pareto.short_term_source"
+            ),
+            engine=_require_str(raw.get("engine", "batched"), "build_pareto.engine"),
+            max_parallel=_require_int(
+                raw.get("max_parallel", 1), "build_pareto.max_parallel", minimum=1
+            ),
+            compare_short_term=_require_bool(
+                raw.get("compare_short_term", False), "build_pareto.compare_short_term"
+            ),
+            compare_engine=_require_bool(
+                raw.get("compare_engine", False), "build_pareto.compare_engine"
+            ),
+            no_plot=_require_bool(raw.get("no_plot", False), "build_pareto.no_plot"),
+            hide_labels=_require_bool(
+                raw.get("hide_labels", True), "build_pareto.hide_labels"
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        if self.short_term not in {"on", "off", "any"}:
+            raise ValueError("build_pareto.short_term must be on, off, or any.")
+        if self.short_term_source not in {"steps", "sched", "any"}:
+            raise ValueError(
+                "build_pareto.short_term_source must be steps, sched, or any."
+            )
+        if self.engine not in {"event", "vectorized", "batched", "any"}:
+            raise ValueError("build_pareto.engine is invalid.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "command_template": list(self.command_template),
+            "envs": list(self.envs),
+            "schedulers": list(self.schedulers),
+            "log_dir": str(self.log_dir) if self.log_dir is not None else None,
+            "result_glob": self.result_glob,
+            "plot_glob": self.plot_glob,
+            "start_retention": self.start_retention,
+            "end_retention": self.end_retention,
+            "short_term": self.short_term,
+            "short_term_source": self.short_term_source,
+            "engine": self.engine,
+            "max_parallel": self.max_parallel,
+            "compare_short_term": self.compare_short_term,
+            "compare_engine": self.compare_engine,
+            "no_plot": self.no_plot,
+            "hide_labels": self.hide_labels,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AnalyzeParetoConfig:
+    command_template: tuple[str, ...] = ()
+    envs: tuple[str, ...] = ()
+    schedulers: tuple[str, ...] = ()
+    comparisons: tuple[str, ...] = ()
+    log_dir: Path | None = None
+    result_glob: str = "analysis.md"
+    start_retention: float = 0.50
+    end_retention: float = 0.98
+    short_term: str = "off"
+    engine: str = "batched"
+    fuzz: str = "off"
+    metric: str = "avg_accum_memorized_per_hour"
+    no_dedupe: bool = False
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> AnalyzeParetoConfig:
+        log_dir = raw.get("log_dir")
+        return cls(
+            command_template=_str_tuple(
+                raw.get("command_template", []), "analyze_pareto.command_template"
+            ),
+            envs=_str_tuple(raw.get("envs", []), "analyze_pareto.envs"),
+            schedulers=_str_tuple(
+                raw.get("schedulers", []), "analyze_pareto.schedulers"
+            ),
+            comparisons=_str_tuple(
+                raw.get("comparisons", []), "analyze_pareto.comparisons"
+            ),
+            log_dir=Path(_require_str(log_dir, "analyze_pareto.log_dir"))
+            if log_dir is not None
+            else None,
+            result_glob=_require_str(
+                raw.get("result_glob", "analysis.md"), "analyze_pareto.result_glob"
+            ),
+            start_retention=float(
+                _optional_float(
+                    raw.get("start_retention", 0.50), "analyze_pareto.start_retention"
+                )
+                or 0.50
+            ),
+            end_retention=float(
+                _optional_float(
+                    raw.get("end_retention", 0.98), "analyze_pareto.end_retention"
+                )
+                or 0.98
+            ),
+            short_term=_require_str(
+                raw.get("short_term", "off"), "analyze_pareto.short_term"
+            ),
+            engine=_require_str(raw.get("engine", "batched"), "analyze_pareto.engine"),
+            fuzz=_require_str(raw.get("fuzz", "off"), "analyze_pareto.fuzz"),
+            metric=_require_str(
+                raw.get("metric", "avg_accum_memorized_per_hour"),
+                "analyze_pareto.metric",
+            ),
+            no_dedupe=_require_bool(
+                raw.get("no_dedupe", False), "analyze_pareto.no_dedupe"
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        if self.short_term not in {"on", "off", "any"}:
+            raise ValueError("analyze_pareto.short_term must be on, off, or any.")
+        if self.engine not in {"event", "vectorized", "batched", "any"}:
+            raise ValueError("analyze_pareto.engine is invalid.")
+        if self.fuzz not in {"on", "off", "any"}:
+            raise ValueError("analyze_pareto.fuzz must be on, off, or any.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "command_template": list(self.command_template),
+            "envs": list(self.envs),
+            "schedulers": list(self.schedulers),
+            "comparisons": list(self.comparisons),
+            "log_dir": str(self.log_dir) if self.log_dir is not None else None,
+            "result_glob": self.result_glob,
+            "start_retention": self.start_retention,
+            "end_retention": self.end_retention,
+            "short_term": self.short_term,
+            "engine": self.engine,
+            "fuzz": self.fuzz,
+            "metric": self.metric,
+            "no_dedupe": self.no_dedupe,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ExperimentConfig:
     name: str
     family: str
@@ -446,6 +754,11 @@ class ExperimentConfig:
     sweep_command_template: tuple[str, ...] = ()
     sweep_log_glob: str = "*.jsonl"
     sweep_batch_scheduler_artifacts: bool = False
+    sweep_batched: BatchedSweepStageConfig = field(
+        default_factory=BatchedSweepStageConfig
+    )
+    build_pareto: BuildParetoConfig = field(default_factory=BuildParetoConfig)
+    analyze_pareto: AnalyzeParetoConfig = field(default_factory=AnalyzeParetoConfig)
     pareto_command_template: tuple[str, ...] = ()
     pareto_result_glob: str = "*.json"
     pareto_plot_glob: str = "*.png"
@@ -475,6 +788,10 @@ class ExperimentConfig:
             )
         training = _require_mapping(raw.get("training"), "training")
         sweep = _require_mapping(raw.get("sweep", {}), "sweep")
+        build_pareto = _require_mapping(raw.get("build_pareto", {}), "build_pareto")
+        analyze_pareto = _require_mapping(
+            raw.get("analyze_pareto", {}), "analyze_pareto"
+        )
         pareto = _require_mapping(raw.get("pareto", {}), "pareto")
         select = _require_mapping(raw.get("select", {}), "select")
         aggregate = _require_mapping(raw.get("aggregate", {}), "aggregate")
@@ -524,6 +841,9 @@ class ExperimentConfig:
                 sweep.get("batch_scheduler_artifacts", False),
                 "sweep.batch_scheduler_artifacts",
             ),
+            sweep_batched=BatchedSweepStageConfig.from_mapping(sweep),
+            build_pareto=BuildParetoConfig.from_mapping(build_pareto),
+            analyze_pareto=AnalyzeParetoConfig.from_mapping(analyze_pareto),
             pareto_command_template=_str_tuple(
                 pareto.get("command_template", []), "pareto.command_template"
             ),
@@ -586,6 +906,11 @@ class ExperimentConfig:
                 "command_template": list(self.sweep_command_template),
                 "log_glob": self.sweep_log_glob,
                 "batch_scheduler_artifacts": self.sweep_batch_scheduler_artifacts,
+                **self.sweep_batched.to_dict(),
+            },
+            "build_pareto": self.build_pareto.to_dict(),
+            "analyze_pareto": {
+                **self.analyze_pareto.to_dict(),
             },
             "pareto": {
                 "command_template": list(self.pareto_command_template),

@@ -10,6 +10,8 @@ SUMMARY_FILENAMES = (
     "preflight_summary.json",
     "baseline_summary.json",
     "gate_summary.json",
+    "build_pareto_summary.json",
+    "analyze_pareto_summary.json",
 )
 
 

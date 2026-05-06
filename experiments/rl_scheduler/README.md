@@ -25,6 +25,8 @@ obtain `S` and `D`.
   `(S,D,DR)` logit-adjustment policy per user/lambda.
 - `plot_sa_fsrs6_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
+- `plot_sa_fsrs6_dr_policy_surfaces.py`: Plotly HTML visualizer for learned
+  `f(S, D, DR) -> desired_retention` slices across input DR values.
 - `tune_sa_fsrs6_lanes.py`: GPU lane/chains tuning and throughput probe.
 - `inspect_run.py`: reads machine-readable evidence under a run root.
 - `validate_artifact.py`: validates scheduler artifact metadata and referenced
@@ -40,8 +42,8 @@ experiment should continue.
 
 - **TOML profile**: the reproducible experiment configuration. User splits,
   seed, days, deck size, limits, engine, environment, short-term mode, fuzz,
-  GPU guard, training settings, and sweep/Pareto/aggregate commands belong in
-  TOML.
+  GPU guard, training settings, sweep, Pareto build, and Pareto analysis
+  settings belong in TOML.
 - **run id**: the stable identifier for one run. Stage outputs are written to
   `<output_root>/<run_id>/<stage>/`. Use a fixed run id when continuing or
   reproducing a run.
@@ -63,11 +65,11 @@ experiment should continue.
   batched sweep can batch `(user, scheduler, scheduler parameter)` lanes in one
   simulator call, such as several FSRS-6 desired-retention values plus several
   SA FSRS-6 policies.
-- **Pareto**: the external efficiency frontier built from sweep logs. Internal
+- **build-pareto/analyze-pareto**: the external efficiency frontier and Markdown
+  comparison report built from sweep logs. Internal
   reward, loss, acceptance rate, and promotion flags are diagnostics only; they
   do not replace Pareto evidence. Pareto charts should be generated per user;
-  do not generate a user-aggregated Pareto plot. Use aggregate JSON/statistics
-  for multi-user evidence instead.
+  do not generate a user-aggregated Pareto plot.
 
 ## Standard Stage Flow
 
@@ -98,19 +100,15 @@ uv run python experiments/rl_scheduler/run_experiment.py \
   --config experiments/rl_scheduler/configs/<profile>.toml \
   --stage sweep \
   --run-id <run-id>
-```
 
-If the profile includes Pareto or aggregate stages, continue with:
-
-```bash
 uv run python experiments/rl_scheduler/run_experiment.py \
   --config experiments/rl_scheduler/configs/<profile>.toml \
-  --stage pareto \
+  --stage build-pareto \
   --run-id <run-id>
 
 uv run python experiments/rl_scheduler/run_experiment.py \
   --config experiments/rl_scheduler/configs/<profile>.toml \
-  --stage aggregate \
+  --stage analyze-pareto \
   --run-id <run-id>
 ```
 
@@ -136,23 +134,31 @@ uv run python experiments/rl_scheduler/plot_sa_fsrs6_policy_surfaces.py \
   --train-run-root <output_root>/<run-id> \
   --users 1,2,3 \
   --lambda-values 0.5
+
+uv run python experiments/rl_scheduler/plot_sa_fsrs6_dr_policy_surfaces.py \
+  --train-run-root <output_root>/<run-id> \
+  --users 1,2,3 \
+  --lambda-values 0.5
 ```
 
 The visualizer writes one interactive Plotly HTML per user/lambda under
 `experiments/rl_scheduler/plots/sa_fsrs6_policy_surfaces/`. Each figure uses
 stability `S` and difficulty `D` as the horizontal axes, policy output retention
 as the vertical axis, and one translucent surface per baseline DR.
+The DR-conditioned visualizer writes to
+`experiments/rl_scheduler/plots/sa_fsrs6_dr_policy_surfaces/` and plots one
+translucent surface per input DR slice from `metrics.json` or `--dr-values`.
 
-## Current Main Experiment: SA FSRS-6 DR Grid
+## Current Main Experiments
 
 Representative profiles:
 
-- `configs/sa_fsrs6_fsrs6_dr_grid.toml`: single-user DR grid.
-- `configs/sa_fsrs6_fsrs6_dr_grid_users_1_8.toml`: first 8 users, FSRS-6
-  environment, short-term off, 1825 days, deck size 10000, learn limit 10,
-  review limit 9999, 256 chains, and DR batch size 25.
-- `configs/sa_fsrs6_dr_fsrs6_users_1_8.toml`: first 8 users, FSRS-6
-  environment, short-term off, one DR-conditioned policy per user/lambda.
+- `configs/sa_fsrs6_batch_sweep_users_1_8.toml`: first 8 users, FSRS-6
+  training environment, short-term off, 1825 days, deck size 10000, learn limit
+  10, review limit 9999, 256 chains, DR batch size 25, and batch sweeps in
+  both FSRS6 and LSTM environments.
+- `configs/sa_fsrs6_dr_batch_sweep_users_1_8.toml`: the same experiment shape
+  for the DR-conditioned `sa_fsrs6_dr` scheduler.
 
 Training target:
 
@@ -173,9 +179,9 @@ Batching model:
   inside one training command.
 - `training.sa.dr_batch_size` controls how many DR values enter one GPU chunk.
 - Effective lanes are approximately `dr_batch_size * chains`.
-- `sweep.batch_scheduler_artifacts = true` evaluates artifacts without one
-  subprocess per artifact. Instead, one in-process batched simulation covers
-  users, schedulers, and scheduler parameters.
+- `[sweep]` contains the batch sweep envs, scheduler list, retention grid, log
+  root, and batch sizing. The formal runner uses that table directly, so no
+  separate retention_sweep TOML is needed.
 
 ## Reproducibility Requirements
 
@@ -184,11 +190,11 @@ Formal experiments must satisfy these rules:
 - Add or copy a `configs/*.toml` profile before running a new experiment. Do not
   rely on shell history for parameters.
 - Record `seed`, `users`, `simulation`, `gpu_guard`, `performance`, `training`,
-  `sweep`, and `pareto`/`aggregate` settings in TOML.
+  `sweep`, `build_pareto`, and `analyze_pareto` settings in TOML.
 - Preserve config snapshots, resolved configs, command records, manifests, gate
   summaries, and performance summaries for each run.
-- Use a stable `--run-id` so later `sweep`, `pareto`, and `aggregate` stages
-  align with the same outputs.
+- Use a stable `--run-id` so later `sweep`, `build-pareto`, and
+  `analyze-pareto` stages align with the same outputs.
 - Do not edit artifact metadata by hand to make a run pass. Metadata mismatch is
   a run failure.
 
@@ -224,10 +230,10 @@ Advance a new policy family in this order:
    generalization pressure.
 2. Same-user external sweep: confirm the trained artifact still improves under
    the independent sweep path.
-3. Pareto: build per-user baseline + candidate Pareto JSON and PNG from sweep
-   logs. Do not use a user-aggregated Pareto plot as evidence.
-4. Multi-user aggregate: compare means and distributions on the intersection of
-   users.
+3. Build Pareto: build per-user baseline + candidate Pareto JSON and PNG from
+   sweep logs. Do not use a user-aggregated Pareto plot as evidence.
+4. Analyze Pareto: write the configured scheduler comparison report from those
+   per-user Pareto JSON files.
 5. Validation and reserved test: unlock only after the earlier stages pass.
 
 Stop conditions:
@@ -267,10 +273,8 @@ scheduler. Do not read hidden memory state from the environment.
   and DR metadata.
 - Training: every user, lambda, and baseline DR has an artifact or an explicit
   failure.
-- Sweep: `batch_lanes` matches the expected `(user, scheduler, parameter)` count;
-  `subprocess_count = 0` means the in-process batched sweep path ran.
-- Pareto: `pareto_summary.json` contains both `result_paths` and `plot_paths`;
+- Sweep: `batch_lanes` matches the expected `(user, scheduler, parameter)` count.
+- Build Pareto: `build_pareto_summary.json` contains both `result_paths` and `plot_paths`;
   generated Pareto plots are per-user, not user-aggregated.
-- Aggregate: uses the user intersection and the intended equivalence-baseline
-  settings.
+- Analyze Pareto: `analyze_pareto_summary.json` points to the Markdown report.
 - Disk: CSV count should be zero unless the run is explicitly diagnostic.

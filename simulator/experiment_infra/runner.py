@@ -43,6 +43,8 @@ SUPPORTED_RUNNER_STAGES = {
     StageName.STAGE_BASELINE,
     StageName.TRAIN_OVERFIT,
     StageName.SWEEP,
+    StageName.BUILD_PARETO,
+    StageName.ANALYZE_PARETO,
     StageName.PARETO,
     StageName.SELECT,
     StageName.AGGREGATE,
@@ -220,6 +222,28 @@ def run_stage(
         )
     if stage == StageName.SWEEP:
         return run_sweep(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=command
+            or stage_command(
+                config_path=config_path, stage=stage, run_id=actual_run_id
+            ),
+        )
+    if stage == StageName.BUILD_PARETO:
+        return run_build_pareto(
+            config=config,
+            config_path=config_path,
+            repo_root=repo_root,
+            run_id=actual_run_id,
+            command=command
+            or stage_command(
+                config_path=config_path, stage=stage, run_id=actual_run_id
+            ),
+        )
+    if stage == StageName.ANALYZE_PARETO:
+        return run_analyze_pareto(
             config=config,
             config_path=config_path,
             repo_root=repo_root,
@@ -670,8 +694,15 @@ def run_sweep(
     batch_runs_attempted = 0
     batch_runs_succeeded = 0
     batch_lane_count = 0
+    batched_retention_sweep = bool(
+        config.sweep_batched.envs and config.sweep_batched.schedulers
+    )
 
-    if not config.sweep_batch_scheduler_artifacts and not config.sweep_command_template:
+    if (
+        not batched_retention_sweep
+        and not config.sweep_batch_scheduler_artifacts
+        and not config.sweep_command_template
+    ):
         failures.append(FailureClass.INVALID_CONFIG)
         notes.append("sweep.command_template is required for sweep.")
 
@@ -684,7 +715,30 @@ def run_sweep(
             failures.append(FailureClass.INCOMPLETE_OUTPUT)
             notes.extend(artifact_notes)
 
-    if not failures and config.sweep_batch_scheduler_artifacts:
+    if not failures and batched_retention_sweep:
+        batch_runs_attempted = 1
+        try:
+            batched_result = _run_configured_batched_retention_sweep(
+                config=config,
+                repo_root=repo_root,
+                run_id=run_id,
+                output_root=output_root,
+                record_path=batched_sweep_record_path,
+            )
+        except Exception as exc:
+            failures.append(FailureClass.RUNNER_FAILED)
+            notes.append(f"Batched retention sweep failed: {exc}")
+        else:
+            batch_runs_succeeded = 1
+            batch_lane_count = batched_result["batch_lane_count"]
+            log_paths.extend(batched_result["log_paths"])
+            command_results.extend(batched_result["lane_results"])
+
+    if (
+        not failures
+        and config.sweep_batch_scheduler_artifacts
+        and not batched_retention_sweep
+    ):
         artifact_lanes: list[SweepBatchLane] = []
         for metadata_path in train_artifact_paths:
             artifact_paths.append(metadata_path)
@@ -768,7 +822,11 @@ def run_sweep(
                     log_paths.extend(matched_logs)
                     command_results.append(_sweep_batch_lane_result(job))
 
-    if not failures and not config.sweep_batch_scheduler_artifacts:
+    if (
+        not failures
+        and not config.sweep_batch_scheduler_artifacts
+        and not batched_retention_sweep
+    ):
         for metadata_path in train_artifact_paths:
             artifact_paths.append(metadata_path)
             try:
@@ -995,6 +1053,8 @@ def run_sweep(
         "command_template": list(config.sweep_command_template),
         "log_glob": config.sweep_log_glob,
         "batch_scheduler_artifacts": config.sweep_batch_scheduler_artifacts,
+        "batched_retention_sweep": batched_retention_sweep,
+        "batched_sweep_config": config.sweep_batched.to_dict(),
         "batch_runs_attempted": batch_runs_attempted,
         "batch_runs_succeeded": batch_runs_succeeded,
         "batch_lanes": batch_lane_count,
@@ -1096,6 +1156,545 @@ def run_sweep(
     return StageExecutionResult(
         exit_code=exit_code,
         stage=StageName.SWEEP,
+        run_id=run_id,
+        stage_root=stage_root,
+        summary=summary,
+    )
+
+
+def run_build_pareto(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    command: list[str],
+) -> StageExecutionResult:
+    started_at = utc_timestamp()
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    stage_root = output_root / run_id / StageName.BUILD_PARETO.value
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    config_snapshot_path = stage_root / "config_snapshot.toml"
+    resolved_config_path = stage_root / "resolved_config.json"
+    gate_summary_path = stage_root / "gate_summary.json"
+    command_record_path = stage_root / "command_record.json"
+    build_command_record_path = stage_root / "commands" / "build_pareto_command.json"
+    build_stdout_path = stage_root / "commands" / "build_pareto_stdout.txt"
+    build_stderr_path = stage_root / "commands" / "build_pareto_stderr.txt"
+    run_record_path = stage_root / "run_record.json"
+    build_summary_path = stage_root / "build_pareto_summary.json"
+    manifest_path = stage_root / "manifest.json"
+    output_dir = stage_root / "build_pareto_outputs"
+    run_root = output_root / run_id
+    baseline_stage_root = run_root / StageName.STAGE_BASELINE.value
+    sweep_stage_root = run_root / StageName.SWEEP.value
+
+    shutil.copyfile(config_path, config_snapshot_path)
+    _write_json(resolved_config_path, config.to_dict())
+
+    failures: list[FailureClass] = []
+    notes: list[str] = []
+    command_results: list[dict[str, Any]] = []
+    command_records: list[Path] = []
+    stdout_paths: list[Path] = []
+    stderr_paths: list[Path] = []
+    result_paths: list[Path] = []
+    plot_paths: list[Path] = []
+    commands_attempted = 0
+    commands_succeeded = 0
+
+    for summary_path, stage_name in (
+        (baseline_stage_root / "baseline_summary.json", StageName.STAGE_BASELINE),
+        (sweep_stage_root / "sweep_summary.json", StageName.SWEEP),
+    ):
+        summary_notes = _read_passed_stage_summary(summary_path, stage_name)
+        if summary_notes:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.extend(summary_notes)
+
+    if not failures:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            build_command = _format_build_pareto_command(
+                config=config,
+                config_path=config_path,
+                repo_root=repo_root,
+                run_id=run_id,
+                stage_root=stage_root,
+                output_dir=output_dir,
+                run_root=run_root,
+                baseline_stage_root=baseline_stage_root,
+                sweep_stage_root=sweep_stage_root,
+                command_record_path=build_command_record_path,
+                stdout_path=build_stdout_path,
+                stderr_path=build_stderr_path,
+            )
+        except ValueError as exc:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(f"Invalid build_pareto.command_template: {exc}")
+        else:
+            commands_attempted = 1
+            build_command_record = _run_recorded_command(
+                command=build_command,
+                cwd=repo_root,
+                command_record_path=build_command_record_path,
+                stdout_path=build_stdout_path,
+                stderr_path=build_stderr_path,
+                timeout_seconds=config.performance.timeout_seconds,
+            )
+            exit_code = _record_exit_code(build_command_record)
+            timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
+            command_records.append(build_command_record_path)
+            stdout_paths.append(build_stdout_path)
+            stderr_paths.append(build_stderr_path)
+            command_results.append(
+                {
+                    "output_dir": str(output_dir),
+                    "command_record_path": str(build_command_record_path),
+                    "stdout_path": str(build_stdout_path),
+                    "stderr_path": str(build_stderr_path),
+                    "exit_code": exit_code,
+                    "timed_out": timed_out,
+                }
+            )
+            if exit_code != 0:
+                failures.append(
+                    FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+                )
+                notes.append(
+                    "Build-Pareto command timed out."
+                    if timed_out
+                    else "Build-Pareto command failed."
+                )
+            else:
+                commands_succeeded = 1
+
+    if not failures:
+        result_paths, result_note = _collect_paths(
+            root=output_dir,
+            path_glob=config.build_pareto.result_glob,
+            field_name="build_pareto.result_glob",
+        )
+        if result_note is not None:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(result_note)
+        elif not result_paths:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.append(
+                "No Build-Pareto result JSON matched "
+                f"{config.build_pareto.result_glob!r} in {output_dir}."
+            )
+        else:
+            json_note = _validate_json_files(result_paths)
+            if json_note is not None:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(json_note)
+
+    if not failures and not config.build_pareto.no_plot:
+        plot_paths, plot_note = _collect_paths(
+            root=output_dir,
+            path_glob=config.build_pareto.plot_glob,
+            field_name="build_pareto.plot_glob",
+        )
+        if plot_note is not None:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(plot_note)
+        elif not plot_paths:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.append(
+                f"No Build-Pareto plot matched {config.build_pareto.plot_glob!r} "
+                f"in {output_dir}."
+            )
+
+    unique_failures = tuple(dict.fromkeys(failures))
+    passed = not unique_failures
+    gate_summary = GateSummary(
+        gate_name=StageName.BUILD_PARETO.value,
+        passed=passed,
+        failures=unique_failures,
+        metrics={
+            "commands_attempted": float(commands_attempted),
+            "commands_succeeded": float(commands_succeeded),
+            "result_json_files": float(len(result_paths)),
+            "plot_files": float(len(plot_paths)),
+        },
+        thresholds={},
+    )
+    _write_json(gate_summary_path, gate_summary.to_dict())
+
+    finished_at = utc_timestamp()
+    exit_code = 0 if passed else 1
+    stage_command_record = CommandRecord(
+        command=tuple(command),
+        cwd=repo_root,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=None,
+        stderr_path=None,
+    )
+    _write_json(command_record_path, stage_command_record.to_dict())
+
+    provenance = collect_environment_summary(repo_root)
+    summary = {
+        "type": "build-pareto",
+        "run_id": run_id,
+        "stage": StageName.BUILD_PARETO.value,
+        "passed": passed,
+        "failures": [failure.value for failure in unique_failures],
+        "notes": notes,
+        "repo_root": str(repo_root),
+        "output_root": str(output_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "run_root": str(run_root),
+        "baseline_stage_root": str(baseline_stage_root),
+        "sweep_stage_root": str(sweep_stage_root),
+        "build_pareto_config": config.build_pareto.to_dict(),
+        "result_paths": [str(path) for path in result_paths],
+        "plot_paths": [str(path) for path in plot_paths],
+        "command_results": command_results,
+        "config_snapshot_path": str(config_snapshot_path),
+        "resolved_config_path": str(resolved_config_path),
+        "gate_summary_path": str(gate_summary_path),
+        "command_record_path": str(command_record_path),
+        "run_record_path": str(run_record_path),
+        "manifest_path": str(manifest_path),
+        "environment": provenance,
+    }
+    _write_json(build_summary_path, summary)
+
+    run_record = RunRecord(
+        run_id=run_id,
+        stage=StageName.BUILD_PARETO,
+        command=stage_command_record,
+        config_path=config_path,
+        config_snapshot_path=config_snapshot_path,
+        resolved_config_path=resolved_config_path,
+        git_commit=provenance["git_commit"],
+        dirty=bool(provenance["dirty"]),
+        uv_lock_hash=provenance["uv_lock_hash"],
+        python_version=provenance["python_version"],
+        torch_version=provenance["torch_version"],
+        cuda_version=provenance["cuda_version"],
+        artifact_paths=(
+            gate_summary_path,
+            build_summary_path,
+            manifest_path,
+            *command_records,
+            *stdout_paths,
+            *stderr_paths,
+            *result_paths,
+            *plot_paths,
+        ),
+    )
+    _write_json(run_record_path, run_record.to_dict())
+
+    manifest_artifacts: dict[str, Path] = {
+        "config_snapshot": config_snapshot_path,
+        "resolved_config": resolved_config_path,
+        "gate_summary": gate_summary_path,
+        "command_record": command_record_path,
+        "run_record": run_record_path,
+        "build_pareto_summary": build_summary_path,
+    }
+    manifest_artifacts.update(
+        {
+            f"build_pareto_command_record_{index}": path
+            for index, path in enumerate(command_records)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"build_pareto_stdout_{index}": path
+            for index, path in enumerate(stdout_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"build_pareto_stderr_{index}": path
+            for index, path in enumerate(stderr_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"build_pareto_result_{index}": path
+            for index, path in enumerate(result_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {f"build_pareto_plot_{index}": path for index, path in enumerate(plot_paths)}
+    )
+    manifest = ArtifactManifest(
+        run_id=run_id,
+        artifacts=manifest_artifacts,
+        config_snapshot_path=config_snapshot_path,
+        gate_summary_path=gate_summary_path,
+        command_record_paths=(command_record_path, *command_records),
+    )
+    _write_json(manifest_path, manifest.to_dict())
+
+    return StageExecutionResult(
+        exit_code=exit_code,
+        stage=StageName.BUILD_PARETO,
+        run_id=run_id,
+        stage_root=stage_root,
+        summary=summary,
+    )
+
+
+def run_analyze_pareto(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    command: list[str],
+) -> StageExecutionResult:
+    started_at = utc_timestamp()
+    output_root = _resolve_repo_path(repo_root, config.output_root)
+    stage_root = output_root / run_id / StageName.ANALYZE_PARETO.value
+    stage_root.mkdir(parents=True, exist_ok=True)
+
+    config_snapshot_path = stage_root / "config_snapshot.toml"
+    resolved_config_path = stage_root / "resolved_config.json"
+    gate_summary_path = stage_root / "gate_summary.json"
+    command_record_path = stage_root / "command_record.json"
+    analyze_command_record_path = (
+        stage_root / "commands" / "analyze_pareto_command.json"
+    )
+    analyze_stdout_path = stage_root / "commands" / "analyze_pareto_stdout.txt"
+    analyze_stderr_path = stage_root / "commands" / "analyze_pareto_stderr.txt"
+    run_record_path = stage_root / "run_record.json"
+    analyze_summary_path = stage_root / "analyze_pareto_summary.json"
+    manifest_path = stage_root / "manifest.json"
+    output_dir = stage_root / "analyze_pareto_outputs"
+    run_root = output_root / run_id
+    build_stage_root = run_root / StageName.BUILD_PARETO.value
+    build_summary_path = build_stage_root / "build_pareto_summary.json"
+
+    shutil.copyfile(config_path, config_snapshot_path)
+    _write_json(resolved_config_path, config.to_dict())
+
+    failures: list[FailureClass] = []
+    notes: list[str] = []
+    command_results: list[dict[str, Any]] = []
+    command_records: list[Path] = []
+    stdout_paths: list[Path] = []
+    stderr_paths: list[Path] = []
+    result_paths: list[Path] = []
+    commands_attempted = 0
+    commands_succeeded = 0
+
+    summary_notes = _read_passed_stage_summary(
+        build_summary_path, StageName.BUILD_PARETO
+    )
+    if summary_notes:
+        failures.append(FailureClass.INCOMPLETE_OUTPUT)
+        notes.extend(summary_notes)
+
+    if not failures:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            analyze_command = _format_analyze_pareto_command(
+                config=config,
+                config_path=config_path,
+                repo_root=repo_root,
+                run_id=run_id,
+                stage_root=stage_root,
+                output_dir=output_dir,
+                run_root=run_root,
+                build_stage_root=build_stage_root,
+                command_record_path=analyze_command_record_path,
+                stdout_path=analyze_stdout_path,
+                stderr_path=analyze_stderr_path,
+            )
+        except ValueError as exc:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(f"Invalid analyze_pareto.command_template: {exc}")
+        else:
+            commands_attempted = 1
+            analyze_command_record = _run_recorded_command(
+                command=analyze_command,
+                cwd=repo_root,
+                command_record_path=analyze_command_record_path,
+                stdout_path=analyze_stdout_path,
+                stderr_path=analyze_stderr_path,
+                timeout_seconds=config.performance.timeout_seconds,
+            )
+            exit_code = _record_exit_code(analyze_command_record)
+            timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
+            command_records.append(analyze_command_record_path)
+            stdout_paths.append(analyze_stdout_path)
+            stderr_paths.append(analyze_stderr_path)
+            command_results.append(
+                {
+                    "output_dir": str(output_dir),
+                    "command_record_path": str(analyze_command_record_path),
+                    "stdout_path": str(analyze_stdout_path),
+                    "stderr_path": str(analyze_stderr_path),
+                    "exit_code": exit_code,
+                    "timed_out": timed_out,
+                }
+            )
+            if exit_code != 0:
+                failures.append(
+                    FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
+                )
+                notes.append(
+                    "Analyze-Pareto command timed out."
+                    if timed_out
+                    else "Analyze-Pareto command failed."
+                )
+            else:
+                commands_succeeded = 1
+
+    if not failures:
+        result_paths, result_note = _collect_paths(
+            root=output_dir,
+            path_glob=config.analyze_pareto.result_glob,
+            field_name="analyze_pareto.result_glob",
+        )
+        if result_note is not None:
+            failures.append(FailureClass.INVALID_CONFIG)
+            notes.append(result_note)
+        elif not result_paths:
+            failures.append(FailureClass.INCOMPLETE_OUTPUT)
+            notes.append(
+                "No Analyze-Pareto result matched "
+                f"{config.analyze_pareto.result_glob!r} in {output_dir}."
+            )
+        else:
+            empty_paths = [path for path in result_paths if path.stat().st_size == 0]
+            if empty_paths:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(f"Analyze-Pareto output is empty: {empty_paths[0]}")
+
+    unique_failures = tuple(dict.fromkeys(failures))
+    passed = not unique_failures
+    gate_summary = GateSummary(
+        gate_name=StageName.ANALYZE_PARETO.value,
+        passed=passed,
+        failures=unique_failures,
+        metrics={
+            "commands_attempted": float(commands_attempted),
+            "commands_succeeded": float(commands_succeeded),
+            "result_files": float(len(result_paths)),
+        },
+        thresholds={},
+    )
+    _write_json(gate_summary_path, gate_summary.to_dict())
+
+    finished_at = utc_timestamp()
+    exit_code = 0 if passed else 1
+    stage_command_record = CommandRecord(
+        command=tuple(command),
+        cwd=repo_root,
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=exit_code,
+        stdout_path=None,
+        stderr_path=None,
+    )
+    _write_json(command_record_path, stage_command_record.to_dict())
+
+    provenance = collect_environment_summary(repo_root)
+    summary = {
+        "type": "analyze-pareto",
+        "run_id": run_id,
+        "stage": StageName.ANALYZE_PARETO.value,
+        "passed": passed,
+        "failures": [failure.value for failure in unique_failures],
+        "notes": notes,
+        "repo_root": str(repo_root),
+        "output_root": str(output_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "run_root": str(run_root),
+        "build_stage_root": str(build_stage_root),
+        "analyze_pareto_config": config.analyze_pareto.to_dict(),
+        "result_paths": [str(path) for path in result_paths],
+        "command_results": command_results,
+        "config_snapshot_path": str(config_snapshot_path),
+        "resolved_config_path": str(resolved_config_path),
+        "gate_summary_path": str(gate_summary_path),
+        "command_record_path": str(command_record_path),
+        "run_record_path": str(run_record_path),
+        "manifest_path": str(manifest_path),
+        "environment": provenance,
+    }
+    _write_json(analyze_summary_path, summary)
+
+    run_record = RunRecord(
+        run_id=run_id,
+        stage=StageName.ANALYZE_PARETO,
+        command=stage_command_record,
+        config_path=config_path,
+        config_snapshot_path=config_snapshot_path,
+        resolved_config_path=resolved_config_path,
+        git_commit=provenance["git_commit"],
+        dirty=bool(provenance["dirty"]),
+        uv_lock_hash=provenance["uv_lock_hash"],
+        python_version=provenance["python_version"],
+        torch_version=provenance["torch_version"],
+        cuda_version=provenance["cuda_version"],
+        artifact_paths=(
+            gate_summary_path,
+            analyze_summary_path,
+            manifest_path,
+            *command_records,
+            *stdout_paths,
+            *stderr_paths,
+            *result_paths,
+        ),
+    )
+    _write_json(run_record_path, run_record.to_dict())
+
+    manifest_artifacts: dict[str, Path] = {
+        "config_snapshot": config_snapshot_path,
+        "resolved_config": resolved_config_path,
+        "gate_summary": gate_summary_path,
+        "command_record": command_record_path,
+        "run_record": run_record_path,
+        "analyze_pareto_summary": analyze_summary_path,
+    }
+    manifest_artifacts.update(
+        {
+            f"analyze_pareto_command_record_{index}": path
+            for index, path in enumerate(command_records)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"analyze_pareto_stdout_{index}": path
+            for index, path in enumerate(stdout_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"analyze_pareto_stderr_{index}": path
+            for index, path in enumerate(stderr_paths)
+        }
+    )
+    manifest_artifacts.update(
+        {
+            f"analyze_pareto_result_{index}": path
+            for index, path in enumerate(result_paths)
+        }
+    )
+    manifest = ArtifactManifest(
+        run_id=run_id,
+        artifacts=manifest_artifacts,
+        config_snapshot_path=config_snapshot_path,
+        gate_summary_path=gate_summary_path,
+        command_record_paths=(command_record_path, *command_records),
+    )
+    _write_json(manifest_path, manifest.to_dict())
+
+    return StageExecutionResult(
+        exit_code=exit_code,
+        stage=StageName.ANALYZE_PARETO,
         run_id=run_id,
         stage_root=stage_root,
         summary=summary,
@@ -2246,8 +2845,9 @@ def run_stage_baseline(
     failures: list[FailureClass] = []
     notes: list[str] = []
     staged_logs: list[Path] = []
-    logs_by_user: dict[int, list[Path]] = {}
-    retentions_by_user: dict[int, set[float]] = {}
+    baseline_envs = config.baseline.environments or (config.simulation.environment,)
+    logs_by_env_user: dict[tuple[str, int], list[Path]] = {}
+    retentions_by_env_user: dict[tuple[str, int], set[float]] = {}
 
     if not baseline_root.exists():
         failures.append(FailureClass.INVALID_BASELINE)
@@ -2258,7 +2858,7 @@ def run_stage_baseline(
             | set(config.users.validation)
             | set(config.users.reserved_test)
         )
-        filename_filter = _baseline_filename_filter(config)
+        filename_filter = _baseline_filename_filter(config, environments=baseline_envs)
         candidate_paths = _baseline_candidate_paths(
             baseline_root=baseline_root,
             required_users=required_users,
@@ -2272,37 +2872,56 @@ def run_stage_baseline(
             if isinstance(user_id, bool) or not isinstance(user_id, int):
                 notes.append(f"Skipping {path}: missing integer user_id.")
                 continue
-            metadata_errors = _baseline_metadata_errors(config=config, meta=meta)
+            environment = meta.get("environment")
+            if environment not in baseline_envs:
+                continue
+            metadata_errors = _baseline_metadata_errors(
+                config=config,
+                meta=meta,
+                expected_environment=str(environment),
+            )
             if metadata_errors:
                 notes.extend(f"{path}: {error}" for error in metadata_errors)
                 continue
-            logs_by_user.setdefault(user_id, []).append(path)
+            env_user_key = (str(environment), user_id)
+            logs_by_env_user.setdefault(env_user_key, []).append(path)
             retention_value = _matched_retention_value(
                 meta.get("desired_retention"),
                 config.baseline.desired_retention_values,
             )
             if retention_value is not None:
-                retentions_by_user.setdefault(user_id, set()).add(retention_value)
+                retentions_by_env_user.setdefault(env_user_key, set()).add(
+                    retention_value
+                )
 
-        missing_users = sorted(required_users - set(logs_by_user))
-        if missing_users:
+        missing_env_users = [
+            f"env={environment},user={user_id}"
+            for environment in baseline_envs
+            for user_id in sorted(required_users)
+            if (environment, user_id) not in logs_by_env_user
+        ]
+        if missing_env_users:
             failures.append(FailureClass.INVALID_BASELINE)
             notes.append(
-                "Missing exact baseline logs for users: "
-                + ", ".join(str(user_id) for user_id in missing_users)
+                "Missing exact baseline logs for environment/user pairs: "
+                + ", ".join(missing_env_users)
             )
-        if not logs_by_user:
+        if not logs_by_env_user:
             failures.append(FailureClass.INVALID_BASELINE)
             notes.append("No exact baseline logs matched the config.")
         if config.baseline.desired_retention_values:
             missing_pairs: list[str] = []
             required_retentions = set(config.baseline.desired_retention_values)
-            for user_id in sorted(required_users):
-                missing_retentions = sorted(
-                    required_retentions - retentions_by_user.get(user_id, set())
-                )
-                for retention in missing_retentions:
-                    missing_pairs.append(f"user={user_id},ret={retention:.2f}")
+            for environment in baseline_envs:
+                for user_id in sorted(required_users):
+                    missing_retentions = sorted(
+                        required_retentions
+                        - retentions_by_env_user.get((environment, user_id), set())
+                    )
+                    for retention in missing_retentions:
+                        missing_pairs.append(
+                            f"env={environment},user={user_id},ret={retention:.2f}"
+                        )
             if missing_pairs:
                 failures.append(FailureClass.INVALID_BASELINE)
                 notes.append(
@@ -2311,9 +2930,14 @@ def run_stage_baseline(
                 )
 
         if not failures:
-            for user_id in sorted(logs_by_user):
-                for source in logs_by_user[user_id]:
-                    dest = staged_root / f"user_{user_id}" / source.name
+            for environment, user_id in sorted(logs_by_env_user):
+                for source in logs_by_env_user[(environment, user_id)]:
+                    dest = (
+                        staged_root
+                        / f"env_{environment}"
+                        / f"user_{user_id}"
+                        / source.name
+                    )
                     _stage_baseline_file(
                         source=source,
                         dest=dest,
@@ -2328,9 +2952,9 @@ def run_stage_baseline(
         passed=passed,
         failures=unique_failures,
         metrics={
-            "matched_users": float(len(logs_by_user)),
+            "matched_environment_user_pairs": float(len(logs_by_env_user)),
             "matched_user_retention_pairs": float(
-                sum(len(values) for values in retentions_by_user.values())
+                sum(len(values) for values in retentions_by_env_user.values())
             ),
             "staged_logs": float(len(staged_logs)),
         },
@@ -2361,13 +2985,32 @@ def run_stage_baseline(
         "notes": notes,
         "repo_root": str(repo_root),
         "baseline_root": str(baseline_root),
+        "baseline_environments": list(baseline_envs),
         "output_root": str(output_root),
         "stage_root": str(stage_root),
         "stage_mode": config.baseline.stage_mode,
-        "matched_users": sorted(logs_by_user),
+        "matched_users": sorted({user_id for _, user_id in logs_by_env_user}),
+        "matched_environment_user_pairs": [
+            {"environment": environment, "user_id": user_id}
+            for environment, user_id in sorted(logs_by_env_user)
+        ],
         "matched_retentions_by_user": {
-            str(user_id): sorted(values)
-            for user_id, values in sorted(retentions_by_user.items())
+            str(user_id): sorted(
+                {
+                    retention
+                    for (
+                        environment,
+                        env_user_id,
+                    ), retentions in retentions_by_env_user.items()
+                    if env_user_id == user_id
+                    for retention in retentions
+                }
+            )
+            for user_id in sorted({user_id for _, user_id in logs_by_env_user})
+        },
+        "matched_retentions_by_environment_user": {
+            f"{environment}:user_{user_id}": sorted(values)
+            for (environment, user_id), values in sorted(retentions_by_env_user.items())
         },
         "staged_logs": [str(path) for path in staged_logs],
         "config_snapshot_path": str(config_snapshot_path),
@@ -2882,13 +3525,17 @@ def _read_log_meta(path: Path) -> dict[str, Any] | None:
 
 
 def _baseline_metadata_errors(
-    *, config: ExperimentConfig, meta: dict[str, Any]
+    *,
+    config: ExperimentConfig,
+    meta: dict[str, Any],
+    expected_environment: str | None = None,
 ) -> list[str]:
     errors = _simulation_metadata_errors(
         config=config,
         meta=meta,
         expected_engine=config.baseline.expected_engine,
         expected_scheduler=config.baseline.scheduler,
+        expected_environment=expected_environment,
     )
     if config.baseline.desired_retention_values:
         actual_retention = meta.get("desired_retention")
@@ -2906,7 +3553,11 @@ def _baseline_metadata_errors(
     return errors
 
 
-def _baseline_filename_filter(config: ExperimentConfig) -> LogFilenameFilter:
+def _baseline_filename_filter(
+    config: ExperimentConfig,
+    *,
+    environments: Sequence[str] | None = None,
+) -> LogFilenameFilter:
     short_term = "on" if config.simulation.short_term_source else "off"
     short_term_source = config.simulation.short_term_source or "any"
     retention_values_by_scheduler = None
@@ -2917,7 +3568,7 @@ def _baseline_filename_filter(config: ExperimentConfig) -> LogFilenameFilter:
             )
         }
     return LogFilenameFilter(
-        envs=[config.simulation.environment],
+        envs=list(environments or (config.simulation.environment,)),
         scheds=[config.baseline.scheduler],
         engine=config.baseline.expected_engine,
         short_term=short_term,
@@ -2962,6 +3613,7 @@ def _simulation_metadata_errors(
     expected_engine: str,
     expected_scheduler: str | None = None,
     expected_user_id: int | None = None,
+    expected_environment: str | None = None,
 ) -> list[str]:
     expected: dict[str, Any] = {
         "engine": expected_engine,
@@ -2971,7 +3623,7 @@ def _simulation_metadata_errors(
         "review_limit": config.simulation.review_limit,
         "cost_limit_minutes": config.simulation.cost_limit_minutes,
         "priority": config.simulation.priority,
-        "environment": config.simulation.environment,
+        "environment": expected_environment or config.simulation.environment,
         "scheduler_priority": config.simulation.scheduler_priority,
         "seed": config.seed,
         "fuzz": config.simulation.fuzz,
@@ -3775,6 +4427,271 @@ def _run_batched_sweep_jobs(
     )
 
 
+def _run_configured_batched_retention_sweep(
+    *,
+    config: ExperimentConfig,
+    repo_root: Path,
+    run_id: str,
+    output_root: Path,
+    record_path: Path,
+) -> dict[str, Any]:
+    import argparse
+
+    from simulator.batched_sweep.execution import run_batches
+    from simulator.batched_sweep.plan import build_batched_sweep_plan
+    from simulator.batched_sweep.runner import _build_sweep_lanes
+    from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
+    from simulator.defaults import (
+        DEFAULT_COST_LIMIT_MINUTES,
+        DEFAULT_LEARN_LIMIT,
+        DEFAULT_REVIEW_LIMIT,
+        DEFAULT_SHORT_TERM_LOOPS_LIMIT,
+    )
+    from simulator.scheduler_spec import parse_scheduler_spec
+
+    sweep_config = config.sweep_batched
+    log_dir = _resolve_repo_path(
+        repo_root, sweep_config.log_dir or (output_root / run_id / "sweep_logs")
+    )
+    run_root = output_root / run_id
+    scheduler_names = {parse_scheduler_spec(raw)[0] for raw in sweep_config.schedulers}
+    args = argparse.Namespace(
+        config=None,
+        user_ids=list(config.users.train),
+        start_user=min(config.users.train),
+        end_user=max(config.users.train),
+        batch_size=sweep_config.batch_size,
+        max_lanes_per_batch=sweep_config.max_lanes_per_batch,
+        torch_device=sweep_config.torch_device,
+        cuda_devices=sweep_config.cuda_devices,
+        srs_benchmark_root=None,
+        benchmark_result=None,
+        benchmark_partition=sweep_config.benchmark_partition,
+        log_dir=log_dir,
+        log_layout=sweep_config.log_layout,
+        start_retention=sweep_config.start_retention,
+        end_retention=sweep_config.end_retention,
+        step=sweep_config.step,
+        days=config.simulation.days,
+        deck=config.simulation.deck,
+        learn_limit=config.simulation.learn_limit
+        if config.simulation.learn_limit is not None
+        else DEFAULT_LEARN_LIMIT,
+        review_limit=config.simulation.review_limit
+        if config.simulation.review_limit is not None
+        else DEFAULT_REVIEW_LIMIT,
+        cost_limit_minutes=config.simulation.cost_limit_minutes
+        if config.simulation.cost_limit_minutes is not None
+        else DEFAULT_COST_LIMIT_MINUTES,
+        seed=config.seed,
+        priority=config.simulation.priority,
+        scheduler_priority=config.simulation.scheduler_priority,
+        button_usage=DEFAULT_BUTTON_USAGE_PATH,
+        no_log=sweep_config.no_log,
+        no_progress=sweep_config.no_progress,
+        diagnostic_csv_logs=config.performance.diagnostic_csv_logs,
+        fuzz=config.simulation.fuzz,
+        short_term_source=config.simulation.short_term_source,
+        learning_steps=config.training_sa.get("learning_steps"),
+        relearning_steps=config.training_sa.get("relearning_steps"),
+        short_term_threshold=_training_sa_float(
+            config,
+            "short_term_threshold",
+            0.5,
+        ),
+        short_term_loops_limit=_training_sa_int(
+            config,
+            "short_term_loops_limit",
+            DEFAULT_SHORT_TERM_LOOPS_LIMIT,
+        ),
+        sa_fsrs6_policy=None,
+        sa_fsrs6_policy_root=None,
+        sa_fsrs6_train_run_root=run_root if "sa_fsrs6" in scheduler_names else None,
+        sa_fsrs6_policy_manifest=None,
+        sa_fsrs6_lambda_values=config.lambda_grid
+        if "sa_fsrs6" in scheduler_names
+        else None,
+        sa_fsrs6_dr_policy=None,
+        sa_fsrs6_dr_policy_root=None,
+        sa_fsrs6_dr_train_run_root=run_root
+        if "sa_fsrs6_dr" in scheduler_names
+        else None,
+        sa_fsrs6_dr_policy_manifest=None,
+        sa_fsrs6_dr_lambda_values=config.lambda_grid
+        if "sa_fsrs6_dr" in scheduler_names
+        else None,
+    )
+    plan = build_batched_sweep_plan(
+        repo_root=repo_root,
+        args=args,
+        envs=list(sweep_config.envs),
+        schedulers=list(sweep_config.schedulers),
+    )
+    if plan.total_lanes < 1:
+        raise ValueError("Configured batched sweep did not produce any lanes.")
+
+    overall = None
+    if not sweep_config.no_progress:
+        from tqdm import tqdm
+
+        overall = tqdm(
+            total=plan.total_user_days,
+            desc="Overall",
+            unit="user-day",
+            leave=True,
+        )
+    try:
+        run_batches(
+            args=args,
+            ctx=plan.ctx,
+            batches=plan.batches,
+            devices=plan.devices,
+            device=plan.device,
+            overall=overall,
+        )
+    finally:
+        if overall is not None:
+            overall.close()
+
+    lanes = [
+        lane
+        for batch in plan.batches
+        for environment in plan.ctx.envs
+        for lane in _build_sweep_lanes(
+            batch=batch,
+            ctx=plan.ctx,
+            environment=environment,
+        )
+    ]
+    log_paths: list[Path] = []
+    lane_results: list[dict[str, Any]] = []
+    for lane in lanes:
+        matched_logs, log_note = _collect_sweep_logs(
+            output_dir=lane.final_log_dir,
+            log_glob=config.sweep_log_glob,
+        )
+        if log_note is not None:
+            raise ValueError(log_note)
+        if not matched_logs:
+            raise ValueError(
+                f"No sweep JSONL logs matched {config.sweep_log_glob!r} "
+                f"in {lane.final_log_dir}."
+            )
+        validation_note = _validate_batched_retention_lane_logs(
+            log_paths=matched_logs,
+            config=config,
+            lane=lane,
+        )
+        if validation_note is not None:
+            raise ValueError(validation_note)
+        log_paths.extend(matched_logs)
+        lane_results.append(
+            {
+                "source": "configured-batched-retention",
+                "environment": lane.environment,
+                "user_id": lane.user_id,
+                "scheduler": lane.scheduler_name,
+                "scheduler_spec": lane.scheduler_spec,
+                "desired_retention": lane.desired_retention,
+                "fixed_interval": lane.fixed_interval,
+                "sa_fsrs6_policy": str(lane.sa_fsrs6_policy)
+                if lane.sa_fsrs6_policy is not None
+                else None,
+                "sa_fsrs6_baseline_desired_retention": (
+                    lane.sa_fsrs6_baseline_desired_retention
+                ),
+                "sa_fsrs6_lambda_value": lane.sa_fsrs6_lambda_value,
+                "sa_fsrs6_dr_policy": str(lane.sa_fsrs6_dr_policy)
+                if lane.sa_fsrs6_dr_policy is not None
+                else None,
+                "sa_fsrs6_dr_lambda_value": lane.sa_fsrs6_dr_lambda_value,
+                "output_dir": str(lane.final_log_dir),
+                "log_paths": [str(path) for path in matched_logs],
+                "exit_code": 0,
+                "timed_out": False,
+                "execution_mode": "batched-retention-config",
+            }
+        )
+
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        record_path,
+        {
+            "type": "batched-retention-sweep-record",
+            "run_id": run_id,
+            "batch_lane_count": len(lanes),
+            "total_lanes": plan.total_lanes,
+            "total_user_days": plan.total_user_days,
+            "batches": plan.batches,
+            "envs": list(plan.ctx.envs),
+            "schedulers": list(plan.ctx.schedulers),
+            "log_root": str(plan.ctx.log_root),
+            "log_layout": plan.ctx.log_layout,
+            "device": str(plan.device) if plan.device is not None else None,
+            "devices": plan.devices,
+            "seed": config.seed,
+            "lanes": lane_results,
+        },
+    )
+    return {
+        "batch_lane_count": len(lanes),
+        "log_paths": log_paths,
+        "lane_results": lane_results,
+    }
+
+
+def _validate_batched_retention_lane_logs(
+    *,
+    log_paths: Sequence[Path],
+    config: ExperimentConfig,
+    lane: Any,
+) -> str | None:
+    for path in log_paths:
+        records = _read_log_meta_and_totals(path)
+        if records is None:
+            return f"Sweep log is missing meta or totals record: {path}"
+        meta, _ = records
+        errors = _simulation_metadata_errors(
+            config=config,
+            meta=meta,
+            expected_engine="batched",
+            expected_scheduler=lane.scheduler_name,
+            expected_user_id=lane.user_id,
+            expected_environment=lane.environment,
+        )
+        if lane.desired_retention is not None:
+            actual_retention = meta.get("desired_retention")
+            if not isinstance(actual_retention, (float, int)) or not math.isclose(
+                float(actual_retention),
+                lane.desired_retention,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                errors.append(
+                    "metadata desired_retention expected "
+                    f"{lane.desired_retention!r}, got {actual_retention!r}"
+                )
+        if lane.sa_fsrs6_baseline_desired_retention is not None:
+            actual_baseline_dr = meta.get("sa_fsrs6_baseline_desired_retention")
+            if not isinstance(actual_baseline_dr, (float, int)) or not math.isclose(
+                float(actual_baseline_dr),
+                lane.sa_fsrs6_baseline_desired_retention,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                errors.append(
+                    "metadata sa_fsrs6_baseline_desired_retention expected "
+                    f"{lane.sa_fsrs6_baseline_desired_retention!r}, "
+                    f"got {actual_baseline_dr!r}"
+                )
+        if errors:
+            return (
+                f"Sweep log metadata mismatch for {path} "
+                f"(configured batched lane): " + "; ".join(errors)
+            )
+    return None
+
+
 def _training_sa_float(
     config: ExperimentConfig,
     key: str,
@@ -3888,6 +4805,135 @@ def _format_pareto_command(
         raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
     except IndexError as exc:
         raise ValueError("positional format fields are not supported") from exc
+
+
+def _format_build_pareto_command(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    output_dir: Path,
+    run_root: Path,
+    baseline_stage_root: Path,
+    sweep_stage_root: Path,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> list[str]:
+    log_dir = _resolve_repo_path(
+        repo_root,
+        config.build_pareto.log_dir
+        or config.sweep_batched.log_dir
+        or (sweep_stage_root / "sweep_outputs"),
+    )
+    values: dict[str, Any] = {
+        "run_id": run_id,
+        "seed": config.seed,
+        "family": config.family,
+        "engine": config.simulation.engine,
+        "repo_root": str(repo_root),
+        "run_root": str(run_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "log_dir": str(log_dir),
+        "baseline_stage_root": str(baseline_stage_root),
+        "baseline_logs_dir": str(baseline_stage_root / "baseline_logs"),
+        "sweep_stage_root": str(sweep_stage_root),
+        "sweep_outputs_dir": str(sweep_stage_root / "sweep_outputs"),
+        "config_path": str(config_path),
+        "config_snapshot_path": str(stage_root / "config_snapshot.toml"),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+    if config.build_pareto.command_template:
+        try:
+            return [
+                item.format(**values) for item in config.build_pareto.command_template
+            ]
+        except KeyError as exc:
+            raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
+        except IndexError as exc:
+            raise ValueError("positional format fields are not supported") from exc
+    return [
+        "uv",
+        "run",
+        "python",
+        "experiments/retention_sweep/build_pareto_users.py",
+        "--config",
+        str(config_path),
+        "--run-root",
+        str(run_root),
+        "--log-dir",
+        str(log_dir),
+        "--output-dir",
+        str(output_dir),
+    ]
+
+
+def _format_analyze_pareto_command(
+    *,
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    run_id: str,
+    stage_root: Path,
+    output_dir: Path,
+    run_root: Path,
+    build_stage_root: Path,
+    command_record_path: Path,
+    stdout_path: Path,
+    stderr_path: Path,
+) -> list[str]:
+    log_dir = _resolve_repo_path(
+        repo_root,
+        config.analyze_pareto.log_dir or (build_stage_root / "build_pareto_outputs"),
+    )
+    output_path = output_dir / "analysis.md"
+    values: dict[str, Any] = {
+        "run_id": run_id,
+        "seed": config.seed,
+        "family": config.family,
+        "engine": config.simulation.engine,
+        "repo_root": str(repo_root),
+        "run_root": str(run_root),
+        "stage_root": str(stage_root),
+        "output_dir": str(output_dir),
+        "output_path": str(output_path),
+        "log_dir": str(log_dir),
+        "build_stage_root": str(build_stage_root),
+        "build_pareto_outputs_dir": str(build_stage_root / "build_pareto_outputs"),
+        "config_path": str(config_path),
+        "config_snapshot_path": str(stage_root / "config_snapshot.toml"),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+    }
+    if config.analyze_pareto.command_template:
+        try:
+            return [
+                item.format(**values) for item in config.analyze_pareto.command_template
+            ]
+        except KeyError as exc:
+            raise ValueError(f"unknown placeholder {{{exc.args[0]}}}") from exc
+        except IndexError as exc:
+            raise ValueError("positional format fields are not supported") from exc
+    return [
+        "uv",
+        "run",
+        "python",
+        "experiments/retention_sweep/analyze_scheduler_comparison.py",
+        "--config",
+        str(config_path),
+        "--run-root",
+        str(run_root),
+        "--log-dir",
+        str(log_dir),
+        "--output-path",
+        str(output_path),
+    ]
 
 
 def _format_select_command(

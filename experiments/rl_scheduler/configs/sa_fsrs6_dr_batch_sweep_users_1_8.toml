@@ -1,12 +1,29 @@
 schema_version = 1
-name = "sa_fsrs6_fsrs6_dr_grid"
+name = "sa_fsrs6_dr_batch_sweep_users_1_8"
 family = "rl_scheduler"
 seed = 42
-output_root = "artifacts/rl_scheduler/sa_fsrs6_fsrs6_dr_grid"
-stages = ["dry-run", "preflight", "stage-baseline", "train-overfit", "sweep", "pareto"]
+output_root = "artifacts/rl_scheduler/sa_fsrs6_dr_batch_sweep_users_1_8"
+stages = [
+  "dry-run",
+  "preflight",
+  "stage-baseline",
+  "train-overfit",
+  "sweep",
+  "build-pareto",
+  "analyze-pareto",
+]
 
 [users]
-train = [1]
+train = [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+]
 validation = []
 reserved_test = []
 
@@ -15,6 +32,7 @@ scheduler = "fsrs6"
 log_root = "logs/retention_sweep"
 expected_engine = "batched"
 stage_mode = "copy"
+environments = ["fsrs6", "lstm"]
 desired_retention_values = [
   0.50,
   0.52,
@@ -70,14 +88,14 @@ diagnostic_csv_logs = false
 
 [training]
 lambda_grid = [0.5]
-artifact_metadata_glob = "**/metadata.json"
+artifact_metadata_glob = "metadata.json"
 max_parallel_commands = 1
 batch_baseline_desired_retention_values = true
 command_template = [
   "uv",
   "run",
   "python",
-  "experiments/rl_scheduler/train_sa_fsrs6_dr_grid.py",
+  "experiments/rl_scheduler/train_sa_fsrs6_dr.py",
   "--config",
   "{config_path}",
   "--user-id",
@@ -91,7 +109,7 @@ command_template = [
 ]
 
 [training.sa]
-chains = 1024
+chains = 256
 iterations = 4
 initial_temp = 0.05
 final_temp = 0.005
@@ -101,7 +119,7 @@ coefficient_max = 8.0
 retention_min = 0.50
 retention_max = 0.98
 baseline_desired_retention = 0.90
-dr_batch_size = 8
+dr_batch_size = 25
 baseline_desired_retention_values = [
   0.50,
   0.52,
@@ -135,36 +153,45 @@ short_term_loops_limit = 10
 
 [sweep]
 log_glob = "**/*.jsonl"
-batch_scheduler_artifacts = true
+envs = ["fsrs6", "lstm"]
+schedulers = ["sa_fsrs6_dr"]
+log_dir = "logs/retention_sweep"
+log_layout = "user"
+batch_size = 8
+torch_device = "cuda"
+benchmark_partition = "0"
+start_retention = 0.50
+end_retention = 0.98
+step = 0.02
+no_progress = true
+no_log = false
 
-[pareto]
-result_glob = "*.json"
+[build_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "sa_fsrs6_dr"]
+log_dir = "logs/retention_sweep"
+result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
-command_template = [
-  "uv",
-  "run",
-  "python",
-  "experiments/retention_sweep/build_pareto.py",
-  "--log-dir",
-  "{stage_root}/..",
-  "--env",
-  "fsrs6",
-  "--sched",
-  "fsrs6,sa_fsrs6",
-  "--user-id",
-  "1",
-  "--start-retention",
-  "0.5",
-  "--end-retention",
-  "0.98",
-  "--fuzz",
-  "off",
-  "--short-term",
-  "off",
-  "--engine",
-  "batched",
-  "--results-path",
-  "{output_dir}/pareto.json",
-  "--plot-dir",
-  "{output_dir}",
-]
+start_retention = 0.50
+end_retention = 0.98
+short_term = "off"
+short_term_source = "any"
+engine = "batched"
+max_parallel = 8
+compare_short_term = false
+compare_engine = false
+no_plot = false
+hide_labels = true
+
+[analyze_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "sa_fsrs6_dr"]
+comparisons = ["sa_fsrs6_dr:fsrs6"]
+result_glob = "analysis.md"
+start_retention = 0.50
+end_retention = 0.98
+short_term = "off"
+engine = "batched"
+fuzz = "off"
+metric = "avg_accum_memorized_per_hour"
+no_dedupe = false
