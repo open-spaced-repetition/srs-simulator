@@ -4572,6 +4572,11 @@ def _run_configured_batched_retention_sweep(
         )
         if log_note is not None:
             raise ValueError(log_note)
+        matched_logs = _filter_batched_retention_lane_logs(
+            log_paths=matched_logs,
+            config=config,
+            lane=lane,
+        )
         if not matched_logs:
             raise ValueError(
                 f"No sweep JSONL logs matched {config.sweep_log_glob!r} "
@@ -4638,6 +4643,48 @@ def _run_configured_batched_retention_sweep(
         "log_paths": log_paths,
         "lane_results": lane_results,
     }
+
+
+def _batched_retention_lane_filename_filter(
+    *,
+    config: ExperimentConfig,
+    lane: Any,
+) -> LogFilenameFilter:
+    short_term = "on" if config.simulation.short_term_source else "off"
+    short_term_source = config.simulation.short_term_source or "any"
+    retention_values_by_scheduler = None
+    if lane.desired_retention is not None:
+        retention_values_by_scheduler = {
+            lane.scheduler_name: round(float(lane.desired_retention), 2)
+        }
+    return LogFilenameFilter(
+        envs=[lane.environment],
+        scheds=[lane.scheduler_name],
+        engine="batched",
+        short_term=short_term,
+        short_term_source=short_term_source,
+        start_retention=float(lane.desired_retention)
+        if lane.desired_retention is not None
+        else None,
+        end_retention=float(lane.desired_retention)
+        if lane.desired_retention is not None
+        else None,
+        priority=config.simulation.priority,
+        retention_values_by_scheduler=retention_values_by_scheduler,
+    )
+
+
+def _filter_batched_retention_lane_logs(
+    *,
+    log_paths: Sequence[Path],
+    config: ExperimentConfig,
+    lane: Any,
+) -> list[Path]:
+    filename_filter = _batched_retention_lane_filename_filter(
+        config=config,
+        lane=lane,
+    )
+    return [path for path in log_paths if filename_filter.matches(path.name)]
 
 
 def _validate_batched_retention_lane_logs(

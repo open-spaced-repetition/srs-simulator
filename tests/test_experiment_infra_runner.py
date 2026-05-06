@@ -1314,6 +1314,109 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             manifest = json.loads((stage_root / "manifest.json").read_text())
             self.assertIn("batched_sweep_record", manifest["artifacts"])
 
+    def test_configured_batched_sweep_filters_mixed_env_lane_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            log_root = root / "retention_logs"
+            baseline_root.mkdir()
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                sweep_extra=(
+                    'envs = ["fsrs6", "lstm"]\n'
+                    'schedulers = ["fsrs6"]\n'
+                    f'log_dir = "{_toml_path(log_root)}"\n'
+                    'log_layout = "user"\n'
+                    "batch_size = 1\n"
+                    'torch_device = "cpu"\n'
+                    "start_retention = 0.90\n"
+                    "end_retention = 0.90\n"
+                    "step = 0.02\n"
+                    "no_progress = true\n"
+                ),
+            )
+            train_root = output_root / "test-run" / "train-overfit"
+            train_root.mkdir(parents=True)
+            (train_root / "training_summary.json").write_text(
+                json.dumps(
+                    {
+                        "passed": True,
+                        "artifact_paths": [str(root / "unused_metadata.json")],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_run_batches(*, args, ctx, batches, **_kwargs):
+                from simulator.batched_sweep.runner import _build_sweep_lanes
+
+                for batch in batches:
+                    for environment in ctx.envs:
+                        for lane in _build_sweep_lanes(
+                            batch=batch,
+                            ctx=ctx,
+                            environment=environment,
+                        ):
+                            lane.final_log_dir.mkdir(parents=True, exist_ok=True)
+                            meta = {
+                                "type": "meta",
+                                "data": {
+                                    "engine": "batched",
+                                    "days": 30,
+                                    "deck_size": 100,
+                                    "learn_limit": 10,
+                                    "review_limit": 999,
+                                    "cost_limit_minutes": 60.0,
+                                    "priority": "review-first",
+                                    "environment": environment,
+                                    "scheduler": lane.scheduler_name,
+                                    "scheduler_spec": lane.scheduler_spec,
+                                    "user_id": lane.user_id,
+                                    "desired_retention": lane.desired_retention,
+                                    "scheduler_priority": "low_retrievability",
+                                    "seed": 42,
+                                    "fuzz": False,
+                                    "short_term": True,
+                                    "short_term_source": "steps",
+                                },
+                            }
+                            totals = {"type": "totals", "data": {"reviews": 1}}
+                            log_path = lane.final_log_dir / (
+                                f"log_env={environment}_engine=batched_"
+                                f"sched={lane.scheduler_name}_st=steps_"
+                                f"user={lane.user_id}_ret={lane.desired_retention:.2f}_"
+                                "prio=review-first_seed=42.jsonl"
+                            )
+                            log_path.write_text(
+                                json.dumps(meta) + "\n" + json.dumps(totals) + "\n",
+                                encoding="utf-8",
+                            )
+
+            with patch(
+                "simulator.batched_sweep.execution.run_batches",
+                side_effect=fake_run_batches,
+            ):
+                result = run_stage(
+                    config_path=config_path,
+                    stage=StageName.SWEEP,
+                    repo_root=root,
+                    run_id="test-run",
+                )
+
+            self.assertEqual(result.exit_code, 0)
+            stage_root = output_root / "test-run" / "sweep"
+            summary = json.loads((stage_root / "sweep_summary.json").read_text())
+            self.assertTrue(summary["passed"])
+            self.assertEqual(summary["batch_lanes"], 2)
+            self.assertEqual(len(summary["log_paths"]), 2)
+            self.assertEqual(
+                {item["environment"] for item in summary["command_results"]},
+                {"fsrs6", "lstm"},
+            )
+
     def test_train_overfit_requires_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
