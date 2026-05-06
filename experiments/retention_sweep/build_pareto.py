@@ -19,6 +19,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 
 SA_FSRS6_DR_TOKEN_RE = re.compile(
@@ -338,6 +339,28 @@ def _engine_rank(engine: Optional[str]) -> int:
     return order.get(engine or "", len(order))
 
 
+def _short_term_filter_name(
+    short_term_filter: Optional[bool],
+    short_term_source_filter: Optional[str],
+) -> str:
+    if short_term_source_filter is not None:
+        return "on"
+    if short_term_filter is True:
+        return "on"
+    if short_term_filter is False:
+        return "off"
+    return "any"
+
+
+def _scan_log_dir(log_dir: Path, user_id_filter: Optional[int]) -> Path:
+    if user_id_filter is None:
+        return log_dir
+    user_dir = log_dir / f"user_{user_id_filter}"
+    if user_dir.is_dir():
+        return user_dir
+    return log_dir
+
+
 def _iter_log_entries(
     log_dir: Path,
     environment: str,
@@ -350,8 +373,23 @@ def _iter_log_entries(
     short_term_source_filter: Optional[str],
     engine_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
+    user_id_filter: Optional[int] = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
-    for path in sorted(log_dir.rglob("*.jsonl")):
+    filename_filter = LogFilenameFilter(
+        envs=[environment],
+        scheds=sorted(scheduler_filter) if scheduler_filter else [],
+        engine=engine_filter or "any",
+        short_term=_short_term_filter_name(
+            short_term_filter,
+            short_term_source_filter,
+        ),
+        short_term_source=short_term_source_filter or "any",
+        start_retention=min_retention,
+        end_retention=max_retention,
+    )
+    for path in sorted(_scan_log_dir(log_dir, user_id_filter).rglob("*.jsonl")):
+        if not filename_filter.matches(path.name):
+            continue
         try:
             meta, totals = _load_meta_totals(path)
         except ValueError:
@@ -363,6 +401,15 @@ def _iter_log_entries(
         if not isinstance(scheduler, str):
             continue
         if scheduler_filter and scheduler not in scheduler_filter:
+            continue
+
+        user_id = meta.get("user_id")
+        if user_id is not None:
+            try:
+                user_id = int(user_id)
+            except (TypeError, ValueError):
+                user_id = None
+        if user_id_filter is not None and user_id != user_id_filter:
             continue
 
         fuzz_value = _normalize_bool(meta.get("fuzz"))
@@ -434,13 +481,6 @@ def _iter_log_entries(
             title = f"DR={format_float(desired_value * 100)}%"
         else:
             title = _format_scheduler_title(scheduler)
-
-        user_id = meta.get("user_id")
-        if user_id is not None:
-            try:
-                user_id = int(user_id)
-            except (TypeError, ValueError):
-                user_id = None
 
         memorized_average = float(totals.get("memorized_average", 0.0))
         entry = {
@@ -534,6 +574,7 @@ def _build_results(
     dedupe_fuzz: bool = False,
     dedupe_short_term: bool = False,
     dedupe_engine: bool = False,
+    user_id_filter: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     by_retention: Dict[RetentionKey, Dict[str, Any]] = {}
     by_retention_rank: Dict[RetentionKey, int] = {}
@@ -553,6 +594,7 @@ def _build_results(
         short_term_source_filter,
         engine_filter,
         fixed_interval_filter,
+        user_id_filter,
     ):
         if title_prefix:
             entry["title"] = f"{title_prefix} {entry['title']}"
@@ -966,7 +1008,8 @@ def main() -> None:
     results_filename = _with_user_tag(default_results, args.user_id)
     results_path = args.results_path or (results_dir / results_filename)
 
-    base_dirs = [repo_root, log_dir]
+    scan_log_dir = _scan_log_dir(log_dir, args.user_id)
+    base_dirs = [repo_root, log_dir, scan_log_dir]
     combined_results: List[Dict[str, Any]] = []
     series: List[Dict[str, Any]] = []
     schedulers = _parse_csv(args.sched) or ["fsrs6"]
@@ -1046,6 +1089,7 @@ def main() -> None:
                                 dedupe_fuzz=args.compare_fuzz,
                                 dedupe_short_term=args.compare_short_term,
                                 dedupe_engine=args.compare_engine,
+                                user_id_filter=args.user_id,
                             )
                             if not results:
                                 continue
@@ -1105,6 +1149,7 @@ def main() -> None:
                             dedupe_fuzz=args.compare_fuzz,
                             dedupe_short_term=args.compare_short_term,
                             dedupe_engine=args.compare_engine,
+                            user_id_filter=args.user_id,
                         )
                         if not fixed_results:
                             continue
@@ -1161,6 +1206,7 @@ def main() -> None:
                             engine_value,
                             title_prefix=None,
                             dedupe=False,
+                            user_id_filter=args.user_id,
                         )
                         if not sspmmc_results:
                             continue

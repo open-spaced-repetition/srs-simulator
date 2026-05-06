@@ -621,6 +621,37 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual([entry["scheduler"] for entry in fsrs_results], ["fsrs6"])
         self.assertEqual([entry["scheduler"] for entry in sa_results], ["sa_fsrs6"])
 
+    def test_build_pareto_filters_root_log_dir_to_requested_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "logs" / "retention_sweep"
+            for user_id, memorized in ((1, 10.0), (2, 20.0)):
+                user_log_dir = root / f"user_{user_id}" / "sched_fsrs6" / "dr_0p9"
+                args = _write_log_args(user_log_dir, False)
+                args.engine = "batched"
+                args.scheduler = "fsrs6"
+                args.scheduler_spec = "fsrs6"
+                args.desired_retention = 0.90
+                args.user_id = user_id
+                simulate_cli._write_log(args, _stats(memorized=memorized))
+
+            results = _build_results(
+                root,
+                "fsrs6",
+                {"fsrs6"},
+                0.50,
+                0.98,
+                [REPO_ROOT, root],
+                None,
+                None,
+                None,
+                "batched",
+                user_id_filter=1,
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["user_id"], 1)
+        self.assertEqual(results[0]["memorized_average"], 10.0)
+
     def test_build_pareto_labels_sa_fsrs6_by_baseline_dr_without_deduping_policies(
         self,
     ) -> None:
