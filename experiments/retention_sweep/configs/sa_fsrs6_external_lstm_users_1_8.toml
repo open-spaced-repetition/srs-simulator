@@ -5,8 +5,8 @@ start = 1
 end = 8
 
 [sweep]
-envs = ["lstm"]
-schedulers = ["fsrs6", "sa_fsrs6"]
+envs = ["fsrs6", "lstm"]
+schedulers = ["sa_fsrs6"]
 
 [retention]
 start = 0.50
@@ -47,5 +47,5 @@ loops_limit = 10
 
 [sa_fsrs6]
 # Equivalent to policy_root = "<train_run_root>/train-overfit/train_outputs".
-train_run_root = "artifacts/rl_scheduler/sa_fsrs6_fsrs6_dr_grid_users_1_16/fsrs6-dr-grid-users-1-16-v1"
+train_run_root = "artifacts/rl_scheduler/sa_fsrs6_fsrs6_dr_grid_users_1_8/fsrs6-dr-grid-users-1-8-v1"
 lambda_values = [0.5]

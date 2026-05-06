@@ -1,9 +1,9 @@
 schema_version = 1
-name = "sa_fsrs6_fsrs6_dr_grid_users_1_16"
+name = "sa_fsrs6_fsrs6_dr_grid_users_1_8"
 family = "rl_scheduler"
 seed = 42
-output_root = "artifacts/rl_scheduler/sa_fsrs6_fsrs6_dr_grid_users_1_16"
-stages = ["dry-run", "preflight", "stage-baseline", "train-overfit", "sweep", "aggregate"]
+output_root = "artifacts/rl_scheduler/sa_fsrs6_fsrs6_dr_grid_users_1_8"
+stages = ["dry-run", "preflight", "stage-baseline", "train-overfit"]
 
 [users]
 train = [
@@ -15,14 +15,6 @@ train = [
   6,
   7,
   8,
-  9,
-  10,
-  11,
-  12,
-  13,
-  14,
-  15,
-  16,
 ]
 validation = []
 reserved_test = []
@@ -108,7 +100,7 @@ command_template = [
 ]
 
 [training.sa]
-chains = 1024
+chains = 256
 iterations = 4
 initial_temp = 0.05
 final_temp = 0.005
@@ -118,7 +110,7 @@ coefficient_max = 8.0
 retention_min = 0.50
 retention_max = 0.98
 baseline_desired_retention = 0.90
-dr_batch_size = 8
+dr_batch_size = 25
 baseline_desired_retention_values = [
   0.50,
   0.52,

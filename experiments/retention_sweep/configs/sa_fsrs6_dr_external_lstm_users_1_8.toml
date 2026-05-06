@@ -6,7 +6,7 @@ end = 8
 
 [sweep]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "sa_fsrs6", "sa_fsrs6_dr"]
+schedulers = ["sa_fsrs6_dr"]
 
 [retention]
 start = 0.50
@@ -41,10 +41,6 @@ no_progress = false
 [short_term]
 threshold = 0.5
 loops_limit = 10
-
-[sa_fsrs6]
-train_run_root = "artifacts/rl_scheduler/sa_fsrs6_fsrs6_dr_grid_users_1_16/fsrs6-dr-grid-users-1-16-v1"
-lambda_values = [0.5]
 
 [sa_fsrs6_dr]
 train_run_root = "artifacts/rl_scheduler/sa_fsrs6_dr_fsrs6_users_1_8/fsrs6-dr-conditioned-users-1-8-v1"

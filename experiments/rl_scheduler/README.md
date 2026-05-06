@@ -148,9 +148,9 @@ as the vertical axis, and one translucent surface per baseline DR.
 Representative profiles:
 
 - `configs/sa_fsrs6_fsrs6_dr_grid.toml`: single-user DR grid.
-- `configs/sa_fsrs6_fsrs6_dr_grid_users_1_16.toml`: first 16 users, FSRS-6
-  environment, short-term off, 1825 days, deck size 10000, learn limit 10, and
-  review limit 9999.
+- `configs/sa_fsrs6_fsrs6_dr_grid_users_1_8.toml`: first 8 users, FSRS-6
+  environment, short-term off, 1825 days, deck size 10000, learn limit 10,
+  review limit 9999, 256 chains, and DR batch size 25.
 - `configs/sa_fsrs6_dr_fsrs6_users_1_8.toml`: first 8 users, FSRS-6
   environment, short-term off, one DR-conditioned policy per user/lambda.
 
