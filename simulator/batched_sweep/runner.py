@@ -258,14 +258,13 @@ def _required_desired_retention(lane: BatchedSweepLogLane) -> float:
 
 
 def _mixed_scheduler_group_key(lane: BatchedSweepLogLane) -> tuple[Any, ...]:
-    if lane.scheduler_name in {"fsrs6", "fsrs6_default"}:
+    if lane.scheduler_name in {
+        "fsrs6",
+        "fsrs6_default",
+        "fsrs3",
+        "fsrs3_default",
+    }:
         return (lane.scheduler_name, lane.scheduler_spec)
-    if lane.scheduler_name in {"fsrs3", "fsrs3_default", "lstm"}:
-        return (
-            lane.scheduler_name,
-            lane.scheduler_spec,
-            _required_desired_retention(lane),
-        )
     if lane.scheduler_name == "fixed":
         return (lane.scheduler_name, lane.scheduler_spec, lane.fixed_interval)
     if lane.scheduler_name == "sa_fsrs6":
@@ -452,9 +451,14 @@ def _build_mixed_scheduler_ops(
                 active_batch=active_batch,
                 lanes=group_lanes,
             )
+            desired_retention = torch.tensor(
+                [_required_desired_retention(lane) for lane in group_lanes],
+                device=device,
+                dtype=torch.float32,
+            )
             ops = FSRS3BatchSchedulerOps(
                 weights=scheduler_weights,
-                desired_retention=_required_desired_retention(sample),
+                desired_retention=desired_retention,
                 bounds=Bounds(),
                 device=device,
                 dtype=torch.float32,
@@ -469,9 +473,14 @@ def _build_mixed_scheduler_ops(
                 active_batch=active_batch,
                 lanes=group_lanes,
             )
+            desired_retention = torch.tensor(
+                [_required_desired_retention(lane) for lane in group_lanes],
+                device=device,
+                dtype=torch.float32,
+            )
             ops = FSRS3BatchSchedulerOps(
                 weights=scheduler_weights,
-                desired_retention=_required_desired_retention(sample),
+                desired_retention=desired_retention,
                 bounds=Bounds(),
                 device=device,
                 dtype=torch.float32,
@@ -486,9 +495,14 @@ def _build_mixed_scheduler_ops(
             )
             interval_mode = "float" if short_term_source == "sched" else "integer"
             min_interval = 0.0 if short_term_source == "sched" else 1.0
+            desired_retention = torch.tensor(
+                [_required_desired_retention(lane) for lane in group_lanes],
+                device=device,
+                dtype=torch.float32,
+            )
             ops = LSTMBatchSchedulerOps(
                 scheduler_weights,
-                desired_retention=_required_desired_retention(sample),
+                desired_retention=desired_retention,
                 min_interval=min_interval,
                 interval_mode=interval_mode,
                 device=device,

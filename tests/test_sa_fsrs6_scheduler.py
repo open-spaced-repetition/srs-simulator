@@ -13,10 +13,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.core import CardView
-from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
+from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
 from simulator.math.fsrs import Bounds
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
-from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps, FSRS6Scheduler
+from simulator.schedulers.fsrs import (
+    FSRS3BatchSchedulerOps,
+    FSRS6BatchSchedulerOps,
+    FSRS6Scheduler,
+)
 from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps, SAFSRS6Scheduler
 
 
@@ -122,6 +126,44 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
         )
 
         self.assertGreater(float(intervals[0]), float(intervals[1]))
+
+    def test_fsrs3_batch_ops_accept_per_user_desired_retention(self) -> None:
+        weights = torch.tensor([DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS3_WEIGHTS])
+        ops = FSRS3BatchSchedulerOps(
+            weights=weights,
+            desired_retention=torch.tensor([0.8, 0.9], dtype=torch.float32),
+            bounds=Bounds(),
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        state = ops.init_state(user_count=2, deck_size=1)
+        intervals = ops.update_learn(
+            state,
+            user_idx=torch.tensor([0, 1]),
+            card_idx=torch.tensor([0, 0]),
+            rating=torch.tensor([3, 3]),
+        )
+
+        self.assertGreater(float(intervals[0]), float(intervals[1]))
+
+    def test_fsrs3_batch_ops_reject_invalid_desired_retention_tensor(self) -> None:
+        weights = torch.tensor([DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS3_WEIGHTS])
+        with self.assertRaisesRegex(ValueError, "shape"):
+            FSRS3BatchSchedulerOps(
+                weights=weights,
+                desired_retention=torch.tensor([0.8, 0.9, 0.95]),
+                bounds=Bounds(),
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+            )
+        with self.assertRaisesRegex(ValueError, "between 0 and 1"):
+            FSRS3BatchSchedulerOps(
+                weights=weights,
+                desired_retention=torch.tensor([0.8, 1.0]),
+                bounds=Bounds(),
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+            )
 
 
 if __name__ == "__main__":

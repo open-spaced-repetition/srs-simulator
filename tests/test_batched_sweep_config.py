@@ -29,8 +29,9 @@ from simulator.batched_sweep.sa_policy import (
     resolve_sa_fsrs6_policy_specs,
 )
 from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH
-from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
+from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from tests.lstm_batch_helpers import dummy_lstm_weights
 
 
 def _valid_config(log_dir: Path) -> str:
@@ -507,6 +508,100 @@ path = "policy.json"
                 [0.50, 0.52, 0.54],
             ],
         )
+
+    def test_lstm_multi_dr_lanes_share_one_scheduler_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "logs" / "a",
+                    environment="fsrs6",
+                    scheduler_name="lstm",
+                    scheduler_spec="lstm",
+                    desired_retention=0.50,
+                    fixed_interval=None,
+                ),
+                BatchedSweepLogLane(
+                    user_id=2,
+                    log_root=root / "logs" / "b",
+                    environment="fsrs6",
+                    scheduler_name="lstm",
+                    scheduler_spec="lstm",
+                    desired_retention=0.52,
+                    fixed_interval=None,
+                ),
+            ]
+
+            ops = _build_mixed_scheduler_ops(
+                args=argparse.Namespace(scheduler_priority="low_retrievability"),
+                active_batch=[1, 2],
+                lanes=lanes,
+                fsrs_weights=None,
+                fsrs_default_weights=None,
+                fsrs3_weights=None,
+                fsrs3_default_weights=None,
+                lstm_packed=dummy_lstm_weights(2),
+                short_term_source=None,
+                device=torch.device("cpu"),
+            )
+
+        self.assertEqual(len(ops._groups), 1)
+        group = ops._groups[0]
+        self.assertEqual(int(group.lane_indices.numel()), 2)
+        target = group.ops._target
+        self.assertEqual(tuple(target.shape), (2,))
+        self.assertEqual(
+            [round(float(value), 2) for value in target.tolist()],
+            [0.50, 0.52],
+        )
+
+    def test_fsrs3_multi_dr_lanes_share_one_scheduler_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "logs" / "a",
+                    environment="fsrs6",
+                    scheduler_name="fsrs3",
+                    scheduler_spec="fsrs3",
+                    desired_retention=0.50,
+                    fixed_interval=None,
+                ),
+                BatchedSweepLogLane(
+                    user_id=2,
+                    log_root=root / "logs" / "b",
+                    environment="fsrs6",
+                    scheduler_name="fsrs3",
+                    scheduler_spec="fsrs3",
+                    desired_retention=0.52,
+                    fixed_interval=None,
+                ),
+            ]
+
+            ops = _build_mixed_scheduler_ops(
+                args=argparse.Namespace(scheduler_priority="low_retrievability"),
+                active_batch=[1, 2],
+                lanes=lanes,
+                fsrs_weights=None,
+                fsrs_default_weights=None,
+                fsrs3_weights=torch.tensor(
+                    [DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS3_WEIGHTS],
+                    dtype=torch.float32,
+                ),
+                fsrs3_default_weights=None,
+                lstm_packed=None,
+                short_term_source=None,
+                device=torch.device("cpu"),
+            )
+
+        self.assertEqual(len(ops._groups), 1)
+        group = ops._groups[0]
+        self.assertEqual(int(group.lane_indices.numel()), 2)
+        interval_factor = group.ops._interval_factor
+        self.assertEqual(tuple(interval_factor.shape), (2,))
+        self.assertGreater(float(interval_factor[0]), float(interval_factor[1]))
 
     def test_multiple_sa_policies_share_one_scheduler_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
