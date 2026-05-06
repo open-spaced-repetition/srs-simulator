@@ -159,6 +159,8 @@ Representative profiles:
   both FSRS6 and LSTM environments.
 - `configs/sa_fsrs6_dr_batch_sweep_users_1_8.toml`: the same experiment shape
   for the DR-conditioned `sa_fsrs6_dr` scheduler.
+- `configs/sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml`: the same workflow
+  using the simplified 4-parameter `sa_fsrs6_dr_log_linear_v1` feature version.
 
 Training target:
 
@@ -171,7 +173,9 @@ Training target:
 
 For `sa_fsrs6_dr`, the action is a logit-space adjustment around the input DR.
 The overfit gate uses mean relative memorized-average and memorized-per-minute
-gains across the whole DR grid.
+gains across the whole DR grid. The default DR-conditioned policy uses 10 log
+polynomial features; set `training.sa.feature_version =
+"sa_fsrs6_dr_log_linear_v1"` to train the 4-parameter linear variant.
 
 Batching model:
 

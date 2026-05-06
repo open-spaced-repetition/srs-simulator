@@ -72,6 +72,7 @@ profiles and machine-readable stage records:
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage dry-run --run-id sa-fsrs6-users-1-8
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-users-1-8
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_dr_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-dr-users-1-8
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-dr-linear-users-1-8
 uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/sa_fsrs6_batch_sweep_users_1_8/sa-fsrs6-users-1-8
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 uv run python experiments/rl_scheduler/plot_sa_fsrs6_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
@@ -98,6 +99,9 @@ metadata contract before they can be used by formal stages.
 `sa_fsrs6_dr_batch_sweep_users_1_8.toml` trains and evaluates the
 DR-conditioned `sa_fsrs6_dr` variant whose policy takes `(S,D,DR)` and learns a
 logit-space adjustment around the requested desired retention.
+`sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml` uses the same workflow and
+training budget with the simplified 4-parameter
+`sa_fsrs6_dr_log_linear_v1` feature version.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):

@@ -149,6 +149,32 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 class UnifiedWorkflowConfigTests(unittest.TestCase):
+    def test_checked_in_linear_dr_config_uses_unified_workflow(self) -> None:
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml"
+        )
+
+        self.assertEqual(config.name, "sa_fsrs6_dr_linear_batch_sweep_users_1_8")
+        self.assertEqual(
+            config.training_sa["feature_version"],
+            "sa_fsrs6_dr_log_linear_v1",
+        )
+        self.assertEqual(config.sweep_batched.schedulers, ("sa_fsrs6_dr",))
+        self.assertEqual(
+            config.stages,
+            (
+                StageName.DRY_RUN,
+                StageName.PREFLIGHT,
+                StageName.STAGE_BASELINE,
+                StageName.TRAIN_OVERFIT,
+                StageName.SWEEP,
+                StageName.BUILD_PARETO,
+                StageName.ANALYZE_PARETO,
+            ),
+        )
+
     def test_experiment_config_loads_new_workflow_stages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

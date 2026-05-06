@@ -160,6 +160,7 @@ class SAFSRS6DRVectorizedSchedulerOps:
         self._fsrs_bounds = scheduler.params.bounds
         self._policy_bounds = scheduler.policy.bounds
         self._policy = scheduler.policy
+        self._feature_count = scheduler.policy.feature_count
         self._coefficients = torch.tensor(
             self._policy.coefficients, device=device, dtype=dtype
         )
@@ -327,20 +328,39 @@ class SAFSRS6DRVectorizedSchedulerOps:
         s_norm = self._torch.clamp(s_norm, 0.0, 1.0)
         d_norm = self._torch.clamp(d_norm, 0.0, 1.0)
         dr_norm = self._torch.clamp(dr_norm, 0.0, 1.0)
-        adjustment = (
-            self._coefficients[0]
-            + self._coefficients[1] * s_norm
-            + self._coefficients[2] * d_norm
-            + self._coefficients[3] * dr_norm
-            + self._coefficients[4] * s_norm * d_norm
-            + self._coefficients[5] * s_norm * dr_norm
-            + self._coefficients[6] * d_norm * dr_norm
-            + self._coefficients[7] * s_norm * s_norm
-            + self._coefficients[8] * d_norm * d_norm
-            + self._coefficients[9] * dr_norm * dr_norm
+        adjustment = self._adjustment_for_normalized_state(
+            self._coefficients,
+            s_norm,
+            d_norm,
+            dr_norm,
         )
         logit = self._torch.logit(dr_norm) + adjustment
         return self._retention_min + self._retention_span * self._torch.sigmoid(logit)
+
+    def _adjustment_for_normalized_state(
+        self,
+        coefficients: "torch.Tensor",
+        s_norm: "torch.Tensor",
+        d_norm: "torch.Tensor",
+        dr_norm: "torch.Tensor",
+    ) -> "torch.Tensor":
+        adjustment = (
+            coefficients[0]
+            + coefficients[1] * s_norm
+            + coefficients[2] * d_norm
+            + coefficients[3] * dr_norm
+        )
+        if self._feature_count == 4:
+            return adjustment
+        return (
+            adjustment
+            + coefficients[4] * s_norm * d_norm
+            + coefficients[5] * s_norm * dr_norm
+            + coefficients[6] * d_norm * dr_norm
+            + coefficients[7] * s_norm * s_norm
+            + coefficients[8] * d_norm * d_norm
+            + coefficients[9] * dr_norm * dr_norm
+        )
 
     def _interval_for_state(
         self, s: "torch.Tensor", d: "torch.Tensor"
@@ -388,15 +408,18 @@ class SAFSRS6DRBatchSchedulerOps:
         self._fsrs_bounds = bounds
         self._policy_bounds = policy.bounds
         self._policy = policy
+        self._feature_count = policy.feature_count
         if coefficients is None:
             self._coefficients = torch.tensor(
                 policy.coefficients, device=device, dtype=dtype
             )
             self._per_user_coefficients = False
         else:
-            if coefficients.ndim != 2 or coefficients.shape != (weights.shape[0], 10):
+            expected_shape = (weights.shape[0], self._feature_count)
+            if coefficients.ndim != 2 or coefficients.shape != expected_shape:
                 raise ValueError(
-                    "SA FSRS-6 DR batch coefficients must have shape (users, 10)."
+                    "SA FSRS-6 DR batch coefficients must have shape "
+                    f"(users, {self._feature_count})."
                 )
             self._coefficients = coefficients.to(device=device, dtype=dtype)
             self._per_user_coefficients = True
@@ -589,31 +612,19 @@ class SAFSRS6DRBatchSchedulerOps:
         dr_norm = self._torch.clamp(dr_norm, 0.0, 1.0)
         if self._per_user_coefficients:
             coefficients = self._coefficients.index_select(0, user_idx)
-            adjustment = (
-                coefficients[:, 0]
-                + coefficients[:, 1] * s_norm
-                + coefficients[:, 2] * d_norm
-                + coefficients[:, 3] * dr_norm
-                + coefficients[:, 4] * s_norm * d_norm
-                + coefficients[:, 5] * s_norm * dr_norm
-                + coefficients[:, 6] * d_norm * dr_norm
-                + coefficients[:, 7] * s_norm * s_norm
-                + coefficients[:, 8] * d_norm * d_norm
-                + coefficients[:, 9] * dr_norm * dr_norm
+            adjustment = self._adjustment_for_normalized_state(
+                coefficients,
+                s_norm,
+                d_norm,
+                dr_norm,
             )
             zero_coefficients = self._torch.all(coefficients == 0.0, dim=1)
         else:
-            adjustment = (
-                self._coefficients[0]
-                + self._coefficients[1] * s_norm
-                + self._coefficients[2] * d_norm
-                + self._coefficients[3] * dr_norm
-                + self._coefficients[4] * s_norm * d_norm
-                + self._coefficients[5] * s_norm * dr_norm
-                + self._coefficients[6] * d_norm * dr_norm
-                + self._coefficients[7] * s_norm * s_norm
-                + self._coefficients[8] * d_norm * d_norm
-                + self._coefficients[9] * dr_norm * dr_norm
+            adjustment = self._adjustment_for_normalized_state(
+                self._coefficients,
+                s_norm,
+                d_norm,
+                dr_norm,
             )
             zero_coefficients = self._torch.full(
                 desired.shape,
@@ -626,6 +637,49 @@ class SAFSRS6DRBatchSchedulerOps:
             logit
         )
         return self._torch.where(zero_coefficients, desired, retention)
+
+    def _adjustment_for_normalized_state(
+        self,
+        coefficients: "torch.Tensor",
+        s_norm: "torch.Tensor",
+        d_norm: "torch.Tensor",
+        dr_norm: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if coefficients.ndim == 1:
+            adjustment = (
+                coefficients[0]
+                + coefficients[1] * s_norm
+                + coefficients[2] * d_norm
+                + coefficients[3] * dr_norm
+            )
+            if self._feature_count == 4:
+                return adjustment
+            return (
+                adjustment
+                + coefficients[4] * s_norm * d_norm
+                + coefficients[5] * s_norm * dr_norm
+                + coefficients[6] * d_norm * dr_norm
+                + coefficients[7] * s_norm * s_norm
+                + coefficients[8] * d_norm * d_norm
+                + coefficients[9] * dr_norm * dr_norm
+            )
+        adjustment = (
+            coefficients[:, 0]
+            + coefficients[:, 1] * s_norm
+            + coefficients[:, 2] * d_norm
+            + coefficients[:, 3] * dr_norm
+        )
+        if self._feature_count == 4:
+            return adjustment
+        return (
+            adjustment
+            + coefficients[:, 4] * s_norm * d_norm
+            + coefficients[:, 5] * s_norm * dr_norm
+            + coefficients[:, 6] * d_norm * dr_norm
+            + coefficients[:, 7] * s_norm * s_norm
+            + coefficients[:, 8] * d_norm * d_norm
+            + coefficients[:, 9] * dr_norm * dr_norm
+        )
 
     def _interval_for_state(
         self, s: "torch.Tensor", d: "torch.Tensor", user_idx: "torch.Tensor"

@@ -9,8 +9,14 @@ from typing import Any, Sequence
 from simulator.math.fsrs import Bounds
 
 
-FEATURE_VERSION = "sa_fsrs6_dr_log_poly_v1"
+FEATURE_VERSION_LOG_POLY = "sa_fsrs6_dr_log_poly_v1"
+FEATURE_VERSION_LOG_LINEAR = "sa_fsrs6_dr_log_linear_v1"
+FEATURE_VERSION = FEATURE_VERSION_LOG_POLY
 FEATURE_COUNT = 10
+FEATURE_COUNTS = {
+    FEATURE_VERSION_LOG_POLY: 10,
+    FEATURE_VERSION_LOG_LINEAR: 4,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,15 +46,13 @@ class SAFSRS6DRPolicy:
             raise ValueError("bounds must be an object when provided.")
         retention_min = _float(raw.get("retention_min", 0.50), "retention_min")
         retention_max = _float(raw.get("retention_max", 0.98), "retention_max")
-        title = raw.get("title", "SA FSRS-6 DR-conditioned log polynomial")
+        feature_version = raw.get("feature_version", FEATURE_VERSION)
+        if not isinstance(feature_version, str):
+            raise ValueError("feature_version must be a string.")
+        _feature_count(feature_version)
+        title = raw.get("title", _default_title(feature_version))
         if not isinstance(title, str) or not title.strip():
             raise ValueError("title must be a non-empty string.")
-        feature_version = raw.get("feature_version", FEATURE_VERSION)
-        if feature_version != FEATURE_VERSION:
-            raise ValueError(
-                f"Unsupported SA FSRS-6 DR feature_version {feature_version!r}; "
-                f"expected {FEATURE_VERSION!r}."
-            )
         return cls(
             coefficients=coefficients,
             retention_min=retention_min,
@@ -60,6 +64,7 @@ class SAFSRS6DRPolicy:
                 d_max=_float(bounds_raw.get("d_max", Bounds().d_max), "bounds.d_max"),
             ),
             title=title.strip(),
+            feature_version=feature_version,
             metadata=raw,
         )
 
@@ -70,18 +75,23 @@ class SAFSRS6DRPolicy:
         retention_min: float = 0.50,
         retention_max: float = 0.98,
         bounds: Bounds = Bounds(),
+        feature_version: str = FEATURE_VERSION,
     ) -> SAFSRS6DRPolicy:
         return cls(
-            coefficients=tuple(0.0 for _ in range(FEATURE_COUNT)),
+            coefficients=tuple(0.0 for _ in range(_feature_count(feature_version))),
             retention_min=retention_min,
             retention_max=retention_max,
             bounds=bounds,
+            title=_default_title(feature_version),
+            feature_version=feature_version,
         )
 
     def __post_init__(self) -> None:
-        if len(self.coefficients) != FEATURE_COUNT:
+        expected_count = _feature_count(self.feature_version)
+        if len(self.coefficients) != expected_count:
             raise ValueError(
-                f"SA FSRS-6 DR policy expects {FEATURE_COUNT} coefficients."
+                "SA FSRS-6 DR policy expects "
+                f"{expected_count} coefficients for {self.feature_version!r}."
             )
         if not (0.0 < self.retention_min < self.retention_max < 1.0):
             raise ValueError("retention_min/max must satisfy 0 < min < max < 1.")
@@ -89,6 +99,10 @@ class SAFSRS6DRPolicy:
             raise ValueError("bounds must satisfy 0 < s_min < s_max.")
         if self.bounds.d_max <= self.bounds.d_min:
             raise ValueError("bounds must satisfy d_min < d_max.")
+
+    @property
+    def feature_count(self) -> int:
+        return _feature_count(self.feature_version)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -127,13 +141,14 @@ class SAFSRS6DRPolicy:
         )
         if all(coefficient == 0.0 for coefficient in self.coefficients):
             return desired
-        features = log_poly_dr_features(
+        features = dr_features(
             stability,
             difficulty,
             desired,
             bounds=self.bounds,
             retention_min=self.retention_min,
             retention_max=self.retention_max,
+            feature_version=self.feature_version,
         )
         adjustment = sum(
             coef * feature for coef, feature in zip(self.coefficients, features)
@@ -157,21 +172,14 @@ def log_poly_dr_features(
     retention_min: float = 0.50,
     retention_max: float = 0.98,
 ) -> tuple[float, float, float, float, float, float, float, float, float, float]:
-    s = min(bounds.s_max, max(bounds.s_min, float(stability)))
-    d = min(bounds.d_max, max(bounds.d_min, float(difficulty)))
-    desired = _validate_desired_retention(
+    x_s, x_d, x_dr = _normalized_dr_inputs(
+        stability,
+        difficulty,
         desired_retention,
+        bounds=bounds,
         retention_min=retention_min,
         retention_max=retention_max,
     )
-    log_s_min = math.log(bounds.s_min)
-    log_s_max = math.log(bounds.s_max)
-    x_s = (math.log(s) - log_s_min) / (log_s_max - log_s_min)
-    x_d = (d - bounds.d_min) / (bounds.d_max - bounds.d_min)
-    x_dr = (desired - retention_min) / (retention_max - retention_min)
-    x_s = min(1.0, max(0.0, x_s))
-    x_d = min(1.0, max(0.0, x_d))
-    x_dr = min(1.0, max(0.0, x_dr))
     return (
         1.0,
         x_s,
@@ -184,6 +192,108 @@ def log_poly_dr_features(
         x_d * x_d,
         x_dr * x_dr,
     )
+
+
+def log_linear_dr_features(
+    stability: float,
+    difficulty: float,
+    desired_retention: float,
+    *,
+    bounds: Bounds = Bounds(),
+    retention_min: float = 0.50,
+    retention_max: float = 0.98,
+) -> tuple[float, float, float, float]:
+    x_s, x_d, x_dr = _normalized_dr_inputs(
+        stability,
+        difficulty,
+        desired_retention,
+        bounds=bounds,
+        retention_min=retention_min,
+        retention_max=retention_max,
+    )
+    return (1.0, x_s, x_d, x_dr)
+
+
+def dr_features(
+    stability: float,
+    difficulty: float,
+    desired_retention: float,
+    *,
+    bounds: Bounds = Bounds(),
+    retention_min: float = 0.50,
+    retention_max: float = 0.98,
+    feature_version: str = FEATURE_VERSION,
+) -> tuple[float, ...]:
+    if feature_version == FEATURE_VERSION_LOG_POLY:
+        return log_poly_dr_features(
+            stability,
+            difficulty,
+            desired_retention,
+            bounds=bounds,
+            retention_min=retention_min,
+            retention_max=retention_max,
+        )
+    if feature_version == FEATURE_VERSION_LOG_LINEAR:
+        return log_linear_dr_features(
+            stability,
+            difficulty,
+            desired_retention,
+            bounds=bounds,
+            retention_min=retention_min,
+            retention_max=retention_max,
+        )
+    _feature_count(feature_version)
+    raise AssertionError("unreachable feature version dispatch")
+
+
+def feature_count(feature_version: str = FEATURE_VERSION) -> int:
+    return _feature_count(feature_version)
+
+
+def _normalized_dr_inputs(
+    stability: float,
+    difficulty: float,
+    desired_retention: float,
+    *,
+    bounds: Bounds,
+    retention_min: float,
+    retention_max: float,
+) -> tuple[float, float, float]:
+    s = min(bounds.s_max, max(bounds.s_min, float(stability)))
+    d = min(bounds.d_max, max(bounds.d_min, float(difficulty)))
+    desired = _validate_desired_retention(
+        desired_retention,
+        retention_min=retention_min,
+        retention_max=retention_max,
+    )
+    log_s_min = math.log(bounds.s_min)
+    log_s_max = math.log(bounds.s_max)
+    x_s = (math.log(s) - log_s_min) / (log_s_max - log_s_min)
+    x_d = (d - bounds.d_min) / (bounds.d_max - bounds.d_min)
+    x_dr = (desired - retention_min) / (retention_max - retention_min)
+    return (
+        min(1.0, max(0.0, x_s)),
+        min(1.0, max(0.0, x_d)),
+        min(1.0, max(0.0, x_dr)),
+    )
+
+
+def _feature_count(feature_version: str) -> int:
+    try:
+        return FEATURE_COUNTS[feature_version]
+    except KeyError as exc:
+        expected = ", ".join(sorted(FEATURE_COUNTS))
+        raise ValueError(
+            f"Unsupported SA FSRS-6 DR feature_version {feature_version!r}; "
+            f"expected one of: {expected}."
+        ) from exc
+
+
+def _default_title(feature_version: str) -> str:
+    if feature_version == FEATURE_VERSION_LOG_LINEAR:
+        return "SA FSRS-6 DR-conditioned log linear"
+    _feature_count(feature_version)
+    return "SA FSRS-6 DR-conditioned log polynomial"
 
 
 def _validate_desired_retention(
@@ -239,7 +349,13 @@ def _sigmoid(value: float) -> float:
 
 __all__ = [
     "FEATURE_COUNT",
+    "FEATURE_COUNTS",
     "FEATURE_VERSION",
+    "FEATURE_VERSION_LOG_LINEAR",
+    "FEATURE_VERSION_LOG_POLY",
     "SAFSRS6DRPolicy",
+    "dr_features",
+    "feature_count",
+    "log_linear_dr_features",
     "log_poly_dr_features",
 ]

@@ -33,7 +33,7 @@ from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.math.fsrs import Bounds
-from simulator.sa_fsrs6_dr_policy import FEATURE_COUNT, FEATURE_VERSION, SAFSRS6DRPolicy
+from simulator.sa_fsrs6_dr_policy import FEATURE_VERSION, SAFSRS6DRPolicy, feature_count
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.schedulers.sa_fsrs6_dr import SAFSRS6DRBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
@@ -98,11 +98,13 @@ def main() -> int:
     config = ExperimentConfig.from_toml(args.config)
     settings = SASettings.from_mapping(config.training_sa)
     raw_training_sa = _read_training_sa(args.config)
+    policy_feature_version = _policy_feature_version(raw_training_sa)
     baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
     dr_batch_size = _dr_batch_size(raw_training_sa, len(baseline_dr_values))
     progress.write(
         "config_loaded",
         settings=asdict(settings),
+        feature_version=policy_feature_version,
         simulation=config.simulation.to_dict(),
         seed=config.seed,
         baseline_desired_retention_values=list(baseline_dr_values),
@@ -188,6 +190,7 @@ def main() -> int:
         dr_batch_size=dr_batch_size,
         baselines=baselines,
         lambda_value=args.lambda_value,
+        feature_version=policy_feature_version,
         progress=progress,
     )
     progress.write(
@@ -207,6 +210,7 @@ def main() -> int:
         user_id=args.user_id,
         lambda_value=args.lambda_value,
         training_command_path=args.training_command_path,
+        feature_version=policy_feature_version,
         result=result,
     )
     progress.write(
@@ -259,6 +263,14 @@ def _dr_batch_size(raw_training_sa: Mapping[str, Any], value_count: int) -> int:
         ),
         value_count,
     )
+
+
+def _policy_feature_version(raw_training_sa: Mapping[str, Any]) -> str:
+    raw_value = raw_training_sa.get("feature_version", FEATURE_VERSION)
+    if not isinstance(raw_value, str):
+        raise ValueError("training.sa.feature_version must be a string.")
+    feature_count(raw_value)
+    return raw_value
 
 
 def _iter_dr_chunks(
@@ -334,13 +346,16 @@ def _anneal_dr_conditioned(
     dr_batch_size: int,
     baselines: list[CandidateMetrics],
     lambda_value: float,
+    feature_version: str,
     progress: TrainingProgress,
 ) -> DRConditionedTrainingResult:
     device = bundle.device
     generator = torch.Generator(device=device)
     generator.manual_seed(config.seed)
+    coefficient_count = feature_count(feature_version)
     current = _initial_coefficients(
         settings=settings,
+        coefficient_count=coefficient_count,
         device=device,
         generator=generator,
     )
@@ -353,6 +368,7 @@ def _anneal_dr_conditioned(
         baselines=baselines,
         coefficients=current,
         lambda_value=lambda_value,
+        feature_version=feature_version,
         seed=config.seed,
     )
     current_scores = torch.tensor(
@@ -396,6 +412,7 @@ def _anneal_dr_conditioned(
             baselines=baselines,
             coefficients=proposal,
             lambda_value=lambda_value,
+            feature_version=feature_version,
             seed=config.seed,
         )
         proposal_scores = torch.tensor(
@@ -460,11 +477,12 @@ def _anneal_dr_conditioned(
 def _initial_coefficients(
     *,
     settings: SASettings,
+    coefficient_count: int,
     device: torch.device,
     generator: torch.Generator,
 ) -> torch.Tensor:
     current = torch.zeros(
-        (settings.chains, FEATURE_COUNT),
+        (settings.chains, coefficient_count),
         dtype=torch.float32,
         device=device,
     )
@@ -491,6 +509,7 @@ def _evaluate_sa_dr_chains(
     baselines: list[CandidateMetrics],
     coefficients: torch.Tensor,
     lambda_value: float,
+    feature_version: str,
     seed: int,
 ) -> list[ChainEvaluation]:
     dr_count = len(baseline_dr_values)
@@ -498,7 +517,14 @@ def _evaluate_sa_dr_chains(
     template = SAFSRS6DRPolicy.baseline(
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
+        feature_version=feature_version,
     )
+    coefficient_count = template.feature_count
+    if int(coefficients.shape[1]) != coefficient_count:
+        raise ValueError(
+            "DR-conditioned coefficients must have shape "
+            f"(chains, {coefficient_count})."
+        )
     metrics_by_chain: list[list[CandidateMetrics]] = [[] for _ in range(chains)]
     rel_mem_sums = [0.0 for _ in range(chains)]
     rel_eff_sums = [0.0 for _ in range(chains)]
@@ -516,8 +542,8 @@ def _evaluate_sa_dr_chains(
         )
         lane_coefficients = (
             coefficients[:, None, :]
-            .expand(chains, dr_batch_size, FEATURE_COUNT)
-            .reshape(chains * dr_batch_size, FEATURE_COUNT)
+            .expand(chains, dr_batch_size, coefficient_count)
+            .reshape(chains * dr_batch_size, coefficient_count)
         )
         sched_ops = SAFSRS6DRBatchSchedulerOps(
             weights=bundle.scheduler_weights,
@@ -612,6 +638,7 @@ def _write_artifact(
     user_id: int,
     lambda_value: float,
     training_command_path: Path | None,
+    feature_version: str,
     result: DRConditionedTrainingResult,
 ) -> tuple[Path, Path, Path]:
     policy = SAFSRS6DRPolicy(
@@ -619,6 +646,7 @@ def _write_artifact(
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         title=f"sa_fsrs6_dr_u{user_id}_lambda_{lambda_value:g}",
+        feature_version=feature_version,
     )
     policy_path = output_dir / "policy.json"
     policy.write_json(policy_path)
@@ -662,6 +690,7 @@ def _write_artifact(
         "best_score": result.best.score,
         "settings": {
             **asdict(settings),
+            "feature_version": feature_version,
             "baseline_desired_retention_values": list(
                 result.baseline_desired_retention_values
             ),
@@ -684,7 +713,7 @@ def _write_artifact(
         "validation_user_ids": list(config.users.validation),
         "seed": config.seed,
         "policy_path": "policy.json",
-        "feature_version": FEATURE_VERSION,
+        "feature_version": feature_version,
         "action_space": "sddr_logit_retention_adjustment",
         "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "code_commit": _git_commit(),

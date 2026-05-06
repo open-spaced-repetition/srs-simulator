@@ -393,7 +393,10 @@ def _same_sa_policy_bounds(lhs: SAFSRS6Policy, rhs: SAFSRS6Policy) -> bool:
 
 def _same_sa_dr_policy_bounds(lhs: SAFSRS6DRPolicy, rhs: SAFSRS6DRPolicy) -> bool:
     return (
-        math.isclose(lhs.retention_min, rhs.retention_min, rel_tol=0.0, abs_tol=1e-9)
+        lhs.feature_version == rhs.feature_version
+        and math.isclose(
+            lhs.retention_min, rhs.retention_min, rel_tol=0.0, abs_tol=1e-9
+        )
         and math.isclose(
             lhs.retention_max,
             rhs.retention_max,
@@ -652,7 +655,8 @@ def _build_mixed_scheduler_ops(
                 if not _same_sa_dr_policy_bounds(candidate, policy):
                     raise ValueError(
                         "Batched sa_fsrs6_dr sweep requires identical policy "
-                        f"retention and FSRS bounds. Mismatch at {policy_path}."
+                        "feature versions, retention bounds, and FSRS bounds. "
+                        f"Mismatch at {policy_path}."
                     )
             coefficients = torch.tensor(
                 [candidate.coefficients for candidate in policies],
