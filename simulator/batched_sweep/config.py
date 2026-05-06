@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,8 @@ class BatchedSweepConfig:
         schema_version = raw.get("schema_version", 1)
         if schema_version != 1:
             raise ValueError(f"schema_version must be 1, got {schema_version!r}.")
+        if _looks_like_experiment_config(raw):
+            raw = _adapt_experiment_config(raw, base_path=base_path)
 
         users = _table(raw, "users", required=True)
         user_ids, start_user, end_user = _parse_users(users)
@@ -237,6 +240,193 @@ def load_batched_sweep_config(
     return BatchedSweepConfig.from_toml(path, repo_root=repo_root)
 
 
+def _looks_like_experiment_config(raw: Mapping[str, Any]) -> bool:
+    users = raw.get("users")
+    sweep = raw.get("sweep")
+    return (
+        isinstance(users, Mapping)
+        and "train" in users
+        and isinstance(sweep, Mapping)
+        and ("output_root" in raw or raw.get("family") == "rl_scheduler")
+    )
+
+
+def _adapt_experiment_config(
+    raw: Mapping[str, Any], *, base_path: Path
+) -> dict[str, Any]:
+    users = _table(raw, "users", required=True)
+    sweep = _table(raw, "sweep", required=True)
+    simulation = _table(raw, "simulation", required=False)
+    performance = _table(raw, "performance", required=False)
+    training = _table(raw, "training", required=False)
+    training_sa = _nested_table(training, "sa", required=False)
+
+    adapted_simulation = dict(simulation)
+    adapted_simulation["seed"] = raw.get(
+        "seed",
+        adapted_simulation.get("seed", DEFAULT_SEED),
+    )
+
+    paths = {
+        "log_dir": sweep.get("log_dir"),
+        "benchmark_result": sweep.get("benchmark_result"),
+        "benchmark_partition": sweep.get("benchmark_partition", "0"),
+        "srs_benchmark_root": sweep.get("srs_benchmark_root"),
+        "button_usage": sweep.get("button_usage"),
+    }
+    paths = {key: value for key, value in paths.items() if value is not None}
+
+    execution = {
+        "batch_size": sweep.get("batch_size"),
+        "max_lanes_per_batch": sweep.get("max_lanes_per_batch"),
+        "torch_device": sweep.get("torch_device", performance.get("device")),
+        "cuda_devices": sweep.get("cuda_devices"),
+        "dry_run": sweep.get("dry_run", False),
+    }
+    execution = {key: value for key, value in execution.items() if value is not None}
+
+    short_term = {
+        "source": adapted_simulation.get("short_term_source"),
+        "learning_steps": training_sa.get("learning_steps"),
+        "relearning_steps": training_sa.get("relearning_steps"),
+        "threshold": training_sa.get("short_term_threshold", 0.5),
+        "loops_limit": training_sa.get("short_term_loops_limit"),
+    }
+    short_term = {key: value for key, value in short_term.items() if value is not None}
+
+    schedulers = _str_list(sweep.get("schedulers", ["fsrs6"]), "sweep.schedulers")
+    scheduler_names = {item.split("@", 1)[0] for item in schedulers}
+    lambda_grid = training.get("lambda_grid")
+    default_train_run_root = _infer_experiment_train_run_root(
+        raw,
+        sweep=sweep,
+        base_path=base_path,
+    )
+    sa_fsrs6 = _adapt_experiment_policy_source(
+        sweep,
+        prefix="sa_fsrs6",
+        lambda_grid=lambda_grid,
+        default_train_run_root=default_train_run_root
+        if "sa_fsrs6" in scheduler_names
+        else None,
+    )
+    sa_fsrs6_dr = _adapt_experiment_policy_source(
+        sweep,
+        prefix="sa_fsrs6_dr",
+        lambda_grid=lambda_grid,
+        default_train_run_root=default_train_run_root
+        if "sa_fsrs6_dr" in scheduler_names
+        else None,
+    )
+
+    return {
+        "schema_version": raw.get("schema_version", 1),
+        "users": {"ids": users.get("train")},
+        "sweep": {
+            "envs": sweep.get("envs", ["lstm"]),
+            "schedulers": schedulers,
+        },
+        "retention": {
+            "start": sweep.get("start_retention", DEFAULT_START_RETENTION),
+            "end": sweep.get("end_retention", DEFAULT_END_RETENTION),
+            "step": sweep.get("step", DEFAULT_RETENTION_STEP),
+        },
+        "simulation": adapted_simulation,
+        "paths": paths,
+        "execution": execution,
+        "logging": {
+            "log_layout": sweep.get("log_layout", "user"),
+            "no_log": sweep.get("no_log", False),
+            "no_progress": False,
+            "diagnostic_csv_logs": performance.get("diagnostic_csv_logs", False),
+        },
+        "short_term": short_term,
+        "sa_fsrs6": sa_fsrs6,
+        "sa_fsrs6_dr": sa_fsrs6_dr,
+    }
+
+
+def _adapt_experiment_policy_source(
+    sweep: Mapping[str, Any],
+    *,
+    prefix: str,
+    lambda_grid: Any,
+    default_train_run_root: Path | None,
+) -> dict[str, Any]:
+    adapted: dict[str, Any] = {}
+    field_map = {
+        "policy": f"{prefix}_policy",
+        "policy_root": f"{prefix}_policy_root",
+        "train_run_root": f"{prefix}_train_run_root",
+        "policy_manifest": f"{prefix}_policy_manifest",
+        "lambda_values": f"{prefix}_lambda_values",
+    }
+    for target, source in field_map.items():
+        if source in sweep:
+            adapted[target] = sweep[source]
+    has_source = any(
+        key in adapted for key in ("policy_root", "train_run_root", "policy_manifest")
+    )
+    if not has_source and default_train_run_root is not None:
+        adapted["train_run_root"] = str(default_train_run_root)
+    if "lambda_values" not in adapted and lambda_grid is not None:
+        adapted["lambda_values"] = lambda_grid
+    return adapted
+
+
+def _infer_experiment_train_run_root(
+    raw: Mapping[str, Any],
+    *,
+    sweep: Mapping[str, Any],
+    base_path: Path,
+) -> Path | None:
+    output_root_raw = raw.get("output_root")
+    if output_root_raw is None:
+        return None
+    output_root = _optional_path(
+        output_root_raw,
+        "output_root",
+        base_path=base_path,
+    )
+    if output_root is None or not output_root.is_dir():
+        return None
+
+    run_id_raw = sweep.get("run_id", raw.get("run_id"))
+    if run_id_raw is not None:
+        run_id = _str(run_id_raw, "run_id")
+        run_root = output_root / run_id
+        if _has_passed_training_summary(run_root):
+            return run_root
+
+    candidates = [
+        child
+        for child in output_root.iterdir()
+        if child.is_dir() and _has_passed_training_summary(child)
+    ]
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda path: (
+            path.joinpath("train-overfit", "training_summary.json").stat().st_mtime,
+            path.name,
+        ),
+    )
+
+
+def _has_passed_training_summary(run_root: Path) -> bool:
+    summary_path = run_root / "train-overfit" / "training_summary.json"
+    try:
+        with summary_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, Mapping):
+        return False
+    artifact_paths = payload.get("artifact_paths")
+    return payload.get("passed") is True and isinstance(artifact_paths, list)
+
+
 def _parse_users(
     users: Mapping[str, Any],
 ) -> tuple[tuple[int, ...] | None, int, int]:
@@ -265,6 +455,22 @@ def _parse_users(
 
 
 def _table(
+    raw: Mapping[str, Any],
+    name: str,
+    *,
+    required: bool,
+) -> Mapping[str, Any]:
+    value = raw.get(name)
+    if value is None:
+        if required:
+            raise ValueError(f"[{name}] table is required.")
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"[{name}] must be a TOML table.")
+    return value
+
+
+def _nested_table(
     raw: Mapping[str, Any],
     name: str,
     *,

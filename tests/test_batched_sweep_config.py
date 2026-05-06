@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 from contextlib import redirect_stdout
 from pathlib import Path
 import sys
@@ -142,6 +143,104 @@ class BatchedSweepConfigTests(unittest.TestCase):
         self.assertEqual(config.schedulers, ("fsrs6", "anki_sm2"))
         self.assertEqual(config.args.log_layout, "user")
         self.assertFalse(config.args.diagnostic_csv_logs)
+
+    def test_loads_rl_scheduler_experiment_config(self) -> None:
+        config = load_batched_sweep_config(
+            REPO_ROOT
+            / "experiments"
+            / "rl_scheduler"
+            / "configs"
+            / "sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml",
+            repo_root=REPO_ROOT,
+        )
+
+        self.assertEqual(config.args.user_ids, list(range(1, 9)))
+        self.assertEqual(config.envs, ("fsrs6", "lstm"))
+        self.assertEqual(config.schedulers, ("sa_fsrs6_dr",))
+        self.assertEqual(config.args.log_dir, REPO_ROOT / "logs" / "retention_sweep")
+        self.assertEqual(config.args.batch_size, 8)
+        self.assertEqual(config.args.torch_device, "cuda")
+        self.assertEqual(config.args.sa_fsrs6_dr_lambda_values, (0.5,))
+        self.assertFalse(config.args.no_progress)
+
+    def test_dry_run_accepts_rl_scheduler_experiment_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_dir = root / "logs"
+            output_root = root / "artifacts"
+            run_root = output_root / "test-run"
+            policy_root = run_root / "train-overfit" / "train_outputs"
+            artifact_paths: list[str] = []
+            for user_id in (1, 2):
+                policy_path = (
+                    policy_root / f"user_{user_id}" / "lambda_0p5" / "policy.json"
+                )
+                policy_path.parent.mkdir(parents=True)
+                _write_dr_policy(policy_path)
+                metadata_path = policy_path.parent / "metadata.json"
+                metadata_path.write_text("{}", encoding="utf-8")
+                artifact_paths.append(str(metadata_path))
+            summary_path = run_root / "train-overfit" / "training_summary.json"
+            summary_path.write_text(
+                json.dumps({"passed": True, "artifact_paths": artifact_paths}),
+                encoding="utf-8",
+            )
+            path = root / "experiment.toml"
+            path.write_text(
+                f"""
+schema_version = 1
+name = "rl-experiment-sweep"
+family = "rl_scheduler"
+seed = 42
+output_root = "{output_root.as_posix()}"
+stages = ["sweep"]
+
+[users]
+train = [1, 2]
+
+[simulation]
+engine = "batched"
+environment = "fsrs6"
+days = 2
+deck = 10
+learn_limit = 1
+review_limit = 10
+cost_limit_minutes = 60.0
+priority = "review-first"
+scheduler_priority = "low_retrievability"
+fuzz = false
+
+[performance]
+device = "cpu"
+diagnostic_csv_logs = false
+
+[training]
+lambda_grid = [0.5]
+
+[sweep]
+envs = ["fsrs6"]
+schedulers = ["sa_fsrs6_dr"]
+log_dir = "{log_dir.as_posix()}"
+log_layout = "user"
+batch_size = 2
+torch_device = "cpu"
+start_retention = 0.50
+end_retention = 0.52
+step = 0.02
+no_progress = true
+no_log = true
+""".lstrip(),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                code = batched_main(["--config", str(path), "--dry-run"])
+
+        self.assertEqual(code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Batched sweep dry run", output)
+        self.assertIn("expanded lanes: 4", output)
 
     def test_loads_sa_fsrs6_dr_config_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
