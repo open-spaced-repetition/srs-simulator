@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
+import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, TypeAlias
-import math
 import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +18,12 @@ from simulator.scheduler_spec import (
     normalize_fixed_interval,
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
+)
+
+
+SA_FSRS6_DR_TOKEN_RE = re.compile(
+    r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
+    re.IGNORECASE,
 )
 
 
@@ -245,10 +252,39 @@ def _resolve_sspmmc_label(title: Optional[str], fallback: str) -> Optional[str]:
     return None
 
 
-def _resolve_sa_fsrs6_title(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> str:
+def _retention_value(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        retention = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(retention) or retention <= 0.0 or retention > 1.0:
+        return None
+    return retention
+
+
+def _retention_from_text(value: str) -> Optional[float]:
+    match = SA_FSRS6_DR_TOKEN_RE.search(value)
+    if not match:
+        return None
+    return _retention_value(match.group(1).replace("p", "."))
+
+
+def _format_retention_title(retention: float) -> str:
+    return f"DR={format_float(retention * 100)}%"
+
+
+def _resolve_sa_fsrs6_label(
+    meta: Dict[str, Any], base_dirs: Sequence[Path]
+) -> tuple[str, Optional[float]]:
+    retention = _retention_value(meta.get("sa_fsrs6_baseline_desired_retention"))
+    if retention is not None:
+        return _format_retention_title(retention), retention
+
     policy_path = meta.get("sa_fsrs6_policy")
     if not policy_path:
-        return "SA FSRS-6"
+        return "SA FSRS-6", None
     path = Path(policy_path)
     if not path.is_absolute():
         for base_dir in base_dirs:
@@ -261,12 +297,28 @@ def _resolve_sa_fsrs6_title(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> 
         try:
             with path.open("r", encoding="utf-8") as fh:
                 payload = json.load(fh)
+            retention = _retention_value(payload.get("baseline_desired_retention"))
+            if retention is not None:
+                return _format_retention_title(retention), retention
             raw_title = payload.get("title")
             if isinstance(raw_title, str) and raw_title.strip():
                 title = raw_title.strip()
+                retention = _retention_from_text(title)
+                if retention is not None:
+                    return _format_retention_title(retention), retention
         except (OSError, json.JSONDecodeError):
             title = None
-    return f"SA {title or path.stem}"
+    retention = _retention_from_text(str(policy_path)) or _retention_from_text(
+        path.stem
+    )
+    if retention is not None:
+        return _format_retention_title(retention), retention
+    return f"SA {title or path.stem}", None
+
+
+def _resolve_sa_fsrs6_title(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> str:
+    title, _retention = _resolve_sa_fsrs6_label(meta, base_dirs)
+    return title
 
 
 def _format_scheduler_title(scheduler: str) -> str:
@@ -369,10 +421,11 @@ def _iter_log_entries(
         if time_average <= 0:
             continue
 
+        sa_fsrs6_baseline_dr = None
         if scheduler == "sspmmc":
             title = _resolve_policy_title(meta, base_dirs)
         elif scheduler == "sa_fsrs6":
-            title = _resolve_sa_fsrs6_title(meta, base_dirs)
+            title, sa_fsrs6_baseline_dr = _resolve_sa_fsrs6_label(meta, base_dirs)
         elif scheduler == "fixed":
             title = f"Ivl={format_float(fixed_interval)}"
         elif scheduler_uses_desired_retention(scheduler):
@@ -407,6 +460,14 @@ def _iter_log_entries(
             "short_term_source": meta.get("short_term_source"),
             "engine": engine_value,
         }
+        if scheduler == "sa_fsrs6":
+            entry.update(
+                {
+                    "sa_fsrs6_policy": meta.get("sa_fsrs6_policy"),
+                    "sa_fsrs6_baseline_desired_retention": sa_fsrs6_baseline_dr,
+                    "sa_fsrs6_lambda_value": meta.get("sa_fsrs6_lambda_value"),
+                }
+            )
         yield desired_value, entry
 
 
@@ -426,11 +487,23 @@ def _no_desired_dedupe_key(
     if not isinstance(scheduler_name, str) or not isinstance(title, str):
         return None
 
+    title_key = title
+    if scheduler_name == "sa_fsrs6":
+        policy_path = entry.get("sa_fsrs6_policy")
+        if isinstance(policy_path, str) and policy_path:
+            title_key = policy_path
+            baseline_dr = entry.get("sa_fsrs6_baseline_desired_retention")
+            lambda_value = entry.get("sa_fsrs6_lambda_value")
+            if baseline_dr is not None:
+                title_key = f"{title_key}|dr={baseline_dr}"
+            if lambda_value is not None:
+                title_key = f"{title_key}|lambda={lambda_value}"
+
     short_term_source = entry.get("short_term_source")
     engine = entry.get("engine")
     return (
         scheduler_name,
-        title,
+        title_key,
         entry.get("fuzz") if dedupe_fuzz or fuzz_filter is not None else None,
         entry.get("short_term")
         if dedupe_short_term or short_term_filter is not None

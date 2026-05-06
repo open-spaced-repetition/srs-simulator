@@ -621,6 +621,48 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual([entry["scheduler"] for entry in fsrs_results], ["fsrs6"])
         self.assertEqual([entry["scheduler"] for entry in sa_results], ["sa_fsrs6"])
 
+    def test_build_pareto_labels_sa_fsrs6_by_baseline_dr_without_deduping_policies(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_log_dir = Path(tmp) / "user_1"
+            for index, lambda_value in enumerate((0.5, 0.7), start=1):
+                policy_path = Path(tmp) / f"sa_fsrs6_u1_dr_0.94_lambda_{index}.json"
+                SAFSRS6Policy.baseline(desired_retention=0.94).write_json(policy_path)
+                args = _write_log_args(user_log_dir, False)
+                args.engine = "batched"
+                args.env = "lstm"
+                args.environment = "lstm"
+                args.scheduler = "sa_fsrs6"
+                args.scheduler_spec = "sa_fsrs6"
+                args.sa_fsrs6_policy = policy_path
+                args.sa_fsrs6_lambda_value = lambda_value
+                simulate_cli._write_log(args, _stats(memorized=10.0 + index))
+
+            results = _build_results(
+                user_log_dir,
+                "lstm",
+                {"sa_fsrs6"},
+                0.50,
+                0.98,
+                [REPO_ROOT, user_log_dir],
+                None,
+                None,
+                None,
+                "batched",
+            )
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual([entry["title"] for entry in results], ["DR=94%", "DR=94%"])
+        self.assertEqual(
+            [entry["sa_fsrs6_baseline_desired_retention"] for entry in results],
+            [0.94, 0.94],
+        )
+        self.assertCountEqual(
+            [entry["sa_fsrs6_lambda_value"] for entry in results],
+            [0.5, 0.7],
+        )
+
     def test_build_pareto_dedupes_no_desired_scheduler_by_key_with_engine_filter(
         self,
     ) -> None:
