@@ -16,6 +16,7 @@ from simulator.schedulers import (
     FSRS6Scheduler,
     HLRScheduler,
     MemriseScheduler,
+    SAFSRS6DRScheduler,
     SAFSRS6Scheduler,
     SSPMMCScheduler,
 )
@@ -28,6 +29,7 @@ from simulator.schedulers.fsrs import (
 from simulator.schedulers.hlr import HLRVectorizedSchedulerOps
 from simulator.schedulers.lstm import LSTMVectorizedSchedulerOps
 from simulator.schedulers.memrise import MemriseVectorizedSchedulerOps
+from simulator.schedulers.sa_fsrs6_dr import SAFSRS6DRVectorizedSchedulerOps
 from simulator.schedulers.sa_fsrs6 import SAFSRS6VectorizedSchedulerOps
 from simulator.schedulers.sspmmc import SSPMMCVectorizedSchedulerOps
 from simulator.vectorized.types import (
@@ -77,6 +79,8 @@ def resolve_scheduler_ops(
         return SSPMMCVectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
     if isinstance(scheduler, SAFSRS6Scheduler):
         return SAFSRS6VectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
+    if isinstance(scheduler, SAFSRS6DRScheduler):
+        return SAFSRS6DRVectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
     if isinstance(scheduler, DASHScheduler):
         raise ValueError(
             "Vectorized engine does not support DASHScheduler; "
@@ -86,5 +90,6 @@ def resolve_scheduler_ops(
         return LSTMVectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
     raise ValueError(
         "Vectorized engine requires a supported scheduler "
-        "(FSRS6, FSRS3, HLR, fixed, Memrise, Anki SM-2, SSPMMC, or SA FSRS-6)."
+        "(FSRS6, FSRS3, HLR, fixed, Memrise, Anki SM-2, SSPMMC, "
+        "SA FSRS-6, or SA FSRS-6 DR)."
     )

@@ -78,6 +78,7 @@ class BatchedSweepConfig:
         logging_config = _table(raw, "logging", required=False)
         short_term = _table(raw, "short_term", required=False)
         sa_fsrs6 = _table(raw, "sa_fsrs6", required=False)
+        sa_fsrs6_dr = _table(raw, "sa_fsrs6_dr", required=False)
 
         args = argparse.Namespace(
             config=config_path,
@@ -201,6 +202,30 @@ class BatchedSweepConfig:
             sa_fsrs6_lambda_values=_optional_float_list(
                 sa_fsrs6.get("lambda_values"),
                 "sa_fsrs6.lambda_values",
+            ),
+            sa_fsrs6_dr_policy=_optional_path(
+                sa_fsrs6_dr.get("policy"),
+                "sa_fsrs6_dr.policy",
+                base_path=base_path,
+            ),
+            sa_fsrs6_dr_policy_root=_optional_path(
+                sa_fsrs6_dr.get("policy_root"),
+                "sa_fsrs6_dr.policy_root",
+                base_path=base_path,
+            ),
+            sa_fsrs6_dr_train_run_root=_optional_path(
+                sa_fsrs6_dr.get("train_run_root"),
+                "sa_fsrs6_dr.train_run_root",
+                base_path=base_path,
+            ),
+            sa_fsrs6_dr_policy_manifest=_optional_path(
+                sa_fsrs6_dr.get("policy_manifest"),
+                "sa_fsrs6_dr.policy_manifest",
+                base_path=base_path,
+            ),
+            sa_fsrs6_dr_lambda_values=_optional_float_list(
+                sa_fsrs6_dr.get("lambda_values"),
+                "sa_fsrs6_dr.lambda_values",
             ),
         )
         return cls(path=config_path, args=args, envs=envs, schedulers=schedulers)

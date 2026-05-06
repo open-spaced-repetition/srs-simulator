@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         env_help="Comma-separated list of environments to sweep.",
         sched_help=(
             "Comma-separated list of schedulers to sweep "
-            "(include sspmmc or sa_fsrs6 to run policies; "
+            "(include sspmmc, sa_fsrs6, or sa_fsrs6_dr to run policies; "
             "use fixed@<days> for fixed intervals)."
         ),
     )
@@ -117,6 +117,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to an SA FSRS-6 policy JSON when using --sched sa_fsrs6.",
+    )
+    parser.add_argument(
+        "--sa-fsrs6-dr-policy",
+        type=Path,
+        default=None,
+        help=(
+            "Path to an SA FSRS-6 DR-conditioned policy JSON when using "
+            "--sched sa_fsrs6_dr."
+        ),
     )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
@@ -196,6 +205,9 @@ def _progress_label(args: argparse.Namespace) -> str:
     elif args.scheduler == "sa_fsrs6":
         if args.sa_fsrs6_policy:
             label = f"{label}:{args.sa_fsrs6_policy.stem}"
+    elif args.scheduler == "sa_fsrs6_dr":
+        if args.sa_fsrs6_dr_policy:
+            label = f"{label}:{args.sa_fsrs6_dr_policy.stem}"
     elif scheduler_uses_desired_retention(args.scheduler):
         label = f"{label} dr={args.desired_retention:.2f}"
     return f"u{args.user_id} {label}" if args.user_id is not None else label
@@ -483,6 +495,7 @@ def main() -> None:
     fixed_schedulers = [spec for spec in scheduler_specs if spec[0] == "fixed"]
     has_sspmmc = any(spec[0] == "sspmmc" for spec in scheduler_specs)
     has_sa_fsrs6 = any(spec[0] == "sa_fsrs6" for spec in scheduler_specs)
+    has_sa_fsrs6_dr = any(spec[0] == "sa_fsrs6_dr" for spec in scheduler_specs)
     for name, _, _ in scheduler_specs:
         if name in {"sspmmc", "sa_fsrs6", "fixed"}:
             continue
@@ -511,6 +524,8 @@ def main() -> None:
         raise SystemExit("No SSP-MMC policies found. Provide --sspmmc-policy-dir.")
     if run_sa_fsrs6 and args.sa_fsrs6_policy is None:
         raise SystemExit("--sched sa_fsrs6 requires --sa-fsrs6-policy.")
+    if has_sa_fsrs6_dr and args.sa_fsrs6_dr_policy is None:
+        raise SystemExit("--sched sa_fsrs6_dr requires --sa-fsrs6-dr-policy.")
 
     priority_fn = (
         review_first_priority if args.priority == "review-first" else new_first_priority

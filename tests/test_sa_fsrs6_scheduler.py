@@ -15,11 +15,16 @@ if str(REPO_ROOT) not in sys.path:
 from simulator.core import CardView
 from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
 from simulator.math.fsrs import Bounds
+from simulator.sa_fsrs6_dr_policy import SAFSRS6DRPolicy
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
 from simulator.schedulers.fsrs import (
     FSRS3BatchSchedulerOps,
     FSRS6BatchSchedulerOps,
     FSRS6Scheduler,
+)
+from simulator.schedulers.sa_fsrs6_dr import (
+    SAFSRS6DRBatchSchedulerOps,
+    SAFSRS6DRScheduler,
 )
 from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps, SAFSRS6Scheduler
 
@@ -164,6 +169,88 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
                 device=torch.device("cpu"),
                 dtype=torch.float32,
             )
+
+
+class SAFSRS6DRSchedulerTests(unittest.TestCase):
+    def test_zero_policy_reproduces_input_dr_across_states(self) -> None:
+        policy = SAFSRS6DRPolicy.baseline()
+
+        for stability in (0.1, 2.5, 100.0):
+            for difficulty in (1.0, 5.5, 10.0):
+                for desired_retention in (0.50, 0.73, 0.98):
+                    self.assertEqual(
+                        policy.evaluate(stability, difficulty, desired_retention),
+                        desired_retention,
+                    )
+
+    def test_zero_policy_matches_fsrs6_scheduler_for_same_dr(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_path = Path(tmp) / "policy.json"
+            SAFSRS6DRPolicy.baseline().write_json(policy_path)
+
+            for desired_retention in (0.50, 0.90, 0.98):
+                fsrs = FSRS6Scheduler(
+                    weights=None,
+                    desired_retention=desired_retention,
+                )
+                sa = SAFSRS6DRScheduler(
+                    policy_json=policy_path,
+                    desired_retention=desired_retention,
+                    fsrs_weights=None,
+                )
+
+                fsrs_interval, fsrs_state = fsrs.init_card(_view(None), 3, 0.0)
+                sa_interval, sa_state = sa.init_card(_view(None), 3, 0.0)
+                self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
+                self.assertEqual(set(sa_state), {"s", "d"})
+
+                elapsed_values = [1.0, 4.0, 12.0, 2.0]
+                ratings = [3, 4, 1, 2]
+                for elapsed, rating in zip(elapsed_values, ratings):
+                    fsrs_interval, fsrs_state = fsrs.schedule(
+                        _view(fsrs_state), rating, elapsed, elapsed
+                    )
+                    sa_interval, sa_state = sa.schedule(
+                        _view(sa_state), rating, elapsed, elapsed
+                    )
+                    self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
+                    self.assertAlmostEqual(sa_state["s"], fsrs_state["s"], places=9)
+                    self.assertAlmostEqual(sa_state["d"], fsrs_state["d"], places=9)
+
+    def test_scheduler_does_not_reference_env_memory_state(self) -> None:
+        source = inspect.getsource(SAFSRS6DRScheduler)
+        self.assertNotIn("memory_state", source)
+
+    def test_batch_ops_accept_per_lane_dr_and_coefficients(self) -> None:
+        policy = SAFSRS6DRPolicy.baseline()
+        weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
+        coefficients = torch.tensor(
+            [
+                list(policy.coefficients),
+                [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        ops = SAFSRS6DRBatchSchedulerOps(
+            weights=weights,
+            desired_retention=torch.tensor([0.80, 0.90], dtype=torch.float32),
+            policy=policy,
+            coefficients=coefficients,
+            bounds=Bounds(),
+            priority_mode="low_retrievability",
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        state = ops.init_state(user_count=2, deck_size=1)
+        intervals = ops.update_learn(
+            state,
+            user_idx=torch.tensor([0, 1]),
+            card_idx=torch.tensor([0, 0]),
+            rating=torch.tensor([3, 3]),
+        )
+
+        self.assertEqual(tuple(intervals.shape), (2,))
+        self.assertGreater(float(intervals[0]), float(intervals[1]))
 
 
 if __name__ == "__main__":

@@ -26,6 +26,10 @@ from simulator.batched_sweep.sa_policy import (
     SAFSRS6PolicySpec,
     resolve_sa_fsrs6_policy_specs,
 )
+from simulator.batched_sweep.sa_dr_policy import (
+    SAFSRS6DRPolicySpec,
+    resolve_sa_fsrs6_dr_policy_specs,
+)
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
 from simulator.batched_sweep.execution import LocalProgressQueue, run_batches
 from simulator.batched_sweep.plan import (
@@ -59,4 +63,6 @@ __all__ = [
     "build_batched_sweep_plan",
     "SAFSRS6PolicySpec",
     "resolve_sa_fsrs6_policy_specs",
+    "SAFSRS6DRPolicySpec",
+    "resolve_sa_fsrs6_dr_policy_specs",
 ]

@@ -74,7 +74,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         sched_help=(
             "Comma-separated schedulers to sweep "
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
-            "anki_sm2, memrise, fixed, sa_fsrs6)."
+            "anki_sm2, memrise, fixed, sa_fsrs6, sa_fsrs6_dr)."
         ),
     )
     add_retention_range_args(parser)
@@ -119,6 +119,47 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Optional comma-separated lambda values to select from an SA FSRS-6 "
             "policy root or manifest."
+        ),
+    )
+    parser.add_argument(
+        "--sa-fsrs6-dr-policy",
+        type=Path,
+        default=None,
+        help=(
+            "Path to an SA FSRS-6 DR-conditioned policy JSON when using "
+            "--sched sa_fsrs6_dr."
+        ),
+    )
+    parser.add_argument(
+        "--sa-fsrs6-dr-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing trained SA FSRS-6 DR policy artifacts, usually "
+            "train-overfit/train_outputs."
+        ),
+    )
+    parser.add_argument(
+        "--sa-fsrs6-dr-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "Training run root; treated as "
+            "<root>/train-overfit/train_outputs for SA FSRS-6 DR policy discovery."
+        ),
+    )
+    parser.add_argument(
+        "--sa-fsrs6-dr-policy-manifest",
+        type=Path,
+        default=None,
+        help="TOML manifest with [[policies]] SA FSRS-6 DR entries.",
+    )
+    parser.add_argument(
+        "--sa-fsrs6-dr-lambda-values",
+        default=None,
+        help=(
+            "Optional comma-separated lambda values to select from an SA FSRS-6 "
+            "DR policy root or manifest."
         ),
     )
     add_log_args(
@@ -175,6 +216,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if isinstance(args.sa_fsrs6_lambda_values, str):
         args.sa_fsrs6_lambda_values = tuple(
             float(item) for item in parse_csv(args.sa_fsrs6_lambda_values)
+        )
+    if isinstance(args.sa_fsrs6_dr_lambda_values, str):
+        args.sa_fsrs6_dr_lambda_values = tuple(
+            float(item) for item in parse_csv(args.sa_fsrs6_dr_lambda_values)
         )
     return args
 
@@ -255,6 +300,11 @@ def _merge_config_args(
         "sa_fsrs6_train_run_root": ("--sa-fsrs6-train-run-root",),
         "sa_fsrs6_policy_manifest": ("--sa-fsrs6-policy-manifest",),
         "sa_fsrs6_lambda_values": ("--sa-fsrs6-lambda-values",),
+        "sa_fsrs6_dr_policy": ("--sa-fsrs6-dr-policy",),
+        "sa_fsrs6_dr_policy_root": ("--sa-fsrs6-dr-policy-root",),
+        "sa_fsrs6_dr_train_run_root": ("--sa-fsrs6-dr-train-run-root",),
+        "sa_fsrs6_dr_policy_manifest": ("--sa-fsrs6-dr-policy-manifest",),
+        "sa_fsrs6_dr_lambda_values": ("--sa-fsrs6-dr-lambda-values",),
         "log_dir": ("--log-dir",),
         "log_layout": ("--log-layout",),
         "no_log": ("--no-log",),
@@ -289,6 +339,8 @@ def _print_dry_run(plan) -> None:
         print(f"example log dir: {plan.example_log_dir}")
     if plan.ctx.sa_fsrs6_policy_specs:
         print(f"sa_fsrs6 policies: {len(plan.ctx.sa_fsrs6_policy_specs)}")
+    if plan.ctx.sa_fsrs6_dr_policy_specs:
+        print(f"sa_fsrs6_dr policies: {len(plan.ctx.sa_fsrs6_dr_policy_specs)}")
 
 
 if __name__ == "__main__":

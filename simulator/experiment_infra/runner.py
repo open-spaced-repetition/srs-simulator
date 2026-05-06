@@ -2943,7 +2943,7 @@ def _baseline_candidate_paths(
     for user_id in sorted(required_users):
         user_dir = baseline_root / f"user_{user_id}"
         if user_dir.is_dir():
-            user_dir_paths.extend(sorted(user_dir.glob("*.jsonl")))
+            user_dir_paths.extend(sorted(user_dir.rglob("*.jsonl")))
     if user_dir_paths:
         filtered = [
             path for path in user_dir_paths if filename_filter.matches(path.name)
@@ -4129,7 +4129,9 @@ def _validate_train_artifacts(
                 f"{lambda_value}, got {metadata.lambda_value}."
             )
         if baseline_desired_retention is not None:
-            if metadata.baseline_desired_retention is None or not math.isclose(
+            if metadata.scheduler_name == "sa_fsrs6_dr":
+                pass
+            elif metadata.baseline_desired_retention is None or not math.isclose(
                 metadata.baseline_desired_retention,
                 baseline_desired_retention,
                 rel_tol=0.0,
@@ -4141,7 +4143,10 @@ def _validate_train_artifacts(
                     f"{baseline_desired_retention}, "
                     f"got {metadata.baseline_desired_retention}."
                 )
-        if allowed_baseline_desired_retentions is not None:
+        if (
+            allowed_baseline_desired_retentions is not None
+            and metadata.scheduler_name != "sa_fsrs6_dr"
+        ):
             if metadata.baseline_desired_retention is None:
                 return (
                     f"Invalid scheduler artifact metadata {path}: "
@@ -4172,7 +4177,7 @@ def _validate_train_artifacts(
                 for observed in observed_baseline_desired_retentions
                 if math.isclose(observed, expected, rel_tol=0.0, abs_tol=1e-9)
             ]
-            if len(matches) != 1:
+            if observed_baseline_desired_retentions and len(matches) != 1:
                 return (
                     "Invalid scheduler artifact metadata set: "
                     f"baseline_desired_retention {expected} expected exactly once, "
@@ -4245,7 +4250,10 @@ def _validate_sweep_artifact_metadata(
             "required for sweep."
         )
     baseline_dr_values = _training_baseline_desired_retention_values(config)
-    if _training_metadata_requires_baseline_dr(config):
+    if (
+        _training_metadata_requires_baseline_dr(config)
+        and metadata.scheduler_name != "sa_fsrs6_dr"
+    ):
         actual_dr = metadata.baseline_desired_retention
         if actual_dr is None or not any(
             math.isclose(actual_dr, expected, rel_tol=0.0, abs_tol=1e-9)

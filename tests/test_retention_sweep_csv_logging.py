@@ -490,7 +490,7 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(
-                [len(group) for group in _group_lane_indices(lanes)], [4, 2, 2, 2, 2]
+                [len(group) for group in _group_lane_indices(lanes)], [4, 4, 2, 2]
             )
 
     def test_aggregate_log_iterator_recurses_nested_lane_logs(self) -> None:

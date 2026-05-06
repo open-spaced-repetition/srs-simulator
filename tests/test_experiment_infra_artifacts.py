@@ -89,6 +89,17 @@ class ExperimentInfraArtifactTests(unittest.TestCase):
         )
         sa_capability = get_scheduler_capability("sa_fsrs6")
         self.assertFalse(sa_capability.supports_desired_retention)
+        self.assertTrue(
+            supports_scheduler(
+                scheduler="sa_fsrs6_dr", engine="batched", environment="lstm"
+            )
+        )
+        sa_dr_capability = get_scheduler_capability("sa_fsrs6_dr")
+        self.assertTrue(sa_dr_capability.supports_desired_retention)
+        self.assertTrue(sa_dr_capability.supports(engine="event", environment="fsrs6"))
+        self.assertTrue(
+            sa_dr_capability.supports(engine="vectorized", environment="fsrs6")
+        )
         capability = get_scheduler_capability("dash")
         self.assertTrue(capability.supports(engine="event", environment="fsrs6"))
         self.assertFalse(capability.supports(engine="vectorized", environment="fsrs6"))

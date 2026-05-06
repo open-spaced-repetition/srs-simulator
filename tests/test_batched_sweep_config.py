@@ -28,8 +28,10 @@ from simulator.batched_sweep.sa_policy import (
     format_float_token,
     resolve_sa_fsrs6_policy_specs,
 )
+from simulator.batched_sweep.sa_dr_policy import resolve_sa_fsrs6_dr_policy_specs
 from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH
 from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
+from simulator.sa_fsrs6_dr_policy import SAFSRS6DRPolicy
 from simulator.sa_fsrs6_policy import SAFSRS6Policy
 from tests.lstm_batch_helpers import dummy_lstm_weights
 
@@ -84,6 +86,14 @@ def _write_policy(path: Path, *, dr: float, offset: float = 0.0) -> None:
     policy.write_json(path)
 
 
+def _write_dr_policy(path: Path, *, offset: float = 0.0) -> None:
+    base = SAFSRS6DRPolicy.baseline()
+    coefficients = list(base.coefficients)
+    coefficients[0] += offset
+    policy = SAFSRS6DRPolicy(coefficients=tuple(coefficients))
+    policy.write_json(path)
+
+
 def _args(log_dir: Path, policy_path: Path | None = None) -> argparse.Namespace:
     return argparse.Namespace(
         user_ids=None,
@@ -108,6 +118,11 @@ def _args(log_dir: Path, policy_path: Path | None = None) -> argparse.Namespace:
         sa_fsrs6_train_run_root=None,
         sa_fsrs6_policy_manifest=None,
         sa_fsrs6_lambda_values=None,
+        sa_fsrs6_dr_policy=None,
+        sa_fsrs6_dr_policy_root=None,
+        sa_fsrs6_dr_train_run_root=None,
+        sa_fsrs6_dr_policy_manifest=None,
+        sa_fsrs6_dr_lambda_values=None,
     )
 
 
@@ -127,6 +142,27 @@ class BatchedSweepConfigTests(unittest.TestCase):
         self.assertEqual(config.schedulers, ("fsrs6", "anki_sm2"))
         self.assertEqual(config.args.log_layout, "user")
         self.assertFalse(config.args.diagnostic_csv_logs)
+
+    def test_loads_sa_fsrs6_dr_config_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sweep.toml"
+            log_dir = root / "logs"
+            policy_root = root / "policies"
+            path.write_text(
+                _valid_config(log_dir)
+                + f"""
+[sa_fsrs6_dr]
+policy_root = "{policy_root.as_posix()}"
+lambda_values = [0.5]
+""",
+                encoding="utf-8",
+            )
+
+            config = load_batched_sweep_config(path)
+
+        self.assertEqual(config.args.sa_fsrs6_dr_policy_root, policy_root.resolve())
+        self.assertEqual(config.args.sa_fsrs6_dr_lambda_values, (0.5,))
 
     def test_loads_explicit_sweep_log_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -656,6 +692,122 @@ path = "policy.json"
         self.assertEqual(len(ops._groups), 1)
         group = ops._groups[0]
         self.assertEqual(int(group.lane_indices.numel()), 2)
+
+
+class SAFSRS6DRPolicyExpansionTests(unittest.TestCase):
+    def test_policy_root_expands_one_policy_per_user_across_dr_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            for user_id in (1, 2):
+                policy_path = root / f"user_{user_id}" / "lambda_0p5" / "policy.json"
+                _write_dr_policy(policy_path)
+
+            specs = resolve_sa_fsrs6_dr_policy_specs(
+                user_ids=[1, 2],
+                policy_root=root,
+                lambda_values=[0.5],
+            )
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["lstm"],
+                schedulers=["sa_fsrs6_dr"],
+                dr_values=[0.50, 0.52],
+                sa_fsrs6_dr_policy_specs=specs,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1, 2], ctx=ctx, environment="lstm")
+
+        self.assertEqual(len(specs), 2)
+        self.assertEqual(len(lanes), 4)
+        self.assertEqual(
+            [
+                (
+                    lane.user_id,
+                    lane.desired_retention,
+                    lane.sa_fsrs6_dr_lambda_value,
+                    lane.sa_fsrs6_dr_policy.name if lane.sa_fsrs6_dr_policy else None,
+                )
+                for lane in lanes
+            ],
+            [
+                (1, 0.50, 0.5, "policy.json"),
+                (1, 0.52, 0.5, "policy.json"),
+                (2, 0.50, 0.5, "policy.json"),
+                (2, 0.52, 0.5, "policy.json"),
+            ],
+        )
+        self.assertEqual(
+            [
+                lane.final_log_dir.relative_to(Path(tmp) / "logs").as_posix()
+                for lane in lanes
+            ],
+            [
+                "user_1/sched_sa_fsrs6_dr/dr_0p5/lambda_0p5",
+                "user_1/sched_sa_fsrs6_dr/dr_0p52/lambda_0p5",
+                "user_2/sched_sa_fsrs6_dr/dr_0p5/lambda_0p5",
+                "user_2/sched_sa_fsrs6_dr/dr_0p52/lambda_0p5",
+            ],
+        )
+
+    def test_multiple_sa_dr_policies_share_one_scheduler_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "p1.json"
+            second = root / "p2.json"
+            _write_dr_policy(first)
+            _write_dr_policy(second, offset=1.0)
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "logs" / "a",
+                    environment="lstm",
+                    scheduler_name="sa_fsrs6_dr",
+                    scheduler_spec="sa_fsrs6_dr",
+                    desired_retention=0.50,
+                    fixed_interval=None,
+                    sa_fsrs6_dr_policy=first,
+                    sa_fsrs6_dr_lambda_value=0.5,
+                ),
+                BatchedSweepLogLane(
+                    user_id=2,
+                    log_root=root / "logs" / "b",
+                    environment="lstm",
+                    scheduler_name="sa_fsrs6_dr",
+                    scheduler_spec="sa_fsrs6_dr",
+                    desired_retention=0.52,
+                    fixed_interval=None,
+                    sa_fsrs6_dr_policy=second,
+                    sa_fsrs6_dr_lambda_value=0.5,
+                ),
+            ]
+
+            ops = _build_mixed_scheduler_ops(
+                args=argparse.Namespace(scheduler_priority="low_retrievability"),
+                active_batch=[1, 2],
+                lanes=lanes,
+                fsrs_weights=torch.tensor(
+                    [DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS],
+                    dtype=torch.float32,
+                ),
+                fsrs_default_weights=None,
+                fsrs3_weights=None,
+                fsrs3_default_weights=None,
+                lstm_packed=None,
+                short_term_source=None,
+                device=torch.device("cpu"),
+            )
+
+        self.assertEqual(len(ops._groups), 1)
+        group = ops._groups[0]
+        self.assertEqual(int(group.lane_indices.numel()), 2)
+        self.assertEqual(
+            [round(float(value), 2) for value in group.ops._desired_retention.tolist()],
+            [0.50, 0.52],
+        )
 
 
 if __name__ == "__main__":

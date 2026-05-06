@@ -21,6 +21,8 @@ obtain `S` and `D`.
   retention value.
 - `train_sa_fsrs6_dr_grid.py`: SA FSRS-6 trainer that batches a desired
   retention grid inside one process.
+- `train_sa_fsrs6_dr.py`: DR-conditioned SA FSRS-6 trainer that learns one
+  `(S,D,DR)` logit-adjustment policy per user/lambda.
 - `plot_sa_fsrs6_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
 - `tune_sa_fsrs6_lanes.py`: GPU lane/chains tuning and throughput probe.
@@ -149,6 +151,8 @@ Representative profiles:
 - `configs/sa_fsrs6_fsrs6_dr_grid_users_1_16.toml`: first 16 users, FSRS-6
   environment, short-term off, 1825 days, deck size 10000, learn limit 10, and
   review limit 9999.
+- `configs/sa_fsrs6_dr_fsrs6_users_1_8.toml`: first 8 users, FSRS-6
+  environment, short-term off, one DR-conditioned policy per user/lambda.
 
 Training target:
 
@@ -158,6 +162,10 @@ Training target:
 - DR grid: typically `0.50..0.98`.
 - Overfit gate: on the training user, both memorized average and memorized per
   minute must improve relative to the corresponding baseline.
+
+For `sa_fsrs6_dr`, the action is a logit-space adjustment around the input DR.
+The overfit gate uses mean relative memorized-average and memorized-per-minute
+gains across the whole DR grid.
 
 Batching model:
 
