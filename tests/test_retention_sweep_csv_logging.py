@@ -165,6 +165,40 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             meta = json.loads(json_logs[0].read_text().splitlines()[0])
             self.assertEqual(meta["data"]["run_id"], "run/one")
 
+    def test_write_log_shortens_redundant_adr_policy_filename_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            args = _write_log_args(log_dir, False)
+            args.engine = "batched"
+            args.days = 1825
+            args.deck = 10000
+            args.learn_limit = 10
+            args.review_limit = 9999
+            args.cost_limit_minutes = 720.0
+            args.priority = "new-first"
+            args.scheduler = "fsrs6_adr_direct"
+            args.scheduler_spec = "fsrs6_adr_direct"
+            args.run_id = "fsrs6_adr_direct_linear_cmaes_users_1_8_v1"
+            args.fsrs6_adr_direct_policy = Path("policy.json")
+            args.fsrs6_adr_direct_baseline_desired_retention = 0.5
+            args.fsrs6_adr_direct_lambda_value = 0.5
+
+            simulate_cli._write_log(args, _stats())
+
+            json_logs = list(log_dir.glob("*.jsonl"))
+            self.assertEqual(len(json_logs), 1)
+            name = json_logs[0].name
+            self.assertLessEqual(len(name), 240)
+            self.assertIn("run=fsrs6_adr_direct_linear_cmaes_users_1_8_v1", name)
+            self.assertIn("policy=policy", name)
+            self.assertNotIn("policy-dr=", name)
+            self.assertNotIn("lambda=", name)
+            meta = json.loads(json_logs[0].read_text().splitlines()[0])
+            self.assertEqual(
+                meta["data"]["fsrs6_adr_direct_baseline_desired_retention"], 0.5
+            )
+            self.assertEqual(meta["data"]["fsrs6_adr_direct_lambda_value"], 0.5)
+
     def test_write_log_preserves_default_daily_csv_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

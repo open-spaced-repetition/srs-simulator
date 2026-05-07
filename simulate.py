@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import math
 import json
 import random
@@ -629,6 +630,52 @@ def _log_filename_token(value: object) -> str:
     return "".join(char if char.isalnum() or char in "._=-" else "-" for char in text)
 
 
+_LOG_FILENAME_COMPONENT_LIMIT = 240
+
+
+def _simulation_log_filename(log_dir: Path, parts: list[str]) -> Path:
+    def _build(candidate_parts: list[str]) -> str:
+        return f"log_{'_'.join(candidate_parts)}.jsonl"
+
+    candidate_parts = list(parts)
+    filename = _build(candidate_parts)
+    if len(filename) <= _LOG_FILENAME_COMPONENT_LIMIT:
+        return log_dir / filename
+
+    for prefix in ("policy-dr=", "lambda="):
+        shortened = [part for part in candidate_parts if not part.startswith(prefix)]
+        if len(shortened) == len(candidate_parts):
+            continue
+        candidate_parts = shortened
+        filename = _build(candidate_parts)
+        if len(filename) <= _LOG_FILENAME_COMPONENT_LIMIT:
+            return log_dir / filename
+
+    policy_parts = [part for part in candidate_parts if part.startswith("policy=")]
+    if policy_parts:
+        digest = hashlib.sha1("_".join(parts).encode("utf-8")).hexdigest()[:10]
+        shortened = [part for part in candidate_parts if not part.startswith("policy=")]
+        shortened.append(f"policyid={digest}")
+        candidate_parts = shortened
+        filename = _build(candidate_parts)
+        if len(filename) <= _LOG_FILENAME_COMPONENT_LIMIT:
+            return log_dir / filename
+
+    for prefix in ("days=", "deck=", "learn=", "review=", "costm=", "sprio="):
+        shortened = [part for part in candidate_parts if not part.startswith(prefix)]
+        if len(shortened) == len(candidate_parts):
+            continue
+        candidate_parts = shortened
+        filename = _build(candidate_parts)
+        if len(filename) <= _LOG_FILENAME_COMPONENT_LIMIT:
+            return log_dir / filename
+
+    raise ValueError(
+        "Simulation log filename exceeds the filesystem component limit after "
+        "shortening non-filter fields."
+    )
+
+
 def plot_simulation(stats, args: argparse.Namespace) -> None:
     days = list(range(len(stats.daily_reviews)))
 
@@ -863,7 +910,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             f"seed={args.seed}",
         ]
     )
-    filename = args.log_dir / f"log_{'_'.join(parts)}.jsonl"
+    filename = _simulation_log_filename(args.log_dir, parts)
     meta = {
         "engine": args.engine,
         "days": args.days,
