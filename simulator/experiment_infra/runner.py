@@ -52,6 +52,7 @@ SUPPORTED_RUNNER_STAGES = {
 }
 
 COMMAND_TIMEOUT_EXIT_CODE = 124
+RUN_ID_SCOPED_SWEEP_SCHEDULERS = {"sa_fsrs6", "sa_fsrs6_dr"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -4579,6 +4580,7 @@ def _run_configured_batched_retention_sweep(
         matched_logs = _filter_batched_retention_lane_logs(
             log_paths=matched_logs,
             config=config,
+            run_id=run_id,
             lane=lane,
         )
         if not matched_logs:
@@ -4652,6 +4654,7 @@ def _run_configured_batched_retention_sweep(
 def _batched_retention_lane_filename_filter(
     *,
     config: ExperimentConfig,
+    run_id: str | None,
     lane: Any,
 ) -> LogFilenameFilter:
     short_term = "on" if config.simulation.short_term_source else "off"
@@ -4667,6 +4670,10 @@ def _batched_retention_lane_filename_filter(
         engine="batched",
         short_term=short_term,
         short_term_source=short_term_source,
+        seed=config.seed,
+        run_id=run_id
+        if lane.scheduler_name in RUN_ID_SCOPED_SWEEP_SCHEDULERS
+        else None,
         start_retention=float(lane.desired_retention)
         if lane.desired_retention is not None
         else None,
@@ -4682,10 +4689,12 @@ def _filter_batched_retention_lane_logs(
     *,
     log_paths: Sequence[Path],
     config: ExperimentConfig,
+    run_id: str | None,
     lane: Any,
 ) -> list[Path]:
     filename_filter = _batched_retention_lane_filename_filter(
         config=config,
+        run_id=run_id,
         lane=lane,
     )
     return [path for path in log_paths if filename_filter.matches(path.name)]

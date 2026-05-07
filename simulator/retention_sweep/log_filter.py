@@ -12,6 +12,8 @@ class LogFilenameFilter:
     engine: str = "any"
     short_term: str = "any"
     short_term_source: str = "any"
+    seed: int | None = None
+    run_id: str | None = None
     start_retention: float | None = None
     end_retention: float | None = None
     priority: str = "any"
@@ -25,6 +27,10 @@ class LogFilenameFilter:
         if self.engine != "any" and f"engine={self.engine}" not in name:
             return False
         if self.priority != "any" and f"prio={self.priority}" not in name:
+            return False
+        if self.seed is not None and f"seed={self.seed}" not in name:
+            return False
+        if self.run_id is not None and f"run={self.run_id}" not in name:
             return False
 
         if self.short_term == "on":

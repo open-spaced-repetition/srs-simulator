@@ -44,6 +44,11 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[
         default=None,
         help="Formal experiment run root, used only for recorded command context.",
     )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Run id passed to build_pareto.py for run-scoped scheduler filtering.",
+    )
     add_user_range_args(parser)
     parser.add_argument(
         "--env",
@@ -74,6 +79,12 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[
         choices=["event", "vectorized", "batched", "any"],
         default="any",
         help="Engine filter passed to build_pareto.py.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Seed filter passed to build_pareto.py.",
     )
     parser.add_argument(
         "--log-dir",
@@ -218,6 +229,8 @@ def _merge_config_args(
         cli_args.short_term_source = build_config.short_term_source
     if not has_flag(argv, "--engine"):
         cli_args.engine = build_config.engine
+    if not has_flag(argv, "--seed"):
+        cli_args.seed = experiment.seed
     if not has_flag(argv, "--max-parallel"):
         cli_args.max_parallel = build_config.max_parallel
     if build_config.compare_short_term and not has_flag(argv, "--compare-short-term"):
@@ -252,6 +265,10 @@ def _build_command(
         cmd.extend(["--short-term-source", args.short_term_source])
     if args.engine != "any":
         cmd.extend(["--engine", args.engine])
+    if args.seed is not None:
+        cmd.extend(["--seed", str(args.seed)])
+    if args.run_id is not None:
+        cmd.extend(["--run-id", args.run_id])
     if args.compare_short_term:
         cmd.append("--compare-short-term")
     if args.compare_engine:
@@ -310,6 +327,8 @@ def _run_command(
 
 def main() -> int:
     args, extra_args = parse_args()
+    if args.run_id is None and args.run_root is not None:
+        args.run_id = args.run_root.name
     if args.start_user < 1 or args.end_user < args.start_user:
         raise ValueError("Invalid user range.")
 

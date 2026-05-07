@@ -22,6 +22,7 @@ from simulator.scheduler_spec import (
 from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 
+RUN_ID_SCOPED_SCHEDULERS = {"sa_fsrs6", "sa_fsrs6_dr"}
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
     re.IGNORECASE,
@@ -96,6 +97,20 @@ def parse_args() -> argparse.Namespace:
         choices=["event", "vectorized", "batched", "any"],
         default="any",
         help="Filter logs by simulation engine.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Filter logs by metadata seed and seed token in filenames.",
+    )
+    parser.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Filter run-scoped scheduler logs by run_id while keeping baseline "
+            "scheduler logs selected by the other filters."
+        ),
     )
     parser.add_argument(
         "--compare-fuzz",
@@ -394,9 +409,16 @@ def _iter_log_entries(
     short_term_filter: Optional[bool],
     short_term_source_filter: Optional[str],
     engine_filter: Optional[str],
+    seed_filter: Optional[int],
+    run_id_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
     user_id_filter: Optional[int] = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
+    only_scheduler = (
+        next(iter(scheduler_filter))
+        if scheduler_filter is not None and len(scheduler_filter) == 1
+        else None
+    )
     filename_filter = LogFilenameFilter(
         envs=[environment],
         scheds=sorted(scheduler_filter) if scheduler_filter else [],
@@ -406,6 +428,8 @@ def _iter_log_entries(
             short_term_source_filter,
         ),
         short_term_source=short_term_source_filter or "any",
+        seed=seed_filter,
+        run_id=run_id_filter if only_scheduler in RUN_ID_SCOPED_SCHEDULERS else None,
         start_retention=min_retention,
         end_retention=max_retention,
     )
@@ -423,6 +447,22 @@ def _iter_log_entries(
         if not isinstance(scheduler, str):
             continue
         if scheduler_filter and scheduler not in scheduler_filter:
+            continue
+        if seed_filter is not None:
+            raw_seed = meta.get("seed")
+            if raw_seed is None:
+                continue
+            try:
+                actual_seed = int(raw_seed)
+            except (TypeError, ValueError):
+                continue
+            if actual_seed != seed_filter:
+                continue
+        if (
+            run_id_filter is not None
+            and scheduler in RUN_ID_SCOPED_SCHEDULERS
+            and meta.get("run_id") != run_id_filter
+        ):
             continue
 
         user_id = meta.get("user_id")
@@ -601,6 +641,8 @@ def _build_results(
     short_term_filter: Optional[bool],
     short_term_source_filter: Optional[str],
     engine_filter: Optional[str],
+    seed_filter: Optional[int] = None,
+    run_id_filter: Optional[str] = None,
     fixed_interval_filter: Optional[Sequence[float]] = None,
     title_prefix: str | None = None,
     dedupe: bool = True,
@@ -626,6 +668,8 @@ def _build_results(
         short_term_filter,
         short_term_source_filter,
         engine_filter,
+        seed_filter,
+        run_id_filter,
         fixed_interval_filter,
         user_id_filter,
     ):
@@ -1142,6 +1186,8 @@ def main() -> None:
                                 short_term_value,
                                 short_term_source_filter,
                                 engine_value,
+                                args.seed,
+                                args.run_id,
                                 title_prefix=None,
                                 dedupe_fuzz=args.compare_fuzz,
                                 dedupe_short_term=args.compare_short_term,
@@ -1214,6 +1260,8 @@ def main() -> None:
                             short_term_value,
                             short_term_source_filter,
                             engine_value,
+                            args.seed,
+                            args.run_id,
                             fixed_interval_filter=interval_filter,
                             title_prefix=None,
                             dedupe_fuzz=args.compare_fuzz,
@@ -1274,6 +1322,8 @@ def main() -> None:
                             short_term_value,
                             short_term_source_filter,
                             engine_value,
+                            args.seed,
+                            args.run_id,
                             title_prefix=None,
                             dedupe=False,
                             user_id_filter=args.user_id,
