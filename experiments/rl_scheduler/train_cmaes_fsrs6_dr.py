@@ -57,23 +57,24 @@ class CMAESSettings:
         coefficient_min: float,
         coefficient_max: float,
     ) -> CMAESSettings:
-        name = _str(raw.get("name", cls.name), "training.optimizer.name")
+        defaults = cls()
+        name = _str(raw.get("name", defaults.name), "training.optimizer.name")
         if name != "cma_es":
             raise ValueError("training.optimizer.name must be 'cma_es'.")
         return cls(
             name=name,
             population_size=_int(
-                raw.get("population_size", cls.population_size),
+                raw.get("population_size", defaults.population_size),
                 "training.optimizer.population_size",
                 2,
             ),
             generations=_int(
-                raw.get("generations", cls.generations),
+                raw.get("generations", defaults.generations),
                 "training.optimizer.generations",
                 1,
             ),
             sigma0=_float(
-                raw.get("sigma0", cls.sigma0),
+                raw.get("sigma0", defaults.sigma0),
                 "training.optimizer.sigma0",
                 0.0,
             ),

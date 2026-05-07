@@ -150,7 +150,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
                 "lambda_grid = [0.0, 0.25, 0.5]\n\n"
                 "[training.batch]\n"
                 "enabled = true\n"
-                'trainer = "sa_fsrs6_dr"\n'
+                'trainer = "cmaes_fsrs6"\n'
                 "batch_size = 8\n"
                 "max_lanes_per_batch = 1024"
             ),
@@ -162,7 +162,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
             config = ExperimentConfig.from_toml(path)
 
         self.assertTrue(config.training_batch.enabled)
-        self.assertEqual(config.training_batch.trainer, "sa_fsrs6_dr")
+        self.assertEqual(config.training_batch.trainer, "cmaes_fsrs6")
         self.assertEqual(config.training_batch.batch_size, 8)
         self.assertEqual(config.training_batch.max_lanes_per_batch, 1024)
         self.assertTrue(config.to_dict()["training"]["batch"]["enabled"])

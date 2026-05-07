@@ -9,8 +9,14 @@ from typing import Any, Sequence
 from simulator.math.fsrs import Bounds
 
 
-FEATURE_VERSION = "sa_fsrs6_log_poly_v1"
+FEATURE_VERSION_LOG_POLY = "sa_fsrs6_log_poly_v1"
+FEATURE_VERSION_LOG_LINEAR = "sa_fsrs6_log_linear_v1"
+FEATURE_VERSION = FEATURE_VERSION_LOG_POLY
 FEATURE_COUNT = 6
+FEATURE_COUNTS = {
+    FEATURE_VERSION_LOG_POLY: 6,
+    FEATURE_VERSION_LOG_LINEAR: 3,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,15 +45,13 @@ class SAFSRS6Policy:
             raise ValueError("bounds must be an object when provided.")
         retention_min = _float(raw.get("retention_min", 0.70), "retention_min")
         retention_max = _float(raw.get("retention_max", 0.98), "retention_max")
-        title = raw.get("title", "SA FSRS-6 log polynomial")
+        feature_version = raw.get("feature_version", FEATURE_VERSION)
+        if not isinstance(feature_version, str):
+            raise ValueError("feature_version must be a string.")
+        _feature_count(feature_version)
+        title = raw.get("title", _default_title(feature_version))
         if not isinstance(title, str) or not title.strip():
             raise ValueError("title must be a non-empty string.")
-        feature_version = raw.get("feature_version", FEATURE_VERSION)
-        if feature_version != FEATURE_VERSION:
-            raise ValueError(
-                f"Unsupported SA FSRS-6 feature_version {feature_version!r}; "
-                f"expected {FEATURE_VERSION!r}."
-            )
         baseline = _float(
             raw.get("baseline_desired_retention", 0.90),
             "baseline_desired_retention",
@@ -64,6 +68,7 @@ class SAFSRS6Policy:
             ),
             title=title.strip(),
             baseline_desired_retention=baseline,
+            feature_version=feature_version,
             metadata=raw,
         )
 
@@ -75,28 +80,39 @@ class SAFSRS6Policy:
         retention_min: float = 0.70,
         retention_max: float = 0.98,
         bounds: Bounds = Bounds(),
+        feature_version: str = FEATURE_VERSION,
     ) -> SAFSRS6Policy:
         ratio = (desired_retention - retention_min) / (retention_max - retention_min)
         ratio = min(1.0 - 1e-9, max(1e-9, ratio))
-        coeffs = [0.0 for _ in range(FEATURE_COUNT)]
+        coeffs = [0.0 for _ in range(_feature_count(feature_version))]
         coeffs[0] = math.log(ratio / (1.0 - ratio))
         return cls(
             coefficients=tuple(coeffs),
             retention_min=retention_min,
             retention_max=retention_max,
             bounds=bounds,
+            title=_default_title(feature_version),
             baseline_desired_retention=desired_retention,
+            feature_version=feature_version,
         )
 
     def __post_init__(self) -> None:
-        if len(self.coefficients) != FEATURE_COUNT:
-            raise ValueError(f"SA FSRS-6 policy expects {FEATURE_COUNT} coefficients.")
+        expected_count = _feature_count(self.feature_version)
+        if len(self.coefficients) != expected_count:
+            raise ValueError(
+                f"SA FSRS-6 policy expects {expected_count} coefficients for "
+                f"{self.feature_version!r}."
+            )
         if not (0.0 < self.retention_min < self.retention_max < 1.0):
             raise ValueError("retention_min/max must satisfy 0 < min < max < 1.")
         if self.bounds.s_min <= 0 or self.bounds.s_max <= self.bounds.s_min:
             raise ValueError("bounds must satisfy 0 < s_min < s_max.")
         if self.bounds.d_max <= self.bounds.d_min:
             raise ValueError("bounds must satisfy d_min < d_max.")
+
+    @property
+    def feature_count(self) -> int:
+        return _feature_count(self.feature_version)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -124,7 +140,12 @@ class SAFSRS6Policy:
         )
 
     def evaluate(self, stability: float, difficulty: float) -> float:
-        features = log_poly_features(stability, difficulty, self.bounds)
+        features = policy_features(
+            stability,
+            difficulty,
+            self.bounds,
+            feature_version=self.feature_version,
+        )
         logit = sum(
             coef * feature for coef, feature in zip(self.coefficients, features)
         )
@@ -138,6 +159,43 @@ def log_poly_features(
     difficulty: float,
     bounds: Bounds = Bounds(),
 ) -> tuple[float, float, float, float, float, float]:
+    x_s, x_d = _normalized_inputs(stability, difficulty, bounds)
+    return (1.0, x_s, x_d, x_s * x_d, x_s * x_s, x_d * x_d)
+
+
+def log_linear_features(
+    stability: float,
+    difficulty: float,
+    bounds: Bounds = Bounds(),
+) -> tuple[float, float, float]:
+    x_s, x_d = _normalized_inputs(stability, difficulty, bounds)
+    return (1.0, x_s, x_d)
+
+
+def policy_features(
+    stability: float,
+    difficulty: float,
+    bounds: Bounds = Bounds(),
+    *,
+    feature_version: str = FEATURE_VERSION,
+) -> tuple[float, ...]:
+    if feature_version == FEATURE_VERSION_LOG_POLY:
+        return log_poly_features(stability, difficulty, bounds)
+    if feature_version == FEATURE_VERSION_LOG_LINEAR:
+        return log_linear_features(stability, difficulty, bounds)
+    _feature_count(feature_version)
+    raise AssertionError("unreachable")
+
+
+def feature_count(feature_version: str = FEATURE_VERSION) -> int:
+    return _feature_count(feature_version)
+
+
+def _normalized_inputs(
+    stability: float,
+    difficulty: float,
+    bounds: Bounds,
+) -> tuple[float, float]:
     s = min(bounds.s_max, max(bounds.s_min, float(stability)))
     d = min(bounds.d_max, max(bounds.d_min, float(difficulty)))
     log_s_min = math.log(bounds.s_min)
@@ -146,7 +204,25 @@ def log_poly_features(
     x_d = (d - bounds.d_min) / (bounds.d_max - bounds.d_min)
     x_s = min(1.0, max(0.0, x_s))
     x_d = min(1.0, max(0.0, x_d))
-    return (1.0, x_s, x_d, x_s * x_d, x_s * x_s, x_d * x_d)
+    return x_s, x_d
+
+
+def _feature_count(feature_version: str) -> int:
+    try:
+        return FEATURE_COUNTS[feature_version]
+    except KeyError:
+        supported = ", ".join(sorted(FEATURE_COUNTS))
+        raise ValueError(
+            f"Unsupported SA FSRS-6 feature_version {feature_version!r}; "
+            f"expected one of: {supported}."
+        ) from None
+
+
+def _default_title(feature_version: str) -> str:
+    if feature_version == FEATURE_VERSION_LOG_LINEAR:
+        return "SA FSRS-6 log linear"
+    _feature_count(feature_version)
+    return "SA FSRS-6 log polynomial"
 
 
 def _float(value: Any, field_name: str) -> float:
@@ -171,4 +247,15 @@ def _sigmoid(value: float) -> float:
     return z / (1.0 + z)
 
 
-__all__ = ["FEATURE_COUNT", "FEATURE_VERSION", "SAFSRS6Policy", "log_poly_features"]
+__all__ = [
+    "FEATURE_COUNT",
+    "FEATURE_COUNTS",
+    "FEATURE_VERSION",
+    "FEATURE_VERSION_LOG_LINEAR",
+    "FEATURE_VERSION_LOG_POLY",
+    "SAFSRS6Policy",
+    "feature_count",
+    "log_linear_features",
+    "log_poly_features",
+    "policy_features",
+]

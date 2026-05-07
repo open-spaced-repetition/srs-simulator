@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from simulator.experiment_infra import StageName
+from simulator.experiment_infra import ExperimentConfig, StageName
 from simulator.experiment_infra.runner import (
     TrainCommandJob,
     _build_train_user_batches,
@@ -1707,6 +1707,56 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                 ).read_text()
             )
             self.assertIn("invalid-config", summary["failures"])
+
+    def test_training_batch_resolves_cmaes_fsrs6_and_estimates_lanes(self) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            baseline_root.mkdir()
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                command_template=[
+                    "uv",
+                    "run",
+                    "python",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6.py",
+                ],
+                training_extra=(
+                    "[training.batch]\n"
+                    "enabled = true\n"
+                    'trainer = "auto"\n'
+                    "\n"
+                    "[training.optimizer]\n"
+                    'name = "cma_es"\n'
+                    "population_size = 32\n"
+                    "generations = 10\n"
+                    "sigma0 = 0.8\n"
+                ),
+                training_sa_extra=(
+                    "[training.sa]\n"
+                    'feature_version = "sa_fsrs6_log_linear_v1"\n'
+                    "retention_min = 0.5\n"
+                    "retention_max = 0.98\n"
+                    "baseline_desired_retention = 0.9\n"
+                ),
+            )
+            config = ExperimentConfig.from_toml(config_path)
+
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+
+        self.assertEqual(trainer, "cmaes_fsrs6")
+        self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 32)
 
     def test_train_user_batches_keep_user_jobs_together(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

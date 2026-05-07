@@ -6,11 +6,11 @@ import math
 import subprocess
 import sys
 import time
-import tomllib
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from collections.abc import Sequence
+import tomllib
 from typing import Any, Mapping
 
 import torch
@@ -32,7 +32,7 @@ from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.math.fsrs import Bounds
 from simulator.models.fsrs import FSRS6BatchEnvOps
 from simulator.models.lstm_batch import LSTMBatchedEnvOps, PackedLSTMWeights
-from simulator.sa_fsrs6_policy import FEATURE_VERSION, SAFSRS6Policy
+from simulator.sa_fsrs6_policy import FEATURE_VERSION, SAFSRS6Policy, feature_count
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
@@ -58,62 +58,63 @@ class SASettings:
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> SASettings:
+        defaults = cls()
         return cls(
-            chains=_int(raw.get("chains", cls.chains), "training.sa.chains", 1),
+            chains=_int(raw.get("chains", defaults.chains), "training.sa.chains", 1),
             iterations=_int(
-                raw.get("iterations", cls.iterations),
+                raw.get("iterations", defaults.iterations),
                 "training.sa.iterations",
                 0,
             ),
             initial_temp=_float(
-                raw.get("initial_temp", cls.initial_temp),
+                raw.get("initial_temp", defaults.initial_temp),
                 "training.sa.initial_temp",
                 0.0,
             ),
             final_temp=_float(
-                raw.get("final_temp", cls.final_temp),
+                raw.get("final_temp", defaults.final_temp),
                 "training.sa.final_temp",
                 0.0,
             ),
             proposal_scale=_float(
-                raw.get("proposal_scale", cls.proposal_scale),
+                raw.get("proposal_scale", defaults.proposal_scale),
                 "training.sa.proposal_scale",
                 0.0,
             ),
             coefficient_min=_float(
-                raw.get("coefficient_min", cls.coefficient_min),
+                raw.get("coefficient_min", defaults.coefficient_min),
                 "training.sa.coefficient_min",
             ),
             coefficient_max=_float(
-                raw.get("coefficient_max", cls.coefficient_max),
+                raw.get("coefficient_max", defaults.coefficient_max),
                 "training.sa.coefficient_max",
             ),
             retention_min=_float(
-                raw.get("retention_min", cls.retention_min),
+                raw.get("retention_min", defaults.retention_min),
                 "training.sa.retention_min",
             ),
             retention_max=_float(
-                raw.get("retention_max", cls.retention_max),
+                raw.get("retention_max", defaults.retention_max),
                 "training.sa.retention_max",
             ),
             baseline_desired_retention=_float(
                 raw.get(
                     "baseline_desired_retention",
-                    cls.baseline_desired_retention,
+                    defaults.baseline_desired_retention,
                 ),
                 "training.sa.baseline_desired_retention",
             ),
             torch_device=_str(
-                raw.get("torch_device", cls.torch_device),
+                raw.get("torch_device", defaults.torch_device),
                 "training.sa.torch_device",
             ),
             short_term_threshold=_float(
-                raw.get("short_term_threshold", cls.short_term_threshold),
+                raw.get("short_term_threshold", defaults.short_term_threshold),
                 "training.sa.short_term_threshold",
                 0.0,
             ),
             short_term_loops_limit=_int(
-                raw.get("short_term_loops_limit", cls.short_term_loops_limit),
+                raw.get("short_term_loops_limit", defaults.short_term_loops_limit),
                 "training.sa.short_term_loops_limit",
                 0,
             ),
@@ -228,9 +229,11 @@ def main() -> int:
         )
         settings.__post_init__()
     raw_training_sa = _read_training_sa(args.config)
+    policy_feature_version = _policy_feature_version(raw_training_sa)
     progress.write(
         "config_loaded",
         settings=asdict(settings),
+        feature_version=policy_feature_version,
         simulation=config.simulation.to_dict(),
         seed=config.seed,
     )
@@ -303,6 +306,7 @@ def main() -> int:
         bundle=train_bundle,
         lambda_value=args.lambda_value,
         baseline=baseline_metrics,
+        feature_version=policy_feature_version,
         progress=progress,
     )
     progress.write(
@@ -326,6 +330,7 @@ def main() -> int:
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         baseline_desired_retention=settings.baseline_desired_retention,
+        feature_version=policy_feature_version,
         title=(
             f"sa_fsrs6_u{args.user_id}_dr_"
             f"{settings.baseline_desired_retention:.2f}_lambda_{args.lambda_value:g}"
@@ -367,7 +372,7 @@ def main() -> int:
         "validation_user_ids": list(config.users.validation),
         "seed": config.seed,
         "policy_path": "policy.json",
-        "feature_version": FEATURE_VERSION,
+        "feature_version": policy_feature_version,
         "action_space": "sd_retention_function",
         "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
         "code_commit": _git_commit(),
@@ -562,6 +567,7 @@ def _anneal(
     bundle: SimulationBundle,
     lambda_value: float,
     baseline: CandidateMetrics,
+    feature_version: str,
     progress: TrainingProgress,
 ) -> tuple[torch.Tensor, CandidateMetrics, list[dict[str, float]]]:
     device = bundle.device
@@ -571,6 +577,7 @@ def _anneal(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
+        feature_version=feature_version,
     )
     current = torch.tensor(
         base_policy.coefficients,
@@ -593,6 +600,7 @@ def _anneal(
         settings=settings,
         bundle=bundle,
         coefficients=current,
+        feature_version=feature_version,
         seed=config.seed,
     )
     current_scores = torch.tensor(
@@ -634,6 +642,7 @@ def _anneal(
             settings=settings,
             bundle=bundle,
             coefficients=proposal,
+            feature_version=feature_version,
             seed=config.seed,
         )
         proposal_scores = torch.tensor(
@@ -700,12 +709,14 @@ def _evaluate_sa_candidates(
     settings: SASettings,
     bundle: SimulationBundle,
     coefficients: torch.Tensor,
+    feature_version: str = FEATURE_VERSION,
     seed: int,
 ) -> list[CandidateMetrics]:
     template = SAFSRS6Policy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
+        feature_version=feature_version,
     )
     sched_ops = SAFSRS6BatchSchedulerOps(
         weights=bundle.scheduler_weights,
@@ -771,10 +782,21 @@ def _score(
         metrics.memorized_per_minute,
         baseline.memorized_per_minute,
     )
-    score = (1.0 - lambda_value) * rel_mem + lambda_value * rel_eff
-    if rel_mem <= 0.0 or rel_eff <= 0.0:
-        score -= 10.0 + 10.0 * abs(min(rel_mem, rel_eff, 0.0))
-    return float(score)
+    return _score_from_relative_gains(rel_mem, rel_eff, lambda_value)
+
+
+def _score_from_relative_gains(
+    relative_memorized_gain: float,
+    relative_efficiency_gain: float,
+    lambda_value: float,
+) -> float:
+    if relative_memorized_gain > 0.0 and relative_efficiency_gain > 0.0:
+        return float(
+            (1.0 - lambda_value) * relative_memorized_gain
+            + lambda_value * relative_efficiency_gain
+        )
+    violation = max(0.0, -relative_memorized_gain) + max(0.0, -relative_efficiency_gain)
+    return -float(violation)
 
 
 def _relative_gain(value: float, baseline: float) -> float:
@@ -822,6 +844,14 @@ def _read_training_sa(config_path: Path) -> Mapping[str, Any]:
         return {}
     sa = training.get("sa", {})
     return sa if isinstance(sa, Mapping) else {}
+
+
+def _policy_feature_version(raw_training_sa: Mapping[str, Any]) -> str:
+    value = raw_training_sa.get("feature_version", FEATURE_VERSION)
+    if not isinstance(value, str):
+        raise ValueError("training.sa.feature_version must be a string.")
+    feature_count(value)
+    return value
 
 
 def _artifact_id(

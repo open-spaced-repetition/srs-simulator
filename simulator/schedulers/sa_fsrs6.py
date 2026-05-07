@@ -143,6 +143,7 @@ class SAFSRS6VectorizedSchedulerOps:
         )
         self._bounds = scheduler.params.bounds
         self._policy = scheduler.policy
+        self._feature_count = scheduler.policy.feature_count
         self._coefficients = torch.tensor(
             self._policy.coefficients, device=device, dtype=dtype
         )
@@ -284,6 +285,13 @@ class SAFSRS6VectorizedSchedulerOps:
             self._coefficients[0]
             + self._coefficients[1] * s_norm
             + self._coefficients[2] * d_norm
+        )
+        if self._feature_count == 3:
+            return self._retention_min + (
+                self._retention_max - self._retention_min
+            ) * self._torch.sigmoid(logit)
+        logit = (
+            logit
             + self._coefficients[3] * s_norm * d_norm
             + self._coefficients[4] * s_norm * s_norm
             + self._coefficients[5] * d_norm * d_norm
@@ -336,15 +344,18 @@ class SAFSRS6BatchSchedulerOps:
         self._weights = weights.to(device=device, dtype=dtype)
         self._bounds = bounds
         self._policy = policy
+        self._feature_count = policy.feature_count
         if coefficients is None:
             self._coefficients = torch.tensor(
                 policy.coefficients, device=device, dtype=dtype
             )
             self._per_user_coefficients = False
         else:
-            if coefficients.ndim != 2 or coefficients.shape != (weights.shape[0], 6):
+            expected_shape = (weights.shape[0], self._feature_count)
+            if coefficients.ndim != 2 or coefficients.shape != expected_shape:
                 raise ValueError(
-                    "SA FSRS-6 batch coefficients must have shape (users, 6)."
+                    "SA FSRS-6 batch coefficients must have shape "
+                    f"(users, {self._feature_count})."
                 )
             self._coefficients = coefficients.to(device=device, dtype=dtype)
             self._per_user_coefficients = True
@@ -508,19 +519,27 @@ class SAFSRS6BatchSchedulerOps:
                 coefficients[:, 0]
                 + coefficients[:, 1] * s_norm
                 + coefficients[:, 2] * d_norm
-                + coefficients[:, 3] * s_norm * d_norm
-                + coefficients[:, 4] * s_norm * s_norm
-                + coefficients[:, 5] * d_norm * d_norm
             )
+            if self._feature_count != 3:
+                logit = (
+                    logit
+                    + coefficients[:, 3] * s_norm * d_norm
+                    + coefficients[:, 4] * s_norm * s_norm
+                    + coefficients[:, 5] * d_norm * d_norm
+                )
         else:
             logit = (
                 self._coefficients[0]
                 + self._coefficients[1] * s_norm
                 + self._coefficients[2] * d_norm
-                + self._coefficients[3] * s_norm * d_norm
-                + self._coefficients[4] * s_norm * s_norm
-                + self._coefficients[5] * d_norm * d_norm
             )
+            if self._feature_count != 3:
+                logit = (
+                    logit
+                    + self._coefficients[3] * s_norm * d_norm
+                    + self._coefficients[4] * s_norm * s_norm
+                    + self._coefficients[5] * d_norm * d_norm
+                )
         return self._retention_min + (
             self._retention_max - self._retention_min
         ) * self._torch.sigmoid(logit)

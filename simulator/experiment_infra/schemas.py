@@ -567,12 +567,13 @@ class TrainingBatchConfig:
         if self.trainer not in {
             "auto",
             "sa_fsrs6",
+            "cmaes_fsrs6",
             "sa_fsrs6_dr_grid",
             "sa_fsrs6_dr",
             "cmaes_fsrs6_dr",
         }:
             raise ValueError(
-                "training.batch.trainer must be auto, sa_fsrs6, "
+                "training.batch.trainer must be auto, sa_fsrs6, cmaes_fsrs6, "
                 "sa_fsrs6_dr_grid, sa_fsrs6_dr, or cmaes_fsrs6_dr."
             )
 

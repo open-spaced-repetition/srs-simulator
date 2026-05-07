@@ -23,6 +23,8 @@ FSRS-6 state update to obtain `S` and `D`.
   retention grid inside one process.
 - `train_sa_fsrs6_dr.py`: DR-conditioned SA FSRS-6 trainer that learns one
   `(S,D,DR)` logit-adjustment policy per user/lambda.
+- `train_cmaes_fsrs6.py`: CMA-ES FSRS-6 trainer for ordinary `sa_fsrs6`
+  policies over `S,D`.
 - `train_cmaes_fsrs6_dr.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
   full-covariance CMA-ES over the same low-dimensional policy coefficients.
 - `train-overfit` can run these trainers through `[training.batch]` so users are
@@ -165,6 +167,9 @@ Representative profiles:
   for the DR-conditioned `sa_fsrs6_dr` scheduler.
 - `configs/sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml`: the same workflow
   using the simplified 4-parameter `sa_fsrs6_dr_log_linear_v1` feature version.
+- `configs/cmaes_fsrs6_linear_batch_sweep_users_1_8.toml`: the ordinary
+  `sa_fsrs6` scheduler trained with CMA-ES using one simplified 3-parameter
+  `sa_fsrs6_log_linear_v1` policy per user and baseline desired retention.
 - `configs/cmaes_fsrs6_dr_linear_seed42_users_1_8.toml`: the same
   DR-conditioned scheduler artifact and evaluation workflow, trained with
   CMA-ES instead of simulated annealing. Seed 43/44 companion profiles are
@@ -178,7 +183,13 @@ Training target:
 - DR grid: typically `0.50..0.98`.
 - Overfit gate: on the training user, both memorized average and memorized per
   minute must improve relative to the corresponding baseline.
+- Constraint handling: candidates with non-positive memorized-average or
+  memorized-per-minute gain are ranked below every candidate satisfying both
+  gate constraints.
 
+For ordinary `sa_fsrs6`, the default policy uses 6 log-polynomial features over
+normalized `S,D`; set `training.sa.feature_version = "sa_fsrs6_log_linear_v1"`
+to train the simplified 3-parameter linear variant.
 For `sa_fsrs6_dr`, the action is a logit-space adjustment around the input DR.
 The overfit gate uses mean relative memorized-average and memorized-per-minute
 gains across the whole DR grid. The default DR-conditioned policy uses 10 log

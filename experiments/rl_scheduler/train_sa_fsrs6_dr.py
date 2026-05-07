@@ -26,6 +26,7 @@ from experiments.rl_scheduler.train_sa_fsrs6 import (
     _metrics_from_stats,
     _read_training_sa,
     _relative_gain,
+    _score_from_relative_gains,
     _temperature,
     _write_json,
 )
@@ -612,21 +613,6 @@ def _evaluate_sa_dr_chains(
             )
         )
     return evaluations
-
-
-def _score_from_relative_gains(
-    relative_memorized_gain: float,
-    relative_efficiency_gain: float,
-    lambda_value: float,
-) -> float:
-    score = (
-        1.0 - lambda_value
-    ) * relative_memorized_gain + lambda_value * relative_efficiency_gain
-    if relative_memorized_gain <= 0.0 or relative_efficiency_gain <= 0.0:
-        score -= 10.0 + 10.0 * abs(
-            min(relative_memorized_gain, relative_efficiency_gain, 0.0)
-        )
-    return float(score)
 
 
 def _write_artifact(

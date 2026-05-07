@@ -19,6 +19,7 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 
 SUPPORTED_TRAINERS = {
     "sa_fsrs6",
+    "cmaes_fsrs6",
     "sa_fsrs6_dr_grid",
     "sa_fsrs6_dr",
     "cmaes_fsrs6_dr",
@@ -66,6 +67,8 @@ def resolve_in_process_trainer(
             raise ValueError(f"Unsupported in-process trainer: {configured_trainer}")
         return configured_trainer
     script_names = {Path(item).name for item in command_template}
+    if "train_cmaes_fsrs6.py" in script_names:
+        return "cmaes_fsrs6"
     if "train_cmaes_fsrs6_dr.py" in script_names:
         return "cmaes_fsrs6_dr"
     if "train_sa_fsrs6_dr_grid.py" in script_names:
@@ -81,8 +84,14 @@ def resolve_in_process_trainer(
 
 
 def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
+    from experiments.rl_scheduler.train_cmaes_fsrs6 import (
+        optimizer_settings_from_mapping,
+    )
     from experiments.rl_scheduler.train_cmaes_fsrs6_dr import CMAESSettings
     from experiments.rl_scheduler.train_sa_fsrs6 import SASettings, _read_training_sa
+    from experiments.rl_scheduler.train_sa_fsrs6 import (
+        _policy_feature_version as _sa_policy_feature_version,
+    )
     from experiments.rl_scheduler.train_sa_fsrs6_dr import (
         _baseline_dr_values,
         _dr_batch_size,
@@ -95,10 +104,18 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         return max(1, settings.chains)
 
     raw_training_sa: dict[str, Any]
-    if config.config_path is not None:
+    if config.config_path is not None and config.config_path.exists():
         raw_training_sa = dict(_read_training_sa(config.config_path))
     else:
         raw_training_sa = dict(config.training_sa)
+    if trainer == "cmaes_fsrs6":
+        feature_version = _sa_policy_feature_version(raw_training_sa)
+        optimizer = optimizer_settings_from_mapping(
+            config.training_optimizer,
+            settings=settings,
+            feature_version=feature_version,
+        )
+        return max(1, optimizer.population_size)
     baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
     dr_batch_size = _dr_batch_size(raw_training_sa, len(baseline_dr_values))
     dr_lanes = min(len(baseline_dr_values), dr_batch_size)
@@ -128,6 +145,10 @@ def run_in_process_train_batch(
         return []
     if trainer == "sa_fsrs6":
         return _run_sa_fsrs6_jobs(
+            jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
+        )
+    if trainer == "cmaes_fsrs6":
+        return _run_cmaes_fsrs6_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     if trainer == "sa_fsrs6_dr_grid":
@@ -269,6 +290,7 @@ def _run_sa_fsrs6_jobs(
         SASettings,
         _clamp_coefficients,
         _metrics_from_stats,
+        _policy_feature_version,
         _relative_gain,
         _score,
         _temperature,
@@ -280,6 +302,7 @@ def _run_sa_fsrs6_jobs(
     ctx = _common_context(
         config=config, config_path=config_path, repo_root=repo_root, settings=settings
     )
+    feature_version = _policy_feature_version(ctx.raw_training_sa)
     progresses = _progress_for_jobs(jobs=jobs, config_path=config_path)
     for job, progress in zip(jobs, progresses, strict=True):
         effective_settings = replace(
@@ -288,6 +311,7 @@ def _run_sa_fsrs6_jobs(
         progress.write(
             "config_loaded",
             settings=asdict(effective_settings),
+            feature_version=feature_version,
             simulation=config.simulation.to_dict(),
             seed=config.seed,
         )
@@ -349,6 +373,7 @@ def _run_sa_fsrs6_jobs(
             desired_retention=job.baseline_desired_retention,
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
+            feature_version=feature_version,
         )
         current = torch.tensor(
             base_policy.coefficients,
@@ -377,6 +402,7 @@ def _run_sa_fsrs6_jobs(
             desired_retention=settings.baseline_desired_retention,
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
+            feature_version=feature_version,
         )
         sched_ops = SAFSRS6BatchSchedulerOps(
             weights=train_bundle.scheduler_weights,
@@ -572,6 +598,7 @@ def _run_sa_fsrs6_jobs(
             baseline=baselines[job_index],
             best=best_metrics[job_index],
             best_coefficients=best_coefficients[job_index].detach().cpu(),
+            feature_version=feature_version,
             history=histories[job_index],
         )
         rel_mem = _relative_gain(
@@ -614,6 +641,7 @@ def _write_sa_fsrs6_artifact(
     baseline: Any,
     best: Any,
     best_coefficients: torch.Tensor,
+    feature_version: str,
     history: list[dict[str, float]],
 ) -> Path:
     from experiments.rl_scheduler.train_sa_fsrs6 import (
@@ -622,7 +650,7 @@ def _write_sa_fsrs6_artifact(
         _relative_gain,
         _write_json,
     )
-    from simulator.sa_fsrs6_policy import FEATURE_VERSION, SAFSRS6Policy
+    from simulator.sa_fsrs6_policy import SAFSRS6Policy
 
     output_dir.mkdir(parents=True, exist_ok=True)
     rel_mem = _relative_gain(best.memorized_average, baseline.memorized_average)
@@ -633,6 +661,7 @@ def _write_sa_fsrs6_artifact(
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         baseline_desired_retention=settings.baseline_desired_retention,
+        feature_version=feature_version,
         title=(
             f"sa_fsrs6_u{user_id}_dr_"
             f"{settings.baseline_desired_retention:.2f}_lambda_{lambda_value:g}"
@@ -654,6 +683,7 @@ def _write_sa_fsrs6_artifact(
             "baseline": asdict(baseline),
             "best": asdict(best),
             "settings": asdict(settings),
+            "feature_version": feature_version,
             "history": history,
         },
     )
@@ -677,7 +707,7 @@ def _write_sa_fsrs6_artifact(
             "validation_user_ids": list(config.users.validation),
             "seed": config.seed,
             "policy_path": "policy.json",
-            "feature_version": FEATURE_VERSION,
+            "feature_version": feature_version,
             "action_space": "sd_retention_function",
             "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "code_commit": _git_commit(),
@@ -692,6 +722,323 @@ def _write_sa_fsrs6_artifact(
         },
     )
     return metadata_path
+
+
+def _run_cmaes_fsrs6_jobs(
+    *,
+    jobs: list[InProcessTrainJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+) -> list[InProcessTrainOutcome]:
+    import cma
+
+    from experiments.rl_scheduler.train_cmaes_fsrs6 import (
+        CMAESFSRS6TrainingResult,
+        optimizer_settings_from_mapping,
+        write_artifact,
+    )
+    from experiments.rl_scheduler.train_cmaes_fsrs6_dr import _optimizer_seed
+    from experiments.rl_scheduler.train_sa_fsrs6 import (
+        SASettings,
+        _metrics_from_stats,
+        _policy_feature_version,
+        _relative_gain,
+        _score,
+    )
+    from simulator.sa_fsrs6_policy import SAFSRS6Policy
+    from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
+
+    settings = SASettings.from_mapping(config.training_sa)
+    ctx = _common_context(
+        config=config, config_path=config_path, repo_root=repo_root, settings=settings
+    )
+    feature_version = _policy_feature_version(ctx.raw_training_sa)
+    effective_settings_by_job = [
+        replace(settings, baseline_desired_retention=job.baseline_desired_retention)
+        for job in jobs
+    ]
+    optimizer_settings_by_job = [
+        optimizer_settings_from_mapping(
+            config.training_optimizer,
+            settings=effective_settings,
+            feature_version=feature_version,
+        )
+        for effective_settings in effective_settings_by_job
+    ]
+    optimizer_settings = optimizer_settings_by_job[0]
+    optimizer_seeds = [
+        _optimizer_seed(
+            config=config,
+            settings=optimizer_settings_by_job[job_index],
+            user_id=job.user_id,
+            lambda_value=job.lambda_value,
+        )
+        for job_index, job in enumerate(jobs)
+    ]
+
+    progresses = _progress_for_jobs(jobs=jobs, config_path=config_path)
+    for progress, effective_settings, optimizer_settings_for_job, seed in zip(
+        progresses,
+        effective_settings_by_job,
+        optimizer_settings_by_job,
+        optimizer_seeds,
+        strict=True,
+    ):
+        progress.write(
+            "config_loaded",
+            settings=asdict(effective_settings),
+            optimizer=optimizer_settings_for_job.to_dict(),
+            optimizer_seed=seed,
+            feature_version=feature_version,
+            simulation=config.simulation.to_dict(),
+            seed=config.seed,
+        )
+        progress.write(
+            "device_resolved", device=ctx.device, torch_device=str(ctx.device)
+        )
+
+    baseline_lane_users = [job.user_id for job in jobs]
+    baseline_bundle = _build_bundle_for_lanes(
+        config=config,
+        settings=settings,
+        lane_user_ids=baseline_lane_users,
+        ctx=ctx,
+    )
+    desired = torch.tensor(
+        [job.baseline_desired_retention for job in jobs],
+        device=baseline_bundle.device,
+        dtype=torch.float32,
+    )
+    baselines = _evaluate_fsrs6_baselines_for_lanes(
+        config=config,
+        settings=settings,
+        bundle=baseline_bundle,
+        desired_retention=desired,
+        seed=config.seed,
+    )
+    for baseline, progress in zip(baselines, progresses, strict=True):
+        progress.write(
+            "baseline_evaluated",
+            device=baseline_bundle.device,
+            effective_lanes=1,
+            metrics=asdict(baseline),
+        )
+
+    train_lane_users = [
+        job.user_id
+        for job in jobs
+        for _candidate in range(optimizer_settings.population_size)
+    ]
+    train_bundle = _build_bundle_for_lanes(
+        config=config,
+        settings=settings,
+        lane_user_ids=train_lane_users,
+        ctx=ctx,
+    )
+    for progress in progresses:
+        progress.write(
+            "train_bundle_built",
+            device=train_bundle.device,
+            effective_lanes=optimizer_settings.population_size,
+            batch_effective_lanes=len(train_lane_users),
+        )
+
+    strategies = []
+    for settings_for_job, seed in zip(
+        optimizer_settings_by_job, optimizer_seeds, strict=True
+    ):
+        strategies.append(
+            cma.CMAEvolutionStrategy(
+                list(settings_for_job.initial_mean),
+                settings_for_job.sigma0,
+                {
+                    "bounds": [
+                        list(settings_for_job.bounds[0]),
+                        list(settings_for_job.bounds[1]),
+                    ],
+                    "popsize": settings_for_job.population_size,
+                    "seed": seed,
+                    "verb_disp": 0,
+                    "verb_log": 0,
+                    "verbose": -9,
+                },
+            )
+        )
+
+    def evaluate(coefficients_by_job: torch.Tensor) -> list[list[Any]]:
+        flat_coefficients = coefficients_by_job.reshape(
+            len(jobs) * optimizer_settings.population_size,
+            coefficients_by_job.shape[-1],
+        )
+        template = SAFSRS6Policy.baseline(
+            desired_retention=settings.baseline_desired_retention,
+            retention_min=settings.retention_min,
+            retention_max=settings.retention_max,
+            feature_version=feature_version,
+        )
+        sched_ops = SAFSRS6BatchSchedulerOps(
+            weights=train_bundle.scheduler_weights,
+            policy=template,
+            coefficients=flat_coefficients,
+            bounds=Bounds(),
+            priority_mode=config.simulation.scheduler_priority,
+            device=train_bundle.device,
+            dtype=torch.float32,
+        )
+        stats = simulate_multiuser(
+            days=config.simulation.days,
+            deck_size=config.simulation.deck,
+            env_ops=train_bundle.env_ops,
+            sched_ops=sched_ops,
+            behavior=train_bundle.behavior,
+            cost_model=train_bundle.cost_model,
+            seed=config.seed,
+            device=train_bundle.device,
+            dtype=torch.float32,
+            fuzz=config.simulation.fuzz,
+            priority_mode=config.simulation.priority,
+            progress=False,
+            short_term_source=train_bundle.short_term_source,
+            learning_steps=train_bundle.learning_steps,
+            relearning_steps=train_bundle.relearning_steps,
+            short_term_threshold=settings.short_term_threshold,
+            short_term_loops_limit=settings.short_term_loops_limit,
+        )
+        metrics = [_metrics_from_stats(item) for item in stats]
+        return [
+            metrics[
+                index * optimizer_settings.population_size : (index + 1)
+                * optimizer_settings.population_size
+            ]
+            for index in range(len(jobs))
+        ]
+
+    best_coefficients: list[torch.Tensor | None] = [None for _job in jobs]
+    best_metrics: list[Any | None] = [None for _job in jobs]
+    best_scores = [float("-inf") for _job in jobs]
+    histories: list[list[dict[str, float]]] = [[] for _job in jobs]
+
+    for generation in range(optimizer_settings.generations):
+        solutions_by_job = []
+        for job_index, strategy in enumerate(strategies):
+            optimizer_settings_for_job = optimizer_settings_by_job[job_index]
+            solutions = [list(map(float, item)) for item in strategy.ask()]
+            if len(solutions) != optimizer_settings_for_job.population_size:
+                raise RuntimeError(
+                    "CMA-ES returned an unexpected population size: "
+                    f"{len(solutions)} != "
+                    f"{optimizer_settings_for_job.population_size}."
+                )
+            if generation == 0:
+                solutions[0] = list(optimizer_settings_for_job.initial_mean)
+            solutions_by_job.append(solutions)
+        coefficients = torch.tensor(
+            solutions_by_job,
+            device=train_bundle.device,
+            dtype=torch.float32,
+        )
+        metrics_by_job = evaluate(coefficients)
+        for job_index, strategy in enumerate(strategies):
+            scores = [
+                _score(metric, baselines[job_index], jobs[job_index].lambda_value)
+                for metric in metrics_by_job[job_index]
+            ]
+            strategy.tell(solutions_by_job[job_index], [-score for score in scores])
+            generation_best_idx = max(range(len(scores)), key=scores.__getitem__)
+            generation_best = metrics_by_job[job_index][generation_best_idx]
+            generation_best_score = float(scores[generation_best_idx])
+            if generation_best_score > best_scores[job_index]:
+                best_scores[job_index] = generation_best_score
+                best_coefficients[job_index] = (
+                    coefficients[job_index, generation_best_idx].detach().clone()
+                )
+                best_metrics[job_index] = generation_best
+            history_entry = {
+                "generation": float(generation),
+                "sigma": float(strategy.sigma),
+                "best_score": float(best_scores[job_index]),
+                "generation_best_score": generation_best_score,
+                "mean_score": float(sum(scores) / max(len(scores), 1)),
+                "generation_best_relative_memorized_gain": _relative_gain(
+                    generation_best.memorized_average,
+                    baselines[job_index].memorized_average,
+                ),
+                "generation_best_relative_efficiency_gain": _relative_gain(
+                    generation_best.memorized_per_minute,
+                    baselines[job_index].memorized_per_minute,
+                ),
+            }
+            histories[job_index].append(history_entry)
+            progresses[job_index].write(
+                "cmaes_generation",
+                device=train_bundle.device,
+                effective_lanes=optimizer_settings.population_size,
+                batch_effective_lanes=len(train_lane_users),
+                **history_entry,
+            )
+
+    outcomes = []
+    for job_index, job in enumerate(jobs):
+        best_coefficients_for_job = best_coefficients[job_index]
+        best = best_metrics[job_index]
+        if best_coefficients_for_job is None or best is None:
+            raise RuntimeError("CMA-ES did not evaluate any candidates.")
+        rel_mem = _relative_gain(
+            best.memorized_average,
+            baselines[job_index].memorized_average,
+        )
+        rel_eff = _relative_gain(
+            best.memorized_per_minute,
+            baselines[job_index].memorized_per_minute,
+        )
+        result = CMAESFSRS6TrainingResult(
+            baseline=baselines[job_index],
+            best=best,
+            best_coefficients=best_coefficients_for_job.detach().cpu(),
+            best_score=best_scores[job_index],
+            history=histories[job_index],
+            passed=rel_mem > 0.0 and rel_eff > 0.0,
+        )
+        progresses[job_index].write(
+            "cmaes_completed",
+            device=train_bundle.device,
+            best_score=result.best_score,
+            best=asdict(result.best),
+            relative_memorized_gain=rel_mem,
+            relative_efficiency_gain=rel_eff,
+            generations=len(result.history),
+        )
+        policy_path, metrics_path, metadata_path = write_artifact(
+            output_dir=job.output_dir,
+            config=config,
+            config_path=config_path,
+            settings=effective_settings_by_job[job_index],
+            user_id=job.user_id,
+            lambda_value=job.lambda_value,
+            training_command_path=job.command_record_path,
+            feature_version=feature_version,
+            result=result,
+            optimizer_settings=optimizer_settings_by_job[job_index],
+            optimizer_seed=optimizer_seeds[job_index],
+        )
+        progresses[job_index].write(
+            "artifacts_written",
+            device=train_bundle.device,
+            passed=result.passed,
+            policy_path=str(policy_path),
+            metrics_path=str(metrics_path),
+            metadata_path=str(metadata_path),
+        )
+        outcomes.append(
+            InProcessTrainOutcome(
+                job=job,
+                passed=result.passed,
+                artifact_paths=(metadata_path,),
+                progress_path=progresses[job_index].path,
+            )
+        )
+    return outcomes
 
 
 def _evaluate_dr_conditioned_batch(

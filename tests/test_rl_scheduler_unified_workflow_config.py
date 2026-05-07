@@ -175,6 +175,39 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             ),
         )
 
+    def test_checked_in_cmaes_sa_linear_config_uses_unified_workflow(self) -> None:
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "cmaes_fsrs6_linear_batch_sweep_users_1_8.toml"
+        )
+
+        self.assertEqual(config.name, "cmaes_fsrs6_linear_batch_sweep_users_1_8")
+        self.assertEqual(
+            config.training_sa["feature_version"],
+            "sa_fsrs6_log_linear_v1",
+        )
+        self.assertEqual(
+            len(config.training_sa["baseline_desired_retention_values"]),
+            25,
+        )
+        self.assertEqual(config.training_optimizer["population_size"], 32)
+        self.assertEqual(config.training_batch.max_lanes_per_batch, 3200)
+        self.assertEqual(config.sweep_batched.schedulers, ("sa_fsrs6",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "sa_fsrs6"))
+        self.assertEqual(
+            config.stages,
+            (
+                StageName.DRY_RUN,
+                StageName.PREFLIGHT,
+                StageName.STAGE_BASELINE,
+                StageName.TRAIN_OVERFIT,
+                StageName.SWEEP,
+                StageName.BUILD_PARETO,
+                StageName.ANALYZE_PARETO,
+            ),
+        )
+
     def test_experiment_config_loads_new_workflow_stages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -74,6 +74,7 @@ uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-users-1-8
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_dr_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-dr-users-1-8
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-dr-linear-users-1-8
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/cmaes_fsrs6_linear_batch_sweep_users_1_8.toml --stage all --run-id cmaes-fsrs6-linear-batch-sweep-users-1-8-v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/cmaes_fsrs6_dr_linear_seed42_users_1_8.toml --stage all --run-id cmaes-fsrs6-dr-linear-users-1-8-v1-seed42
 uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/sa_fsrs6_batch_sweep_users_1_8/sa-fsrs6-users-1-8
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
@@ -108,6 +109,10 @@ logit-space adjustment around the requested desired retention.
 `sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml` uses the same workflow and
 training budget with the simplified 4-parameter
 `sa_fsrs6_dr_log_linear_v1` feature version.
+`cmaes_fsrs6_linear_batch_sweep_users_1_8.toml` trains one simplified
+3-parameter `sa_fsrs6_log_linear_v1` policy per user and baseline desired
+retention with CMA-ES, then evaluates the resulting ordinary `sa_fsrs6`
+schedulers.
 `cmaes_fsrs6_dr_linear_seed42_users_1_8.toml` uses the same scheduler artifact
 and sweep path, but trains the 4-parameter DR-conditioned policy with CMA-ES
 instead of simulated annealing.
@@ -122,7 +127,7 @@ batch_size = 8
 ```
 
 `trainer = "auto"` resolves the built-in trainer from `training.command_template`;
-set an explicit trainer such as `"cmaes_fsrs6_dr"` for command-template-free
+set an explicit trainer such as `"cmaes_fsrs6"` or `"cmaes_fsrs6_dr"` for command-template-free
 in-process runs.
 
 ## Experiments
