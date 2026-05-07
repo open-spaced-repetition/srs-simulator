@@ -6,13 +6,13 @@ name is broad by design: it covers PPO/DQN-style reinforcement learning, FQI,
 CEM, simulated annealing, and other policy-search methods as long as the output
 is a scheduler artifact that can enter the same external evaluation pipeline.
 
-The current implemented research line is SA FSRS-6: simulated annealing learns a
-function `f(S, D) -> desired_retention`, then uses scheduler-side FSRS-6
+The current implemented research lines are SA FSRS-6 and CMA-ES FSRS-6:
+black-box optimizers learn scheduler-side FSRS-6 retention policies, then use
 stability `S` and difficulty `D` to compute the next interval. A core rule is
 that training and evaluation must not read the environment's hidden memory
-state. A learned scheduler must maintain its own scheduler state. For SA
-FSRS-6, that means the scheduler implements its own FSRS-6 state update to
-obtain `S` and `D`.
+state. A learned scheduler must maintain its own scheduler state. For these
+FSRS-6 policy-search schedulers, that means the scheduler implements its own
+FSRS-6 state update to obtain `S` and `D`.
 
 ## Directory Layout
 
@@ -23,6 +23,8 @@ obtain `S` and `D`.
   retention grid inside one process.
 - `train_sa_fsrs6_dr.py`: DR-conditioned SA FSRS-6 trainer that learns one
   `(S,D,DR)` logit-adjustment policy per user/lambda.
+- `train_cmaes_fsrs6_dr.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
+  full-covariance CMA-ES over the same low-dimensional policy coefficients.
 - `plot_sa_fsrs6_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
 - `plot_sa_fsrs6_dr_policy_surfaces.py`: Plotly HTML visualizer for learned
@@ -161,6 +163,10 @@ Representative profiles:
   for the DR-conditioned `sa_fsrs6_dr` scheduler.
 - `configs/sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml`: the same workflow
   using the simplified 4-parameter `sa_fsrs6_dr_log_linear_v1` feature version.
+- `configs/cmaes_fsrs6_dr_linear_seed42_users_1_8.toml`: the same
+  DR-conditioned scheduler artifact and evaluation workflow, trained with
+  CMA-ES instead of simulated annealing. Seed 43/44 companion profiles are
+  used for seed-robustness checks.
 
 Training target:
 
@@ -176,6 +182,9 @@ The overfit gate uses mean relative memorized-average and memorized-per-minute
 gains across the whole DR grid. The default DR-conditioned policy uses 10 log
 polynomial features; set `training.sa.feature_version =
 "sa_fsrs6_dr_log_linear_v1"` to train the 4-parameter linear variant.
+CMA-ES profiles keep the same `[training.sa]` policy/evaluation settings and put
+optimizer-specific settings such as population size, generations, `sigma0`,
+initial mean, and coefficient bounds in `[training.optimizer]`.
 
 Batching model:
 
@@ -251,7 +260,7 @@ Stop conditions:
 
 ## Trainer Integration Contract
 
-New PPO/FQI/CEM/SA variants should emit the same scheduler artifact shape:
+New PPO/FQI/CEM/CMA-ES/SA variants should emit the same scheduler artifact shape:
 
 - `metadata.json`
 - a policy file, such as `policy.json`, or a checkpoint

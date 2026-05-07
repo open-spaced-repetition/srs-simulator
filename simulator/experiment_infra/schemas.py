@@ -747,6 +747,7 @@ class ExperimentConfig:
     performance: PerformanceConfig
     lambda_grid: tuple[float, ...]
     training_sa: Mapping[str, Any] = field(default_factory=dict)
+    training_optimizer: Mapping[str, Any] = field(default_factory=dict)
     train_command_template: tuple[str, ...] = ()
     train_artifact_glob: str = "metadata.json"
     train_max_parallel_commands: int = 1
@@ -815,6 +816,9 @@ class ExperimentConfig:
                 training.get("lambda_grid"), "training.lambda_grid"
             ),
             training_sa=dict(_require_mapping(training.get("sa", {}), "training.sa")),
+            training_optimizer=dict(
+                _require_mapping(training.get("optimizer", {}), "training.optimizer")
+            ),
             train_command_template=_str_tuple(
                 training.get("command_template", []), "training.command_template"
             ),
@@ -895,6 +899,7 @@ class ExperimentConfig:
             "training": {
                 "lambda_grid": list(self.lambda_grid),
                 "sa": dict(self.training_sa),
+                "optimizer": dict(self.training_optimizer),
                 "command_template": list(self.train_command_template),
                 "artifact_metadata_glob": self.train_artifact_glob,
                 "max_parallel_commands": self.train_max_parallel_commands,
