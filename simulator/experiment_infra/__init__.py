@@ -27,6 +27,7 @@ from simulator.experiment_infra.schemas import (
     RunRecord,
     SimulationScope,
     StageName,
+    TrainingBatchConfig,
     UserSplit,
 )
 
@@ -52,6 +53,7 @@ __all__ = [
     "SchedulerCapability",
     "SimulationScope",
     "StageName",
+    "TrainingBatchConfig",
     "UserSplit",
     "get_scheduler_capability",
     "supports_scheduler",

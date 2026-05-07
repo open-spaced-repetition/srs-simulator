@@ -541,6 +541,51 @@ class BatchedSweepStageConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TrainingBatchConfig:
+    enabled: bool = False
+    trainer: str = "auto"
+    batch_size: int | None = None
+    max_lanes_per_batch: int | None = None
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> TrainingBatchConfig:
+        raw = raw or {}
+        return cls(
+            enabled=_require_bool(raw.get("enabled", False), "training.batch.enabled"),
+            trainer=_require_str(raw.get("trainer", "auto"), "training.batch.trainer"),
+            batch_size=_optional_int(
+                raw.get("batch_size"), "training.batch.batch_size", minimum=1
+            ),
+            max_lanes_per_batch=_optional_int(
+                raw.get("max_lanes_per_batch"),
+                "training.batch.max_lanes_per_batch",
+                minimum=1,
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        if self.trainer not in {
+            "auto",
+            "sa_fsrs6",
+            "sa_fsrs6_dr_grid",
+            "sa_fsrs6_dr",
+            "cmaes_fsrs6_dr",
+        }:
+            raise ValueError(
+                "training.batch.trainer must be auto, sa_fsrs6, "
+                "sa_fsrs6_dr_grid, sa_fsrs6_dr, or cmaes_fsrs6_dr."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "trainer": self.trainer,
+            "batch_size": self.batch_size,
+            "max_lanes_per_batch": self.max_lanes_per_batch,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class BuildParetoConfig:
     command_template: tuple[str, ...] = ()
     envs: tuple[str, ...] = ()
@@ -748,6 +793,7 @@ class ExperimentConfig:
     lambda_grid: tuple[float, ...]
     training_sa: Mapping[str, Any] = field(default_factory=dict)
     training_optimizer: Mapping[str, Any] = field(default_factory=dict)
+    training_batch: TrainingBatchConfig = field(default_factory=TrainingBatchConfig)
     train_command_template: tuple[str, ...] = ()
     train_artifact_glob: str = "metadata.json"
     train_max_parallel_commands: int = 1
@@ -818,6 +864,9 @@ class ExperimentConfig:
             training_sa=dict(_require_mapping(training.get("sa", {}), "training.sa")),
             training_optimizer=dict(
                 _require_mapping(training.get("optimizer", {}), "training.optimizer")
+            ),
+            training_batch=TrainingBatchConfig.from_mapping(
+                _require_mapping(training.get("batch", {}), "training.batch")
             ),
             train_command_template=_str_tuple(
                 training.get("command_template", []), "training.command_template"
@@ -900,6 +949,7 @@ class ExperimentConfig:
                 "lambda_grid": list(self.lambda_grid),
                 "sa": dict(self.training_sa),
                 "optimizer": dict(self.training_optimizer),
+                "batch": self.training_batch.to_dict(),
                 "command_template": list(self.train_command_template),
                 "artifact_metadata_glob": self.train_artifact_glob,
                 "max_parallel_commands": self.train_max_parallel_commands,

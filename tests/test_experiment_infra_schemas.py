@@ -89,6 +89,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertEqual(config.performance.timeout_seconds, 120.0)
         self.assertTrue(config.performance.write_performance_summary)
         self.assertFalse(config.train_batch_baseline_desired_retention_values)
+        self.assertFalse(config.training_batch.enabled)
 
     def test_rejects_overlapping_user_splits(self) -> None:
         raw = VALID_CONFIG.replace("validation = [2, 3]", "validation = [1, 3]")
@@ -141,6 +142,47 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertTrue(
             config.to_dict()["training"]["batch_baseline_desired_retention_values"]
         )
+
+    def test_loads_training_batch_config(self) -> None:
+        raw = VALID_CONFIG.replace(
+            "lambda_grid = [0.0, 0.25, 0.5]",
+            (
+                "lambda_grid = [0.0, 0.25, 0.5]\n\n"
+                "[training.batch]\n"
+                "enabled = true\n"
+                'trainer = "sa_fsrs6_dr"\n'
+                "batch_size = 8\n"
+                "max_lanes_per_batch = 1024"
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertTrue(config.training_batch.enabled)
+        self.assertEqual(config.training_batch.trainer, "sa_fsrs6_dr")
+        self.assertEqual(config.training_batch.batch_size, 8)
+        self.assertEqual(config.training_batch.max_lanes_per_batch, 1024)
+        self.assertTrue(config.to_dict()["training"]["batch"]["enabled"])
+
+    def test_rejects_invalid_training_batch_trainer(self) -> None:
+        raw = VALID_CONFIG.replace(
+            "lambda_grid = [0.0, 0.25, 0.5]",
+            (
+                "lambda_grid = [0.0, 0.25, 0.5]\n\n"
+                "[training.batch]\n"
+                "enabled = true\n"
+                'trainer = "external"'
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "training.batch.trainer"):
+                ExperimentConfig.from_toml(path)
 
     def test_loads_batched_sweep_scheduler_artifacts_flag(self) -> None:
         raw = VALID_CONFIG + "\n[sweep]\nbatch_scheduler_artifacts = true\n"

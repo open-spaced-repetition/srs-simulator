@@ -25,6 +25,8 @@ FSRS-6 state update to obtain `S` and `D`.
   `(S,D,DR)` logit-adjustment policy per user/lambda.
 - `train_cmaes_fsrs6_dr.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
   full-covariance CMA-ES over the same low-dimensional policy coefficients.
+- `train-overfit` can run these trainers through `[training.batch]` so users are
+  batched in one process rather than launched as parallel training subprocesses.
 - `plot_sa_fsrs6_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
 - `plot_sa_fsrs6_dr_policy_surfaces.py`: Plotly HTML visualizer for learned

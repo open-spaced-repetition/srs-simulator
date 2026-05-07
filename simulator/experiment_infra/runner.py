@@ -410,11 +410,21 @@ def run_train_overfit(
     command_results: list[dict[str, Any]] = []
     commands_attempted = 0
     commands_succeeded = 0
+    runtime_batch_metrics: dict[str, Any] = {}
     baseline_dr_values = _training_baseline_desired_retention_values(config)
 
-    if not config.train_command_template:
+    if not config.train_command_template and not config.training_batch.enabled:
         failures.append(FailureClass.INVALID_CONFIG)
         notes.append("training.command_template is required for train-overfit.")
+    elif (
+        config.training_batch.enabled
+        and config.training_batch.trainer == "auto"
+        and not config.train_command_template
+    ):
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append(
+            "training.command_template is required for training.batch.trainer = 'auto'."
+        )
     elif not baseline_dr_values:
         failures.append(FailureClass.INVALID_CONFIG)
         notes.append(
@@ -436,39 +446,67 @@ def run_train_overfit(
             failures.append(FailureClass.INVALID_CONFIG)
             notes.extend(job_notes)
         else:
-            max_parallel = min(config.train_max_parallel_commands, max(len(jobs), 1))
             job_results: list[dict[str, Any]] = []
-            if max_parallel <= 1:
-                for job in jobs:
-                    result = _run_train_command_job(
-                        job=job,
-                        config=config,
-                        repo_root=repo_root,
-                    )
-                    job_results.append(result)
-                    if result["failure"] is not None:
-                        break
+            batch_runs_attempted = 0
+            batch_runs_succeeded = 0
+            max_effective_lanes = 0
+            resolved_batch_trainer: str | None = None
+            if config.training_batch.enabled:
+                (
+                    job_results,
+                    batch_runs_attempted,
+                    batch_runs_succeeded,
+                    max_effective_lanes,
+                    resolved_batch_trainer,
+                    batch_notes,
+                ) = _run_train_in_process_batches(
+                    jobs=jobs,
+                    config=config,
+                    config_path=config_path,
+                    repo_root=repo_root,
+                    commands_root=commands_root,
+                )
+                if batch_notes:
+                    notes.extend(batch_notes)
+                    if not job_results:
+                        failures.append(FailureClass.INVALID_CONFIG)
             else:
-                ordered_results: list[dict[str, Any] | None] = [None] * len(jobs)
-                with ThreadPoolExecutor(max_workers=max_parallel) as executor:
-                    future_to_index = {
-                        executor.submit(
-                            _run_train_command_job,
+                max_parallel = min(
+                    config.train_max_parallel_commands, max(len(jobs), 1)
+                )
+                if max_parallel <= 1:
+                    for job in jobs:
+                        result = _run_train_command_job(
                             job=job,
                             config=config,
                             repo_root=repo_root,
-                        ): index
-                        for index, job in enumerate(jobs)
-                    }
-                    for future in as_completed(future_to_index):
-                        ordered_results[future_to_index[future]] = future.result()
-                job_results = [result for result in ordered_results if result]
+                        )
+                        job_results.append(result)
+                        if result["failure"] is not None:
+                            break
+                else:
+                    ordered_results: list[dict[str, Any] | None] = [None] * len(jobs)
+                    with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+                        future_to_index = {
+                            executor.submit(
+                                _run_train_command_job,
+                                job=job,
+                                config=config,
+                                repo_root=repo_root,
+                            ): index
+                            for index, job in enumerate(jobs)
+                        }
+                        for future in as_completed(future_to_index):
+                            ordered_results[future_to_index[future]] = future.result()
+                    job_results = [result for result in ordered_results if result]
 
             commands_attempted = len(job_results)
             for result in job_results:
                 command_records.append(result["command_record_path"])
-                stdout_paths.append(result["stdout_path"])
-                stderr_paths.append(result["stderr_path"])
+                if result["stdout_path"] is not None:
+                    stdout_paths.append(result["stdout_path"])
+                if result["stderr_path"] is not None:
+                    stderr_paths.append(result["stderr_path"])
                 if result["progress_path"] is not None:
                     progress_paths.append(result["progress_path"])
                 command_results.append(result["command_result"])
@@ -482,6 +520,15 @@ def run_train_overfit(
                 commands_succeeded += 1
                 artifact_paths.extend(result["artifact_paths"])
 
+            if config.training_batch.enabled:
+                runtime_batch_metrics = {
+                    "batch_runs_attempted": batch_runs_attempted,
+                    "batch_runs_succeeded": batch_runs_succeeded,
+                    "max_effective_lanes_per_simulation": max_effective_lanes,
+                    "resolved_batch_trainer": resolved_batch_trainer,
+                }
+            else:
+                runtime_batch_metrics = {}
     unique_failures = tuple(dict.fromkeys(failures))
     passed = not unique_failures
     gate_summary = GateSummary(
@@ -511,12 +558,17 @@ def run_train_overfit(
             "commands_attempted": commands_attempted,
             "commands_succeeded": commands_succeeded,
             "artifacts_validated": len(artifact_paths),
+            **runtime_batch_metrics,
         },
         execution_shape={
             "process_count": 1,
-            "subprocess_count": commands_attempted,
+            "subprocess_count": 0
+            if config.training_batch.enabled
+            else commands_attempted,
             "max_parallel_commands": config.train_max_parallel_commands,
+            "training_batch": config.training_batch.to_dict(),
             "timeout_seconds": config.performance.timeout_seconds,
+            **runtime_batch_metrics,
         },
     )
     if config.performance.write_performance_summary:
@@ -549,6 +601,7 @@ def run_train_overfit(
         "commands_root": str(commands_root),
         "outputs_root": str(outputs_root),
         "command_template": list(config.train_command_template),
+        "training_batch": config.training_batch.to_dict(),
         "artifact_metadata_glob": config.train_artifact_glob,
         "baseline_desired_retention_values": list(baseline_dr_values),
         "command_results": command_results,
@@ -3825,28 +3878,30 @@ def _build_train_command_jobs(
                 command_record = commands_root / f"{command_stem}_command.json"
                 stdout_path = commands_root / f"{command_stem}_stdout.txt"
                 stderr_path = commands_root / f"{command_stem}_stderr.txt"
-                try:
-                    train_command = _format_train_command(
-                        config=config,
-                        config_path=config_path,
-                        repo_root=repo_root,
-                        run_id=run_id,
-                        stage_root=stage_root,
-                        output_dir=output_dir,
-                        user_id=user_id,
-                        lambda_value=lambda_value,
-                        baseline_desired_retention=baseline_dr,
-                        command_record_path=command_record,
-                        stdout_path=stdout_path,
-                        stderr_path=stderr_path,
-                    )
-                except (KeyError, ValueError) as exc:
-                    notes.append(
-                        "Invalid training.command_template for "
-                        f"user={user_id}, baseline_dr={baseline_dr}, "
-                        f"lambda={lambda_value}: {exc}"
-                    )
-                    return jobs, notes
+                train_command: list[str] = []
+                if config.train_command_template:
+                    try:
+                        train_command = _format_train_command(
+                            config=config,
+                            config_path=config_path,
+                            repo_root=repo_root,
+                            run_id=run_id,
+                            stage_root=stage_root,
+                            output_dir=output_dir,
+                            user_id=user_id,
+                            lambda_value=lambda_value,
+                            baseline_desired_retention=baseline_dr,
+                            command_record_path=command_record,
+                            stdout_path=stdout_path,
+                            stderr_path=stderr_path,
+                        )
+                    except (KeyError, ValueError) as exc:
+                        notes.append(
+                            "Invalid training.command_template for "
+                            f"user={user_id}, baseline_dr={baseline_dr}, "
+                            f"lambda={lambda_value}: {exc}"
+                        )
+                        return jobs, notes
                 jobs.append(
                     TrainCommandJob(
                         user_id=user_id,
@@ -3881,6 +3936,31 @@ def _run_train_command_job(
     )
     exit_code = _record_exit_code(train_command_record)
     timed_out = exit_code == COMMAND_TIMEOUT_EXIT_CODE
+    return _finalize_train_job_result(
+        job=job,
+        config=config,
+        exit_code=exit_code,
+        timed_out=timed_out,
+        command_record_path=job.command_record_path,
+        stdout_path=job.stdout_path,
+        stderr_path=job.stderr_path,
+        command_result_extra={},
+        failure_verb="Training command",
+    )
+
+
+def _finalize_train_job_result(
+    *,
+    job: TrainCommandJob,
+    config: ExperimentConfig,
+    exit_code: int,
+    timed_out: bool,
+    command_record_path: Path,
+    stdout_path: Path | None,
+    stderr_path: Path | None,
+    command_result_extra: dict[str, Any],
+    failure_verb: str,
+) -> dict[str, Any]:
     progress_path = job.output_dir / "training_progress.jsonl"
     progress_path_exists = progress_path.exists()
     command_result = {
@@ -3890,18 +3970,19 @@ def _run_train_command_job(
         "lambda_value": job.lambda_value,
         "lambda_token": job.lambda_token,
         "output_dir": str(job.output_dir),
-        "command_record_path": str(job.command_record_path),
-        "stdout_path": str(job.stdout_path),
-        "stderr_path": str(job.stderr_path),
+        "command_record_path": str(command_record_path),
+        "stdout_path": str(stdout_path) if stdout_path is not None else None,
+        "stderr_path": str(stderr_path) if stderr_path is not None else None,
         "training_progress_path": str(progress_path) if progress_path_exists else None,
         "exit_code": exit_code,
         "timed_out": timed_out,
+        **command_result_extra,
     }
     result: dict[str, Any] = {
         "job": job,
-        "command_record_path": job.command_record_path,
-        "stdout_path": job.stdout_path,
-        "stderr_path": job.stderr_path,
+        "command_record_path": command_record_path,
+        "stdout_path": stdout_path,
+        "stderr_path": stderr_path,
         "progress_path": progress_path if progress_path_exists else None,
         "command_result": command_result,
         "artifact_paths": [],
@@ -3915,14 +3996,14 @@ def _run_train_command_job(
         )
         if timed_out:
             result["note"] = (
-                "Training command timed out for "
+                f"{failure_verb} timed out for "
                 f"user={job.user_id}, "
                 f"baseline_dr={job.baseline_desired_retention}, "
                 f"lambda={job.lambda_value}."
             )
         else:
             result["note"] = (
-                "Training command failed for "
+                f"{failure_verb} failed for "
                 f"user={job.user_id}, "
                 f"baseline_dr={job.baseline_desired_retention}, "
                 f"lambda={job.lambda_value}."
@@ -3972,6 +4053,264 @@ def _run_train_command_job(
     result["artifact_paths"] = matched_artifacts
     result["succeeded"] = True
     return result
+
+
+def _run_train_in_process_batches(
+    *,
+    jobs: list[TrainCommandJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+    commands_root: Path,
+) -> tuple[list[dict[str, Any]], int, int, int, str | None, list[str]]:
+    from simulator.experiment_infra.training_batch import (
+        InProcessTrainJob,
+        estimate_lanes_per_job,
+        resolve_in_process_trainer,
+        run_in_process_train_batch,
+    )
+
+    notes: list[str] = []
+    try:
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+    except ValueError as exc:
+        return [], 0, 0, 0, None, [str(exc)]
+
+    try:
+        lanes_per_job = estimate_lanes_per_job(trainer=trainer, config=config)
+    except ValueError as exc:
+        return [], 0, 0, 0, trainer, [str(exc)]
+    batches = _build_train_user_batches(
+        jobs=jobs,
+        batch_size=config.training_batch.batch_size,
+        max_lanes_per_batch=config.training_batch.max_lanes_per_batch,
+        lanes_per_job=lanes_per_job,
+    )
+    commands_root.mkdir(parents=True, exist_ok=True)
+    results: list[dict[str, Any]] = []
+    batch_runs_attempted = 0
+    batch_runs_succeeded = 0
+    max_effective_lanes = 0
+    elapsed_started = time.monotonic()
+    for batch_index, batch_jobs in enumerate(batches):
+        batch_runs_attempted += 1
+        batch_record_path = commands_root / f"in_process_batch_{batch_index}.json"
+        started_at = utc_timestamp()
+        outcomes = []
+        error_note: str | None = None
+        try:
+            outcomes = run_in_process_train_batch(
+                trainer=trainer,
+                jobs=[
+                    InProcessTrainJob(
+                        user_id=job.user_id,
+                        baseline_desired_retention=job.baseline_desired_retention,
+                        baseline_desired_retention_token=(
+                            job.baseline_desired_retention_token
+                        ),
+                        lambda_value=job.lambda_value,
+                        lambda_token=job.lambda_token,
+                        output_dir=job.output_dir,
+                        command_record_path=job.command_record_path,
+                        stdout_path=job.stdout_path,
+                        stderr_path=job.stderr_path,
+                    )
+                    for job in batch_jobs
+                ],
+                config=config,
+                config_path=config_path,
+                repo_root=repo_root,
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve runner summary on trainer errors.
+            error_note = f"In-process training batch {batch_index} failed: {exc}"
+            notes.append(error_note)
+
+        finished_at = utc_timestamp()
+        batch_exit_code = 1 if error_note else 0
+        if outcomes and all(outcome.passed for outcome in outcomes):
+            batch_runs_succeeded += 1
+        elif outcomes:
+            batch_exit_code = 1
+        max_effective_lanes = max(
+            max_effective_lanes,
+            len(batch_jobs) * lanes_per_job,
+        )
+        _write_json(
+            batch_record_path,
+            {
+                "type": "in-process-training-batch",
+                "execution_mode": "in_process_batch",
+                "trainer": trainer,
+                "batch_index": batch_index,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "exit_code": batch_exit_code,
+                "error": error_note,
+                "user_ids": sorted({job.user_id for job in batch_jobs}),
+                "job_count": len(batch_jobs),
+                "lanes_per_job_estimate": lanes_per_job,
+                "effective_lanes_estimate": len(batch_jobs) * lanes_per_job,
+                "outcomes": [
+                    {
+                        "user_id": outcome.job.user_id,
+                        "lambda_value": outcome.job.lambda_value,
+                        "baseline_desired_retention": (
+                            outcome.job.baseline_desired_retention
+                        ),
+                        "passed": outcome.passed,
+                        "artifact_paths": [
+                            str(path) for path in outcome.artifact_paths
+                        ],
+                        "progress_path": str(outcome.progress_path)
+                        if outcome.progress_path is not None
+                        else None,
+                        "error": outcome.error,
+                    }
+                    for outcome in outcomes
+                ],
+            },
+        )
+        outcome_status_by_key = {
+            (
+                outcome.job.user_id,
+                outcome.job.lambda_value,
+                outcome.job.baseline_desired_retention,
+            ): outcome
+            for outcome in outcomes
+        }
+        for job in batch_jobs:
+            outcome = outcome_status_by_key.get(
+                (job.user_id, job.lambda_value, job.baseline_desired_retention)
+            )
+            _write_json(
+                job.command_record_path,
+                {
+                    "type": "in-process-training-job",
+                    "execution_mode": "in_process_batch",
+                    "trainer": trainer,
+                    "batch_index": batch_index,
+                    "batch_record_path": str(batch_record_path),
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "exit_code": 0 if outcome is not None and outcome.passed else 1,
+                    "user_id": job.user_id,
+                    "lambda_value": job.lambda_value,
+                    "baseline_desired_retention": job.baseline_desired_retention,
+                    "output_dir": str(job.output_dir),
+                },
+            )
+
+        outcome_by_key = {
+            (
+                outcome.job.user_id,
+                outcome.job.lambda_value,
+                outcome.job.baseline_desired_retention,
+            ): outcome
+            for outcome in outcomes
+        }
+        for job in batch_jobs:
+            outcome = outcome_by_key.get(
+                (job.user_id, job.lambda_value, job.baseline_desired_retention)
+            )
+            if outcome is None:
+                result = _finalize_train_job_result(
+                    job=job,
+                    config=config,
+                    exit_code=1,
+                    timed_out=False,
+                    command_record_path=batch_record_path,
+                    stdout_path=None,
+                    stderr_path=None,
+                    command_result_extra={
+                        "execution_mode": "in_process_batch",
+                        "batch_index": batch_index,
+                        "batch_record_path": str(batch_record_path),
+                        "trainer": trainer,
+                    },
+                    failure_verb="In-process training",
+                )
+            else:
+                result = _finalize_train_job_result(
+                    job=job,
+                    config=config,
+                    exit_code=0 if outcome.passed else 1,
+                    timed_out=False,
+                    command_record_path=batch_record_path,
+                    stdout_path=None,
+                    stderr_path=None,
+                    command_result_extra={
+                        "execution_mode": "in_process_batch",
+                        "batch_index": batch_index,
+                        "batch_record_path": str(batch_record_path),
+                        "trainer": trainer,
+                        "artifact_paths_reported": [
+                            str(path) for path in outcome.artifact_paths
+                        ],
+                    },
+                    failure_verb="In-process training",
+                )
+            results.append(result)
+
+        if any(result["failure"] is not None for result in results[-len(batch_jobs) :]):
+            break
+        timeout = config.performance.timeout_seconds
+        if timeout is not None and time.monotonic() - elapsed_started > timeout:
+            notes.append(
+                "In-process training exceeded performance.timeout_seconds after "
+                f"batch {batch_index}; stopping before the next batch."
+            )
+            break
+    return (
+        results,
+        batch_runs_attempted,
+        batch_runs_succeeded,
+        max_effective_lanes,
+        trainer,
+        notes,
+    )
+
+
+def _build_train_user_batches(
+    *,
+    jobs: list[TrainCommandJob],
+    batch_size: int | None,
+    max_lanes_per_batch: int | None,
+    lanes_per_job: int,
+) -> list[list[TrainCommandJob]]:
+    jobs_by_user: dict[int, list[TrainCommandJob]] = {}
+    for job in jobs:
+        jobs_by_user.setdefault(job.user_id, []).append(job)
+    user_ids = list(jobs_by_user)
+    if batch_size is not None:
+        return [
+            [
+                job
+                for user_id in user_ids[index : index + batch_size]
+                for job in jobs_by_user[user_id]
+            ]
+            for index in range(0, len(user_ids), batch_size)
+        ]
+    if max_lanes_per_batch is None:
+        return [[job for user_id in user_ids for job in jobs_by_user[user_id]]]
+
+    batches: list[list[TrainCommandJob]] = []
+    current: list[TrainCommandJob] = []
+    current_lanes = 0
+    for user_id in user_ids:
+        user_jobs = jobs_by_user[user_id]
+        user_lanes = len(user_jobs) * lanes_per_job
+        if current and current_lanes + user_lanes > max_lanes_per_batch:
+            batches.append(current)
+            current = []
+            current_lanes = 0
+        current.extend(user_jobs)
+        current_lanes += user_lanes
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _build_sweep_artifact_lane(

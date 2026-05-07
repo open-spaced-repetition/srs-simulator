@@ -10,6 +10,7 @@ import tomllib
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, Mapping
 
 import torch
@@ -396,8 +397,9 @@ def _build_bundle(
     *,
     config: ExperimentConfig,
     settings: SASettings,
-    user_id: int,
-    lanes: int,
+    user_id: int | None = None,
+    lanes: int | None = None,
+    lane_user_ids: Sequence[int] | None = None,
     benchmark_root: Path,
     overrides: dict[str, str],
     benchmark_partition: str | None,
@@ -407,7 +409,15 @@ def _build_bundle(
     learning_steps: list[float],
     relearning_steps: list[float],
 ) -> SimulationBundle:
-    user_ids = [user_id for _ in range(lanes)]
+    if lane_user_ids is None:
+        if user_id is None or lanes is None:
+            raise ValueError("user_id and lanes are required without lane_user_ids.")
+        user_ids = [user_id for _ in range(lanes)]
+    else:
+        user_ids = [int(item) for item in lane_user_ids]
+        lanes = len(user_ids)
+        if lanes < 1:
+            raise ValueError("lane_user_ids must not be empty.")
     short_term = bool(short_term_source)
     scheduler_weights, kept_users = load_fsrs6_weights(
         repo_root=REPO_ROOT,

@@ -108,6 +108,11 @@ command_template = [
   "{command_record_path}",
 ]
 
+[training.batch]
+enabled = true
+trainer = "auto"
+max_lanes_per_batch = 6400
+
 [training.sa]
 feature_version = "sa_fsrs6_dr_log_linear_v1"
 chains = 256

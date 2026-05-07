@@ -88,8 +88,12 @@ configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata,
 including configured `baseline.desired_retention_values`, and stages exact
 baseline logs by copy or hardlink without staging CSV sidecars. `train-overfit`
 runs the user-provided `training.command_template` once per training user and
-lambda value, then requires scheduler policy artifact metadata under the command
-output directory. `sweep` can run the configured batched retention sweep from the
+lambda value by default. When `[training.batch].enabled = true`, supported
+in-tree RL trainers run in one Python process and batch multiple users into the
+same vectorized simulation call, avoiding GPU multi-process requirements while
+preserving per-user artifact directories. It then requires scheduler policy
+artifact metadata under the command output directory. `sweep` can run the
+configured batched retention sweep from the
 same TOML and validates the resulting JSONL logs. `build-pareto` fans out
 `build_pareto.py` per user, and `analyze-pareto` writes a Markdown comparison
 report from those Pareto JSON files. Formal stages fail if required inputs are
@@ -107,6 +111,19 @@ training budget with the simplified 4-parameter
 `cmaes_fsrs6_dr_linear_seed42_users_1_8.toml` uses the same scheduler artifact
 and sweep path, but trains the 4-parameter DR-conditioned policy with CMA-ES
 instead of simulated annealing.
+
+Training batch mode is configured under `[training.batch]`, for example:
+
+```toml
+[training.batch]
+enabled = true
+trainer = "auto"
+batch_size = 8
+```
+
+`trainer = "auto"` resolves the built-in trainer from `training.command_template`;
+set an explicit trainer such as `"cmaes_fsrs6_dr"` for command-template-free
+in-process runs.
 
 ## Experiments
 Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
