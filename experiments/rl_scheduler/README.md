@@ -176,11 +176,17 @@ Representative profiles:
 Training target:
 
 - Baseline scheduler: FSRS-6.
-- Candidate scheduler: FSRS6 ADR Direct.
-- Action: emit desired retention from scheduler-side FSRS-6 `S,D`.
+- Candidate schedulers: FSRS6 ADR Direct and FSRS6 ADR Delta.
+- Direct action: emit desired retention from scheduler-side FSRS-6 `S,D`.
+- Delta action: apply a logit-space adjustment around the input DR from
+  scheduler-side FSRS-6 `S,D` and the requested DR.
 - DR grid: typically `0.50..0.98`.
-- Overfit gate: on the training user, both memorized average and memorized per
-  minute must improve relative to the corresponding baseline.
+- Direct overfit gate: each artifact is trained for one baseline DR, and both
+  memorized average and memorized per minute must improve against the same-user
+  same-DR baseline.
+- Delta overfit gate: one artifact covers the DR grid, and every DR must improve
+  both memorized average and memorized per minute against its corresponding
+  same-user same-DR baseline.
 - Constraint handling: candidates with non-positive memorized-average or
   memorized-per-minute gain are ranked below every candidate satisfying both
   gate constraints.
@@ -189,9 +195,9 @@ For ordinary `fsrs6_adr_direct`, the default policy uses 6 log-polynomial featur
 normalized `S,D`; set `training.sa.feature_version = "fsrs6_adr_direct_log_linear_v1"`
 to train the simplified 3-parameter linear variant.
 For `fsrs6_adr_delta`, the action is a logit-space adjustment around the input DR.
-The overfit gate uses mean relative memorized-average and memorized-per-minute
-gains across the whole DR grid. The default DR-conditioned policy uses 10 log
-polynomial features; set `training.sa.feature_version =
+The overfit gate is an all-DR hard constraint; mean relative gains are reported
+and used only to rank candidates that are already feasible. The default
+DR-conditioned policy uses 10 log polynomial features; set `training.sa.feature_version =
 "fsrs6_adr_delta_log_linear_v1"` to train the 4-parameter linear variant.
 CMA-ES profiles keep the same `[training.sa]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,

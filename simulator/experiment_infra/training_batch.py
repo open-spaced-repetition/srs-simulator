@@ -1059,13 +1059,11 @@ def _evaluate_dr_conditioned_batch(
 ) -> list[list[Any]]:
     from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         _metrics_from_stats,
-        _relative_gain,
     )
     from experiments.rl_scheduler.train_fsrs6_adr_delta import (
-        ChainEvaluation,
+        _chain_evaluation,
         _iter_dr_chunks,
         _pad_tuple,
-        _score_from_relative_gains,
     )
     from simulator.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicy
     from simulator.schedulers.fsrs6_adr_delta import FSRS6ADRDeltaBatchSchedulerOps
@@ -1087,8 +1085,6 @@ def _evaluate_dr_conditioned_batch(
     metrics_by_job_candidate: list[list[list[Any]]] = [
         [[] for _candidate in range(candidate_count)] for _job in jobs
     ]
-    rel_mem_sums = [[0.0 for _candidate in range(candidate_count)] for _job in jobs]
-    rel_eff_sums = [[0.0 for _candidate in range(candidate_count)] for _job in jobs]
 
     for chunk_dr_values, _chunk_baselines in _iter_dr_chunks(
         baseline_dr_values, baselines_by_job[0], dr_batch_size
@@ -1147,21 +1143,6 @@ def _evaluate_dr_conditioned_batch(
                 metrics_by_job_candidate[job_index][candidate_index].extend(
                     chunk_metrics
                 )
-                dr_offset = baseline_dr_values.index(chunk_dr_values[0])
-                chunk_baselines = baselines_by_job[job_index][
-                    dr_offset : dr_offset + actual_count
-                ]
-                for metric, baseline in zip(
-                    chunk_metrics, chunk_baselines, strict=True
-                ):
-                    rel_mem_sums[job_index][candidate_index] += _relative_gain(
-                        metric.memorized_average,
-                        baseline.memorized_average,
-                    )
-                    rel_eff_sums[job_index][candidate_index] += _relative_gain(
-                        metric.memorized_per_minute,
-                        baseline.memorized_per_minute,
-                    )
 
     evaluations_by_job: list[list[Any]] = []
     for job_index, job in enumerate(jobs):
@@ -1170,18 +1151,11 @@ def _evaluate_dr_conditioned_batch(
             candidate_metrics = metrics_by_job_candidate[job_index][candidate_index]
             if len(candidate_metrics) != dr_count:
                 raise AssertionError("DR-conditioned batch evaluation missed metrics.")
-            mean_rel_mem = rel_mem_sums[job_index][candidate_index] / max(dr_count, 1)
-            mean_rel_eff = rel_eff_sums[job_index][candidate_index] / max(dr_count, 1)
             evaluations.append(
-                ChainEvaluation(
-                    metrics_by_dr=candidate_metrics,
-                    mean_relative_memorized_gain=mean_rel_mem,
-                    mean_relative_efficiency_gain=mean_rel_eff,
-                    score=_score_from_relative_gains(
-                        mean_rel_mem,
-                        mean_rel_eff,
-                        job.lambda_value,
-                    ),
+                _chain_evaluation(
+                    candidate_metrics,
+                    baselines_by_job[job_index],
+                    job.lambda_value,
                 )
             )
         evaluations_by_job.append(evaluations)
@@ -1367,6 +1341,12 @@ def _run_fsrs6_adr_delta_jobs(
             best_mean_relative_efficiency_gain=best_evaluations[
                 job_index
             ].mean_relative_efficiency_gain,
+            best_min_relative_memorized_gain=best_evaluations[
+                job_index
+            ].min_relative_memorized_gain,
+            best_min_relative_efficiency_gain=best_evaluations[
+                job_index
+            ].min_relative_efficiency_gain,
         )
 
     for iteration in range(settings.iterations):
@@ -1449,6 +1429,12 @@ def _run_fsrs6_adr_delta_jobs(
                 "best_mean_relative_efficiency_gain": best_evaluations[
                     job_index
                 ].mean_relative_efficiency_gain,
+                "best_min_relative_memorized_gain": best_evaluations[
+                    job_index
+                ].min_relative_memorized_gain,
+                "best_min_relative_efficiency_gain": best_evaluations[
+                    job_index
+                ].min_relative_efficiency_gain,
             }
             histories[job_index].append(history_entry)
             progress.write(
@@ -1464,10 +1450,7 @@ def _run_fsrs6_adr_delta_jobs(
     outcomes = []
     for job_index, job in enumerate(jobs):
         best = best_evaluations[job_index]
-        passed = (
-            best.mean_relative_memorized_gain > 0.0
-            and best.mean_relative_efficiency_gain > 0.0
-        )
+        passed = best.passed_overfit_gate
         result = DRConditionedTrainingResult(
             baseline_desired_retention_values=baseline_dr_values,
             baselines=baselines_by_job[job_index],
@@ -1692,6 +1675,12 @@ def _run_fsrs6_adr_delta_cmaes_jobs(
                 "generation_best_mean_relative_efficiency_gain": (
                     generation_best.mean_relative_efficiency_gain
                 ),
+                "generation_best_min_relative_memorized_gain": (
+                    generation_best.min_relative_memorized_gain
+                ),
+                "generation_best_min_relative_efficiency_gain": (
+                    generation_best.min_relative_efficiency_gain
+                ),
             }
             histories[job_index].append(history_entry)
             progresses[job_index].write(
@@ -1710,10 +1699,7 @@ def _run_fsrs6_adr_delta_cmaes_jobs(
         best = best_evaluations[job_index]
         if best_coefficients_for_job is None or best is None:
             raise RuntimeError("CMA-ES did not evaluate any candidates.")
-        passed = (
-            best.mean_relative_memorized_gain > 0.0
-            and best.mean_relative_efficiency_gain > 0.0
-        )
+        passed = best.passed_overfit_gate
         result = DRConditionedTrainingResult(
             baseline_desired_retention_values=baseline_dr_values,
             baselines=baselines_by_job[job_index],
@@ -1728,6 +1714,9 @@ def _run_fsrs6_adr_delta_cmaes_jobs(
             best_score=best.score,
             mean_relative_memorized_gain=best.mean_relative_memorized_gain,
             mean_relative_efficiency_gain=best.mean_relative_efficiency_gain,
+            min_relative_memorized_gain=best.min_relative_memorized_gain,
+            min_relative_efficiency_gain=best.min_relative_efficiency_gain,
+            passed_overfit_gate=best.passed_overfit_gate,
             generations=len(histories[job_index]),
         )
         policy_path, metrics_path, metadata_path = _write_artifact(

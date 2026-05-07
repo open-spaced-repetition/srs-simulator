@@ -113,6 +113,12 @@ schedulers.
 and sweep path, but trains the 4-parameter DR-conditioned policy with CMA-ES
 instead of simulated annealing.
 
+Direct ADR trains one artifact per `(user, baseline DR, lambda)` and applies the
+overfit gate against the same user's same-DR FSRS-6 baseline. Delta ADR trains
+one artifact per `(user, lambda)` over the full DR grid; every DR in that grid
+must improve both memorized average and memorized per minute. Mean gains are
+reported and used only to rank candidates that already satisfy the all-DR gate.
+
 Training batch mode is configured under `[training.batch]`, for example:
 
 ```toml

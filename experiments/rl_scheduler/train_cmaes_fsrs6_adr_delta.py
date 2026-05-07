@@ -263,6 +263,9 @@ def main() -> int:
         best_score=result.best.score,
         mean_relative_memorized_gain=result.best.mean_relative_memorized_gain,
         mean_relative_efficiency_gain=result.best.mean_relative_efficiency_gain,
+        min_relative_memorized_gain=result.best.min_relative_memorized_gain,
+        min_relative_efficiency_gain=result.best.min_relative_efficiency_gain,
+        passed_overfit_gate=result.best.passed_overfit_gate,
         generations=len(result.history),
     )
 
@@ -379,6 +382,12 @@ def _run_cmaes_dr_conditioned(
             "generation_best_mean_relative_efficiency_gain": (
                 generation_best.mean_relative_efficiency_gain
             ),
+            "generation_best_min_relative_memorized_gain": (
+                generation_best.min_relative_memorized_gain
+            ),
+            "generation_best_min_relative_efficiency_gain": (
+                generation_best.min_relative_efficiency_gain
+            ),
         }
         history.append(history_entry)
         progress.write(
@@ -393,17 +402,13 @@ def _run_cmaes_dr_conditioned(
     if best_coefficients is None or best_evaluation is None:
         raise RuntimeError("CMA-ES did not evaluate any candidates.")
 
-    passed = (
-        best_evaluation.mean_relative_memorized_gain > 0.0
-        and best_evaluation.mean_relative_efficiency_gain > 0.0
-    )
     return DRConditionedTrainingResult(
         baseline_desired_retention_values=baseline_dr_values,
         baselines=baselines,
         best_coefficients=best_coefficients.detach().cpu(),
         best=best_evaluation,
         history=history,
-        passed=passed,
+        passed=best_evaluation.passed_overfit_gate,
     )
 
 

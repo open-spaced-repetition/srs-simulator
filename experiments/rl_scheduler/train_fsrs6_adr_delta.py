@@ -26,7 +26,6 @@ from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     _metrics_from_stats,
     _read_training_sa,
     _relative_gain,
-    _score_from_relative_gains,
     _temperature,
     _write_json,
 )
@@ -48,8 +47,13 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 @dataclass(frozen=True, slots=True)
 class ChainEvaluation:
     metrics_by_dr: list[CandidateMetrics]
+    relative_memorized_gains: list[float]
+    relative_efficiency_gains: list[float]
     mean_relative_memorized_gain: float
     mean_relative_efficiency_gain: float
+    min_relative_memorized_gain: float
+    min_relative_efficiency_gain: float
+    passed_overfit_gate: bool
     score: float
 
 
@@ -66,7 +70,7 @@ class DRConditionedTrainingResult:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train one DR-conditioned FSRS6 ADR Direct scheduler policy over a desired "
+            "Train one DR-conditioned FSRS6 ADR Delta scheduler policy over a desired "
             "retention grid."
         ),
         allow_abbrev=False,
@@ -204,6 +208,9 @@ def main() -> int:
         best_score=result.best.score,
         mean_relative_memorized_gain=result.best.mean_relative_memorized_gain,
         mean_relative_efficiency_gain=result.best.mean_relative_efficiency_gain,
+        min_relative_memorized_gain=result.best.min_relative_memorized_gain,
+        min_relative_efficiency_gain=result.best.min_relative_efficiency_gain,
+        passed_overfit_gate=result.best.passed_overfit_gate,
         iterations=len(result.history),
     )
 
@@ -398,6 +405,8 @@ def _anneal_dr_conditioned(
         best_mean_relative_efficiency_gain=(
             best_evaluation.mean_relative_efficiency_gain
         ),
+        best_min_relative_memorized_gain=best_evaluation.min_relative_memorized_gain,
+        best_min_relative_efficiency_gain=best_evaluation.min_relative_efficiency_gain,
     )
 
     for iteration in range(settings.iterations):
@@ -454,6 +463,12 @@ def _anneal_dr_conditioned(
             "best_mean_relative_efficiency_gain": (
                 best_evaluation.mean_relative_efficiency_gain
             ),
+            "best_min_relative_memorized_gain": (
+                best_evaluation.min_relative_memorized_gain
+            ),
+            "best_min_relative_efficiency_gain": (
+                best_evaluation.min_relative_efficiency_gain
+            ),
         }
         history.append(history_entry)
         progress.write(
@@ -465,17 +480,13 @@ def _anneal_dr_conditioned(
             **history_entry,
         )
 
-    passed = (
-        best_evaluation.mean_relative_memorized_gain > 0.0
-        and best_evaluation.mean_relative_efficiency_gain > 0.0
-    )
     return DRConditionedTrainingResult(
         baseline_desired_retention_values=baseline_dr_values,
         baselines=baselines,
         best_coefficients=best_coefficients.detach().cpu(),
         best=best_evaluation,
         history=history,
-        passed=passed,
+        passed=best_evaluation.passed_overfit_gate,
     )
 
 
@@ -531,8 +542,6 @@ def _evaluate_sa_dr_chains(
             f"(chains, {coefficient_count})."
         )
     metrics_by_chain: list[list[CandidateMetrics]] = [[] for _ in range(chains)]
-    rel_mem_sums = [0.0 for _ in range(chains)]
-    rel_eff_sums = [0.0 for _ in range(chains)]
     for chunk_dr_values, chunk_baselines in _iter_dr_chunks(
         baseline_dr_values,
         baselines,
@@ -584,39 +593,109 @@ def _evaluate_sa_dr_chains(
             start = chain * dr_batch_size
             chain_metrics = metrics[start : start + actual_count]
             metrics_by_chain[chain].extend(chain_metrics)
-            for metric, baseline in zip(
-                chain_metrics,
-                chunk_baselines,
-                strict=True,
-            ):
-                rel_mem_sums[chain] += _relative_gain(
-                    metric.memorized_average,
-                    baseline.memorized_average,
-                )
-                rel_eff_sums[chain] += _relative_gain(
-                    metric.memorized_per_minute,
-                    baseline.memorized_per_minute,
-                )
     evaluations: list[ChainEvaluation] = []
     for chain in range(chains):
         chain_metrics = metrics_by_chain[chain]
         if len(chain_metrics) != dr_count:
             raise AssertionError("DR-conditioned evaluation produced missing metrics.")
-        mean_rel_mem = rel_mem_sums[chain] / max(dr_count, 1)
-        mean_rel_eff = rel_eff_sums[chain] / max(dr_count, 1)
-        evaluations.append(
-            ChainEvaluation(
-                metrics_by_dr=chain_metrics,
-                mean_relative_memorized_gain=mean_rel_mem,
-                mean_relative_efficiency_gain=mean_rel_eff,
-                score=_score_from_relative_gains(
-                    mean_rel_mem,
-                    mean_rel_eff,
-                    lambda_value,
-                ),
-            )
-        )
+        evaluations.append(_chain_evaluation(chain_metrics, baselines, lambda_value))
     return evaluations
+
+
+def _chain_evaluation(
+    metrics_by_dr: list[CandidateMetrics],
+    baselines: Sequence[CandidateMetrics],
+    lambda_value: float,
+) -> ChainEvaluation:
+    if len(metrics_by_dr) != len(baselines):
+        raise ValueError("metrics_by_dr and baselines must have the same length.")
+    if not metrics_by_dr:
+        raise ValueError("DR-conditioned evaluation requires at least one DR.")
+    relative_memorized_gains = [
+        _relative_gain(metric.memorized_average, baseline.memorized_average)
+        for metric, baseline in zip(metrics_by_dr, baselines, strict=True)
+    ]
+    relative_efficiency_gains = [
+        _relative_gain(metric.memorized_per_minute, baseline.memorized_per_minute)
+        for metric, baseline in zip(metrics_by_dr, baselines, strict=True)
+    ]
+    mean_relative_memorized_gain = sum(relative_memorized_gains) / len(
+        relative_memorized_gains
+    )
+    mean_relative_efficiency_gain = sum(relative_efficiency_gains) / len(
+        relative_efficiency_gains
+    )
+    return ChainEvaluation(
+        metrics_by_dr=list(metrics_by_dr),
+        relative_memorized_gains=relative_memorized_gains,
+        relative_efficiency_gains=relative_efficiency_gains,
+        mean_relative_memorized_gain=mean_relative_memorized_gain,
+        mean_relative_efficiency_gain=mean_relative_efficiency_gain,
+        min_relative_memorized_gain=min(relative_memorized_gains),
+        min_relative_efficiency_gain=min(relative_efficiency_gains),
+        passed_overfit_gate=_dr_grid_passed_relative_gains(
+            relative_memorized_gains,
+            relative_efficiency_gains,
+        ),
+        score=_score_dr_grid_relative_gains(
+            relative_memorized_gains,
+            relative_efficiency_gains,
+            lambda_value,
+        ),
+    )
+
+
+def _dr_grid_passed_relative_gains(
+    relative_memorized_gains: Sequence[float],
+    relative_efficiency_gains: Sequence[float],
+) -> bool:
+    _validate_relative_gain_grid(relative_memorized_gains, relative_efficiency_gains)
+    return all(
+        rel_mem > 0.0 and rel_eff > 0.0
+        for rel_mem, rel_eff in zip(
+            relative_memorized_gains,
+            relative_efficiency_gains,
+            strict=True,
+        )
+    )
+
+
+def _score_dr_grid_relative_gains(
+    relative_memorized_gains: Sequence[float],
+    relative_efficiency_gains: Sequence[float],
+    lambda_value: float,
+) -> float:
+    _validate_relative_gain_grid(relative_memorized_gains, relative_efficiency_gains)
+    if _dr_grid_passed_relative_gains(
+        relative_memorized_gains,
+        relative_efficiency_gains,
+    ):
+        return sum(
+            (1.0 - lambda_value) * rel_mem + lambda_value * rel_eff
+            for rel_mem, rel_eff in zip(
+                relative_memorized_gains,
+                relative_efficiency_gains,
+                strict=True,
+            )
+        ) / len(relative_memorized_gains)
+    return -sum(
+        max(0.0, -rel_mem) + max(0.0, -rel_eff)
+        for rel_mem, rel_eff in zip(
+            relative_memorized_gains,
+            relative_efficiency_gains,
+            strict=True,
+        )
+    )
+
+
+def _validate_relative_gain_grid(
+    relative_memorized_gains: Sequence[float],
+    relative_efficiency_gains: Sequence[float],
+) -> None:
+    if len(relative_memorized_gains) != len(relative_efficiency_gains):
+        raise ValueError("Relative gain arrays must have the same length.")
+    if not relative_memorized_gains:
+        raise ValueError("Relative gain arrays must not be empty.")
 
 
 def _write_artifact(
@@ -648,30 +727,39 @@ def _write_artifact(
         result.best.metrics_by_dr,
         strict=True,
     ):
+        relative_memorized_gain = _relative_gain(
+            best.memorized_average,
+            baseline.memorized_average,
+        )
+        relative_efficiency_gain = _relative_gain(
+            best.memorized_per_minute,
+            baseline.memorized_per_minute,
+        )
         per_dr.append(
             {
                 "baseline_desired_retention": dr,
                 "baseline": asdict(baseline),
                 "best": asdict(best),
-                "relative_memorized_gain": _relative_gain(
-                    best.memorized_average,
-                    baseline.memorized_average,
-                ),
-                "relative_efficiency_gain": _relative_gain(
-                    best.memorized_per_minute,
-                    baseline.memorized_per_minute,
+                "relative_memorized_gain": relative_memorized_gain,
+                "relative_efficiency_gain": relative_efficiency_gain,
+                "memorized_average_gt_baseline": relative_memorized_gain > 0.0,
+                "memorized_per_minute_gt_baseline": relative_efficiency_gain > 0.0,
+                "passed_overfit_gate": (
+                    relative_memorized_gain > 0.0 and relative_efficiency_gain > 0.0
                 ),
             }
         )
     metrics = {
         "passed_overfit_gate": result.passed,
         "gate": {
-            "mean_memorized_average_gt_baseline": (
-                result.best.mean_relative_memorized_gain > 0.0
+            "all_desired_retention_memorized_average_gt_baseline": (
+                result.best.min_relative_memorized_gain > 0.0
             ),
-            "mean_memorized_per_minute_gt_baseline": (
-                result.best.mean_relative_efficiency_gain > 0.0
+            "all_desired_retention_memorized_per_minute_gt_baseline": (
+                result.best.min_relative_efficiency_gain > 0.0
             ),
+            "min_relative_memorized_gain": result.best.min_relative_memorized_gain,
+            "min_relative_efficiency_gain": result.best.min_relative_efficiency_gain,
             "mean_relative_memorized_gain": (result.best.mean_relative_memorized_gain),
             "mean_relative_efficiency_gain": (
                 result.best.mean_relative_efficiency_gain
