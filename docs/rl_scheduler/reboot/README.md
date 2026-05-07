@@ -36,9 +36,9 @@ only by default.
 The second slice adds a minimal TOML runner:
 
 ```bash
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage dry-run --run-id sa-fsrs6-users-1-8
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-users-1-8
-uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/sa_fsrs6_batch_sweep_users_1_8/sa-fsrs6-users-1-8
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage dry-run --run-id fsrs6_adr_direct_sa_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage all --run-id fsrs6_adr_direct_sa_users_1_8_v1
+uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/fsrs6_adr_direct_sa_users_1_8/fsrs6_adr_direct_sa_users_1_8_v1
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 ```
 

@@ -32,9 +32,13 @@ from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.math.fsrs import Bounds
 from simulator.models.fsrs import FSRS6BatchEnvOps
 from simulator.models.lstm_batch import LSTMBatchedEnvOps, PackedLSTMWeights
-from simulator.sa_fsrs6_policy import FEATURE_VERSION, SAFSRS6Policy, feature_count
+from simulator.fsrs6_adr_direct_policy import (
+    FEATURE_VERSION,
+    FSRS6ADRDirectPolicy,
+    feature_count,
+)
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
-from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
+from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
@@ -183,7 +187,7 @@ class TrainingProgress:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an SA FSRS-6 log-polynomial scheduler policy.",
+        description="Train an FSRS6 ADR Direct log-polynomial scheduler policy.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", type=Path, required=True)
@@ -325,14 +329,14 @@ def main() -> int:
     )
     passed = rel_mem > 0.0 and rel_eff > 0.0
 
-    policy = SAFSRS6Policy(
+    policy = FSRS6ADRDirectPolicy(
         coefficients=tuple(float(v) for v in best_coefficients.tolist()),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         baseline_desired_retention=settings.baseline_desired_retention,
         feature_version=policy_feature_version,
         title=(
-            f"sa_fsrs6_u{args.user_id}_dr_"
+            f"fsrs6_adr_direct_u{args.user_id}_dr_"
             f"{settings.baseline_desired_retention:.2f}_lambda_{args.lambda_value:g}"
         ),
     )
@@ -365,7 +369,7 @@ def main() -> int:
             config.seed,
         ),
         "family": config.family,
-        "scheduler_name": "sa_fsrs6",
+        "scheduler_name": "fsrs6_adr_direct",
         "environment": config.simulation.environment,
         "engine": config.simulation.engine,
         "training_user_ids": [args.user_id],
@@ -482,7 +486,7 @@ def _build_bundle(
         )
     else:
         raise SystemExit(
-            "SA FSRS-6 trainer supports lstm, fsrs6, and fsrs6_default environments."
+            "FSRS6 ADR Direct trainer supports lstm, fsrs6, and fsrs6_default environments."
         )
 
     (
@@ -573,7 +577,7 @@ def _anneal(
     device = bundle.device
     generator = torch.Generator(device=device)
     generator.manual_seed(config.seed)
-    base_policy = SAFSRS6Policy.baseline(
+    base_policy = FSRS6ADRDirectPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
@@ -712,13 +716,13 @@ def _evaluate_sa_candidates(
     feature_version: str = FEATURE_VERSION,
     seed: int,
 ) -> list[CandidateMetrics]:
-    template = SAFSRS6Policy.baseline(
+    template = FSRS6ADRDirectPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         feature_version=feature_version,
     )
-    sched_ops = SAFSRS6BatchSchedulerOps(
+    sched_ops = FSRS6ADRDirectBatchSchedulerOps(
         weights=bundle.scheduler_weights,
         policy=template,
         coefficients=coefficients,
@@ -862,7 +866,7 @@ def _artifact_id(
 ) -> str:
     lambda_token = _float_token(lambda_value)
     dr_token = _float_token(baseline_desired_retention)
-    return f"sa-fsrs6-user-{user_id}-dr-{dr_token}-lambda-{lambda_token}-seed-{seed}"
+    return f"fsrs6-adr-direct-user-{user_id}-dr-{dr_token}-lambda-{lambda_token}-seed-{seed}"
 
 
 def _float_token(value: float) -> str:

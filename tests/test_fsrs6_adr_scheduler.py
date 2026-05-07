@@ -15,29 +15,29 @@ if str(REPO_ROOT) not in sys.path:
 from simulator.core import CardView
 from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
 from simulator.math.fsrs import Bounds
-from simulator.sa_fsrs6_dr_policy import (
+from simulator.fsrs6_adr_delta_policy import (
     FEATURE_VERSION_LOG_LINEAR as DR_FEATURE_VERSION_LOG_LINEAR,
 )
-from simulator.sa_fsrs6_dr_policy import SAFSRS6DRPolicy
-from simulator.sa_fsrs6_policy import (
+from simulator.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicy
+from simulator.fsrs6_adr_direct_policy import (
     FEATURE_VERSION_LOG_LINEAR as SA_FEATURE_VERSION_LOG_LINEAR,
 )
-from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 from simulator.schedulers.fsrs import (
     FSRS3BatchSchedulerOps,
     FSRS6BatchSchedulerOps,
     FSRS6Scheduler,
     FSRS6VectorizedSchedulerOps,
 )
-from simulator.schedulers.sa_fsrs6_dr import (
-    SAFSRS6DRBatchSchedulerOps,
-    SAFSRS6DRScheduler,
-    SAFSRS6DRVectorizedSchedulerOps,
+from simulator.schedulers.fsrs6_adr_delta import (
+    FSRS6ADRDeltaBatchSchedulerOps,
+    FSRS6ADRDeltaScheduler,
+    FSRS6ADRDeltaVectorizedSchedulerOps,
 )
-from simulator.schedulers.sa_fsrs6 import (
-    SAFSRS6BatchSchedulerOps,
-    SAFSRS6Scheduler,
-    SAFSRS6VectorizedSchedulerOps,
+from simulator.schedulers.fsrs6_adr_direct import (
+    FSRS6ADRDirectBatchSchedulerOps,
+    FSRS6ADRDirectScheduler,
+    FSRS6ADRDirectVectorizedSchedulerOps,
 )
 
 
@@ -54,14 +54,14 @@ def _view(state, *, last_review: float = 0.0, interval: float = 1.0) -> CardView
     )
 
 
-class SAFSRS6SchedulerTests(unittest.TestCase):
+class FSRS6ADRDirectSchedulerTests(unittest.TestCase):
     def test_baseline_policy_matches_fsrs6_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6Policy.baseline(desired_retention=0.9).write_json(policy_path)
+            FSRS6ADRDirectPolicy.baseline(desired_retention=0.9).write_json(policy_path)
 
             fsrs = FSRS6Scheduler(weights=None, desired_retention=0.9)
-            sa = SAFSRS6Scheduler(policy_json=policy_path, fsrs_weights=None)
+            sa = FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None)
 
             fsrs_interval, fsrs_state = fsrs.init_card(_view(None), 3, 0.0)
             sa_interval, sa_state = sa.init_card(_view(None), 3, 0.0)
@@ -82,11 +82,11 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
                 self.assertAlmostEqual(sa_state["d"], fsrs_state["d"], places=9)
 
     def test_scheduler_does_not_reference_env_memory_state(self) -> None:
-        source = inspect.getsource(SAFSRS6Scheduler)
+        source = inspect.getsource(FSRS6ADRDirectScheduler)
         self.assertNotIn("memory_state", source)
 
     def test_policy_retention_is_clipped_to_configured_range(self) -> None:
-        policy = SAFSRS6Policy(
+        policy = FSRS6ADRDirectPolicy(
             coefficients=(100.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             retention_min=0.7,
             retention_max=0.98,
@@ -98,14 +98,14 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
     def test_linear_policy_round_trips_feature_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6Policy.baseline(
+            FSRS6ADRDirectPolicy.baseline(
                 desired_retention=0.9,
                 retention_min=0.5,
                 retention_max=0.98,
                 feature_version=SA_FEATURE_VERSION_LOG_LINEAR,
             ).write_json(policy_path)
 
-            loaded = SAFSRS6Policy.from_json(policy_path)
+            loaded = FSRS6ADRDirectPolicy.from_json(policy_path)
 
         self.assertEqual(loaded.feature_version, SA_FEATURE_VERSION_LOG_LINEAR)
         self.assertEqual(loaded.feature_count, 3)
@@ -114,7 +114,7 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
     def test_linear_baseline_policy_matches_fsrs6_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6Policy.baseline(
+            FSRS6ADRDirectPolicy.baseline(
                 desired_retention=0.9,
                 retention_min=0.5,
                 retention_max=0.98,
@@ -122,7 +122,7 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
             ).write_json(policy_path)
 
             fsrs = FSRS6Scheduler(weights=None, desired_retention=0.9)
-            sa = SAFSRS6Scheduler(policy_json=policy_path, fsrs_weights=None)
+            sa = FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None)
 
             fsrs_interval, _fsrs_state = fsrs.init_card(_view(None), 3, 0.0)
             sa_interval, _sa_state = sa.init_card(_view(None), 3, 0.0)
@@ -132,7 +132,7 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
     def test_linear_vectorized_baseline_policy_matches_fsrs6_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6Policy.baseline(
+            FSRS6ADRDirectPolicy.baseline(
                 desired_retention=0.9,
                 retention_min=0.5,
                 retention_max=0.98,
@@ -144,8 +144,8 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
                 device=torch.device("cpu"),
                 dtype=torch.float32,
             )
-            sa = SAFSRS6VectorizedSchedulerOps(
-                SAFSRS6Scheduler(policy_json=policy_path, fsrs_weights=None),
+            sa = FSRS6ADRDirectVectorizedSchedulerOps(
+                FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None),
                 device=torch.device("cpu"),
                 dtype=torch.float32,
             )
@@ -160,7 +160,7 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
         self.assertTrue(torch.allclose(sa_interval, fsrs_interval))
 
     def test_batch_ops_accept_per_user_coefficients(self) -> None:
-        policy = SAFSRS6Policy.baseline(desired_retention=0.9)
+        policy = FSRS6ADRDirectPolicy.baseline(desired_retention=0.9)
         weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
         coefficients = torch.tensor(
             [
@@ -169,7 +169,7 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
             ],
             dtype=torch.float32,
         )
-        ops = SAFSRS6BatchSchedulerOps(
+        ops = FSRS6ADRDirectBatchSchedulerOps(
             weights=weights,
             policy=policy,
             coefficients=coefficients,
@@ -189,7 +189,7 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
         self.assertGreater(float(intervals[1]), float(intervals[0]))
 
     def test_batch_ops_accept_linear_per_user_coefficients(self) -> None:
-        policy = SAFSRS6Policy.baseline(
+        policy = FSRS6ADRDirectPolicy.baseline(
             desired_retention=0.9,
             retention_min=0.5,
             retention_max=0.98,
@@ -203,7 +203,7 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
             ],
             dtype=torch.float32,
         )
-        ops = SAFSRS6BatchSchedulerOps(
+        ops = FSRS6ADRDirectBatchSchedulerOps(
             weights=weights,
             policy=policy,
             coefficients=coefficients,
@@ -223,14 +223,14 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
         self.assertGreater(float(intervals[1]), float(intervals[0]))
 
     def test_batch_ops_reject_invalid_linear_coefficients_shape(self) -> None:
-        policy = SAFSRS6Policy.baseline(
+        policy = FSRS6ADRDirectPolicy.baseline(
             desired_retention=0.9,
             feature_version=SA_FEATURE_VERSION_LOG_LINEAR,
         )
         weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
 
         with self.assertRaisesRegex(ValueError, r"\(users, 3\)"):
-            SAFSRS6BatchSchedulerOps(
+            FSRS6ADRDirectBatchSchedulerOps(
                 weights=weights,
                 policy=policy,
                 coefficients=torch.zeros((2, 6), dtype=torch.float32),
@@ -299,9 +299,9 @@ class SAFSRS6SchedulerTests(unittest.TestCase):
             )
 
 
-class SAFSRS6DRSchedulerTests(unittest.TestCase):
+class FSRS6ADRDeltaSchedulerTests(unittest.TestCase):
     def test_zero_policy_reproduces_input_dr_across_states(self) -> None:
-        policy = SAFSRS6DRPolicy.baseline()
+        policy = FSRS6ADRDeltaPolicy.baseline()
 
         for stability in (0.1, 2.5, 100.0):
             for difficulty in (1.0, 5.5, 10.0):
@@ -312,7 +312,9 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
                     )
 
     def test_linear_zero_policy_reproduces_input_dr_across_states(self) -> None:
-        policy = SAFSRS6DRPolicy.baseline(feature_version=DR_FEATURE_VERSION_LOG_LINEAR)
+        policy = FSRS6ADRDeltaPolicy.baseline(
+            feature_version=DR_FEATURE_VERSION_LOG_LINEAR
+        )
 
         self.assertEqual(policy.feature_count, 4)
         for stability in (0.1, 2.5, 100.0):
@@ -326,11 +328,11 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
     def test_linear_policy_round_trips_feature_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6DRPolicy.baseline(
+            FSRS6ADRDeltaPolicy.baseline(
                 feature_version=DR_FEATURE_VERSION_LOG_LINEAR
             ).write_json(policy_path)
 
-            loaded = SAFSRS6DRPolicy.from_json(policy_path)
+            loaded = FSRS6ADRDeltaPolicy.from_json(policy_path)
 
         self.assertEqual(loaded.feature_version, DR_FEATURE_VERSION_LOG_LINEAR)
         self.assertEqual(len(loaded.coefficients), 4)
@@ -338,14 +340,14 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
     def test_zero_policy_matches_fsrs6_scheduler_for_same_dr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6DRPolicy.baseline().write_json(policy_path)
+            FSRS6ADRDeltaPolicy.baseline().write_json(policy_path)
 
             for desired_retention in (0.50, 0.90, 0.98):
                 fsrs = FSRS6Scheduler(
                     weights=None,
                     desired_retention=desired_retention,
                 )
-                sa = SAFSRS6DRScheduler(
+                sa = FSRS6ADRDeltaScheduler(
                     policy_json=policy_path,
                     desired_retention=desired_retention,
                     fsrs_weights=None,
@@ -372,12 +374,12 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
     def test_linear_zero_policy_matches_fsrs6_scheduler_for_same_dr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6DRPolicy.baseline(
+            FSRS6ADRDeltaPolicy.baseline(
                 feature_version=DR_FEATURE_VERSION_LOG_LINEAR
             ).write_json(policy_path)
 
             fsrs = FSRS6Scheduler(weights=None, desired_retention=0.90)
-            sa = SAFSRS6DRScheduler(
+            sa = FSRS6ADRDeltaScheduler(
                 policy_json=policy_path,
                 desired_retention=0.90,
                 fsrs_weights=None,
@@ -392,7 +394,7 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
     def test_linear_vectorized_zero_policy_matches_fsrs6_for_same_dr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6DRPolicy.baseline(
+            FSRS6ADRDeltaPolicy.baseline(
                 feature_version=DR_FEATURE_VERSION_LOG_LINEAR
             ).write_json(policy_path)
 
@@ -401,8 +403,8 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
                 device=torch.device("cpu"),
                 dtype=torch.float32,
             )
-            sa = SAFSRS6DRVectorizedSchedulerOps(
-                SAFSRS6DRScheduler(
+            sa = FSRS6ADRDeltaVectorizedSchedulerOps(
+                FSRS6ADRDeltaScheduler(
                     policy_json=policy_path,
                     desired_retention=0.90,
                     fsrs_weights=None,
@@ -423,11 +425,11 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
         self.assertTrue(torch.allclose(sa_state.d, fsrs_state.d))
 
     def test_scheduler_does_not_reference_env_memory_state(self) -> None:
-        source = inspect.getsource(SAFSRS6DRScheduler)
+        source = inspect.getsource(FSRS6ADRDeltaScheduler)
         self.assertNotIn("memory_state", source)
 
     def test_batch_ops_accept_per_lane_dr_and_coefficients(self) -> None:
-        policy = SAFSRS6DRPolicy.baseline()
+        policy = FSRS6ADRDeltaPolicy.baseline()
         weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
         coefficients = torch.tensor(
             [
@@ -436,7 +438,7 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
             ],
             dtype=torch.float32,
         )
-        ops = SAFSRS6DRBatchSchedulerOps(
+        ops = FSRS6ADRDeltaBatchSchedulerOps(
             weights=weights,
             desired_retention=torch.tensor([0.80, 0.90], dtype=torch.float32),
             policy=policy,
@@ -458,7 +460,9 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
         self.assertGreater(float(intervals[0]), float(intervals[1]))
 
     def test_batch_ops_accept_linear_per_lane_dr_and_coefficients(self) -> None:
-        policy = SAFSRS6DRPolicy.baseline(feature_version=DR_FEATURE_VERSION_LOG_LINEAR)
+        policy = FSRS6ADRDeltaPolicy.baseline(
+            feature_version=DR_FEATURE_VERSION_LOG_LINEAR
+        )
         weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
         coefficients = torch.tensor(
             [
@@ -467,7 +471,7 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
             ],
             dtype=torch.float32,
         )
-        ops = SAFSRS6DRBatchSchedulerOps(
+        ops = FSRS6ADRDeltaBatchSchedulerOps(
             weights=weights,
             desired_retention=torch.tensor([0.80, 0.90], dtype=torch.float32),
             policy=policy,
@@ -489,10 +493,12 @@ class SAFSRS6DRSchedulerTests(unittest.TestCase):
         self.assertGreater(float(intervals[0]), float(intervals[1]))
 
     def test_batch_ops_reject_wrong_linear_coefficient_count(self) -> None:
-        policy = SAFSRS6DRPolicy.baseline(feature_version=DR_FEATURE_VERSION_LOG_LINEAR)
+        policy = FSRS6ADRDeltaPolicy.baseline(
+            feature_version=DR_FEATURE_VERSION_LOG_LINEAR
+        )
         weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
         with self.assertRaisesRegex(ValueError, r"users, 4"):
-            SAFSRS6DRBatchSchedulerOps(
+            FSRS6ADRDeltaBatchSchedulerOps(
                 weights=weights,
                 desired_retention=torch.tensor([0.80, 0.90], dtype=torch.float32),
                 policy=policy,

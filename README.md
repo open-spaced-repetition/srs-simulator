@@ -26,7 +26,7 @@ uv run simulate.py --engine vectorized --env lstm --sched fsrs6 --no-log
 ## Requirements and data
 - Python 3.13+ (matches `pyproject.toml`).
 - Use `uv sync` to install dependencies. Torch is pulled from the uv indexes declared in `pyproject.toml` (CUDA builds on Windows/Linux, CPU builds on macOS).
-- Plotly is included for interactive SA FSRS-6 policy-surface HTML plots.
+- Plotly is included for interactive FSRS6 ADR Direct policy-surface HTML plots.
 - `cma`/pycma is included for CMA-ES black-box policy search in RL scheduler experiments.
 - `srs-benchmark` repo is expected next to this repo at `../srs-benchmark` (override with `--srs-benchmark-root`). It provides FSRS/HLR/DASH weights in `result/*.jsonl` and LSTM weights in `weights/LSTM/<user_id>.pth`.
 - Generate LSTM weights in the `srs-benchmark` repo by running:
@@ -70,16 +70,15 @@ The rebooted RL scheduler experiment infrastructure starts from checked-in TOML
 profiles and machine-readable stage records:
 
 ```bash
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage dry-run --run-id sa-fsrs6-users-1-8
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-users-1-8
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_dr_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-dr-users-1-8
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml --stage all --run-id sa-fsrs6-dr-linear-users-1-8
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/cmaes_fsrs6_linear_batch_sweep_users_1_8.toml --stage all --run-id cmaes-fsrs6-linear-batch-sweep-users-1-8-v1
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/cmaes_fsrs6_dr_linear_seed42_users_1_8.toml --stage all --run-id cmaes-fsrs6-dr-linear-users-1-8-v1-seed42
-uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/sa_fsrs6_batch_sweep_users_1_8/sa-fsrs6-users-1-8
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage dry-run --run-id fsrs6_adr_direct_sa_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage all --run-id fsrs6_adr_direct_sa_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_direct_linear_cmaes_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_sa_users_1_8.toml --stage all --run-id fsrs6_adr_delta_linear_sa_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_delta_linear_cmaes_users_1_8_v1
+uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/fsrs6_adr_direct_sa_users_1_8/fsrs6_adr_direct_sa_users_1_8_v1
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
-uv run python experiments/rl_scheduler/plot_sa_fsrs6_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
-uv run python experiments/rl_scheduler/plot_sa_fsrs6_dr_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
+uv run python experiments/rl_scheduler/plot_fsrs6_adr_direct_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
+uv run python experiments/rl_scheduler/plot_fsrs6_adr_delta_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
 ```
 
 `dry-run` validates the TOML and prints resolved commands without writing formal
@@ -102,18 +101,15 @@ missing. `all` runs the configured stages in order and stops at the first
 non-zero stage result. Scheduler policy artifacts must validate against the
 metadata contract before they can be used by formal stages.
 
-`sa_fsrs6_batch_sweep_users_1_8.toml` trains and evaluates `sa_fsrs6`.
-`sa_fsrs6_dr_batch_sweep_users_1_8.toml` trains and evaluates the
-DR-conditioned `sa_fsrs6_dr` variant whose policy takes `(S,D,DR)` and learns a
-logit-space adjustment around the requested desired retention.
-`sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml` uses the same workflow and
+`fsrs6_adr_direct_sa_users_1_8.toml` trains and evaluates `fsrs6_adr_direct`.
+`fsrs6_adr_delta_linear_sa_users_1_8.toml` uses the same workflow and
 training budget with the simplified 4-parameter
-`sa_fsrs6_dr_log_linear_v1` feature version.
-`cmaes_fsrs6_linear_batch_sweep_users_1_8.toml` trains one simplified
-3-parameter `sa_fsrs6_log_linear_v1` policy per user and baseline desired
-retention with CMA-ES, then evaluates the resulting ordinary `sa_fsrs6`
+`fsrs6_adr_delta_log_linear_v1` feature version.
+`fsrs6_adr_direct_linear_cmaes_users_1_8.toml` trains one simplified
+3-parameter `fsrs6_adr_direct_log_linear_v1` policy per user and baseline desired
+retention with CMA-ES, then evaluates the resulting ordinary `fsrs6_adr_direct`
 schedulers.
-`cmaes_fsrs6_dr_linear_seed42_users_1_8.toml` uses the same scheduler artifact
+`fsrs6_adr_delta_linear_cmaes_users_1_8.toml` uses the same scheduler artifact
 and sweep path, but trains the 4-parameter DR-conditioned policy with CMA-ES
 instead of simulated annealing.
 
@@ -127,7 +123,7 @@ batch_size = 8
 ```
 
 `trainer = "auto"` resolves the built-in trainer from `training.command_template`;
-set an explicit trainer such as `"cmaes_fsrs6"` or `"cmaes_fsrs6_dr"` for command-template-free
+set an explicit trainer such as `"fsrs6_adr_direct_cmaes"` or `"fsrs6_adr_delta_cmaes"` for command-template-free
 in-process runs.
 
 ## Experiments
@@ -136,13 +132,13 @@ Retention sweep + Pareto (compare environments, optional SSP-MMC policies):
 ```bash
 uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6
 uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched sspmmc
-uv run experiments/retention_sweep/run_sweep.py --env lstm --sched sa_fsrs6 --sa-fsrs6-policy <policy.json>
-uv run experiments/retention_sweep/run_sweep.py --env lstm --sched sa_fsrs6_dr --sa-fsrs6-dr-policy <policy.json>
+uv run experiments/retention_sweep/run_sweep.py --env lstm --sched fsrs6_adr_direct --fsrs6-adr-direct-policy <policy.json>
+uv run experiments/retention_sweep/run_sweep.py --env lstm --sched fsrs6_adr_delta --fsrs6-adr-delta-policy <policy.json>
 uv run experiments/retention_sweep/run_sweep.py --env fsrs6,lstm --sched fsrs6,sspmmc
 uv run experiments/retention_sweep/build_pareto.py --env fsrs6,lstm --sched fsrs6,sspmmc
 ```
 
-By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc`, `sa_fsrs6`, or `sa_fsrs6_dr` to add policy curves. For `sa_fsrs6`, pass `--sa-fsrs6-policy <policy.json>`; the policy maps scheduler-side FSRS-6 `S,D` to desired retention. For `sa_fsrs6_dr`, pass `--sa-fsrs6-dr-policy <policy.json>`; the policy maps scheduler-side `S,D` plus the current DR target to a retention adjustment. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. Retention sweeps write JSONL summaries by default but skip daily CSV sidecars to limit disk usage; pass `--diagnostic-csv-logs` when diagnosing simulation behavior or when using CSV-based plotting helpers. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` recursively scans JSONL logs under `--log-dir`, annotates points by default, and can compare staged baseline logs with nested sweep outputs. Pass `--hide-labels` to disable labels, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
+By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc`, `fsrs6_adr_direct`, or `fsrs6_adr_delta` to add policy curves. For `fsrs6_adr_direct`, pass `--fsrs6-adr-direct-policy <policy.json>`; the policy maps scheduler-side FSRS-6 `S,D` to desired retention. For `fsrs6_adr_delta`, pass `--fsrs6-adr-delta-policy <policy.json>`; the policy maps scheduler-side `S,D` plus the current DR target to a retention adjustment. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. Retention sweeps write JSONL summaries by default but skip daily CSV sidecars to limit disk usage; pass `--diagnostic-csv-logs` when diagnosing simulation behavior or when using CSV-based plotting helpers. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` recursively scans JSONL logs under `--log-dir`, annotates points by default, and can compare staged baseline logs with nested sweep outputs. Pass `--hide-labels` to disable labels, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
 
 Short-term scheduling (event or vectorized engines):
 
@@ -171,12 +167,12 @@ Additional retention sweep helpers:
 ```bash
 uv run experiments/retention_sweep/run_sweep_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,anki_sm2,memrise --max-parallel 4
 uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 200 --env lstm --sched fsrs6,anki_sm2,memrise
-uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 10 --env lstm --sched sa_fsrs6 --sa-fsrs6-policy <policy.json>
+uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 10 --env lstm --sched fsrs6_adr_direct --fsrs6-adr-direct-policy <policy.json>
 uv run python experiments/retention_sweep/run_sweep_users_batched.py --config <edited-batched-sweep.toml> --dry-run
-uv run python experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 8 --env lstm --sched fsrs6,sa_fsrs6 --sa-fsrs6-policy-root <train-overfit/train_outputs> --sa-fsrs6-lambda-values 0.5
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/sa_fsrs6_dr_batch_sweep_users_1_8.toml --stage dry-run --run-id sa-fsrs6-dr-users-1-8
-uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 8 --env lstm --sched fsrs6,sa_fsrs6 --engine batched
-uv run experiments/retention_sweep/build_pareto_users.py --config experiments/rl_scheduler/configs/sa_fsrs6_batch_sweep_users_1_8.toml --dry-run
+uv run python experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 8 --env lstm --sched fsrs6,fsrs6_adr_direct --fsrs6-adr-direct-policy-root <train-overfit/train_outputs> --fsrs6-adr-direct-lambda-values 0.5
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_sa_users_1_8.toml --stage dry-run --run-id fsrs6_adr_delta_linear_sa_users_1_8_v1
+uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 8 --env lstm --sched fsrs6,fsrs6_adr_direct --engine batched
+uv run experiments/retention_sweep/build_pareto_users.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --dry-run
 uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,sspmmc
 uv run experiments/retention_sweep/aggregate_users.py --env lstm --sched fsrs6,anki_sm2,memrise
 uv run experiments/retention_sweep/dominance.py --env lstm
@@ -184,7 +180,7 @@ uv run python experiments/retention_sweep/plot_short_loops.py --env lstm --sched
 ```
 
 - `run_sweep_users.py` fans out `run_sweep.py` across a user-id range and supports `--max-parallel`, `--cuda-devices` (round-robin per worker), plus MPS env passthrough; `--max-parallel` only delivers speedups when GPU Multi-Process Service (MPS) is enabled on the host. In parallel it shows an overall work bar, a user bar, and per-worker bars (disable with `--child-progress off`, and use `--show-commands on` if you need the raw subprocess commands).
-- `run_sweep_users_batched.py` runs LSTM/FSRS6 retention sweeps in batched vectorized mode. By default it uses `--max-lanes-per-batch 10000` to precompute outer user batches before loading per-user weights, keeping each user's scheduler/DR lanes together; use `--batch-size` only when you want a fixed outer user count, such as distributing work with `--cuda-devices`. Each batch expands `(user, scheduler, parameter/DR)` into simulation lanes, so mixed scheduler sweeps share one batched engine call per environment batch. It is also the supported entrypoint for FSRS-trained `sa_fsrs6` and `sa_fsrs6_dr` policies evaluated in FSRS6 or external LSTM environments. Use `--sa-fsrs6-policy <policy.json>` for one policy, `--sa-fsrs6-policy-root <train-overfit/train_outputs>` or `--sa-fsrs6-train-run-root <run-root>` to expand trained `(user, baseline DR, lambda)` policies, or `--sa-fsrs6-policy-manifest <policies.toml>` for explicit entries. Use `--sa-fsrs6-dr-policy <policy.json>` for one DR-conditioned policy, `--sa-fsrs6-dr-policy-root <train-overfit/train_outputs>` or `--sa-fsrs6-dr-train-run-root <run-root>` to expand trained `(user, lambda)` policies across the DR grid, or `--sa-fsrs6-dr-policy-manifest <policies.toml>` for explicit entries. `sa_fsrs6` manifests include `baseline_desired_retention`; `sa_fsrs6_dr` manifests use `user_id`, optional `lambda_value`, and `path`. Formal SA experiments keep the batched sweep settings inside `experiments/rl_scheduler/configs/*.toml` so one TOML reproduces training, sweep, Pareto build, and analysis. Batched sweeps use `--log-layout user` by default, so `--log-dir logs/retention_sweep` writes `logs/retention_sweep/user_<id>/sched_...` for all schedulers and can be consumed directly by `build_pareto_users.py`; use `--log-layout sweep` to keep the legacy `sched_.../user_<id>` layout. Short-term steps are supported via `--short-term-source steps`, and LSTM sched-based short-term is supported via `--short-term-source sched`. Batched sweeps skip per-user daily CSV sidecars and batch GPU CSV logs by default; pass `--diagnostic-csv-logs` to write them under the normal log root.
+- `run_sweep_users_batched.py` runs LSTM/FSRS6 retention sweeps in batched vectorized mode. By default it uses `--max-lanes-per-batch 10000` to precompute outer user batches before loading per-user weights, keeping each user's scheduler/DR lanes together; use `--batch-size` only when you want a fixed outer user count, such as distributing work with `--cuda-devices`. Each batch expands `(user, scheduler, parameter/DR)` into simulation lanes, so mixed scheduler sweeps share one batched engine call per environment batch. It is also the supported entrypoint for FSRS-trained `fsrs6_adr_direct` and `fsrs6_adr_delta` policies evaluated in FSRS6 or external LSTM environments. Use `--fsrs6-adr-direct-policy <policy.json>` for one policy, `--fsrs6-adr-direct-policy-root <train-overfit/train_outputs>` or `--fsrs6-adr-direct-train-run-root <run-root>` to expand trained `(user, baseline DR, lambda)` policies, or `--fsrs6-adr-direct-policy-manifest <policies.toml>` for explicit entries. Use `--fsrs6-adr-delta-policy <policy.json>` for one DR-conditioned policy, `--fsrs6-adr-delta-policy-root <train-overfit/train_outputs>` or `--fsrs6-adr-delta-train-run-root <run-root>` to expand trained `(user, lambda)` policies across the DR grid, or `--fsrs6-adr-delta-policy-manifest <policies.toml>` for explicit entries. `fsrs6_adr_direct` manifests include `baseline_desired_retention`; `fsrs6_adr_delta` manifests use `user_id`, optional `lambda_value`, and `path`. Formal ADR experiments keep the batched sweep settings inside `experiments/rl_scheduler/configs/*.toml` so one TOML reproduces training, sweep, Pareto build, and analysis. Batched sweeps use `--log-layout user` by default, so `--log-dir logs/retention_sweep` writes `logs/retention_sweep/user_<id>/sched_...` for all schedulers and can be consumed directly by `build_pareto_users.py`; use `--log-layout sweep` to keep the legacy `sched_.../user_<id>` layout. Short-term steps are supported via `--short-term-source steps`, and LSTM sched-based short-term is supported via `--short-term-source sched`. Batched sweeps skip per-user daily CSV sidecars and batch GPU CSV logs by default; pass `--diagnostic-csv-logs` to write them under the normal log root.
 - `SRS_LSTM_MAX_BATCH` defaults to 20000, which typically needs ~12GB of GPU memory; keep `--max-lanes-per-batch` at or below the default 10000 unless memory allows larger chunks.
 - `build_pareto_users.py` fans out `build_pareto.py` across a user-id range.
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON, recursively scanning nested batched lane logs under `--log-dir`. By default it plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise; use `--equiv-baselines` to choose different baseline scheduler specs and `--equiv-pairs` for generic DR-scheduler pair boxplots such as `lstm:fsrs6`. Use `--equiv-report fsrs3` (and include `fsrs3` in `--sched`) to switch the baseline-equivalence target to FSRSv3.
@@ -200,7 +196,7 @@ Legend: ✓ supported, — not supported.
 
 Event engine:
 
-| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc | sa_fsrs6 | sa_fsrs6_dr |
+| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc | fsrs6_adr_direct | fsrs6_adr_delta |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | lstm | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -210,14 +206,14 @@ Event engine:
 
 Vectorized engine:
 
-| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc | sa_fsrs6 | sa_fsrs6_dr |
+| env \\ sched | fsrs6 | fsrs3 | hlr | dash | lstm | fixed | anki_sm2 | memrise | sspmmc | fsrs6_adr_direct | fsrs6_adr_delta |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | lstm | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | fsrs6 | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Batched (multi-user vectorized in `run_sweep_users_batched.py`):
 
-| env \\ sched | fsrs6 | fsrs3 | lstm | anki_sm2 | memrise | fixed | sa_fsrs6 | sa_fsrs6_dr |
+| env \\ sched | fsrs6 | fsrs3 | lstm | anki_sm2 | memrise | fixed | fsrs6_adr_direct | fsrs6_adr_delta |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | lstm | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | fsrs6 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
@@ -225,7 +221,7 @@ Batched (multi-user vectorized in `run_sweep_users_batched.py`):
 Notes:
 - Event engine is the reference implementation and supports all scheduler/environment combinations, even if some pairings are not meaningful.
 - Vectorized engine supports only LSTM and FSRS6 environments and does not implement DASHScheduler.
-- Batched mode is intended for retention sweeps; it is vectorized-only and currently limited to the schedulers listed above. `sa_fsrs6` requires one of `--sa-fsrs6-policy`, `--sa-fsrs6-policy-root`, `--sa-fsrs6-train-run-root`, or `--sa-fsrs6-policy-manifest`; `sa_fsrs6_dr` uses the matching `--sa-fsrs6-dr-*` policy source flags.
+- Batched mode is intended for retention sweeps; it is vectorized-only and currently limited to the schedulers listed above. `fsrs6_adr_direct` requires one of `--fsrs6-adr-direct-policy`, `--fsrs6-adr-direct-policy-root`, `--fsrs6-adr-direct-train-run-root`, or `--fsrs6-adr-direct-policy-manifest`; `fsrs6_adr_delta` uses the matching `--fsrs6-adr-delta-*` policy source flags.
 
 ## Evaluation
 `experiments/retention_sweep/aggregate_users.py` compares scheduler efficiency by aggregating retention_sweep logs across users for each environment, scheduler, and target setting (desired retention or fixed interval) and restricting to the intersection of user IDs so each config is compared on the same users.

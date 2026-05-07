@@ -21,7 +21,7 @@ from experiments.retention_sweep.cli_utils import has_flag
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
-DEFAULT_SCHEDULERS = ("fsrs6", "sa_fsrs6", "sa_fsrs6_dr")
+DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr_direct", "fsrs6_adr_delta")
 DEFAULT_METRIC = "avg_accum_memorized_per_hour"
 USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$")
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
@@ -88,7 +88,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--comparisons",
-        default="sa_fsrs6:fsrs6,sa_fsrs6_dr:fsrs6,sa_fsrs6_dr:sa_fsrs6",
+        default="fsrs6_adr_direct:fsrs6,fsrs6_adr_delta:fsrs6,fsrs6_adr_delta:fsrs6_adr_direct",
         help="Comma-separated pairwise comparisons as left:right.",
     )
     parser.add_argument(
@@ -249,7 +249,7 @@ def load_result_items(path: Path) -> list[dict[str, Any]]:
 def parse_desired_retention(item: dict[str, Any]) -> float | None:
     for key in (
         "desired_retention",
-        "sa_fsrs6_baseline_desired_retention",
+        "fsrs6_adr_direct_baseline_desired_retention",
         "retention",
     ):
         value = item.get(key)
@@ -495,6 +495,84 @@ def pairwise_rows(
     return output_rows
 
 
+def dominance_rows(
+    rows: list[SweepRow],
+    env: str,
+    comparisons: tuple[tuple[str, str], ...],
+) -> list[list[str]]:
+    env_rows = [row for row in rows if row.environment == env]
+    by_key = {
+        (row.scheduler, row.user_id, round(row.desired_retention * 10000)): row
+        for row in env_rows
+    }
+    output_rows: list[list[str]] = []
+    for left, right in comparisons:
+        pair_count = 0
+        left_dominates = 0
+        right_dominates = 0
+        left_more_mem_more_time = 0
+        left_less_mem_less_time = 0
+        equal = 0
+        for row in env_rows:
+            if row.scheduler != left:
+                continue
+            key = (right, row.user_id, round(row.desired_retention * 10000))
+            other = by_key.get(key)
+            if other is None:
+                continue
+            pair_count += 1
+            left_no_worse = (
+                row.memorized_average >= other.memorized_average
+                and row.time_average <= other.time_average
+            )
+            left_strictly_better = (
+                row.memorized_average > other.memorized_average
+                or row.time_average < other.time_average
+            )
+            right_no_worse = (
+                other.memorized_average >= row.memorized_average
+                and other.time_average <= row.time_average
+            )
+            right_strictly_better = (
+                other.memorized_average > row.memorized_average
+                or other.time_average < row.time_average
+            )
+            if left_no_worse and left_strictly_better:
+                left_dominates += 1
+            elif right_no_worse and right_strictly_better:
+                right_dominates += 1
+            elif (
+                row.memorized_average == other.memorized_average
+                and row.time_average == other.time_average
+            ):
+                equal += 1
+            elif (
+                row.memorized_average > other.memorized_average
+                and row.time_average > other.time_average
+            ):
+                left_more_mem_more_time += 1
+            elif (
+                row.memorized_average < other.memorized_average
+                and row.time_average < other.time_average
+            ):
+                left_less_mem_less_time += 1
+            else:
+                equal += 1
+
+        output_rows.append(
+            [
+                f"{left} - {right}",
+                str(pair_count),
+                f"{left_dominates}/{pair_count}",
+                f"{right_dominates}/{pair_count}",
+                f"{left_more_mem_more_time}/{pair_count}",
+                f"{left_less_mem_less_time}/{pair_count}",
+                f"{equal}/{pair_count}",
+            ]
+        )
+    return output_rows
+
+
 def best_by_user(
     rows: list[SweepRow],
     *,
@@ -674,6 +752,22 @@ def print_env_report(
                 "mem wins",
             ],
             pairwise_rows(rows, env, comparisons),
+        )
+    )
+
+    print("\n### Same-user same-DR dominance\n")
+    print(
+        markdown_table(
+            [
+                "comparison",
+                "pairs",
+                "left dominates",
+                "right dominates",
+                "left mem+ time+",
+                "left mem- time-",
+                "equal",
+            ],
+            dominance_rows(rows, env, comparisons),
         )
     )
 

@@ -80,8 +80,8 @@ class BatchedSweepConfig:
         paths = _table(raw, "paths", required=False)
         logging_config = _table(raw, "logging", required=False)
         short_term = _table(raw, "short_term", required=False)
-        sa_fsrs6 = _table(raw, "sa_fsrs6", required=False)
-        sa_fsrs6_dr = _table(raw, "sa_fsrs6_dr", required=False)
+        fsrs6_adr_direct = _table(raw, "fsrs6_adr_direct", required=False)
+        fsrs6_adr_delta = _table(raw, "fsrs6_adr_delta", required=False)
 
         args = argparse.Namespace(
             config=config_path,
@@ -183,53 +183,53 @@ class BatchedSweepConfig:
             ),
             cuda_devices=_cuda_devices(execution.get("cuda_devices")),
             dry_run=_bool(execution.get("dry_run", False), "execution.dry_run"),
-            sa_fsrs6_policy=_optional_path(
-                sa_fsrs6.get("policy"),
-                "sa_fsrs6.policy",
+            fsrs6_adr_direct_policy=_optional_path(
+                fsrs6_adr_direct.get("policy"),
+                "fsrs6_adr_direct.policy",
                 base_path=base_path,
             ),
-            sa_fsrs6_policy_root=_optional_path(
-                sa_fsrs6.get("policy_root"),
-                "sa_fsrs6.policy_root",
+            fsrs6_adr_direct_policy_root=_optional_path(
+                fsrs6_adr_direct.get("policy_root"),
+                "fsrs6_adr_direct.policy_root",
                 base_path=base_path,
             ),
-            sa_fsrs6_train_run_root=_optional_path(
-                sa_fsrs6.get("train_run_root"),
-                "sa_fsrs6.train_run_root",
+            fsrs6_adr_direct_train_run_root=_optional_path(
+                fsrs6_adr_direct.get("train_run_root"),
+                "fsrs6_adr_direct.train_run_root",
                 base_path=base_path,
             ),
-            sa_fsrs6_policy_manifest=_optional_path(
-                sa_fsrs6.get("policy_manifest"),
-                "sa_fsrs6.policy_manifest",
+            fsrs6_adr_direct_policy_manifest=_optional_path(
+                fsrs6_adr_direct.get("policy_manifest"),
+                "fsrs6_adr_direct.policy_manifest",
                 base_path=base_path,
             ),
-            sa_fsrs6_lambda_values=_optional_float_list(
-                sa_fsrs6.get("lambda_values"),
-                "sa_fsrs6.lambda_values",
+            fsrs6_adr_direct_lambda_values=_optional_float_list(
+                fsrs6_adr_direct.get("lambda_values"),
+                "fsrs6_adr_direct.lambda_values",
             ),
-            sa_fsrs6_dr_policy=_optional_path(
-                sa_fsrs6_dr.get("policy"),
-                "sa_fsrs6_dr.policy",
+            fsrs6_adr_delta_policy=_optional_path(
+                fsrs6_adr_delta.get("policy"),
+                "fsrs6_adr_delta.policy",
                 base_path=base_path,
             ),
-            sa_fsrs6_dr_policy_root=_optional_path(
-                sa_fsrs6_dr.get("policy_root"),
-                "sa_fsrs6_dr.policy_root",
+            fsrs6_adr_delta_policy_root=_optional_path(
+                fsrs6_adr_delta.get("policy_root"),
+                "fsrs6_adr_delta.policy_root",
                 base_path=base_path,
             ),
-            sa_fsrs6_dr_train_run_root=_optional_path(
-                sa_fsrs6_dr.get("train_run_root"),
-                "sa_fsrs6_dr.train_run_root",
+            fsrs6_adr_delta_train_run_root=_optional_path(
+                fsrs6_adr_delta.get("train_run_root"),
+                "fsrs6_adr_delta.train_run_root",
                 base_path=base_path,
             ),
-            sa_fsrs6_dr_policy_manifest=_optional_path(
-                sa_fsrs6_dr.get("policy_manifest"),
-                "sa_fsrs6_dr.policy_manifest",
+            fsrs6_adr_delta_policy_manifest=_optional_path(
+                fsrs6_adr_delta.get("policy_manifest"),
+                "fsrs6_adr_delta.policy_manifest",
                 base_path=base_path,
             ),
-            sa_fsrs6_dr_lambda_values=_optional_float_list(
-                sa_fsrs6_dr.get("lambda_values"),
-                "sa_fsrs6_dr.lambda_values",
+            fsrs6_adr_delta_lambda_values=_optional_float_list(
+                fsrs6_adr_delta.get("lambda_values"),
+                "fsrs6_adr_delta.lambda_values",
             ),
         )
         return cls(path=config_path, args=args, envs=envs, schedulers=schedulers)
@@ -308,20 +308,20 @@ def _adapt_experiment_config(
         sweep=sweep,
         default_train_run_root=default_train_run_root,
     )
-    sa_fsrs6 = _adapt_experiment_policy_source(
+    fsrs6_adr_direct = _adapt_experiment_policy_source(
         sweep,
-        prefix="sa_fsrs6",
+        prefix="fsrs6_adr_direct",
         lambda_grid=lambda_grid,
         default_train_run_root=default_train_run_root
-        if "sa_fsrs6" in scheduler_names
+        if "fsrs6_adr_direct" in scheduler_names
         else None,
     )
-    sa_fsrs6_dr = _adapt_experiment_policy_source(
+    fsrs6_adr_delta = _adapt_experiment_policy_source(
         sweep,
-        prefix="sa_fsrs6_dr",
+        prefix="fsrs6_adr_delta",
         lambda_grid=lambda_grid,
         default_train_run_root=default_train_run_root
-        if "sa_fsrs6_dr" in scheduler_names
+        if "fsrs6_adr_delta" in scheduler_names
         else None,
     )
 
@@ -348,8 +348,8 @@ def _adapt_experiment_config(
             "diagnostic_csv_logs": performance.get("diagnostic_csv_logs", False),
         },
         "short_term": short_term,
-        "sa_fsrs6": sa_fsrs6,
-        "sa_fsrs6_dr": sa_fsrs6_dr,
+        "fsrs6_adr_direct": fsrs6_adr_direct,
+        "fsrs6_adr_delta": fsrs6_adr_delta,
     }
 
 

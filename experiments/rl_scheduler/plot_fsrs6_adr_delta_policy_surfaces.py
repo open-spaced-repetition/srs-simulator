@@ -14,8 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from simulator.batched_sweep.sa_policy import format_float_token, parse_float_token
-from simulator.sa_fsrs6_dr_policy import FEATURE_VERSION, SAFSRS6DRPolicy
+from simulator.batched_sweep.fsrs6_adr_direct_policy import (
+    format_float_token,
+    parse_float_token,
+)
+from simulator.fsrs6_adr_delta_policy import FEATURE_VERSION, FSRS6ADRDeltaPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +26,7 @@ class PolicyEntry:
     user_id: int
     lambda_value: float | None
     path: Path
-    policy: SAFSRS6DRPolicy
+    policy: FSRS6ADRDeltaPolicy
     discovered_dr_values: tuple[float, ...]
 
 
@@ -91,11 +94,11 @@ def _load_optional_json_mapping(path: Path) -> Mapping[str, Any] | None:
     return _load_json_mapping(path)
 
 
-def _is_sa_fsrs6_dr_policy(path: Path) -> bool:
+def _is_fsrs6_adr_delta_policy(path: Path) -> bool:
     raw = _load_json_mapping(path)
     return (
         raw.get("feature_version") == FEATURE_VERSION
-        or raw.get("policy_kind") == "sa-fsrs6-dr"
+        or raw.get("policy_kind") == "fsrs6-adr-delta"
     )
 
 
@@ -104,10 +107,10 @@ def _load_sibling_metadata(path: Path) -> Mapping[str, Any] | None:
     if metadata is None:
         return None
     scheduler_name = metadata.get("scheduler_name")
-    if scheduler_name is not None and scheduler_name != "sa_fsrs6_dr":
+    if scheduler_name is not None and scheduler_name != "fsrs6_adr_delta":
         raise ValueError(
             f"Artifact metadata for {path} has scheduler_name={scheduler_name!r}; "
-            "expected 'sa_fsrs6_dr'."
+            "expected 'fsrs6_adr_delta'."
         )
     policy_path_raw = metadata.get("policy_path")
     if isinstance(policy_path_raw, str) and policy_path_raw.strip():
@@ -212,9 +215,9 @@ def _discover_policies(
     user_filter = set(users) if users is not None else None
     entries: list[PolicyEntry] = []
     for path in sorted(root.rglob("policy.json")):
-        if not _is_sa_fsrs6_dr_policy(path):
+        if not _is_fsrs6_adr_delta_policy(path):
             continue
-        policy = SAFSRS6DRPolicy.from_json(path)
+        policy = FSRS6ADRDeltaPolicy.from_json(path)
         metadata = _load_sibling_metadata(path)
         path_user_id = _path_user_id(path)
         metadata_user_id = _metadata_user_id(metadata, path)
@@ -269,7 +272,7 @@ def _discover_policies(
 
     if not entries:
         raise SystemExit(
-            f"No matching SA FSRS-6 DR policy.json files found under {root}"
+            f"No matching FSRS6 ADR Delta policy.json files found under {root}"
         )
     _reject_duplicate_entries(entries)
     return entries
@@ -287,7 +290,7 @@ def _reject_duplicate_entries(entries: Sequence[PolicyEntry]) -> None:
         previous = seen.get(key)
         if previous is not None:
             raise ValueError(
-                "Duplicate SA FSRS-6 DR policies for "
+                "Duplicate FSRS6 ADR Delta policies for "
                 f"user={entry.user_id}, lambda={entry.lambda_value}: "
                 f"{previous} and {entry.path}"
             )
@@ -346,7 +349,7 @@ def _desired_retention_values(
 
 def _build_surface_data(
     *,
-    policy: SAFSRS6DRPolicy,
+    policy: FSRS6ADRDeltaPolicy,
     s_grid: Sequence[float],
     d_grid: Sequence[float],
     desired_retention: float,
@@ -399,7 +402,7 @@ def _scale_visibility(trace_count: int, visible_index: int | None = None) -> lis
 def _z_axis_range(
     *,
     z_mode: str,
-    policy: SAFSRS6DRPolicy,
+    policy: FSRS6ADRDeltaPolicy,
     surfaces: Sequence[SurfaceData],
 ) -> list[float]:
     if z_mode == "retention":
@@ -540,7 +543,7 @@ def _write_policy_plot(
     lambda_text = "none" if entry.lambda_value is None else f"{entry.lambda_value:g}"
     fig.update_layout(
         title=(
-            "SA FSRS-6 DR-conditioned retention policy surfaces: "
+            "FSRS6 ADR Delta-conditioned retention policy surfaces: "
             f"user {entry.user_id}, lambda={lambda_text}"
         ),
         scene={
@@ -580,7 +583,7 @@ def _write_policy_plot(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = (
-        out_dir / "sa_fsrs6_dr_policy_surfaces_"
+        out_dir / "fsrs6_adr_delta_policy_surfaces_"
         f"user_{entry.user_id}_lambda_{_lambda_label(entry.lambda_value)}_"
         f"z_{z_mode}.html"
     )
@@ -616,7 +619,7 @@ def _float_sequence(value: Any, field_name: str) -> tuple[float, ...]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Plot SA FSRS-6 DR-conditioned policy output surfaces by user, "
+            "Plot FSRS6 ADR Delta-conditioned policy output surfaces by user, "
             "lambda, and input desired retention."
         ),
         allow_abbrev=False,
@@ -682,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("experiments")
         / "rl_scheduler"
         / "plots"
-        / "sa_fsrs6_dr_policy_surfaces",
+        / "fsrs6_adr_delta_policy_surfaces",
         help="Directory for generated HTML plots.",
     )
     args = parser.parse_args(argv)

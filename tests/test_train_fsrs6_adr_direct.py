@@ -8,21 +8,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_cmaes_fsrs6 import (
+from experiments.rl_scheduler.train_cmaes_fsrs6_adr_direct import (
     baseline_coefficients,
     optimizer_settings_from_mapping,
 )
-from experiments.rl_scheduler.train_sa_fsrs6 import (
+from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     SASettings,
     _policy_feature_version,
     _score_from_relative_gains,
 )
-from simulator.sa_fsrs6_policy import FEATURE_VERSION_LOG_LINEAR, SAFSRS6Policy
+from simulator.fsrs6_adr_direct_policy import (
+    FEATURE_VERSION_LOG_LINEAR,
+    FSRS6ADRDirectPolicy,
+)
 
 
-class TrainSAFSRS6ConfigTests(unittest.TestCase):
+class TrainFSRS6ADRDirectConfigTests(unittest.TestCase):
     def test_policy_feature_version_defaults_to_log_poly(self) -> None:
-        self.assertEqual(_policy_feature_version({}), "sa_fsrs6_log_poly_v1")
+        self.assertEqual(_policy_feature_version({}), "fsrs6_adr_direct_log_poly_v1")
 
     def test_policy_feature_version_accepts_linear_variant(self) -> None:
         self.assertEqual(
@@ -49,7 +52,7 @@ class TrainSAFSRS6ConfigTests(unittest.TestCase):
 
         self.assertEqual(
             optimizer.initial_mean,
-            SAFSRS6Policy.baseline(
+            FSRS6ADRDirectPolicy.baseline(
                 desired_retention=settings.baseline_desired_retention,
                 retention_min=settings.retention_min,
                 retention_max=settings.retention_max,

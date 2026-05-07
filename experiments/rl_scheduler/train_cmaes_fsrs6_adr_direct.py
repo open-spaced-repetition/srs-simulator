@@ -15,11 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_cmaes_fsrs6_dr import (
+from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import (
     CMAESSettings,
     _optimizer_seed,
 )
-from experiments.rl_scheduler.train_sa_fsrs6 import (
+from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     CandidateMetrics,
     SASettings,
     TrainingProgress,
@@ -37,7 +37,7 @@ from experiments.rl_scheduler.train_sa_fsrs6 import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
-from simulator.sa_fsrs6_policy import SAFSRS6Policy, feature_count
+from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy, feature_count
 from simulator.short_term_config import resolve_short_term_config
 
 
@@ -53,7 +53,7 @@ class CMAESFSRS6TrainingResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an SA FSRS-6 scheduler policy with CMA-ES.",
+        description="Train an FSRS6 ADR Direct scheduler policy with CMA-ES.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", type=Path, required=True)
@@ -263,7 +263,7 @@ def baseline_coefficients(
     settings: SASettings,
     feature_version: str,
 ) -> tuple[float, ...]:
-    return SAFSRS6Policy.baseline(
+    return FSRS6ADRDirectPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
@@ -401,14 +401,14 @@ def write_artifact(
         result.best.memorized_per_minute,
         result.baseline.memorized_per_minute,
     )
-    policy = SAFSRS6Policy(
+    policy = FSRS6ADRDirectPolicy(
         coefficients=tuple(float(v) for v in result.best_coefficients.tolist()),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         baseline_desired_retention=settings.baseline_desired_retention,
         feature_version=feature_version,
         title=(
-            f"cmaes_sa_fsrs6_u{user_id}_dr_"
+            f"fsrs6_adr_direct_cmaes_u{user_id}_dr_"
             f"{settings.baseline_desired_retention:.2f}_lambda_{lambda_value:g}"
         ),
     )
@@ -452,7 +452,7 @@ def write_artifact(
                 config.seed,
             ),
             "family": config.family,
-            "scheduler_name": "sa_fsrs6",
+            "scheduler_name": "fsrs6_adr_direct",
             "environment": config.simulation.environment,
             "engine": config.simulation.engine,
             "training_user_ids": [user_id],

@@ -25,8 +25,8 @@ EVENT_SCHEDULERS = (
     "anki_sm2",
     "memrise",
     "sspmmc",
-    "sa_fsrs6",
-    "sa_fsrs6_dr",
+    "fsrs6_adr_direct",
+    "fsrs6_adr_delta",
 )
 VECTORIZED_ENVS = ("lstm", "fsrs6", "fsrs6_default")
 VECTORIZED_SCHEDULERS = (
@@ -40,8 +40,8 @@ VECTORIZED_SCHEDULERS = (
     "anki_sm2",
     "memrise",
     "sspmmc",
-    "sa_fsrs6",
-    "sa_fsrs6_dr",
+    "fsrs6_adr_direct",
+    "fsrs6_adr_delta",
 )
 BATCHED_ENVS = ("lstm", "fsrs6", "fsrs6_default")
 BATCHED_SCHEDULERS = (
@@ -53,8 +53,8 @@ BATCHED_SCHEDULERS = (
     "fixed",
     "anki_sm2",
     "memrise",
-    "sa_fsrs6",
-    "sa_fsrs6_dr",
+    "fsrs6_adr_direct",
+    "fsrs6_adr_delta",
 )
 
 

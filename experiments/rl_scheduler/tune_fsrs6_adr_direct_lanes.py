@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_sa_fsrs6 import (
+from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     SASettings,
     _build_bundle,
     _evaluate_sa_candidates,
@@ -23,14 +23,14 @@ from experiments.rl_scheduler.train_sa_fsrs6 import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig
-from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 from simulator.short_term_config import resolve_short_term_config
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Tune SA FSRS-6 effective lanes by timing one candidate evaluation "
+            "Tune FSRS6 ADR Direct effective lanes by timing one candidate evaluation "
             "per lane count."
         ),
         allow_abbrev=False,
@@ -86,7 +86,7 @@ def main() -> int:
     summary_path = output_dir / "lane_tuning_summary.json"
 
     summary: dict[str, Any] = {
-        "type": "sa-fsrs6-lane-tuning",
+        "type": "fsrs6-adr-direct-lane-tuning",
         "config_path": str(args.config),
         "output_dir": str(output_dir),
         "user_id": user_id,
@@ -217,7 +217,7 @@ def _baseline_coefficients(
     lanes: int,
     device: torch.device,
 ) -> torch.Tensor:
-    policy = SAFSRS6Policy.baseline(
+    policy = FSRS6ADRDirectPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,

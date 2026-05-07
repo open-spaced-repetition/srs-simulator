@@ -18,11 +18,11 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 
 
 SUPPORTED_TRAINERS = {
-    "sa_fsrs6",
-    "cmaes_fsrs6",
-    "sa_fsrs6_dr_grid",
-    "sa_fsrs6_dr",
-    "cmaes_fsrs6_dr",
+    "fsrs6_adr_direct",
+    "fsrs6_adr_direct_cmaes",
+    "fsrs6_adr_direct_dr_grid",
+    "fsrs6_adr_delta",
+    "fsrs6_adr_delta_cmaes",
 }
 
 
@@ -67,16 +67,16 @@ def resolve_in_process_trainer(
             raise ValueError(f"Unsupported in-process trainer: {configured_trainer}")
         return configured_trainer
     script_names = {Path(item).name for item in command_template}
-    if "train_cmaes_fsrs6.py" in script_names:
-        return "cmaes_fsrs6"
-    if "train_cmaes_fsrs6_dr.py" in script_names:
-        return "cmaes_fsrs6_dr"
-    if "train_sa_fsrs6_dr_grid.py" in script_names:
-        return "sa_fsrs6_dr_grid"
-    if "train_sa_fsrs6_dr.py" in script_names:
-        return "sa_fsrs6_dr"
-    if "train_sa_fsrs6.py" in script_names:
-        return "sa_fsrs6"
+    if "train_cmaes_fsrs6_adr_direct.py" in script_names:
+        return "fsrs6_adr_direct_cmaes"
+    if "train_cmaes_fsrs6_adr_delta.py" in script_names:
+        return "fsrs6_adr_delta_cmaes"
+    if "train_fsrs6_adr_direct_dr_grid.py" in script_names:
+        return "fsrs6_adr_direct_dr_grid"
+    if "train_fsrs6_adr_delta.py" in script_names:
+        return "fsrs6_adr_delta"
+    if "train_fsrs6_adr_direct.py" in script_names:
+        return "fsrs6_adr_direct"
     raise ValueError(
         "training.batch.trainer = 'auto' requires an in-tree RL trainer script "
         "in training.command_template."
@@ -84,23 +84,26 @@ def resolve_in_process_trainer(
 
 
 def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
-    from experiments.rl_scheduler.train_cmaes_fsrs6 import (
+    from experiments.rl_scheduler.train_cmaes_fsrs6_adr_direct import (
         optimizer_settings_from_mapping,
     )
-    from experiments.rl_scheduler.train_cmaes_fsrs6_dr import CMAESSettings
-    from experiments.rl_scheduler.train_sa_fsrs6 import SASettings, _read_training_sa
-    from experiments.rl_scheduler.train_sa_fsrs6 import (
+    from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import CMAESSettings
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
+        SASettings,
+        _read_training_sa,
+    )
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         _policy_feature_version as _sa_policy_feature_version,
     )
-    from experiments.rl_scheduler.train_sa_fsrs6_dr import (
+    from experiments.rl_scheduler.train_fsrs6_adr_delta import (
         _baseline_dr_values,
         _dr_batch_size,
         _policy_feature_version,
     )
-    from simulator.sa_fsrs6_dr_policy import feature_count
+    from simulator.fsrs6_adr_delta_policy import feature_count
 
     settings = SASettings.from_mapping(config.training_sa)
-    if trainer == "sa_fsrs6":
+    if trainer == "fsrs6_adr_direct":
         return max(1, settings.chains)
 
     raw_training_sa: dict[str, Any]
@@ -108,7 +111,7 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         raw_training_sa = dict(_read_training_sa(config.config_path))
     else:
         raw_training_sa = dict(config.training_sa)
-    if trainer == "cmaes_fsrs6":
+    if trainer == "fsrs6_adr_direct_cmaes":
         feature_version = _sa_policy_feature_version(raw_training_sa)
         optimizer = optimizer_settings_from_mapping(
             config.training_optimizer,
@@ -119,9 +122,9 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
     baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
     dr_batch_size = _dr_batch_size(raw_training_sa, len(baseline_dr_values))
     dr_lanes = min(len(baseline_dr_values), dr_batch_size)
-    if trainer in {"sa_fsrs6_dr", "sa_fsrs6_dr_grid"}:
+    if trainer in {"fsrs6_adr_delta", "fsrs6_adr_direct_dr_grid"}:
         return max(len(baseline_dr_values), dr_lanes * settings.chains)
-    if trainer == "cmaes_fsrs6_dr":
+    if trainer == "fsrs6_adr_delta_cmaes":
         feature_version = _policy_feature_version(raw_training_sa)
         optimizer = CMAESSettings.from_mapping(
             config.training_optimizer,
@@ -143,24 +146,24 @@ def run_in_process_train_batch(
 ) -> list[InProcessTrainOutcome]:
     if not jobs:
         return []
-    if trainer == "sa_fsrs6":
-        return _run_sa_fsrs6_jobs(
+    if trainer == "fsrs6_adr_direct":
+        return _run_fsrs6_adr_direct_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
-    if trainer == "cmaes_fsrs6":
-        return _run_cmaes_fsrs6_jobs(
+    if trainer == "fsrs6_adr_direct_cmaes":
+        return _run_fsrs6_adr_direct_cmaes_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
-    if trainer == "sa_fsrs6_dr_grid":
-        return _run_sa_fsrs6_dr_grid_jobs(
+    if trainer == "fsrs6_adr_direct_dr_grid":
+        return _run_fsrs6_adr_direct_dr_grid_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
-    if trainer == "sa_fsrs6_dr":
-        return _run_sa_fsrs6_dr_jobs(
+    if trainer == "fsrs6_adr_delta":
+        return _run_fsrs6_adr_delta_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
-    if trainer == "cmaes_fsrs6_dr":
-        return _run_cmaes_fsrs6_dr_jobs(
+    if trainer == "fsrs6_adr_delta_cmaes":
+        return _run_fsrs6_adr_delta_cmaes_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
@@ -173,7 +176,7 @@ def _common_context(
     repo_root: Path,
     settings: Any,
 ) -> _CommonContext:
-    from experiments.rl_scheduler.train_sa_fsrs6 import _read_training_sa
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import _read_training_sa
 
     raw_training_sa = dict(_read_training_sa(config_path))
     short_term_args = argparse.Namespace(
@@ -198,7 +201,7 @@ def _common_context(
 def _progress_for_jobs(
     *, jobs: list[InProcessTrainJob], config_path: Path
 ) -> list[Any]:
-    from experiments.rl_scheduler.train_sa_fsrs6 import TrainingProgress
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import TrainingProgress
 
     progresses = []
     for job in jobs:
@@ -222,7 +225,7 @@ def _build_bundle_for_lanes(
     lane_user_ids: list[int],
     ctx: _CommonContext,
 ) -> Any:
-    from experiments.rl_scheduler.train_sa_fsrs6 import _build_bundle
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import _build_bundle
 
     return _build_bundle(
         config=config,
@@ -247,7 +250,7 @@ def _evaluate_fsrs6_baselines_for_lanes(
     desired_retention: torch.Tensor,
     seed: int,
 ) -> list[Any]:
-    from experiments.rl_scheduler.train_sa_fsrs6 import _metrics_from_stats
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import _metrics_from_stats
 
     sched_ops = FSRS6BatchSchedulerOps(
         weights=bundle.scheduler_weights,
@@ -279,14 +282,14 @@ def _evaluate_fsrs6_baselines_for_lanes(
     return [_metrics_from_stats(item) for item in stats]
 
 
-def _run_sa_fsrs6_jobs(
+def _run_fsrs6_adr_direct_jobs(
     *,
     jobs: list[InProcessTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
 ) -> list[InProcessTrainOutcome]:
-    from experiments.rl_scheduler.train_sa_fsrs6 import (
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _clamp_coefficients,
         _metrics_from_stats,
@@ -295,8 +298,8 @@ def _run_sa_fsrs6_jobs(
         _score,
         _temperature,
     )
-    from simulator.sa_fsrs6_policy import SAFSRS6Policy
-    from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
+    from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+    from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
 
     settings = SASettings.from_mapping(config.training_sa)
     ctx = _common_context(
@@ -369,7 +372,7 @@ def _run_sa_fsrs6_jobs(
         generator = torch.Generator(device=train_bundle.device)
         generator.manual_seed(config.seed)
         generators.append(generator)
-        base_policy = SAFSRS6Policy.baseline(
+        base_policy = FSRS6ADRDirectPolicy.baseline(
             desired_retention=job.baseline_desired_retention,
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
@@ -398,13 +401,13 @@ def _run_sa_fsrs6_jobs(
         flat_coefficients = coefficients_by_job.reshape(
             len(jobs) * settings.chains, coefficients_by_job.shape[-1]
         )
-        template = SAFSRS6Policy.baseline(
+        template = FSRS6ADRDirectPolicy.baseline(
             desired_retention=settings.baseline_desired_retention,
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
             feature_version=feature_version,
         )
-        sched_ops = SAFSRS6BatchSchedulerOps(
+        sched_ops = FSRS6ADRDirectBatchSchedulerOps(
             weights=train_bundle.scheduler_weights,
             policy=template,
             coefficients=flat_coefficients,
@@ -585,7 +588,7 @@ def _run_sa_fsrs6_jobs(
             best=asdict(best_metrics[job_index]),
             iterations=len(histories[job_index]),
         )
-        metadata_path = _write_sa_fsrs6_artifact(
+        metadata_path = _write_fsrs6_adr_direct_artifact(
             output_dir=job.output_dir,
             config=config,
             config_path=config_path,
@@ -629,7 +632,7 @@ def _run_sa_fsrs6_jobs(
     return outcomes
 
 
-def _write_sa_fsrs6_artifact(
+def _write_fsrs6_adr_direct_artifact(
     *,
     output_dir: Path,
     config: ExperimentConfig,
@@ -644,26 +647,26 @@ def _write_sa_fsrs6_artifact(
     feature_version: str,
     history: list[dict[str, float]],
 ) -> Path:
-    from experiments.rl_scheduler.train_sa_fsrs6 import (
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         _artifact_id,
         _git_commit,
         _relative_gain,
         _write_json,
     )
-    from simulator.sa_fsrs6_policy import SAFSRS6Policy
+    from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 
     output_dir.mkdir(parents=True, exist_ok=True)
     rel_mem = _relative_gain(best.memorized_average, baseline.memorized_average)
     rel_eff = _relative_gain(best.memorized_per_minute, baseline.memorized_per_minute)
     passed = rel_mem > 0.0 and rel_eff > 0.0
-    policy = SAFSRS6Policy(
+    policy = FSRS6ADRDirectPolicy(
         coefficients=tuple(float(v) for v in best_coefficients.tolist()),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         baseline_desired_retention=settings.baseline_desired_retention,
         feature_version=feature_version,
         title=(
-            f"sa_fsrs6_u{user_id}_dr_"
+            f"fsrs6_adr_direct_u{user_id}_dr_"
             f"{settings.baseline_desired_retention:.2f}_lambda_{lambda_value:g}"
         ),
     )
@@ -700,7 +703,7 @@ def _write_sa_fsrs6_artifact(
                 config.seed,
             ),
             "family": config.family,
-            "scheduler_name": "sa_fsrs6",
+            "scheduler_name": "fsrs6_adr_direct",
             "environment": config.simulation.environment,
             "engine": config.simulation.engine,
             "training_user_ids": [user_id],
@@ -724,7 +727,7 @@ def _write_sa_fsrs6_artifact(
     return metadata_path
 
 
-def _run_cmaes_fsrs6_jobs(
+def _run_fsrs6_adr_direct_cmaes_jobs(
     *,
     jobs: list[InProcessTrainJob],
     config: ExperimentConfig,
@@ -733,21 +736,21 @@ def _run_cmaes_fsrs6_jobs(
 ) -> list[InProcessTrainOutcome]:
     import cma
 
-    from experiments.rl_scheduler.train_cmaes_fsrs6 import (
+    from experiments.rl_scheduler.train_cmaes_fsrs6_adr_direct import (
         CMAESFSRS6TrainingResult,
         optimizer_settings_from_mapping,
         write_artifact,
     )
-    from experiments.rl_scheduler.train_cmaes_fsrs6_dr import _optimizer_seed
-    from experiments.rl_scheduler.train_sa_fsrs6 import (
+    from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import _optimizer_seed
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _metrics_from_stats,
         _policy_feature_version,
         _relative_gain,
         _score,
     )
-    from simulator.sa_fsrs6_policy import SAFSRS6Policy
-    from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
+    from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+    from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
 
     settings = SASettings.from_mapping(config.training_sa)
     ctx = _common_context(
@@ -871,13 +874,13 @@ def _run_cmaes_fsrs6_jobs(
             len(jobs) * optimizer_settings.population_size,
             coefficients_by_job.shape[-1],
         )
-        template = SAFSRS6Policy.baseline(
+        template = FSRS6ADRDirectPolicy.baseline(
             desired_retention=settings.baseline_desired_retention,
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
             feature_version=feature_version,
         )
-        sched_ops = SAFSRS6BatchSchedulerOps(
+        sched_ops = FSRS6ADRDirectBatchSchedulerOps(
             weights=train_bundle.scheduler_weights,
             policy=template,
             coefficients=flat_coefficients,
@@ -1054,24 +1057,24 @@ def _evaluate_dr_conditioned_batch(
     feature_version: str,
     seed: int,
 ) -> list[list[Any]]:
-    from experiments.rl_scheduler.train_sa_fsrs6 import (
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         _metrics_from_stats,
         _relative_gain,
     )
-    from experiments.rl_scheduler.train_sa_fsrs6_dr import (
+    from experiments.rl_scheduler.train_fsrs6_adr_delta import (
         ChainEvaluation,
         _iter_dr_chunks,
         _pad_tuple,
         _score_from_relative_gains,
     )
-    from simulator.sa_fsrs6_dr_policy import SAFSRS6DRPolicy
-    from simulator.schedulers.sa_fsrs6_dr import SAFSRS6DRBatchSchedulerOps
+    from simulator.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicy
+    from simulator.schedulers.fsrs6_adr_delta import FSRS6ADRDeltaBatchSchedulerOps
 
     job_count = len(jobs)
     candidate_count = int(coefficients.shape[1])
     coefficient_count = int(coefficients.shape[2])
     dr_count = len(baseline_dr_values)
-    template = SAFSRS6DRPolicy.baseline(
+    template = FSRS6ADRDeltaPolicy.baseline(
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         feature_version=feature_version,
@@ -1107,7 +1110,7 @@ def _evaluate_dr_conditioned_batch(
             .expand(job_count, candidate_count, dr_batch_size, coefficient_count)
             .reshape(job_count * candidate_count * dr_batch_size, coefficient_count)
         )
-        sched_ops = SAFSRS6DRBatchSchedulerOps(
+        sched_ops = FSRS6ADRDeltaBatchSchedulerOps(
             weights=bundle.scheduler_weights,
             desired_retention=desired_retention,
             policy=template,
@@ -1219,20 +1222,20 @@ def _evaluate_baseline_grid(
     return bundle, by_job
 
 
-def _run_sa_fsrs6_dr_jobs(
+def _run_fsrs6_adr_delta_jobs(
     *,
     jobs: list[InProcessTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
 ) -> list[InProcessTrainOutcome]:
-    from experiments.rl_scheduler.train_sa_fsrs6 import (
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _clamp_coefficients,
         _read_training_sa,
         _temperature,
     )
-    from experiments.rl_scheduler.train_sa_fsrs6_dr import (
+    from experiments.rl_scheduler.train_fsrs6_adr_delta import (
         DRConditionedTrainingResult,
         _baseline_dr_values,
         _dr_batch_size,
@@ -1240,7 +1243,7 @@ def _run_sa_fsrs6_dr_jobs(
         _policy_feature_version,
         _write_artifact,
     )
-    from simulator.sa_fsrs6_dr_policy import feature_count
+    from simulator.fsrs6_adr_delta_policy import feature_count
 
     settings = SASettings.from_mapping(config.training_sa)
     raw_training_sa = dict(_read_training_sa(config_path))
@@ -1503,7 +1506,7 @@ def _run_sa_fsrs6_dr_jobs(
     return outcomes
 
 
-def _run_cmaes_fsrs6_dr_jobs(
+def _run_fsrs6_adr_delta_cmaes_jobs(
     *,
     jobs: list[InProcessTrainJob],
     config: ExperimentConfig,
@@ -1512,20 +1515,23 @@ def _run_cmaes_fsrs6_dr_jobs(
 ) -> list[InProcessTrainOutcome]:
     import cma
 
-    from experiments.rl_scheduler.train_cmaes_fsrs6_dr import (
+    from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import (
         CMAESSettings,
         _augment_artifact,
         _optimizer_seed,
     )
-    from experiments.rl_scheduler.train_sa_fsrs6 import SASettings, _read_training_sa
-    from experiments.rl_scheduler.train_sa_fsrs6_dr import (
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
+        SASettings,
+        _read_training_sa,
+    )
+    from experiments.rl_scheduler.train_fsrs6_adr_delta import (
         DRConditionedTrainingResult,
         _baseline_dr_values,
         _dr_batch_size,
         _policy_feature_version,
         _write_artifact,
     )
-    from simulator.sa_fsrs6_dr_policy import feature_count
+    from simulator.fsrs6_adr_delta_policy import feature_count
 
     settings = SASettings.from_mapping(config.training_sa)
     raw_training_sa = dict(_read_training_sa(config_path))
@@ -1760,20 +1766,20 @@ def _run_cmaes_fsrs6_dr_jobs(
     return outcomes
 
 
-def _run_sa_fsrs6_dr_grid_jobs(
+def _run_fsrs6_adr_direct_dr_grid_jobs(
     *,
     jobs: list[InProcessTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
 ) -> list[InProcessTrainOutcome]:
-    from experiments.rl_scheduler.train_sa_fsrs6 import (
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _clamp_coefficients,
         _read_training_sa,
         _temperature,
     )
-    from experiments.rl_scheduler.train_sa_fsrs6_dr_grid import (
+    from experiments.rl_scheduler.train_fsrs6_adr_direct_dr_grid import (
         DRTrainingResult,
         _baseline_dr_values,
         _best_by_dr,
@@ -1784,9 +1790,9 @@ def _run_sa_fsrs6_dr_grid_jobs(
         _progress_best_by_dr,
         _write_grid_artifacts,
     )
-    from simulator.sa_fsrs6_policy import SAFSRS6Policy
-    from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
-    from experiments.rl_scheduler.train_sa_fsrs6 import _metrics_from_stats
+    from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+    from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
+    from experiments.rl_scheduler.train_fsrs6_adr_direct import _metrics_from_stats
 
     settings = SASettings.from_mapping(config.training_sa)
     raw_training_sa = dict(_read_training_sa(config_path))
@@ -1879,12 +1885,12 @@ def _run_sa_fsrs6_dr_grid_jobs(
                 len(jobs) * len(chunk_dr_values) * settings.chains,
                 6,
             )
-            template = SAFSRS6Policy.baseline(
+            template = FSRS6ADRDirectPolicy.baseline(
                 desired_retention=settings.baseline_desired_retention,
                 retention_min=settings.retention_min,
                 retention_max=settings.retention_max,
             )
-            sched_ops = SAFSRS6BatchSchedulerOps(
+            sched_ops = FSRS6ADRDirectBatchSchedulerOps(
                 weights=train_bundle.scheduler_weights,
                 policy=template,
                 coefficients=flat,

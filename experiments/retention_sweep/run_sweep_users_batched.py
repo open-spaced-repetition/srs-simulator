@@ -79,7 +79,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         sched_help=(
             "Comma-separated schedulers to sweep "
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
-            "anki_sm2, memrise, fixed, sa_fsrs6, sa_fsrs6_dr)."
+            "anki_sm2, memrise, fixed, fsrs6_adr_direct, fsrs6_adr_delta)."
         ),
     )
     add_retention_range_args(parser)
@@ -89,81 +89,81 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     add_button_usage_arg(parser, default_path=DEFAULT_BUTTON_USAGE_PATH)
     add_benchmark_args(parser)
     parser.add_argument(
-        "--sa-fsrs6-policy",
+        "--fsrs6-adr-direct-policy",
         type=Path,
         default=None,
-        help="Path to an SA FSRS-6 policy JSON when using --sched sa_fsrs6.",
+        help="Path to an FSRS6 ADR Direct policy JSON when using --sched fsrs6_adr_direct.",
     )
     parser.add_argument(
-        "--sa-fsrs6-policy-root",
+        "--fsrs6-adr-direct-policy-root",
         type=Path,
         default=None,
         help=(
-            "Root containing trained SA FSRS-6 policy artifacts, usually "
+            "Root containing trained FSRS6 ADR Direct policy artifacts, usually "
             "train-overfit/train_outputs."
         ),
     )
     parser.add_argument(
-        "--sa-fsrs6-train-run-root",
+        "--fsrs6-adr-direct-train-run-root",
         type=Path,
         default=None,
         help=(
             "Training run root; treated as "
-            "<root>/train-overfit/train_outputs for SA FSRS-6 policy discovery."
+            "<root>/train-overfit/train_outputs for FSRS6 ADR Direct policy discovery."
         ),
     )
     parser.add_argument(
-        "--sa-fsrs6-policy-manifest",
+        "--fsrs6-adr-direct-policy-manifest",
         type=Path,
         default=None,
-        help="TOML manifest with [[policies]] SA FSRS-6 entries.",
+        help="TOML manifest with [[policies]] FSRS6 ADR Direct entries.",
     )
     parser.add_argument(
-        "--sa-fsrs6-lambda-values",
+        "--fsrs6-adr-direct-lambda-values",
         default=None,
         help=(
-            "Optional comma-separated lambda values to select from an SA FSRS-6 "
+            "Optional comma-separated lambda values to select from an FSRS6 ADR Direct "
             "policy root or manifest."
         ),
     )
     parser.add_argument(
-        "--sa-fsrs6-dr-policy",
+        "--fsrs6-adr-delta-policy",
         type=Path,
         default=None,
         help=(
-            "Path to an SA FSRS-6 DR-conditioned policy JSON when using "
-            "--sched sa_fsrs6_dr."
+            "Path to an FSRS6 ADR Delta-conditioned policy JSON when using "
+            "--sched fsrs6_adr_delta."
         ),
     )
     parser.add_argument(
-        "--sa-fsrs6-dr-policy-root",
+        "--fsrs6-adr-delta-policy-root",
         type=Path,
         default=None,
         help=(
-            "Root containing trained SA FSRS-6 DR policy artifacts, usually "
+            "Root containing trained FSRS6 ADR Delta policy artifacts, usually "
             "train-overfit/train_outputs."
         ),
     )
     parser.add_argument(
-        "--sa-fsrs6-dr-train-run-root",
+        "--fsrs6-adr-delta-train-run-root",
         type=Path,
         default=None,
         help=(
             "Training run root; treated as "
-            "<root>/train-overfit/train_outputs for SA FSRS-6 DR policy discovery."
+            "<root>/train-overfit/train_outputs for FSRS6 ADR Delta policy discovery."
         ),
     )
     parser.add_argument(
-        "--sa-fsrs6-dr-policy-manifest",
+        "--fsrs6-adr-delta-policy-manifest",
         type=Path,
         default=None,
-        help="TOML manifest with [[policies]] SA FSRS-6 DR entries.",
+        help="TOML manifest with [[policies]] FSRS6 ADR Delta entries.",
     )
     parser.add_argument(
-        "--sa-fsrs6-dr-lambda-values",
+        "--fsrs6-adr-delta-lambda-values",
         default=None,
         help=(
-            "Optional comma-separated lambda values to select from an SA FSRS-6 "
+            "Optional comma-separated lambda values to select from an FSRS6 ADR Direct "
             "DR policy root or manifest."
         ),
     )
@@ -218,13 +218,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.config is not None:
         config = load_batched_sweep_config(args.config, repo_root=REPO_ROOT)
         args = _merge_config_args(cli_args=args, config_args=config.args, argv=argv)
-    if isinstance(args.sa_fsrs6_lambda_values, str):
-        args.sa_fsrs6_lambda_values = tuple(
-            float(item) for item in parse_csv(args.sa_fsrs6_lambda_values)
+    if isinstance(args.fsrs6_adr_direct_lambda_values, str):
+        args.fsrs6_adr_direct_lambda_values = tuple(
+            float(item) for item in parse_csv(args.fsrs6_adr_direct_lambda_values)
         )
-    if isinstance(args.sa_fsrs6_dr_lambda_values, str):
-        args.sa_fsrs6_dr_lambda_values = tuple(
-            float(item) for item in parse_csv(args.sa_fsrs6_dr_lambda_values)
+    if isinstance(args.fsrs6_adr_delta_lambda_values, str):
+        args.fsrs6_adr_delta_lambda_values = tuple(
+            float(item) for item in parse_csv(args.fsrs6_adr_delta_lambda_values)
         )
     return args
 
@@ -301,16 +301,16 @@ def _merge_config_args(
         "benchmark_result": ("--benchmark-result",),
         "benchmark_partition": ("--benchmark-partition",),
         "srs_benchmark_root": ("--srs-benchmark-root",),
-        "sa_fsrs6_policy": ("--sa-fsrs6-policy",),
-        "sa_fsrs6_policy_root": ("--sa-fsrs6-policy-root",),
-        "sa_fsrs6_train_run_root": ("--sa-fsrs6-train-run-root",),
-        "sa_fsrs6_policy_manifest": ("--sa-fsrs6-policy-manifest",),
-        "sa_fsrs6_lambda_values": ("--sa-fsrs6-lambda-values",),
-        "sa_fsrs6_dr_policy": ("--sa-fsrs6-dr-policy",),
-        "sa_fsrs6_dr_policy_root": ("--sa-fsrs6-dr-policy-root",),
-        "sa_fsrs6_dr_train_run_root": ("--sa-fsrs6-dr-train-run-root",),
-        "sa_fsrs6_dr_policy_manifest": ("--sa-fsrs6-dr-policy-manifest",),
-        "sa_fsrs6_dr_lambda_values": ("--sa-fsrs6-dr-lambda-values",),
+        "fsrs6_adr_direct_policy": ("--fsrs6-adr-direct-policy",),
+        "fsrs6_adr_direct_policy_root": ("--fsrs6-adr-direct-policy-root",),
+        "fsrs6_adr_direct_train_run_root": ("--fsrs6-adr-direct-train-run-root",),
+        "fsrs6_adr_direct_policy_manifest": ("--fsrs6-adr-direct-policy-manifest",),
+        "fsrs6_adr_direct_lambda_values": ("--fsrs6-adr-direct-lambda-values",),
+        "fsrs6_adr_delta_policy": ("--fsrs6-adr-delta-policy",),
+        "fsrs6_adr_delta_policy_root": ("--fsrs6-adr-delta-policy-root",),
+        "fsrs6_adr_delta_train_run_root": ("--fsrs6-adr-delta-train-run-root",),
+        "fsrs6_adr_delta_policy_manifest": ("--fsrs6-adr-delta-policy-manifest",),
+        "fsrs6_adr_delta_lambda_values": ("--fsrs6-adr-delta-lambda-values",),
         "log_dir": ("--log-dir",),
         "log_layout": ("--log-layout",),
         "no_log": ("--no-log",),
@@ -343,10 +343,12 @@ def _print_dry_run(plan) -> None:
     print(f"log root: {plan.ctx.log_root}")
     if plan.example_log_dir is not None:
         print(f"example log dir: {plan.example_log_dir}")
-    if plan.ctx.sa_fsrs6_policy_specs:
-        print(f"sa_fsrs6 policies: {len(plan.ctx.sa_fsrs6_policy_specs)}")
-    if plan.ctx.sa_fsrs6_dr_policy_specs:
-        print(f"sa_fsrs6_dr policies: {len(plan.ctx.sa_fsrs6_dr_policy_specs)}")
+    if plan.ctx.fsrs6_adr_direct_policy_specs:
+        print(
+            f"fsrs6_adr_direct policies: {len(plan.ctx.fsrs6_adr_direct_policy_specs)}"
+        )
+    if plan.ctx.fsrs6_adr_delta_policy_specs:
+        print(f"fsrs6_adr_delta policies: {len(plan.ctx.fsrs6_adr_delta_policy_specs)}")
 
 
 if __name__ == "__main__":

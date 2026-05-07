@@ -1,8 +1,8 @@
 schema_version = 1
-name = "cmaes_fsrs6_linear_batch_sweep_users_1_8"
+name = "fsrs6_adr_delta_linear_cmaes_users_1_8"
 family = "rl_scheduler"
 seed = 42
-output_root = "artifacts/rl_scheduler/cmaes_fsrs6_linear_batch_sweep_users_1_8"
+output_root = "artifacts/rl_scheduler/fsrs6_adr_delta_linear_cmaes_users_1_8"
 stages = [
   "dry-run",
   "preflight",
@@ -90,19 +90,18 @@ diagnostic_csv_logs = false
 lambda_grid = [0.5]
 artifact_metadata_glob = "metadata.json"
 max_parallel_commands = 1
+batch_baseline_desired_retention_values = true
 command_template = [
   "uv",
   "run",
   "python",
-  "experiments/rl_scheduler/train_cmaes_fsrs6.py",
+  "experiments/rl_scheduler/train_cmaes_fsrs6_adr_delta.py",
   "--config",
   "{config_path}",
   "--user-id",
   "{user_id}",
   "--lambda",
   "{lambda_value}",
-  "--baseline-desired-retention",
-  "{baseline_desired_retention}",
   "--output-dir",
   "{output_dir}",
   "--training-command-path",
@@ -112,20 +111,21 @@ command_template = [
 [training.batch]
 enabled = true
 trainer = "auto"
-max_lanes_per_batch = 3200
+batch_size = 8
 
 [training.sa]
-feature_version = "sa_fsrs6_log_linear_v1"
+feature_version = "fsrs6_adr_delta_log_linear_v1"
 chains = 32
 iterations = 10
 initial_temp = 0.05
 final_temp = 0.005
 proposal_scale = 0.35
-coefficient_min = -12.0
-coefficient_max = 12.0
+coefficient_min = -8.0
+coefficient_max = 8.0
 retention_min = 0.50
 retention_max = 0.98
 baseline_desired_retention = 0.90
+dr_batch_size = 25
 baseline_desired_retention_values = [
   0.50,
   0.52,
@@ -160,17 +160,20 @@ short_term_loops_limit = 10
 [training.optimizer]
 name = "cma_es"
 population_size = 32
-generations = 20
+generations = 10
 sigma0 = 0.8
+initial_mean = [0.0, 0.0, 0.0, 0.0]
 bounds = [
-  [-12.0, -12.0, -12.0],
-  [12.0, 12.0, 12.0],
+  [-8.0, -8.0, -8.0, -8.0],
+  [8.0, 8.0, 8.0, 8.0],
 ]
 
 [sweep]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
-schedulers = ["sa_fsrs6"]
+schedulers = ["fsrs6_adr_delta"]
+run_id = "fsrs6_adr_delta_linear_cmaes_users_1_8_v1"
+fsrs6_adr_delta_train_run_root = "artifacts/rl_scheduler/fsrs6_adr_delta_linear_cmaes_users_1_8/fsrs6_adr_delta_linear_cmaes_users_1_8_v1"
 log_dir = "logs/retention_sweep"
 log_layout = "user"
 batch_size = 8
@@ -184,7 +187,7 @@ no_log = false
 
 [build_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "sa_fsrs6"]
+schedulers = ["fsrs6", "fsrs6_adr_delta"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
@@ -201,8 +204,8 @@ hide_labels = true
 
 [analyze_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "sa_fsrs6"]
-comparisons = ["sa_fsrs6:fsrs6"]
+schedulers = ["fsrs6", "fsrs6_adr_delta"]
+comparisons = ["fsrs6_adr_delta:fsrs6"]
 result_glob = "analysis.md"
 start_retention = 0.50
 end_retention = 0.98

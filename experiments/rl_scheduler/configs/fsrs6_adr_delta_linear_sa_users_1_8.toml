@@ -1,8 +1,8 @@
 schema_version = 1
-name = "sa_fsrs6_dr_linear_batch_sweep_users_1_8"
+name = "fsrs6_adr_delta_linear_sa_users_1_8"
 family = "rl_scheduler"
 seed = 42
-output_root = "artifacts/rl_scheduler/sa_fsrs6_dr_linear_batch_sweep_users_1_8"
+output_root = "artifacts/rl_scheduler/fsrs6_adr_delta_linear_sa_users_1_8"
 stages = [
   "dry-run",
   "preflight",
@@ -95,7 +95,7 @@ command_template = [
   "uv",
   "run",
   "python",
-  "experiments/rl_scheduler/train_sa_fsrs6_dr.py",
+  "experiments/rl_scheduler/train_fsrs6_adr_delta.py",
   "--config",
   "{config_path}",
   "--user-id",
@@ -114,7 +114,7 @@ trainer = "auto"
 max_lanes_per_batch = 6400
 
 [training.sa]
-feature_version = "sa_fsrs6_dr_log_linear_v1"
+feature_version = "fsrs6_adr_delta_log_linear_v1"
 chains = 256
 iterations = 4
 initial_temp = 0.05
@@ -160,7 +160,9 @@ short_term_loops_limit = 10
 [sweep]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
-schedulers = ["sa_fsrs6_dr"]
+schedulers = ["fsrs6_adr_delta"]
+run_id = "fsrs6_adr_delta_linear_sa_users_1_8_v1"
+fsrs6_adr_delta_train_run_root = "artifacts/rl_scheduler/fsrs6_adr_delta_linear_sa_users_1_8/fsrs6_adr_delta_linear_sa_users_1_8_v1"
 log_dir = "logs/retention_sweep"
 log_layout = "user"
 batch_size = 8
@@ -174,7 +176,7 @@ no_log = false
 
 [build_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "sa_fsrs6_dr"]
+schedulers = ["fsrs6", "fsrs6_adr_delta"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
@@ -191,8 +193,8 @@ hide_labels = true
 
 [analyze_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "sa_fsrs6_dr"]
-comparisons = ["sa_fsrs6_dr:fsrs6"]
+schedulers = ["fsrs6", "fsrs6_adr_delta"]
+comparisons = ["fsrs6_adr_delta:fsrs6"]
 result_glob = "analysis.md"
 start_retention = 0.50
 end_retention = 0.98

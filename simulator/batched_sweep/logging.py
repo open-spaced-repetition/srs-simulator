@@ -48,11 +48,11 @@ class BatchedSweepLogLane:
     scheduler_spec: str
     desired_retention: float | None
     fixed_interval: float | None
-    sa_fsrs6_policy: Path | None = None
-    sa_fsrs6_baseline_desired_retention: float | None = None
-    sa_fsrs6_lambda_value: float | None = None
-    sa_fsrs6_dr_policy: Path | None = None
-    sa_fsrs6_dr_lambda_value: float | None = None
+    fsrs6_adr_direct_policy: Path | None = None
+    fsrs6_adr_direct_baseline_desired_retention: float | None = None
+    fsrs6_adr_direct_lambda_value: float | None = None
+    fsrs6_adr_delta_policy: Path | None = None
+    fsrs6_adr_delta_lambda_value: float | None = None
     log_dir: Path | None = None
 
     @property
@@ -117,8 +117,8 @@ def _build_log_args(
     learning_steps_arg: str | None,
     relearning_steps_arg: str | None,
     log_dir: Path,
-    sa_fsrs6_policy: Path | None = None,
-    sa_fsrs6_dr_policy: Path | None = None,
+    fsrs6_adr_direct_policy: Path | None = None,
+    fsrs6_adr_delta_policy: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         engine="batched",
@@ -137,11 +137,11 @@ def _build_log_args(
         desired_retention=desired_retention,
         scheduler_priority=args.scheduler_priority,
         sspmmc_policy=None,
-        sa_fsrs6_policy=sa_fsrs6_policy,
-        sa_fsrs6_baseline_desired_retention=None,
-        sa_fsrs6_lambda_value=None,
-        sa_fsrs6_dr_policy=sa_fsrs6_dr_policy,
-        sa_fsrs6_dr_lambda_value=None,
+        fsrs6_adr_direct_policy=fsrs6_adr_direct_policy,
+        fsrs6_adr_direct_baseline_desired_retention=None,
+        fsrs6_adr_direct_lambda_value=None,
+        fsrs6_adr_delta_policy=fsrs6_adr_delta_policy,
+        fsrs6_adr_delta_lambda_value=None,
         fixed_interval=fixed_interval,
         seed=args.seed,
         fuzz=args.fuzz,
@@ -257,14 +257,14 @@ def simulate_and_log_lanes(
             learning_steps_arg=learning_steps_arg,
             relearning_steps_arg=relearning_steps_arg,
             log_dir=user_log_dir,
-            sa_fsrs6_policy=lane.sa_fsrs6_policy,
-            sa_fsrs6_dr_policy=lane.sa_fsrs6_dr_policy,
+            fsrs6_adr_direct_policy=lane.fsrs6_adr_direct_policy,
+            fsrs6_adr_delta_policy=lane.fsrs6_adr_delta_policy,
         )
-        log_args.sa_fsrs6_baseline_desired_retention = (
-            lane.sa_fsrs6_baseline_desired_retention
+        log_args.fsrs6_adr_direct_baseline_desired_retention = (
+            lane.fsrs6_adr_direct_baseline_desired_retention
         )
-        log_args.sa_fsrs6_lambda_value = lane.sa_fsrs6_lambda_value
-        log_args.sa_fsrs6_dr_lambda_value = lane.sa_fsrs6_dr_lambda_value
+        log_args.fsrs6_adr_direct_lambda_value = lane.fsrs6_adr_direct_lambda_value
+        log_args.fsrs6_adr_delta_lambda_value = lane.fsrs6_adr_delta_lambda_value
         write_log(log_args, stats)
 
 
@@ -303,8 +303,8 @@ def simulate_and_log(
             scheduler_spec=scheduler_spec,
             desired_retention=desired_retention,
             fixed_interval=fixed_interval,
-            sa_fsrs6_policy=getattr(args, "sa_fsrs6_policy", None),
-            sa_fsrs6_dr_policy=getattr(args, "sa_fsrs6_dr_policy", None),
+            fsrs6_adr_direct_policy=getattr(args, "fsrs6_adr_direct_policy", None),
+            fsrs6_adr_delta_policy=getattr(args, "fsrs6_adr_delta_policy", None),
         )
         for user_id in batch
     ]

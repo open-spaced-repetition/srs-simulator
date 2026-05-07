@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_sa_fsrs6 import (
+from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     CandidateMetrics,
     SASettings,
     SimulationBundle,
@@ -34,9 +34,13 @@ from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.math.fsrs import Bounds
-from simulator.sa_fsrs6_dr_policy import FEATURE_VERSION, SAFSRS6DRPolicy, feature_count
+from simulator.fsrs6_adr_delta_policy import (
+    FEATURE_VERSION,
+    FSRS6ADRDeltaPolicy,
+    feature_count,
+)
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
-from simulator.schedulers.sa_fsrs6_dr import SAFSRS6DRBatchSchedulerOps
+from simulator.schedulers.fsrs6_adr_delta import FSRS6ADRDeltaBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 
@@ -62,7 +66,7 @@ class DRConditionedTrainingResult:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train one DR-conditioned SA FSRS-6 scheduler policy over a desired "
+            "Train one DR-conditioned FSRS6 ADR Direct scheduler policy over a desired "
             "retention grid."
         ),
         allow_abbrev=False,
@@ -515,7 +519,7 @@ def _evaluate_sa_dr_chains(
 ) -> list[ChainEvaluation]:
     dr_count = len(baseline_dr_values)
     chains = int(coefficients.shape[0])
-    template = SAFSRS6DRPolicy.baseline(
+    template = FSRS6ADRDeltaPolicy.baseline(
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         feature_version=feature_version,
@@ -546,7 +550,7 @@ def _evaluate_sa_dr_chains(
             .expand(chains, dr_batch_size, coefficient_count)
             .reshape(chains * dr_batch_size, coefficient_count)
         )
-        sched_ops = SAFSRS6DRBatchSchedulerOps(
+        sched_ops = FSRS6ADRDeltaBatchSchedulerOps(
             weights=bundle.scheduler_weights,
             desired_retention=desired_retention,
             policy=template,
@@ -627,11 +631,11 @@ def _write_artifact(
     feature_version: str,
     result: DRConditionedTrainingResult,
 ) -> tuple[Path, Path, Path]:
-    policy = SAFSRS6DRPolicy(
+    policy = FSRS6ADRDeltaPolicy(
         coefficients=tuple(float(v) for v in result.best_coefficients.tolist()),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
-        title=f"sa_fsrs6_dr_u{user_id}_lambda_{lambda_value:g}",
+        title=f"fsrs6_adr_delta_u{user_id}_lambda_{lambda_value:g}",
         feature_version=feature_version,
     )
     policy_path = output_dir / "policy.json"
@@ -692,7 +696,7 @@ def _write_artifact(
         "artifact_kind": "scheduler-policy",
         "artifact_id": _artifact_id(user_id, lambda_value, config.seed),
         "family": config.family,
-        "scheduler_name": "sa_fsrs6_dr",
+        "scheduler_name": "fsrs6_adr_delta",
         "environment": config.simulation.environment,
         "engine": config.simulation.engine,
         "training_user_ids": [user_id],
@@ -719,7 +723,7 @@ def _write_artifact(
 
 def _artifact_id(user_id: int, lambda_value: float, seed: int) -> str:
     lambda_token = _float_token(lambda_value)
-    return f"sa-fsrs6-dr-user-{user_id}-lambda-{lambda_token}-seed-{seed}"
+    return f"fsrs6-adr-delta-user-{user_id}-lambda-{lambda_token}-seed-{seed}"
 
 
 def _float(value: Any, field_name: str) -> float:

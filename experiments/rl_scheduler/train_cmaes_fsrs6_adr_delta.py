@@ -15,13 +15,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_sa_fsrs6 import (
+from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     SASettings,
     TrainingProgress,
     _build_bundle,
     _read_training_sa,
 )
-from experiments.rl_scheduler.train_sa_fsrs6_dr import (
+from experiments.rl_scheduler.train_fsrs6_adr_delta import (
     DRConditionedTrainingResult,
     _baseline_dr_values,
     _clear_cuda_cache,
@@ -34,7 +34,7 @@ from experiments.rl_scheduler.train_sa_fsrs6_dr import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig
-from simulator.sa_fsrs6_dr_policy import feature_count
+from simulator.fsrs6_adr_delta_policy import feature_count
 from simulator.short_term_config import resolve_short_term_config
 
 

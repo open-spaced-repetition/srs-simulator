@@ -13,8 +13,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from simulator.batched_sweep.sa_policy import format_float_token, parse_float_token
-from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from simulator.batched_sweep.fsrs6_adr_direct_policy import (
+    format_float_token,
+    parse_float_token,
+)
+from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +26,7 @@ class PolicyEntry:
     baseline_desired_retention: float
     lambda_value: float | None
     path: Path
-    policy: SAFSRS6Policy
+    policy: FSRS6ADRDirectPolicy
 
 
 def _parse_csv_floats(value: str | None) -> tuple[float, ...] | None:
@@ -92,7 +95,7 @@ def _discover_policies(
     user_filter = set(users) if users is not None else None
     entries: list[PolicyEntry] = []
     for path in sorted(root.rglob("policy.json")):
-        policy = SAFSRS6Policy.from_json(path)
+        policy = FSRS6ADRDirectPolicy.from_json(path)
         user_id = _path_user_id(path)
         if user_id is None:
             metadata = policy.metadata or {}
@@ -131,7 +134,9 @@ def _discover_policies(
         )
 
     if not entries:
-        raise SystemExit(f"No matching SA FSRS-6 policy.json files found under {root}")
+        raise SystemExit(
+            f"No matching FSRS6 ADR Direct policy.json files found under {root}"
+        )
     return entries
 
 
@@ -158,7 +163,7 @@ def _lambda_label(value: float | None) -> str:
 
 def _build_surface_z(
     *,
-    policy: SAFSRS6Policy,
+    policy: FSRS6ADRDirectPolicy,
     s_grid: Sequence[float],
     d_grid: Sequence[float],
 ) -> list[list[float]]:
@@ -311,7 +316,7 @@ def _write_user_plot(
     lambda_text = "none" if lambda_value is None else f"{lambda_value:g}"
     fig.update_layout(
         title=(
-            f"SA FSRS-6 retention policy surfaces: user {user_id}, lambda={lambda_text}"
+            f"FSRS6 ADR Direct retention policy surfaces: user {user_id}, lambda={lambda_text}"
         ),
         scene={
             "domain": {"x": [0.08, 0.9], "y": [0.0, 0.96]},
@@ -347,7 +352,7 @@ def _write_user_plot(
     out_dir.mkdir(parents=True, exist_ok=True)
     output_path = (
         out_dir
-        / f"sa_fsrs6_policy_surfaces_user_{user_id}_lambda_{_lambda_label(lambda_value)}.html"
+        / f"fsrs6_adr_direct_policy_surfaces_user_{user_id}_lambda_{_lambda_label(lambda_value)}.html"
     )
     fig.write_html(output_path, include_plotlyjs="cdn")
     return output_path
@@ -364,7 +369,7 @@ def _group_entries(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Plot SA FSRS-6 policy output retention surfaces by user and DR.",
+        description="Plot FSRS6 ADR Direct policy output retention surfaces by user and DR.",
         allow_abbrev=False,
     )
     source = parser.add_mutually_exclusive_group(required=True)
@@ -413,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("experiments")
         / "rl_scheduler"
         / "plots"
-        / "sa_fsrs6_policy_surfaces",
+        / "fsrs6_adr_direct_policy_surfaces",
         help="Directory for generated HTML plots.",
     )
     args = parser.parse_args(argv)

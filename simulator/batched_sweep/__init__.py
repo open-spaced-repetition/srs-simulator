@@ -22,13 +22,13 @@ from simulator.batched_sweep.logging import (
     simulate_and_log,
     simulate_and_log_lanes,
 )
-from simulator.batched_sweep.sa_policy import (
-    SAFSRS6PolicySpec,
-    resolve_sa_fsrs6_policy_specs,
+from simulator.batched_sweep.fsrs6_adr_direct_policy import (
+    FSRS6ADRDirectPolicySpec,
+    resolve_fsrs6_adr_direct_policy_specs,
 )
-from simulator.batched_sweep.sa_dr_policy import (
-    SAFSRS6DRPolicySpec,
-    resolve_sa_fsrs6_dr_policy_specs,
+from simulator.batched_sweep.fsrs6_adr_delta_policy import (
+    FSRS6ADRDeltaPolicySpec,
+    resolve_fsrs6_adr_delta_policy_specs,
 )
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
 from simulator.batched_sweep.execution import LocalProgressQueue, run_batches
@@ -61,8 +61,8 @@ __all__ = [
     "run_batches",
     "BatchedSweepPlan",
     "build_batched_sweep_plan",
-    "SAFSRS6PolicySpec",
-    "resolve_sa_fsrs6_policy_specs",
-    "SAFSRS6DRPolicySpec",
-    "resolve_sa_fsrs6_dr_policy_specs",
+    "FSRS6ADRDirectPolicySpec",
+    "resolve_fsrs6_adr_direct_policy_specs",
+    "FSRS6ADRDeltaPolicySpec",
+    "resolve_fsrs6_adr_delta_policy_specs",
 ]

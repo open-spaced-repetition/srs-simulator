@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
-from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 
 
 @dataclass(frozen=True, slots=True)
-class SAFSRS6PolicySpec:
+class FSRS6ADRDirectPolicySpec:
     user_id: int
     baseline_desired_retention: float
     lambda_value: float | None
@@ -32,7 +32,7 @@ def parse_float_token(value: str) -> float:
     return float(token)
 
 
-def resolve_sa_fsrs6_policy_specs(
+def resolve_fsrs6_adr_direct_policy_specs(
     *,
     user_ids: Sequence[int],
     dr_values: Sequence[float],
@@ -40,7 +40,7 @@ def resolve_sa_fsrs6_policy_specs(
     train_run_root: Path | None = None,
     policy_manifest: Path | None = None,
     lambda_values: Sequence[float] | None = None,
-) -> tuple[SAFSRS6PolicySpec, ...]:
+) -> tuple[FSRS6ADRDirectPolicySpec, ...]:
     sources = [
         policy_root is not None,
         train_run_root is not None,
@@ -48,7 +48,7 @@ def resolve_sa_fsrs6_policy_specs(
     ]
     if sum(sources) != 1:
         raise ValueError(
-            "Configure exactly one SA FSRS-6 policy source: "
+            "Configure exactly one FSRS6 ADR Direct policy source: "
             "policy_root, train_run_root, or policy_manifest."
         )
     if train_run_root is not None:
@@ -76,13 +76,13 @@ def _discover_policy_root(
     user_ids: Sequence[int],
     dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
-) -> tuple[SAFSRS6PolicySpec, ...]:
+) -> tuple[FSRS6ADRDirectPolicySpec, ...]:
     root = policy_root.expanduser()
     if not root.exists():
-        raise FileNotFoundError(f"SA FSRS-6 policy root does not exist: {root}")
+        raise FileNotFoundError(f"FSRS6 ADR Direct policy root does not exist: {root}")
     user_set = set(user_ids)
     lambda_filter = _normalized_lambda_filter(lambda_values)
-    specs: list[SAFSRS6PolicySpec] = []
+    specs: list[FSRS6ADRDirectPolicySpec] = []
     for policy_path in sorted(root.rglob("policy.json")):
         path_user_id = _extract_path_int(policy_path, "user_")
         if path_user_id is not None and path_user_id not in user_set:
@@ -100,7 +100,7 @@ def _discover_policy_root(
 
     if not specs:
         raise FileNotFoundError(
-            "No SA FSRS-6 policies under "
+            "No FSRS6 ADR Direct policies under "
             f"{root} matched users={list(user_ids)} and DR grid={list(dr_values)}."
         )
     _reject_duplicate_policy_specs(specs)
@@ -119,18 +119,18 @@ def _load_policy_manifest(
     user_ids: Sequence[int],
     dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
-) -> tuple[SAFSRS6PolicySpec, ...]:
+) -> tuple[FSRS6ADRDirectPolicySpec, ...]:
     manifest_path = policy_manifest.expanduser()
     if not manifest_path.exists():
         raise FileNotFoundError(
-            f"SA FSRS-6 policy manifest does not exist: {manifest_path}"
+            f"FSRS6 ADR Direct policy manifest does not exist: {manifest_path}"
         )
     with manifest_path.open("rb") as handle:
         raw = tomllib.load(handle)
     entries = _manifest_entries(raw)
     user_set = set(user_ids)
     lambda_filter = _normalized_lambda_filter(lambda_values)
-    specs: list[SAFSRS6PolicySpec] = []
+    specs: list[FSRS6ADRDirectPolicySpec] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, Mapping):
             raise ValueError(f"policies[{index}] must be a TOML table.")
@@ -192,8 +192,8 @@ def _spec_from_policy_path(
     policy_path: Path,
     *,
     dr_values: Sequence[float],
-) -> SAFSRS6PolicySpec:
-    policy = SAFSRS6Policy.from_json(policy_path)
+) -> FSRS6ADRDirectPolicySpec:
+    policy = FSRS6ADRDirectPolicy.from_json(policy_path)
     metadata = _load_sibling_metadata(policy_path)
     path_user_id = _extract_path_int(policy_path, "user_")
     path_lambda = _extract_path_float(policy_path, "lambda_")
@@ -208,7 +208,7 @@ def _spec_from_policy_path(
     user_id = metadata_user_id if metadata_user_id is not None else path_user_id
     if user_id is None:
         raise ValueError(
-            f"Could not infer user_id for SA FSRS-6 policy {policy_path}. "
+            f"Could not infer user_id for FSRS6 ADR Direct policy {policy_path}. "
             "Use a user_<id> path component or metadata.json."
         )
     if (
@@ -247,7 +247,7 @@ def _spec_from_policy_path(
             f"Policy {policy_path} lambda mismatch: path has {path_lambda}, "
             f"metadata has {metadata_lambda}."
         )
-    return SAFSRS6PolicySpec(
+    return FSRS6ADRDirectPolicySpec(
         user_id=user_id,
         baseline_desired_retention=matched_dr,
         lambda_value=lambda_value,
@@ -262,10 +262,10 @@ def _validate_policy_spec(
     baseline_desired_retention: float,
     lambda_value: float | None,
     source: str,
-) -> SAFSRS6PolicySpec:
+) -> FSRS6ADRDirectPolicySpec:
     if not path.exists():
-        raise FileNotFoundError(f"Missing SA FSRS-6 policy for {source}: {path}")
-    policy = SAFSRS6Policy.from_json(path)
+        raise FileNotFoundError(f"Missing FSRS6 ADR Direct policy for {source}: {path}")
+    policy = FSRS6ADRDirectPolicy.from_json(path)
     if not math.isclose(
         policy.baseline_desired_retention,
         baseline_desired_retention,
@@ -306,7 +306,7 @@ def _validate_policy_spec(
             f"Policy {path} metadata lambda_value={metadata_lambda}, "
             f"expected {lambda_value} from {source}."
         )
-    return SAFSRS6PolicySpec(
+    return FSRS6ADRDirectPolicySpec(
         user_id=user_id,
         baseline_desired_retention=baseline_desired_retention,
         lambda_value=effective_lambda,
@@ -316,7 +316,7 @@ def _validate_policy_spec(
 
 def _require_complete_policy_root(
     *,
-    specs: Sequence[SAFSRS6PolicySpec],
+    specs: Sequence[FSRS6ADRDirectPolicySpec],
     user_ids: Sequence[int],
     dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
@@ -352,10 +352,12 @@ def _require_complete_policy_root(
             for user_id, baseline_dr, lambda_value in missing[:10]
         )
         suffix = "" if len(missing) <= 10 else f"\n... and {len(missing) - 10} more"
-        raise FileNotFoundError(f"Missing SA FSRS-6 policies:\n{preview}{suffix}")
+        raise FileNotFoundError(
+            f"Missing FSRS6 ADR Direct policies:\n{preview}{suffix}"
+        )
 
 
-def _reject_duplicate_policy_specs(specs: Sequence[SAFSRS6PolicySpec]) -> None:
+def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADRDirectPolicySpec]) -> None:
     by_key: dict[tuple[int, int, int | None], Path] = {}
     for spec in specs:
         key = _policy_key(
@@ -366,7 +368,7 @@ def _reject_duplicate_policy_specs(specs: Sequence[SAFSRS6PolicySpec]) -> None:
         previous = by_key.get(key)
         if previous is not None:
             raise ValueError(
-                "Duplicate SA FSRS-6 policy for "
+                "Duplicate FSRS6 ADR Direct policy for "
                 f"user={spec.user_id}, baseline_desired_retention="
                 f"{spec.baseline_desired_retention}, lambda={spec.lambda_value}: "
                 f"{previous} and {spec.path}"
@@ -438,10 +440,10 @@ def _load_sibling_metadata(path: Path) -> Mapping[str, Any] | None:
     if not isinstance(raw, Mapping):
         raise ValueError(f"Artifact metadata must be a JSON object: {metadata_path}")
     scheduler_name = raw.get("scheduler_name")
-    if scheduler_name is not None and scheduler_name != "sa_fsrs6":
+    if scheduler_name is not None and scheduler_name != "fsrs6_adr_direct":
         raise ValueError(
             f"Artifact metadata {metadata_path} scheduler_name={scheduler_name!r}; "
-            "expected 'sa_fsrs6'."
+            "expected 'fsrs6_adr_direct'."
         )
     policy_path_raw = raw.get("policy_path")
     if isinstance(policy_path_raw, str) and policy_path_raw.strip():
@@ -529,8 +531,8 @@ def _require_path(value: Any, field_name: str, *, base_path: Path) -> Path:
 
 
 __all__ = [
-    "SAFSRS6PolicySpec",
+    "FSRS6ADRDirectPolicySpec",
     "format_float_token",
     "parse_float_token",
-    "resolve_sa_fsrs6_policy_specs",
+    "resolve_fsrs6_adr_direct_policy_specs",
 ]

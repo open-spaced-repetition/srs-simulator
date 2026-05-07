@@ -6,9 +6,10 @@ name is broad by design: it covers PPO/DQN-style reinforcement learning, FQI,
 CEM, simulated annealing, and other policy-search methods as long as the output
 is a scheduler artifact that can enter the same external evaluation pipeline.
 
-The current implemented research lines are SA FSRS-6 and CMA-ES FSRS-6:
-black-box optimizers learn scheduler-side FSRS-6 retention policies, then use
-stability `S` and difficulty `D` to compute the next interval. A core rule is
+The current implemented research lines are `fsrs6_adr_direct` and
+`fsrs6_adr_delta`: black-box optimizers learn scheduler-side FSRS-6 retention
+policies, then use stability `S` and difficulty `D` to compute the next interval.
+A core rule is
 that training and evaluation must not read the environment's hidden memory
 state. A learned scheduler must maintain its own scheduler state. For these
 FSRS-6 policy-search schedulers, that means the scheduler implements its own
@@ -17,23 +18,23 @@ FSRS-6 state update to obtain `S` and `D`.
 ## Directory Layout
 
 - `run_experiment.py`: TOML-driven stage runner.
-- `train_sa_fsrs6.py`: SA FSRS-6 overfit trainer for one baseline desired
+- `train_fsrs6_adr_direct.py`: FSRS6 ADR Direct overfit trainer for one baseline desired
   retention value.
-- `train_sa_fsrs6_dr_grid.py`: SA FSRS-6 trainer that batches a desired
+- `train_fsrs6_adr_direct_dr_grid.py`: FSRS6 ADR Direct trainer that batches a desired
   retention grid inside one process.
-- `train_sa_fsrs6_dr.py`: DR-conditioned SA FSRS-6 trainer that learns one
+- `train_fsrs6_adr_delta.py`: DR-conditioned FSRS6 ADR Delta trainer that learns one
   `(S,D,DR)` logit-adjustment policy per user/lambda.
-- `train_cmaes_fsrs6.py`: CMA-ES FSRS-6 trainer for ordinary `sa_fsrs6`
+- `train_cmaes_fsrs6_adr_direct.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr_direct`
   policies over `S,D`.
-- `train_cmaes_fsrs6_dr.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
+- `train_cmaes_fsrs6_adr_delta.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
   full-covariance CMA-ES over the same low-dimensional policy coefficients.
 - `train-overfit` can run these trainers through `[training.batch]` so users are
   batched in one process rather than launched as parallel training subprocesses.
-- `plot_sa_fsrs6_policy_surfaces.py`: Plotly HTML visualizer for learned
+- `plot_fsrs6_adr_direct_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
-- `plot_sa_fsrs6_dr_policy_surfaces.py`: Plotly HTML visualizer for learned
+- `plot_fsrs6_adr_delta_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D, DR) -> desired_retention` slices across input DR values.
-- `tune_sa_fsrs6_lanes.py`: GPU lane/chains tuning and throughput probe.
+- `tune_fsrs6_adr_direct_lanes.py`: GPU lane/chains tuning and throughput probe.
 - `inspect_run.py`: reads machine-readable evidence under a run root.
 - `validate_artifact.py`: validates scheduler artifact metadata and referenced
   files.
@@ -70,7 +71,7 @@ experiment should continue.
 - **sweep**: external simulation of artifacts and baselines. The current
   batched sweep can batch `(user, scheduler, scheduler parameter)` lanes in one
   simulator call, such as several FSRS-6 desired-retention values plus several
-  SA FSRS-6 policies.
+  FSRS6 ADR Direct policies.
 - **build-pareto/analyze-pareto**: the external efficiency frontier and Markdown
   comparison report built from sweep logs. Internal
   reward, loss, acceptance rate, and promotion flags are diagnostics only; they
@@ -133,52 +134,49 @@ uv run python experiments/rl_scheduler/validate_artifact.py \
   --require-files
 ```
 
-Visualize learned SA FSRS-6 policy surfaces:
+Visualize learned FSRS6 ADR Direct policy surfaces:
 
 ```bash
-uv run python experiments/rl_scheduler/plot_sa_fsrs6_policy_surfaces.py \
+uv run python experiments/rl_scheduler/plot_fsrs6_adr_direct_policy_surfaces.py \
   --train-run-root <output_root>/<run-id> \
   --users 1,2,3 \
   --lambda-values 0.5
 
-uv run python experiments/rl_scheduler/plot_sa_fsrs6_dr_policy_surfaces.py \
+uv run python experiments/rl_scheduler/plot_fsrs6_adr_delta_policy_surfaces.py \
   --train-run-root <output_root>/<run-id> \
   --users 1,2,3 \
   --lambda-values 0.5
 ```
 
 The visualizer writes one interactive Plotly HTML per user/lambda under
-`experiments/rl_scheduler/plots/sa_fsrs6_policy_surfaces/`. Each figure uses
+`experiments/rl_scheduler/plots/fsrs6_adr_direct_policy_surfaces/`. Each figure uses
 stability `S` and difficulty `D` as the horizontal axes, policy output retention
 as the vertical axis, and one translucent surface per baseline DR.
 The DR-conditioned visualizer writes to
-`experiments/rl_scheduler/plots/sa_fsrs6_dr_policy_surfaces/` and plots one
+`experiments/rl_scheduler/plots/fsrs6_adr_delta_policy_surfaces/` and plots one
 translucent surface per input DR slice from `metrics.json` or `--dr-values`.
 
 ## Current Main Experiments
 
 Representative profiles:
 
-- `configs/sa_fsrs6_batch_sweep_users_1_8.toml`: first 8 users, FSRS-6
+- `configs/fsrs6_adr_direct_sa_users_1_8.toml`: first 8 users, FSRS-6
   training environment, short-term off, 1825 days, deck size 10000, learn limit
   10, review limit 9999, 256 chains, DR batch size 25, and batch sweeps in
   both FSRS6 and LSTM environments.
-- `configs/sa_fsrs6_dr_batch_sweep_users_1_8.toml`: the same experiment shape
-  for the DR-conditioned `sa_fsrs6_dr` scheduler.
-- `configs/sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml`: the same workflow
-  using the simplified 4-parameter `sa_fsrs6_dr_log_linear_v1` feature version.
-- `configs/cmaes_fsrs6_linear_batch_sweep_users_1_8.toml`: the ordinary
-  `sa_fsrs6` scheduler trained with CMA-ES using one simplified 3-parameter
-  `sa_fsrs6_log_linear_v1` policy per user and baseline desired retention.
-- `configs/cmaes_fsrs6_dr_linear_seed42_users_1_8.toml`: the same
+- `configs/fsrs6_adr_delta_linear_sa_users_1_8.toml`: the same workflow
+  using the simplified 4-parameter `fsrs6_adr_delta_log_linear_v1` feature version.
+- `configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml`: the ordinary
+  `fsrs6_adr_direct` scheduler trained with CMA-ES using one simplified 3-parameter
+  `fsrs6_adr_direct_log_linear_v1` policy per user and baseline desired retention.
+- `configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml`: the same
   DR-conditioned scheduler artifact and evaluation workflow, trained with
-  CMA-ES instead of simulated annealing. Seed 43/44 companion profiles are
-  used for seed-robustness checks.
+  CMA-ES instead of simulated annealing.
 
 Training target:
 
 - Baseline scheduler: FSRS-6.
-- Candidate scheduler: SA FSRS-6.
+- Candidate scheduler: FSRS6 ADR Direct.
 - Action: emit desired retention from scheduler-side FSRS-6 `S,D`.
 - DR grid: typically `0.50..0.98`.
 - Overfit gate: on the training user, both memorized average and memorized per
@@ -187,14 +185,14 @@ Training target:
   memorized-per-minute gain are ranked below every candidate satisfying both
   gate constraints.
 
-For ordinary `sa_fsrs6`, the default policy uses 6 log-polynomial features over
-normalized `S,D`; set `training.sa.feature_version = "sa_fsrs6_log_linear_v1"`
+For ordinary `fsrs6_adr_direct`, the default policy uses 6 log-polynomial features over
+normalized `S,D`; set `training.sa.feature_version = "fsrs6_adr_direct_log_linear_v1"`
 to train the simplified 3-parameter linear variant.
-For `sa_fsrs6_dr`, the action is a logit-space adjustment around the input DR.
+For `fsrs6_adr_delta`, the action is a logit-space adjustment around the input DR.
 The overfit gate uses mean relative memorized-average and memorized-per-minute
 gains across the whole DR grid. The default DR-conditioned policy uses 10 log
 polynomial features; set `training.sa.feature_version =
-"sa_fsrs6_dr_log_linear_v1"` to train the 4-parameter linear variant.
+"fsrs6_adr_delta_log_linear_v1"` to train the 4-parameter linear variant.
 CMA-ES profiles keep the same `[training.sa]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,
 initial mean, and coefficient bounds in `[training.optimizer]`.

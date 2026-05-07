@@ -8,13 +8,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.tune_sa_fsrs6_lanes import (
+from experiments.rl_scheduler.tune_fsrs6_adr_direct_lanes import (
     _parse_lane_values,
     _select_fastest_passed,
 )
 
 
-class SAFSRS6LaneTuningTests(unittest.TestCase):
+class FSRS6ADRDirectLaneTuningTests(unittest.TestCase):
     def test_parse_lane_values(self) -> None:
         self.assertEqual(_parse_lane_values("8, 16,32"), [8, 16, 32])
         with self.assertRaisesRegex(ValueError, "duplicates"):

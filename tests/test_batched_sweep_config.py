@@ -25,15 +25,17 @@ from simulator.batched_sweep.runner import (
     _build_sweep_lanes,
     _split_lanes,
 )
-from simulator.batched_sweep.sa_policy import (
+from simulator.batched_sweep.fsrs6_adr_direct_policy import (
     format_float_token,
-    resolve_sa_fsrs6_policy_specs,
+    resolve_fsrs6_adr_direct_policy_specs,
 )
-from simulator.batched_sweep.sa_dr_policy import resolve_sa_fsrs6_dr_policy_specs
+from simulator.batched_sweep.fsrs6_adr_delta_policy import (
+    resolve_fsrs6_adr_delta_policy_specs,
+)
 from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH
 from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
-from simulator.sa_fsrs6_dr_policy import SAFSRS6DRPolicy
-from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from simulator.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicy
+from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 from tests.lstm_batch_helpers import dummy_lstm_weights
 
 
@@ -79,8 +81,8 @@ no_progress = true
 
 
 def _write_policy(path: Path, *, dr: float, offset: float = 0.0) -> None:
-    base = SAFSRS6Policy.baseline(desired_retention=dr)
-    policy = SAFSRS6Policy(
+    base = FSRS6ADRDirectPolicy.baseline(desired_retention=dr)
+    policy = FSRS6ADRDirectPolicy(
         coefficients=(base.coefficients[0] + offset, *base.coefficients[1:]),
         baseline_desired_retention=dr,
     )
@@ -88,10 +90,10 @@ def _write_policy(path: Path, *, dr: float, offset: float = 0.0) -> None:
 
 
 def _write_dr_policy(path: Path, *, offset: float = 0.0) -> None:
-    base = SAFSRS6DRPolicy.baseline()
+    base = FSRS6ADRDeltaPolicy.baseline()
     coefficients = list(base.coefficients)
     coefficients[0] += offset
-    policy = SAFSRS6DRPolicy(coefficients=tuple(coefficients))
+    policy = FSRS6ADRDeltaPolicy(coefficients=tuple(coefficients))
     policy.write_json(path)
 
 
@@ -114,16 +116,16 @@ def _args(log_dir: Path, policy_path: Path | None = None) -> argparse.Namespace:
         step=0.02,
         days=2,
         diagnostic_csv_logs=False,
-        sa_fsrs6_policy=policy_path,
-        sa_fsrs6_policy_root=None,
-        sa_fsrs6_train_run_root=None,
-        sa_fsrs6_policy_manifest=None,
-        sa_fsrs6_lambda_values=None,
-        sa_fsrs6_dr_policy=None,
-        sa_fsrs6_dr_policy_root=None,
-        sa_fsrs6_dr_train_run_root=None,
-        sa_fsrs6_dr_policy_manifest=None,
-        sa_fsrs6_dr_lambda_values=None,
+        fsrs6_adr_direct_policy=policy_path,
+        fsrs6_adr_direct_policy_root=None,
+        fsrs6_adr_direct_train_run_root=None,
+        fsrs6_adr_direct_policy_manifest=None,
+        fsrs6_adr_direct_lambda_values=None,
+        fsrs6_adr_delta_policy=None,
+        fsrs6_adr_delta_policy_root=None,
+        fsrs6_adr_delta_train_run_root=None,
+        fsrs6_adr_delta_policy_manifest=None,
+        fsrs6_adr_delta_lambda_values=None,
     )
 
 
@@ -150,17 +152,17 @@ class BatchedSweepConfigTests(unittest.TestCase):
             / "experiments"
             / "rl_scheduler"
             / "configs"
-            / "sa_fsrs6_dr_linear_batch_sweep_users_1_8.toml",
+            / "fsrs6_adr_delta_linear_sa_users_1_8.toml",
             repo_root=REPO_ROOT,
         )
 
         self.assertEqual(config.args.user_ids, list(range(1, 9)))
         self.assertEqual(config.envs, ("fsrs6", "lstm"))
-        self.assertEqual(config.schedulers, ("sa_fsrs6_dr",))
+        self.assertEqual(config.schedulers, ("fsrs6_adr_delta",))
         self.assertEqual(config.args.log_dir, REPO_ROOT / "logs" / "retention_sweep")
         self.assertEqual(config.args.batch_size, 8)
         self.assertEqual(config.args.torch_device, "cuda")
-        self.assertEqual(config.args.sa_fsrs6_dr_lambda_values, (0.5,))
+        self.assertEqual(config.args.fsrs6_adr_delta_lambda_values, (0.5,))
         self.assertFalse(config.args.no_progress)
 
     def test_dry_run_accepts_rl_scheduler_experiment_config(self) -> None:
@@ -219,7 +221,7 @@ lambda_grid = [0.5]
 
 [sweep]
 envs = ["fsrs6"]
-schedulers = ["sa_fsrs6_dr"]
+schedulers = ["fsrs6_adr_delta"]
 log_dir = "{log_dir.as_posix()}"
 log_layout = "user"
 batch_size = 2
@@ -244,7 +246,7 @@ no_log = true
         self.assertIn("Batched sweep dry run", output)
         self.assertIn("expanded lanes: 4", output)
 
-    def test_loads_sa_fsrs6_dr_config_fields(self) -> None:
+    def test_loads_fsrs6_adr_delta_config_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             path = root / "sweep.toml"
@@ -253,7 +255,7 @@ no_log = true
             path.write_text(
                 _valid_config(log_dir)
                 + f"""
-[sa_fsrs6_dr]
+[fsrs6_adr_delta]
 policy_root = "{policy_root.as_posix()}"
 lambda_values = [0.5]
 """,
@@ -262,8 +264,8 @@ lambda_values = [0.5]
 
             config = load_batched_sweep_config(path)
 
-        self.assertEqual(config.args.sa_fsrs6_dr_policy_root, policy_root.resolve())
-        self.assertEqual(config.args.sa_fsrs6_dr_lambda_values, (0.5,))
+        self.assertEqual(config.args.fsrs6_adr_delta_policy_root, policy_root.resolve())
+        self.assertEqual(config.args.fsrs6_adr_delta_lambda_values, (0.5,))
 
     def test_loads_explicit_sweep_log_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -444,7 +446,7 @@ lambda_values = [0.5]
         self.assertIn("example log dir:", output)
 
 
-class SAFSRS6PolicyExpansionTests(unittest.TestCase):
+class FSRS6ADRDirectPolicyExpansionTests(unittest.TestCase):
     def test_single_policy_preserves_current_lane_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
@@ -455,17 +457,22 @@ class SAFSRS6PolicyExpansionTests(unittest.TestCase):
                 log_root=Path(tmp) / "logs",
                 batch_log_root=Path(tmp) / "logs" / "batch_logs",
                 envs=["lstm"],
-                schedulers=["sa_fsrs6"],
+                schedulers=["fsrs6_adr_direct"],
                 dr_values=[0.50, 0.52],
-                sa_fsrs6_policy=policy_path,
+                fsrs6_adr_direct_policy=policy_path,
             )
 
             lanes = _build_sweep_lanes(batch=[1, 2], ctx=ctx, environment="lstm")
 
         self.assertEqual(len(lanes), 2)
-        self.assertTrue(all(lane.sa_fsrs6_policy == policy_path for lane in lanes))
         self.assertTrue(
-            all(lane.sa_fsrs6_baseline_desired_retention is None for lane in lanes)
+            all(lane.fsrs6_adr_direct_policy == policy_path for lane in lanes)
+        )
+        self.assertTrue(
+            all(
+                lane.fsrs6_adr_direct_baseline_desired_retention is None
+                for lane in lanes
+            )
         )
         self.assertEqual(
             [
@@ -473,8 +480,8 @@ class SAFSRS6PolicyExpansionTests(unittest.TestCase):
                 for lane in lanes
             ],
             [
-                "user_1/sched_sa_fsrs6/policy_policy",
-                "user_2/sched_sa_fsrs6/policy_policy",
+                "user_1/sched_fsrs6_adr_direct/policy_policy",
+                "user_2/sched_fsrs6_adr_direct/policy_policy",
             ],
         )
 
@@ -492,7 +499,7 @@ class SAFSRS6PolicyExpansionTests(unittest.TestCase):
                     )
                     _write_policy(policy_path, dr=dr)
 
-            specs = resolve_sa_fsrs6_policy_specs(
+            specs = resolve_fsrs6_adr_direct_policy_specs(
                 user_ids=[1, 2],
                 dr_values=[0.50, 0.52],
                 policy_root=root,
@@ -505,9 +512,9 @@ class SAFSRS6PolicyExpansionTests(unittest.TestCase):
                 log_root=Path(tmp) / "logs",
                 batch_log_root=Path(tmp) / "logs" / "batch_logs",
                 envs=["lstm"],
-                schedulers=["sa_fsrs6"],
+                schedulers=["fsrs6_adr_direct"],
                 dr_values=[0.50, 0.52],
-                sa_fsrs6_policy_specs=specs,
+                fsrs6_adr_direct_policy_specs=specs,
             )
 
             lanes = _build_sweep_lanes(batch=[1, 2], ctx=ctx, environment="lstm")
@@ -517,8 +524,8 @@ class SAFSRS6PolicyExpansionTests(unittest.TestCase):
             [
                 (
                     lane.user_id,
-                    lane.sa_fsrs6_baseline_desired_retention,
-                    lane.sa_fsrs6_lambda_value,
+                    lane.fsrs6_adr_direct_baseline_desired_retention,
+                    lane.fsrs6_adr_direct_lambda_value,
                 )
                 for lane in lanes
             ],
@@ -535,10 +542,10 @@ class SAFSRS6PolicyExpansionTests(unittest.TestCase):
                 for lane in lanes
             ],
             [
-                "user_1/sched_sa_fsrs6/dr_0p5/lambda_0p5",
-                "user_1/sched_sa_fsrs6/dr_0p52/lambda_0p5",
-                "user_2/sched_sa_fsrs6/dr_0p5/lambda_0p5",
-                "user_2/sched_sa_fsrs6/dr_0p52/lambda_0p5",
+                "user_1/sched_fsrs6_adr_direct/dr_0p5/lambda_0p5",
+                "user_1/sched_fsrs6_adr_direct/dr_0p52/lambda_0p5",
+                "user_2/sched_fsrs6_adr_direct/dr_0p5/lambda_0p5",
+                "user_2/sched_fsrs6_adr_direct/dr_0p52/lambda_0p5",
             ],
         )
 
@@ -559,7 +566,7 @@ path = "policies/u1_dr05/policy.json"
                 encoding="utf-8",
             )
 
-            specs = resolve_sa_fsrs6_policy_specs(
+            specs = resolve_fsrs6_adr_direct_policy_specs(
                 user_ids=[1],
                 dr_values=[0.50],
                 policy_manifest=manifest,
@@ -586,7 +593,7 @@ path = "policy.json"
             )
 
             with self.assertRaisesRegex(ValueError, "baseline_desired_retention"):
-                resolve_sa_fsrs6_policy_specs(
+                resolve_fsrs6_adr_direct_policy_specs(
                     user_ids=[1],
                     dr_values=[0.50],
                     policy_manifest=manifest,
@@ -600,8 +607,8 @@ path = "policy.json"
                 dr=0.50,
             )
 
-            with self.assertRaisesRegex(FileNotFoundError, "Missing SA FSRS-6"):
-                resolve_sa_fsrs6_policy_specs(
+            with self.assertRaisesRegex(FileNotFoundError, "Missing FSRS6 ADR Direct"):
+                resolve_fsrs6_adr_direct_policy_specs(
                     user_ids=[1],
                     dr_values=[0.50, 0.52],
                     policy_root=root,
@@ -752,25 +759,25 @@ path = "policy.json"
                     user_id=1,
                     log_root=root / "logs" / "a",
                     environment="lstm",
-                    scheduler_name="sa_fsrs6",
-                    scheduler_spec="sa_fsrs6",
+                    scheduler_name="fsrs6_adr_direct",
+                    scheduler_spec="fsrs6_adr_direct",
                     desired_retention=None,
                     fixed_interval=None,
-                    sa_fsrs6_policy=first,
-                    sa_fsrs6_baseline_desired_retention=0.50,
-                    sa_fsrs6_lambda_value=0.5,
+                    fsrs6_adr_direct_policy=first,
+                    fsrs6_adr_direct_baseline_desired_retention=0.50,
+                    fsrs6_adr_direct_lambda_value=0.5,
                 ),
                 BatchedSweepLogLane(
                     user_id=2,
                     log_root=root / "logs" / "b",
                     environment="lstm",
-                    scheduler_name="sa_fsrs6",
-                    scheduler_spec="sa_fsrs6",
+                    scheduler_name="fsrs6_adr_direct",
+                    scheduler_spec="fsrs6_adr_direct",
                     desired_retention=None,
                     fixed_interval=None,
-                    sa_fsrs6_policy=second,
-                    sa_fsrs6_baseline_desired_retention=0.52,
-                    sa_fsrs6_lambda_value=0.5,
+                    fsrs6_adr_direct_policy=second,
+                    fsrs6_adr_direct_baseline_desired_retention=0.52,
+                    fsrs6_adr_direct_lambda_value=0.5,
                 ),
             ]
 
@@ -795,7 +802,7 @@ path = "policy.json"
         self.assertEqual(int(group.lane_indices.numel()), 2)
 
 
-class SAFSRS6DRPolicyExpansionTests(unittest.TestCase):
+class FSRS6ADRDeltaPolicyExpansionTests(unittest.TestCase):
     def test_policy_root_expands_one_policy_per_user_across_dr_grid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "train_outputs"
@@ -803,7 +810,7 @@ class SAFSRS6DRPolicyExpansionTests(unittest.TestCase):
                 policy_path = root / f"user_{user_id}" / "lambda_0p5" / "policy.json"
                 _write_dr_policy(policy_path)
 
-            specs = resolve_sa_fsrs6_dr_policy_specs(
+            specs = resolve_fsrs6_adr_delta_policy_specs(
                 user_ids=[1, 2],
                 policy_root=root,
                 lambda_values=[0.5],
@@ -815,9 +822,9 @@ class SAFSRS6DRPolicyExpansionTests(unittest.TestCase):
                 log_root=Path(tmp) / "logs",
                 batch_log_root=Path(tmp) / "logs" / "batch_logs",
                 envs=["lstm"],
-                schedulers=["sa_fsrs6_dr"],
+                schedulers=["fsrs6_adr_delta"],
                 dr_values=[0.50, 0.52],
-                sa_fsrs6_dr_policy_specs=specs,
+                fsrs6_adr_delta_policy_specs=specs,
             )
 
             lanes = _build_sweep_lanes(batch=[1, 2], ctx=ctx, environment="lstm")
@@ -829,8 +836,10 @@ class SAFSRS6DRPolicyExpansionTests(unittest.TestCase):
                 (
                     lane.user_id,
                     lane.desired_retention,
-                    lane.sa_fsrs6_dr_lambda_value,
-                    lane.sa_fsrs6_dr_policy.name if lane.sa_fsrs6_dr_policy else None,
+                    lane.fsrs6_adr_delta_lambda_value,
+                    lane.fsrs6_adr_delta_policy.name
+                    if lane.fsrs6_adr_delta_policy
+                    else None,
                 )
                 for lane in lanes
             ],
@@ -847,10 +856,10 @@ class SAFSRS6DRPolicyExpansionTests(unittest.TestCase):
                 for lane in lanes
             ],
             [
-                "user_1/sched_sa_fsrs6_dr/dr_0p5/lambda_0p5",
-                "user_1/sched_sa_fsrs6_dr/dr_0p52/lambda_0p5",
-                "user_2/sched_sa_fsrs6_dr/dr_0p5/lambda_0p5",
-                "user_2/sched_sa_fsrs6_dr/dr_0p52/lambda_0p5",
+                "user_1/sched_fsrs6_adr_delta/dr_0p5/lambda_0p5",
+                "user_1/sched_fsrs6_adr_delta/dr_0p52/lambda_0p5",
+                "user_2/sched_fsrs6_adr_delta/dr_0p5/lambda_0p5",
+                "user_2/sched_fsrs6_adr_delta/dr_0p52/lambda_0p5",
             ],
         )
 
@@ -866,23 +875,23 @@ class SAFSRS6DRPolicyExpansionTests(unittest.TestCase):
                     user_id=1,
                     log_root=root / "logs" / "a",
                     environment="lstm",
-                    scheduler_name="sa_fsrs6_dr",
-                    scheduler_spec="sa_fsrs6_dr",
+                    scheduler_name="fsrs6_adr_delta",
+                    scheduler_spec="fsrs6_adr_delta",
                     desired_retention=0.50,
                     fixed_interval=None,
-                    sa_fsrs6_dr_policy=first,
-                    sa_fsrs6_dr_lambda_value=0.5,
+                    fsrs6_adr_delta_policy=first,
+                    fsrs6_adr_delta_lambda_value=0.5,
                 ),
                 BatchedSweepLogLane(
                     user_id=2,
                     log_root=root / "logs" / "b",
                     environment="lstm",
-                    scheduler_name="sa_fsrs6_dr",
-                    scheduler_spec="sa_fsrs6_dr",
+                    scheduler_name="fsrs6_adr_delta",
+                    scheduler_spec="fsrs6_adr_delta",
                     desired_retention=0.52,
                     fixed_interval=None,
-                    sa_fsrs6_dr_policy=second,
-                    sa_fsrs6_dr_lambda_value=0.5,
+                    fsrs6_adr_delta_policy=second,
+                    fsrs6_adr_delta_lambda_value=0.5,
                 ),
             ]
 

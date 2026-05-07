@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_sa_fsrs6 import (
+from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     CandidateMetrics,
     SASettings,
     SimulationBundle,
@@ -36,9 +36,9 @@ from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.math.fsrs import Bounds
-from simulator.sa_fsrs6_policy import FEATURE_VERSION, SAFSRS6Policy
+from simulator.fsrs6_adr_direct_policy import FEATURE_VERSION, FSRS6ADRDirectPolicy
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
-from simulator.schedulers.sa_fsrs6 import SAFSRS6BatchSchedulerOps
+from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 
@@ -57,7 +57,7 @@ class DRTrainingResult:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Train SA FSRS-6 policies for a desired-retention grid inside one "
+            "Train FSRS6 ADR Direct policies for a desired-retention grid inside one "
             "process using batch lanes."
         ),
         allow_abbrev=False,
@@ -472,7 +472,7 @@ def _initial_coefficients(
     generator: torch.Generator,
 ) -> torch.Tensor:
     base_coefficients = [
-        SAFSRS6Policy.baseline(
+        FSRS6ADRDirectPolicy.baseline(
             desired_retention=baseline_dr,
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
@@ -503,12 +503,12 @@ def _evaluate_sa_candidates(
     coefficients: torch.Tensor,
     seed: int,
 ) -> list[CandidateMetrics]:
-    template = SAFSRS6Policy.baseline(
+    template = FSRS6ADRDirectPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
     )
-    sched_ops = SAFSRS6BatchSchedulerOps(
+    sched_ops = FSRS6ADRDirectBatchSchedulerOps(
         weights=bundle.scheduler_weights,
         policy=template,
         coefficients=coefficients,
@@ -606,12 +606,12 @@ def _write_grid_artifacts(
         dr_token = _float_token(dr)
         result_dir = output_dir / f"dr_{dr_token}"
         result_dir.mkdir(parents=True, exist_ok=True)
-        policy = SAFSRS6Policy(
+        policy = FSRS6ADRDirectPolicy(
             coefficients=tuple(float(v) for v in result.best_coefficients.tolist()),
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
             baseline_desired_retention=dr,
-            title=f"sa_fsrs6_u{user_id}_dr_{dr:.2f}_lambda_{lambda_value:g}",
+            title=f"fsrs6_adr_direct_u{user_id}_dr_{dr:.2f}_lambda_{lambda_value:g}",
         )
         policy_path = result_dir / "policy.json"
         policy.write_json(policy_path)
@@ -650,7 +650,7 @@ def _write_grid_artifacts(
             "artifact_kind": "scheduler-policy",
             "artifact_id": _artifact_id(user_id, lambda_value, dr, config.seed),
             "family": config.family,
-            "scheduler_name": "sa_fsrs6",
+            "scheduler_name": "fsrs6_adr_direct",
             "environment": config.simulation.environment,
             "engine": config.simulation.engine,
             "training_user_ids": [user_id],
@@ -730,7 +730,7 @@ def _artifact_id(
 ) -> str:
     lambda_token = _float_token(lambda_value)
     dr_token = _float_token(baseline_desired_retention)
-    return f"sa-fsrs6-user-{user_id}-dr-{dr_token}-lambda-{lambda_token}-seed-{seed}"
+    return f"fsrs6-adr-direct-user-{user_id}-dr-{dr_token}-lambda-{lambda_token}-seed-{seed}"
 
 
 def _float(value: Any, field_name: str) -> float:

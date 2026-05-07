@@ -566,15 +566,15 @@ class TrainingBatchConfig:
     def __post_init__(self) -> None:
         if self.trainer not in {
             "auto",
-            "sa_fsrs6",
-            "cmaes_fsrs6",
-            "sa_fsrs6_dr_grid",
-            "sa_fsrs6_dr",
-            "cmaes_fsrs6_dr",
+            "fsrs6_adr_direct",
+            "fsrs6_adr_direct_cmaes",
+            "fsrs6_adr_direct_dr_grid",
+            "fsrs6_adr_delta",
+            "fsrs6_adr_delta_cmaes",
         }:
             raise ValueError(
-                "training.batch.trainer must be auto, sa_fsrs6, cmaes_fsrs6, "
-                "sa_fsrs6_dr_grid, sa_fsrs6_dr, or cmaes_fsrs6_dr."
+                "training.batch.trainer must be auto, fsrs6_adr_direct, fsrs6_adr_direct_cmaes, "
+                "fsrs6_adr_direct_dr_grid, fsrs6_adr_delta, or fsrs6_adr_delta_cmaes."
             )
 
     def to_dict(self) -> dict[str, Any]:

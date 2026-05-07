@@ -32,7 +32,7 @@ from simulator.batched_sweep.runner import (
     _group_lane_indices,
 )
 from simulator.core import SimulationStats
-from simulator.sa_fsrs6_policy import SAFSRS6Policy
+from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 from experiments.retention_sweep.build_pareto import (
     _build_results,
     _split_results_by_series,
@@ -117,7 +117,7 @@ def _plan_args(
     log_dir: Path,
     diagnostic_csv_logs: bool,
     *,
-    sa_fsrs6_policy: Path | None = None,
+    fsrs6_adr_direct_policy: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         batch_size=2,
@@ -134,7 +134,7 @@ def _plan_args(
         step=0.01,
         days=2,
         diagnostic_csv_logs=diagnostic_csv_logs,
-        sa_fsrs6_policy=sa_fsrs6_policy,
+        fsrs6_adr_direct_policy=fsrs6_adr_direct_policy,
     )
 
 
@@ -416,9 +416,9 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                 log_root=root,
                 batch_log_root=root / "batch_logs",
                 envs=["lstm"],
-                schedulers=["fsrs6", "sa_fsrs6", "fixed@3", "anki_sm2"],
+                schedulers=["fsrs6", "fsrs6_adr_direct", "fixed@3", "anki_sm2"],
                 dr_values=[0.90],
-                sa_fsrs6_policy=policy_path,
+                fsrs6_adr_direct_policy=policy_path,
             )
 
             lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="lstm")
@@ -427,7 +427,7 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             [lane.final_log_dir.relative_to(root).as_posix() for lane in lanes],
             [
                 "user_1/sched_fsrs6/dr_0p9",
-                "user_1/sched_sa_fsrs6/policy_policy",
+                "user_1/sched_fsrs6_adr_direct/policy_policy",
                 "user_1/sched_fixed/ivl_3",
                 "user_1/sched_anki_sm2",
             ],
@@ -559,7 +559,9 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "logs" / "retention_sweep"
             policy_path = Path(tmp) / "policy.json"
-            SAFSRS6Policy.baseline(desired_retention=0.90).write_json(policy_path)
+            FSRS6ADRDirectPolicy.baseline(desired_retention=0.90).write_json(
+                policy_path
+            )
             args = _batched_args(False)
             args.no_log = False
             lanes = [
@@ -575,14 +577,17 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                 ),
                 BatchedSweepLogLane(
                     user_id=1,
-                    log_root=root / "sched_sa_fsrs6" / "policy_policy",
-                    log_dir=root / "user_1" / "sched_sa_fsrs6" / "policy_policy",
+                    log_root=root / "sched_fsrs6_adr_direct" / "policy_policy",
+                    log_dir=root
+                    / "user_1"
+                    / "sched_fsrs6_adr_direct"
+                    / "policy_policy",
                     environment="lstm",
-                    scheduler_name="sa_fsrs6",
-                    scheduler_spec="sa_fsrs6",
+                    scheduler_name="fsrs6_adr_direct",
+                    scheduler_spec="fsrs6_adr_direct",
                     desired_retention=None,
                     fixed_interval=None,
-                    sa_fsrs6_policy=policy_path,
+                    fsrs6_adr_direct_policy=policy_path,
                 ),
             ]
 
@@ -626,7 +631,7 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             sa_results = _build_results(
                 user_log_dir,
                 "lstm",
-                {"sa_fsrs6"},
+                {"fsrs6_adr_direct"},
                 0.50,
                 0.98,
                 [REPO_ROOT, user_log_dir],
@@ -637,7 +642,9 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             )
 
         self.assertEqual([entry["scheduler"] for entry in fsrs_results], ["fsrs6"])
-        self.assertEqual([entry["scheduler"] for entry in sa_results], ["sa_fsrs6"])
+        self.assertEqual(
+            [entry["scheduler"] for entry in sa_results], ["fsrs6_adr_direct"]
+        )
 
     def test_build_pareto_filters_root_log_dir_to_requested_user(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -670,24 +677,24 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(results[0]["user_id"], 1)
         self.assertEqual(results[0]["memorized_average"], 10.0)
 
-    def test_build_pareto_keeps_sa_fsrs6_dr_runs_separate(self) -> None:
+    def test_build_pareto_keeps_fsrs6_adr_delta_runs_separate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            user_log_dir = Path(tmp) / "user_1" / "sched_sa_fsrs6_dr" / "dr_0p9"
+            user_log_dir = Path(tmp) / "user_1" / "sched_fsrs6_adr_delta" / "dr_0p9"
             for run_id, memorized in (("poly-run", 10.0), ("linear-run", 20.0)):
                 args = _write_log_args(user_log_dir, False)
                 args.engine = "batched"
-                args.scheduler = "sa_fsrs6_dr"
-                args.scheduler_spec = "sa_fsrs6_dr"
+                args.scheduler = "fsrs6_adr_delta"
+                args.scheduler_spec = "fsrs6_adr_delta"
                 args.desired_retention = 0.90
                 args.run_id = run_id
-                args.sa_fsrs6_dr_policy = Path(tmp) / run_id / "policy.json"
-                args.sa_fsrs6_dr_lambda_value = 0.5
+                args.fsrs6_adr_delta_policy = Path(tmp) / run_id / "policy.json"
+                args.fsrs6_adr_delta_lambda_value = 0.5
                 simulate_cli._write_log(args, _stats(memorized=memorized))
 
             results = _build_results(
                 user_log_dir.parents[1],
                 "fsrs6",
-                {"sa_fsrs6_dr"},
+                {"fsrs6_adr_delta"},
                 0.50,
                 0.98,
                 [REPO_ROOT, user_log_dir],
@@ -706,28 +713,32 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         )
         self.assertEqual([len(entries) for _key, entries in series], [1, 1])
 
-    def test_build_pareto_labels_sa_fsrs6_by_baseline_dr_without_deduping_policies(
+    def test_build_pareto_labels_fsrs6_adr_direct_by_baseline_dr_without_deduping_policies(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             user_log_dir = Path(tmp) / "user_1"
             for index, lambda_value in enumerate((0.5, 0.7), start=1):
-                policy_path = Path(tmp) / f"sa_fsrs6_u1_dr_0.94_lambda_{index}.json"
-                SAFSRS6Policy.baseline(desired_retention=0.94).write_json(policy_path)
+                policy_path = (
+                    Path(tmp) / f"fsrs6_adr_direct_u1_dr_0.94_lambda_{index}.json"
+                )
+                FSRS6ADRDirectPolicy.baseline(desired_retention=0.94).write_json(
+                    policy_path
+                )
                 args = _write_log_args(user_log_dir, False)
                 args.engine = "batched"
                 args.env = "lstm"
                 args.environment = "lstm"
-                args.scheduler = "sa_fsrs6"
-                args.scheduler_spec = "sa_fsrs6"
-                args.sa_fsrs6_policy = policy_path
-                args.sa_fsrs6_lambda_value = lambda_value
+                args.scheduler = "fsrs6_adr_direct"
+                args.scheduler_spec = "fsrs6_adr_direct"
+                args.fsrs6_adr_direct_policy = policy_path
+                args.fsrs6_adr_direct_lambda_value = lambda_value
                 simulate_cli._write_log(args, _stats(memorized=10.0 + index))
 
             results = _build_results(
                 user_log_dir,
                 "lstm",
-                {"sa_fsrs6"},
+                {"fsrs6_adr_direct"},
                 0.50,
                 0.98,
                 [REPO_ROOT, user_log_dir],
@@ -740,11 +751,11 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual([entry["title"] for entry in results], ["DR=94%", "DR=94%"])
         self.assertEqual(
-            [entry["sa_fsrs6_baseline_desired_retention"] for entry in results],
+            [entry["fsrs6_adr_direct_baseline_desired_retention"] for entry in results],
             [0.94, 0.94],
         )
         self.assertCountEqual(
-            [entry["sa_fsrs6_lambda_value"] for entry in results],
+            [entry["fsrs6_adr_direct_lambda_value"] for entry in results],
             [0.5, 0.7],
         )
 
@@ -778,26 +789,26 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(results[0]["scheduler"], "anki_sm2")
         self.assertEqual(results[0]["memorized_average"], 11.0)
 
-    def test_batched_plan_requires_sa_fsrs6_policy(self) -> None:
+    def test_batched_plan_requires_fsrs6_adr_direct_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp) / "logs"
-            with self.assertRaisesRegex(ValueError, "--sa-fsrs6-policy"):
+            with self.assertRaisesRegex(ValueError, "--fsrs6-adr-direct-policy"):
                 build_batched_sweep_plan(
                     repo_root=REPO_ROOT,
                     args=_plan_args(log_dir, False),
                     envs=["lstm"],
-                    schedulers=["sa_fsrs6"],
+                    schedulers=["fsrs6_adr_direct"],
                 )
 
             policy_path = Path(tmp) / "policy.json"
             plan = build_batched_sweep_plan(
                 repo_root=REPO_ROOT,
-                args=_plan_args(log_dir, False, sa_fsrs6_policy=policy_path),
+                args=_plan_args(log_dir, False, fsrs6_adr_direct_policy=policy_path),
                 envs=["lstm"],
-                schedulers=["sa_fsrs6"],
+                schedulers=["fsrs6_adr_direct"],
             )
 
-            self.assertEqual(plan.ctx.sa_fsrs6_policy, policy_path)
+            self.assertEqual(plan.ctx.fsrs6_adr_direct_policy, policy_path)
 
 
 if __name__ == "__main__":
