@@ -159,8 +159,18 @@ def _build_sweep_lanes(
             for spec in ctx.fsrs6_adr_direct_policy_specs:
                 if spec.user_id not in batch_users:
                     continue
-                dr_token = _format_float_token(spec.baseline_desired_retention)
-                scheduler_subpath = Path("sched_fsrs6_adr_direct") / f"dr_{dr_token}"
+                if spec.baseline_desired_retention is None:
+                    policy_token = (
+                        f"policy_{spec.policy_index}"
+                        if spec.policy_index is not None
+                        else f"policy_{spec.path.parent.name}"
+                    )
+                    scheduler_subpath = Path("sched_fsrs6_adr_direct") / policy_token
+                else:
+                    dr_token = _format_float_token(spec.baseline_desired_retention)
+                    scheduler_subpath = (
+                        Path("sched_fsrs6_adr_direct") / f"dr_{dr_token}"
+                    )
                 if spec.lambda_value is not None:
                     scheduler_subpath = scheduler_subpath / (
                         f"lambda_{_format_float_token(spec.lambda_value)}"

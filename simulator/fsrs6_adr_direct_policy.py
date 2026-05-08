@@ -26,7 +26,7 @@ class FSRS6ADRDirectPolicy:
     retention_max: float = 0.98
     bounds: Bounds = Bounds()
     title: str = "FSRS6 ADR Direct log polynomial"
-    baseline_desired_retention: float = 0.90
+    baseline_desired_retention: float | None = 0.90
     feature_version: str = FEATURE_VERSION
     metadata: dict[str, Any] | None = None
 
@@ -54,7 +54,7 @@ class FSRS6ADRDirectPolicy:
         title = raw.get("title", _default_title(feature_version))
         if not isinstance(title, str) or not title.strip():
             raise ValueError("title must be a non-empty string.")
-        baseline = _float(
+        baseline = _optional_float(
             raw.get("baseline_desired_retention", 0.90),
             "baseline_desired_retention",
         )
@@ -231,6 +231,12 @@ def _float(value: Any, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (float, int)):
         raise ValueError(f"{field_name} must be a number.")
     return float(value)
+
+
+def _optional_float(value: Any, field_name: str) -> float | None:
+    if value is None:
+        return None
+    return _float(value, field_name)
 
 
 def _float_tuple(value: Any, field_name: str) -> tuple[float, ...]:

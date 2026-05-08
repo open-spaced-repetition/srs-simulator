@@ -19,6 +19,7 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 
 SUPPORTED_TRAINERS = {
     "fsrs6_adr_direct",
+    "fsrs6_adr_direct_portfolio",
     "fsrs6_adr_direct_cmaes",
     "fsrs6_adr_direct_dr_grid",
     "fsrs6_adr_delta",
@@ -74,6 +75,8 @@ def resolve_in_process_trainer(
         return "fsrs6_adr_delta_cmaes"
     if "train_cmaes_fsrs6_adp.py" in script_names:
         return "fsrs6_adp_cmaes"
+    if "train_fsrs6_adr_direct_portfolio.py" in script_names:
+        return "fsrs6_adr_direct_portfolio"
     if "train_fsrs6_adr_direct_dr_grid.py" in script_names:
         return "fsrs6_adr_direct_dr_grid"
     if "train_fsrs6_adr_delta.py" in script_names:
@@ -103,6 +106,9 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         _dr_batch_size,
         _policy_feature_version,
     )
+    from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
+        PortfolioSettings,
+    )
     from experiments.rl_scheduler.train_cmaes_fsrs6_adp import (
         ADPSettings,
         optimizer_settings_from_mapping as adp_optimizer_settings_from_mapping,
@@ -126,6 +132,19 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             feature_version=feature_version,
         )
         return max(1, optimizer.population_size)
+    if trainer == "fsrs6_adr_direct_portfolio":
+        portfolio = PortfolioSettings.from_mapping(
+            config.training_portfolio,
+            settings=settings,
+            default_seed_retention_values=_baseline_dr_values(
+                raw_training_sa, settings
+            ),
+        )
+        return max(
+            len(portfolio.seed_retention_values or ()),
+            portfolio.population_size,
+            portfolio.offspring_size,
+        )
     baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
     dr_batch_size = _dr_batch_size(raw_training_sa, len(baseline_dr_values))
     dr_lanes = min(len(baseline_dr_values), dr_batch_size)
@@ -170,6 +189,10 @@ def run_in_process_train_batch(
         )
     if trainer == "fsrs6_adr_direct_cmaes":
         return _run_fsrs6_adr_direct_cmaes_jobs(
+            jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
+        )
+    if trainer == "fsrs6_adr_direct_portfolio":
+        return _run_fsrs6_adr_direct_portfolio_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     if trainer == "fsrs6_adr_direct_dr_grid":
@@ -745,6 +768,55 @@ def _write_fsrs6_adr_direct_artifact(
         },
     )
     return metadata_path
+
+
+def _run_fsrs6_adr_direct_portfolio_jobs(
+    *,
+    jobs: list[InProcessTrainJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+) -> list[InProcessTrainOutcome]:
+    from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
+        PortfolioTrainJob,
+        run_portfolio_train_jobs,
+    )
+
+    outcomes = run_portfolio_train_jobs(
+        jobs=[
+            PortfolioTrainJob(
+                user_id=job.user_id,
+                lambda_value=job.lambda_value,
+                output_dir=job.output_dir,
+                command_record_path=job.command_record_path,
+            )
+            for job in jobs
+        ],
+        config=config,
+        config_path=config_path,
+        repo_root=repo_root,
+        execution_mode="in_process_batch",
+    )
+    outcome_by_key = {
+        (outcome.job.user_id, outcome.job.lambda_value, outcome.job.output_dir): outcome
+        for outcome in outcomes
+    }
+    return [
+        InProcessTrainOutcome(
+            job=job,
+            passed=outcome.passed,
+            artifact_paths=outcome.artifact_paths,
+            progress_path=outcome.progress_path,
+            error=outcome.error,
+        )
+        for job in jobs
+        if (
+            outcome := outcome_by_key.get(
+                (job.user_id, job.lambda_value, job.output_dir)
+            )
+        )
+        is not None
+    ]
 
 
 def _run_fsrs6_adr_direct_cmaes_jobs(

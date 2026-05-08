@@ -14,8 +14,9 @@ from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 @dataclass(frozen=True, slots=True)
 class FSRS6ADRDirectPolicySpec:
     user_id: int
-    baseline_desired_retention: float
+    baseline_desired_retention: float | None
     lambda_value: float | None
+    policy_index: int | None
     path: Path
 
 
@@ -90,7 +91,9 @@ def _discover_policy_root(
         spec = _spec_from_policy_path(policy_path, dr_values=dr_values)
         if spec.user_id not in user_set:
             continue
-        if not _matches_grid(spec.baseline_desired_retention, dr_values):
+        if spec.baseline_desired_retention is not None and not _matches_grid(
+            spec.baseline_desired_retention, dr_values
+        ):
             continue
         if lambda_filter is not None and not _matches_lambda(
             spec.lambda_value, lambda_filter
@@ -135,7 +138,7 @@ def _load_policy_manifest(
         if not isinstance(entry, Mapping):
             raise ValueError(f"policies[{index}] must be a TOML table.")
         user_id = _require_int(entry.get("user_id"), f"policies[{index}].user_id")
-        baseline_dr = _require_float(
+        baseline_dr = _optional_float(
             entry.get("baseline_desired_retention"),
             f"policies[{index}].baseline_desired_retention",
         )
@@ -152,7 +155,7 @@ def _load_policy_manifest(
                 f"Policy manifest entry {index} uses user_id={user_id}, "
                 f"which is outside configured users {list(user_ids)}."
             )
-        if not _matches_grid(baseline_dr, dr_values):
+        if baseline_dr is not None and not _matches_grid(baseline_dr, dr_values):
             raise ValueError(
                 f"Policy manifest entry {index} uses "
                 f"baseline_desired_retention={baseline_dr}, which is outside "
@@ -168,6 +171,9 @@ def _load_policy_manifest(
                 user_id=user_id,
                 baseline_desired_retention=baseline_dr,
                 lambda_value=lambda_value,
+                policy_index=_optional_int(
+                    entry.get("policy_index"), f"policies[{index}].policy_index"
+                ),
                 source=f"manifest entry {index}",
             )
         )
@@ -197,6 +203,7 @@ def _spec_from_policy_path(
     metadata = _load_sibling_metadata(policy_path)
     path_user_id = _extract_path_int(policy_path, "user_")
     path_lambda = _extract_path_float(policy_path, "lambda_")
+    path_policy_index = _extract_path_int(policy_path, "policy_")
     metadata_user_id = _metadata_user_id(metadata, policy_path)
     metadata_baseline_dr = _metadata_float(
         metadata,
@@ -204,6 +211,7 @@ def _spec_from_policy_path(
         policy_path,
     )
     metadata_lambda = _metadata_float(metadata, "lambda_value", policy_path)
+    metadata_policy_index = _metadata_int(metadata, "portfolio_index", policy_path)
 
     user_id = metadata_user_id if metadata_user_id is not None else path_user_id
     if user_id is None:
@@ -221,12 +229,27 @@ def _spec_from_policy_path(
             f"metadata has {metadata_user_id}."
         )
 
-    baseline_dr = (
-        metadata_baseline_dr
-        if metadata_baseline_dr is not None
-        else policy.baseline_desired_retention
+    metadata_has_null_baseline = (
+        metadata is not None
+        and "baseline_desired_retention" in metadata
+        and metadata.get("baseline_desired_retention") is None
     )
-    if not math.isclose(
+    if metadata_has_null_baseline:
+        baseline_dr = None
+    else:
+        baseline_dr = (
+            metadata_baseline_dr
+            if metadata_baseline_dr is not None
+            else policy.baseline_desired_retention
+        )
+    if baseline_dr is None:
+        if policy.baseline_desired_retention is not None:
+            raise ValueError(
+                f"Policy {policy_path} has baseline_desired_retention="
+                f"{policy.baseline_desired_retention}, metadata has null."
+            )
+        matched_dr = None
+    elif policy.baseline_desired_retention is None or not math.isclose(
         baseline_dr,
         policy.baseline_desired_retention,
         rel_tol=0.0,
@@ -236,7 +259,8 @@ def _spec_from_policy_path(
             f"Policy {policy_path} has baseline_desired_retention="
             f"{policy.baseline_desired_retention}, metadata has {baseline_dr}."
         )
-    matched_dr = _matching_grid_value(baseline_dr, dr_values)
+    else:
+        matched_dr = _matching_grid_value(baseline_dr, dr_values)
     lambda_value = metadata_lambda if metadata_lambda is not None else path_lambda
     if (
         metadata_lambda is not None
@@ -251,6 +275,9 @@ def _spec_from_policy_path(
         user_id=user_id,
         baseline_desired_retention=matched_dr,
         lambda_value=lambda_value,
+        policy_index=metadata_policy_index
+        if metadata_policy_index is not None
+        else path_policy_index,
         path=policy_path.resolve(),
     )
 
@@ -259,14 +286,21 @@ def _validate_policy_spec(
     *,
     path: Path,
     user_id: int,
-    baseline_desired_retention: float,
+    baseline_desired_retention: float | None,
     lambda_value: float | None,
+    policy_index: int | None,
     source: str,
 ) -> FSRS6ADRDirectPolicySpec:
     if not path.exists():
         raise FileNotFoundError(f"Missing FSRS6 ADR Direct policy for {source}: {path}")
     policy = FSRS6ADRDirectPolicy.from_json(path)
-    if not math.isclose(
+    if baseline_desired_retention is None:
+        if policy.baseline_desired_retention is not None:
+            raise ValueError(
+                f"Policy {path} has baseline_desired_retention="
+                f"{policy.baseline_desired_retention}, expected null from {source}."
+            )
+    elif policy.baseline_desired_retention is None or not math.isclose(
         policy.baseline_desired_retention,
         baseline_desired_retention,
         rel_tol=0.0,
@@ -285,7 +319,13 @@ def _validate_policy_spec(
             f"expected {user_id} from {source}."
         )
     metadata_baseline_dr = _metadata_float(metadata, "baseline_desired_retention", path)
-    if metadata_baseline_dr is not None and not math.isclose(
+    if baseline_desired_retention is None:
+        if metadata_baseline_dr is not None:
+            raise ValueError(
+                f"Policy {path} metadata baseline_desired_retention="
+                f"{metadata_baseline_dr}, expected null."
+            )
+    elif metadata_baseline_dr is not None and not math.isclose(
         metadata_baseline_dr,
         baseline_desired_retention,
         rel_tol=0.0,
@@ -310,6 +350,11 @@ def _validate_policy_spec(
         user_id=user_id,
         baseline_desired_retention=baseline_desired_retention,
         lambda_value=effective_lambda,
+        policy_index=policy_index
+        if policy_index is not None
+        else _metadata_int(metadata, "portfolio_index", path)
+        if metadata is not None
+        else _extract_path_int(path, "policy_"),
         path=path.resolve(),
     )
 
@@ -331,11 +376,14 @@ def _require_complete_policy_root(
         )
         if not expected_lambdas and any(spec.lambda_value is None for spec in specs):
             expected_lambdas = (None,)
+    if any(spec.baseline_desired_retention is None for spec in specs):
+        return
     observed = {
         _policy_key(
             spec.user_id,
             spec.baseline_desired_retention,
             spec.lambda_value,
+            spec.policy_index,
         )
         for spec in specs
     }
@@ -358,12 +406,13 @@ def _require_complete_policy_root(
 
 
 def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADRDirectPolicySpec]) -> None:
-    by_key: dict[tuple[int, int, int | None], Path] = {}
+    by_key: dict[tuple[int, int | None, int | None, int | None], Path] = {}
     for spec in specs:
         key = _policy_key(
             spec.user_id,
             spec.baseline_desired_retention,
             spec.lambda_value,
+            spec.policy_index,
         )
         previous = by_key.get(key)
         if previous is not None:
@@ -378,16 +427,23 @@ def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADRDirectPolicySpec]) ->
 
 def _policy_key(
     user_id: int,
-    baseline_desired_retention: float,
+    baseline_desired_retention: float | None,
     lambda_value: float | None,
-) -> tuple[int, int, int | None]:
+    policy_index: int | None = None,
+) -> tuple[int, int | None, int | None, int | None]:
     lambda_key = (
         None if lambda_value is None else round(float(lambda_value) * 1_000_000)
     )
+    baseline_key = (
+        None
+        if baseline_desired_retention is None
+        else round(float(baseline_desired_retention) * 1_000_000)
+    )
     return (
         int(user_id),
-        round(float(baseline_desired_retention) * 1_000_000),
+        baseline_key,
         lambda_key,
+        policy_index if baseline_key is None else None,
     )
 
 
@@ -481,6 +537,16 @@ def _metadata_float(
     return _optional_float(metadata[key], f"metadata.{key} for {path}")
 
 
+def _metadata_int(
+    metadata: Mapping[str, Any] | None,
+    key: str,
+    path: Path,
+) -> int | None:
+    if metadata is None or key not in metadata:
+        return None
+    return _optional_int(metadata[key], f"metadata.{key} for {path}")
+
+
 def _extract_path_int(path: Path, prefix: str) -> int | None:
     for part in reversed(path.parts):
         if part.startswith(prefix):
@@ -507,6 +573,12 @@ def _require_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{field_name} must be an integer.")
     return int(value)
+
+
+def _optional_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _require_int(value, field_name)
 
 
 def _require_float(value: Any, field_name: str) -> float:

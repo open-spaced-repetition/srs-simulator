@@ -20,6 +20,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from simulator.experiment_infra import ExperimentConfig
 from experiments.retention_sweep.cli_utils import has_flag
+from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
+    ObjectivePoint,
+    hypervolume_2d,
+    non_dominated_indices,
+    reference_point,
+)
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
@@ -35,13 +41,14 @@ class SweepRow:
     environment: str
     scheduler: str
     user_id: int
-    desired_retention: float
+    desired_retention: float | None
     memorized_average: float
     time_average: float
     reviews_average: float
     efficiency: float
     path: Path
     mtime_ns: int
+    series_identity: str | None = None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -298,7 +305,7 @@ def row_from_item(
     metric: str,
 ) -> SweepRow | None:
     desired_retention = parse_desired_retention(item)
-    if desired_retention is None:
+    if desired_retention is None and item.get("scheduler") != "fsrs6_adr_direct":
         return None
     return SweepRow(
         environment=str(item["environment"]),
@@ -311,7 +318,19 @@ def row_from_item(
         efficiency=float(item[metric]),
         path=path,
         mtime_ns=mtime_ns,
+        series_identity=_row_series_identity(item),
     )
+
+
+def _row_series_identity(item: dict[str, Any]) -> str | None:
+    if item.get("scheduler") == "fsrs6_adr_direct":
+        policy = item.get("fsrs6_adr_direct_policy")
+        if isinstance(policy, str) and policy.strip():
+            return policy
+    title = item.get("title")
+    if isinstance(title, str) and title.strip():
+        return title
+    return None
 
 
 def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
@@ -349,22 +368,27 @@ def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
             except (KeyError, TypeError, ValueError) as exc:
                 print(f"warning: skipping row in {path}: {exc}", file=sys.stderr)
                 continue
-            if (
-                row is not None
-                and args.start_retention <= row.desired_retention <= args.end_retention
+            if row is not None and (
+                row.desired_retention is None
+                or args.start_retention <= row.desired_retention <= args.end_retention
             ):
                 raw_rows.append(row)
 
     if args.no_dedupe:
         return raw_rows, len(raw_rows)
 
-    latest: dict[tuple[str, int, str, int], SweepRow] = {}
+    latest: dict[tuple[str, int, str, object], SweepRow] = {}
     for row in raw_rows:
+        dr_key: object
+        if row.desired_retention is None:
+            dr_key = row.series_identity or str(row.path)
+        else:
+            dr_key = round(row.desired_retention * 10000)
         key = (
             row.environment,
             row.user_id,
             row.scheduler,
-            round(row.desired_retention * 10000),
+            dr_key,
         )
         previous = latest.get(key)
         if previous is None or (row.mtime_ns, str(row.path)) > (
@@ -377,6 +401,10 @@ def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
 
 def average(values: list[float]) -> float:
     return statistics.fmean(values) if values else float("nan")
+
+
+def average_optional(values: list[float | None]) -> float:
+    return average([value for value in values if value is not None])
 
 
 def fmt_float(value: float, digits: int = 2) -> str:
@@ -412,7 +440,13 @@ def coverage_table(
         for scheduler in schedulers:
             group_rows = groups.get((env, scheduler), [])
             users = sorted({row.user_id for row in group_rows})
-            drs = sorted({round(row.desired_retention, 4) for row in group_rows})
+            drs = sorted(
+                {
+                    round(row.desired_retention, 4)
+                    for row in group_rows
+                    if row.desired_retention is not None
+                }
+            )
             output_rows.append(
                 [
                     env,
@@ -459,6 +493,7 @@ def pairwise_rows(
     by_key = {
         (row.scheduler, row.user_id, round(row.desired_retention * 10000)): row
         for row in env_rows
+        if row.desired_retention is not None
     }
     output_rows: list[list[str]] = []
     for left, right in comparisons:
@@ -471,6 +506,8 @@ def pairwise_rows(
         pair_count = 0
         for row in env_rows:
             if row.scheduler != left:
+                continue
+            if row.desired_retention is None:
                 continue
             key = (right, row.user_id, round(row.desired_retention * 10000))
             other = by_key.get(key)
@@ -510,6 +547,7 @@ def dominance_rows(
     by_key = {
         (row.scheduler, row.user_id, round(row.desired_retention * 10000)): row
         for row in env_rows
+        if row.desired_retention is not None
     }
     output_rows: list[list[str]] = []
     for left, right in comparisons:
@@ -521,6 +559,8 @@ def dominance_rows(
         equal = 0
         for row in env_rows:
             if row.scheduler != left:
+                continue
+            if row.desired_retention is None:
                 continue
             key = (right, row.user_id, round(row.desired_retention * 10000))
             other = by_key.get(key)
@@ -634,7 +674,9 @@ def best_summary_table(
                 fmt_float(average([row.memorized_average for row in values]), 1),
                 fmt_float(average([row.time_average for row in values]), 2),
                 fmt_float(average([row.reviews_average for row in values]), 2),
-                fmt_float(average([row.desired_retention for row in values]), 3),
+                fmt_float(
+                    average_optional([row.desired_retention for row in values]), 3
+                ),
             ]
         )
     return markdown_table(
@@ -704,6 +746,64 @@ def pareto_frontier(rows: list[SweepRow]) -> list[SweepRow]:
         if not dominated:
             frontier.append(candidate)
     return frontier
+
+
+def hypervolume_summary_table(
+    rows: list[SweepRow],
+    env: str,
+    *,
+    baseline_scheduler: str = "fsrs6",
+    portfolio_scheduler: str = "fsrs6_adr_direct",
+) -> str:
+    output_rows: list[list[str]] = []
+    user_ids = sorted({row.user_id for row in rows if row.environment == env})
+    for user_id in user_ids:
+        baseline = [
+            row
+            for row in rows
+            if row.environment == env
+            and row.user_id == user_id
+            and row.scheduler == baseline_scheduler
+        ]
+        portfolio = [
+            row
+            for row in rows
+            if row.environment == env
+            and row.user_id == user_id
+            and row.scheduler == portfolio_scheduler
+        ]
+        if not baseline or not portfolio:
+            continue
+        baseline_points = [
+            ObjectivePoint(row.memorized_average, -row.time_average) for row in baseline
+        ]
+        portfolio_points = [
+            ObjectivePoint(row.memorized_average, -row.time_average)
+            for row in portfolio
+        ]
+        reference = reference_point(baseline_points, margin_fraction=0.05)
+        baseline_hv = hypervolume_2d(baseline_points, reference=reference)
+        combined_points = [*baseline_points, *portfolio_points]
+        portfolio_hv = hypervolume_2d(combined_points, reference=reference)
+        frontier_indices = non_dominated_indices(combined_points)
+        frontier_child_count = sum(
+            1 for index in frontier_indices if index >= len(baseline_points)
+        )
+        output_rows.append(
+            [
+                str(user_id),
+                fmt_float(baseline_hv, 2),
+                fmt_float(portfolio_hv, 2),
+                fmt_float(portfolio_hv - baseline_hv, 2),
+                str(frontier_child_count),
+            ]
+        )
+    if not output_rows:
+        return "No baseline + portfolio rows available."
+    return markdown_table(
+        ["user", "baseline HV", "portfolio HV", "HV delta", "frontier children"],
+        output_rows,
+    )
 
 
 def pareto_counts(
@@ -798,6 +898,10 @@ def print_env_report(
     ]
     print(f"\n### Pareto frontier by user\n\nTotal frontier points: {total}\n")
     print(markdown_table(["scheduler", "frontier points", "users"], pareto_rows))
+
+    if "fsrs6" in schedulers and "fsrs6_adr_direct" in schedulers:
+        print("\n### Hypervolume vs FSRS6 baseline\n")
+        print(hypervolume_summary_table(rows, env))
 
 
 def render_report(args: argparse.Namespace) -> str:

@@ -111,6 +111,19 @@ class FSRS6ADRDirectSchedulerTests(unittest.TestCase):
         self.assertEqual(loaded.feature_count, 3)
         self.assertEqual(len(loaded.coefficients), 3)
 
+    def test_policy_round_trips_null_baseline_desired_retention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_path = Path(tmp) / "policy.json"
+            policy = FSRS6ADRDirectPolicy(
+                coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                baseline_desired_retention=None,
+            )
+            policy.write_json(policy_path)
+
+            loaded = FSRS6ADRDirectPolicy.from_json(policy_path)
+
+        self.assertIsNone(loaded.baseline_desired_retention)
+
     def test_linear_baseline_policy_matches_fsrs6_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"

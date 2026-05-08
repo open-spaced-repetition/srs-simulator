@@ -934,8 +934,22 @@ def run_sweep(
                 )
             else:
                 baseline_dr_token = None
-                output_dir = outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
-                command_stem = f"user_{user_id}_lambda_{lambda_token}"
+                if metadata.action_space == "sd_retention_function_portfolio_child":
+                    policy_token = metadata.policy_path.parent.name
+                    output_dir = (
+                        outputs_root
+                        / f"user_{user_id}"
+                        / f"lambda_{lambda_token}"
+                        / policy_token
+                    )
+                    command_stem = (
+                        f"user_{user_id}_lambda_{lambda_token}_{policy_token}"
+                    )
+                else:
+                    output_dir = (
+                        outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
+                    )
+                    command_stem = f"user_{user_id}_lambda_{lambda_token}"
             command_record = commands_root / f"{command_stem}_command.json"
             stdout_path = commands_root / f"{command_stem}_stdout.txt"
             stderr_path = commands_root / f"{command_stem}_stderr.txt"
@@ -4388,6 +4402,8 @@ def _build_sweep_artifact_lane(
             / f"sched_{metadata.scheduler_name}"
             / f"lambda_{lambda_token}"
         )
+        if metadata.action_space == "sd_retention_function_portfolio_child":
+            output_dir = output_dir / metadata.policy_path.parent.name
     return SweepBatchLane(
         source="artifact",
         metadata_path=metadata_path,
@@ -5649,7 +5665,10 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: lambda_value expected "
                 f"{lambda_value}, got {metadata.lambda_value}."
             )
-        if baseline_desired_retention is not None:
+        is_portfolio_child = (
+            metadata.action_space == "sd_retention_function_portfolio_child"
+        )
+        if baseline_desired_retention is not None and not is_portfolio_child:
             if metadata.scheduler_name == "fsrs6_adr_delta":
                 pass
             elif metadata.baseline_desired_retention is None or not math.isclose(
@@ -5667,6 +5686,7 @@ def _validate_train_artifacts(
         if (
             allowed_baseline_desired_retentions is not None
             and metadata.scheduler_name != "fsrs6_adr_delta"
+            and not is_portfolio_child
         ):
             if metadata.baseline_desired_retention is None:
                 return (
@@ -5774,6 +5794,7 @@ def _validate_sweep_artifact_metadata(
     if (
         _training_metadata_requires_baseline_dr(config)
         and metadata.scheduler_name != "fsrs6_adr_delta"
+        and metadata.action_space != "sd_retention_function_portfolio_child"
     ):
         actual_dr = metadata.baseline_desired_retention
         if actual_dr is None or not any(

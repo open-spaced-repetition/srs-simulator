@@ -112,6 +112,8 @@ def _discover_policies(
 
         baseline_dr = _path_token_float(path, "dr_")
         if baseline_dr is None:
+            if policy.baseline_desired_retention is None:
+                continue
             baseline_dr = float(policy.baseline_desired_retention)
         if not _matches_float(baseline_dr, dr_values):
             continue

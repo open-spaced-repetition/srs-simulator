@@ -567,6 +567,7 @@ class TrainingBatchConfig:
         if self.trainer not in {
             "auto",
             "fsrs6_adr_direct",
+            "fsrs6_adr_direct_portfolio",
             "fsrs6_adr_direct_cmaes",
             "fsrs6_adr_direct_dr_grid",
             "fsrs6_adr_delta",
@@ -575,8 +576,8 @@ class TrainingBatchConfig:
         }:
             raise ValueError(
                 "training.batch.trainer must be auto, fsrs6_adr_direct, fsrs6_adr_direct_cmaes, "
-                "fsrs6_adr_direct_dr_grid, fsrs6_adr_delta, fsrs6_adr_delta_cmaes, "
-                "or fsrs6_adp_cmaes."
+                "fsrs6_adr_direct_portfolio, fsrs6_adr_direct_dr_grid, fsrs6_adr_delta, "
+                "fsrs6_adr_delta_cmaes, or fsrs6_adp_cmaes."
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -795,6 +796,7 @@ class ExperimentConfig:
     performance: PerformanceConfig
     lambda_grid: tuple[float, ...]
     training_sa: Mapping[str, Any] = field(default_factory=dict)
+    training_portfolio: Mapping[str, Any] = field(default_factory=dict)
     training_adp: Mapping[str, Any] = field(default_factory=dict)
     training_optimizer: Mapping[str, Any] = field(default_factory=dict)
     training_batch: TrainingBatchConfig = field(default_factory=TrainingBatchConfig)
@@ -866,6 +868,9 @@ class ExperimentConfig:
                 training.get("lambda_grid"), "training.lambda_grid"
             ),
             training_sa=dict(_require_mapping(training.get("sa", {}), "training.sa")),
+            training_portfolio=dict(
+                _require_mapping(training.get("portfolio", {}), "training.portfolio")
+            ),
             training_adp=dict(
                 _require_mapping(training.get("adp", {}), "training.adp")
             ),
@@ -955,6 +960,7 @@ class ExperimentConfig:
             "training": {
                 "lambda_grid": list(self.lambda_grid),
                 "sa": dict(self.training_sa),
+                "portfolio": dict(self.training_portfolio),
                 "adp": dict(self.training_adp),
                 "optimizer": dict(self.training_optimizer),
                 "batch": self.training_batch.to_dict(),
