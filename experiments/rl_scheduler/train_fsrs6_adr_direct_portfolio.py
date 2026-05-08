@@ -181,6 +181,8 @@ class UserPortfolioResult:
     baseline_hypervolume: float
     portfolio_hypervolume: float
     hypervolume_improvement: float
+    final_population_hypervolume: float
+    final_population_hypervolume_improvement: float
     reference_point: ObjectivePoint
     selected_children: list[SelectedPortfolioChild]
     final_population: list[PortfolioCandidate]
@@ -523,30 +525,38 @@ def run_portfolio_train_jobs(
             for metrics in baseline_metrics_by_job[job_index]
         ]
         candidate_points = [candidate.point for candidate in populations[job_index]]
-        final_hv = hypervolume_2d(
+        final_population_hv = hypervolume_2d(
             [*baseline_points, *candidate_points],
             reference=references[job_index],
         )
-        hv_delta = final_hv - baseline_hv[job_index]
+        final_population_hv_delta = final_population_hv - baseline_hv[job_index]
         selected = _select_portfolio_children(
             baseline_points=baseline_points,
             candidates=populations[job_index],
             portfolio_size=portfolio.portfolio_size,
             reference=references[job_index],
         )
+        selected_points = [child.candidate.point for child in selected]
+        selected_hv = hypervolume_2d(
+            [*baseline_points, *selected_points],
+            reference=references[job_index],
+        )
+        selected_hv_delta = selected_hv - baseline_hv[job_index]
         results.append(
             UserPortfolioResult(
                 job=job,
                 baseline_desired_retention_values=baseline_dr_values,
                 baseline_metrics=baseline_metrics_by_job[job_index],
                 baseline_hypervolume=baseline_hv[job_index],
-                portfolio_hypervolume=final_hv,
-                hypervolume_improvement=hv_delta,
+                portfolio_hypervolume=selected_hv,
+                hypervolume_improvement=selected_hv_delta,
+                final_population_hypervolume=final_population_hv,
+                final_population_hypervolume_improvement=final_population_hv_delta,
                 reference_point=references[job_index],
                 selected_children=selected,
                 final_population=populations[job_index],
                 history=history_by_job[job_index],
-                passed=hv_delta > portfolio.hv_epsilon,
+                passed=selected_hv_delta > portfolio.hv_epsilon,
             )
         )
 
@@ -955,39 +965,46 @@ def _select_portfolio_children(
     reference: ObjectivePoint,
 ) -> list[SelectedPortfolioChild]:
     candidate_points = [candidate.point for candidate in candidates]
-    contributions = exclusive_hypervolume_contributions(
-        baseline_points=baseline_points,
-        candidate_points=candidate_points,
-        reference=reference,
-    )
     ranks = _baseline_aware_candidate_ranks(
         baseline_points=baseline_points,
         candidate_points=candidate_points,
     )
-    eligible = [
-        (index, candidate)
-        for index, candidate in enumerate(candidates)
-        if contributions[index] > 0.0 or ranks[index] == 0
-    ]
-    eligible.sort(
-        key=lambda item: (
-            ranks[item[0]],
-            -contributions[item[0]],
-            -item[1].metrics.memorized_average,
-            item[1].metrics.time_average,
-            item[1].candidate_id,
-        )
-    )
+    remaining = set(range(len(candidates)))
+    selected_indices: list[int] = []
+    current_points = list(baseline_points)
+    current_hv = hypervolume_2d(current_points, reference=reference)
     children: list[SelectedPortfolioChild] = []
-    for portfolio_index, (candidate_index, candidate) in enumerate(
-        eligible[:portfolio_size]
-    ):
+    while remaining and len(children) < portfolio_size:
+        best_index = max(
+            remaining,
+            key=lambda index: (
+                hypervolume_2d(
+                    [*current_points, candidate_points[index]],
+                    reference=reference,
+                )
+                - current_hv,
+                -ranks[index],
+                candidates[index].metrics.memorized_average,
+                -candidates[index].metrics.time_average,
+                -candidates[index].candidate_id,
+            ),
+        )
+        next_hv = hypervolume_2d(
+            [*current_points, candidate_points[best_index]],
+            reference=reference,
+        )
+        contribution = max(0.0, next_hv - current_hv)
+        current_hv = next_hv
+        current_points.append(candidate_points[best_index])
+        selected_indices.append(best_index)
+        remaining.remove(best_index)
+        candidate = candidates[best_index]
         children.append(
             SelectedPortfolioChild(
-                portfolio_index=portfolio_index,
+                portfolio_index=len(selected_indices) - 1,
                 candidate=candidate,
-                hypervolume_contribution=contributions[candidate_index],
-                pareto_rank=ranks[candidate_index],
+                hypervolume_contribution=contribution,
+                pareto_rank=ranks[best_index],
             )
         )
     return children
@@ -1163,6 +1180,10 @@ def _write_portfolio_artifacts(
             "baseline_hypervolume": result.baseline_hypervolume,
             "portfolio_hypervolume": result.portfolio_hypervolume,
             "hypervolume_improvement": result.hypervolume_improvement,
+            "final_population_hypervolume": result.final_population_hypervolume,
+            "final_population_hypervolume_improvement": (
+                result.final_population_hypervolume_improvement
+            ),
             "reference_point": asdict(result.reference_point),
             "baseline_desired_retention_values": list(
                 result.baseline_desired_retention_values
@@ -1180,6 +1201,7 @@ def _write_portfolio_artifacts(
             ],
             "selected_child_count": len(result.selected_children),
             "final_population_size": len(result.final_population),
+            "selection_algorithm": "greedy_subset_hypervolume",
             "settings": asdict(settings),
             "portfolio_settings": asdict(portfolio),
             "history": result.history,

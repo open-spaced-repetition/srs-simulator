@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from itertools import combinations
 from pathlib import Path
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from experiments.rl_scheduler.train_fsrs6_adr_direct import CandidateMetrics
 from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
     ObjectivePoint,
     PortfolioCandidate,
+    _select_portfolio_children,
     exclusive_hypervolume_contributions,
     hypervolume_2d,
     non_dominated_indices,
@@ -91,6 +93,44 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
         )
 
         self.assertEqual({candidate.candidate_id for candidate in survivors}, {2, 3})
+
+    def test_portfolio_child_selection_greedily_maximizes_exported_hv(
+        self,
+    ) -> None:
+        baseline_points = [ObjectivePoint(0.1, -9.9)]
+        reference = ObjectivePoint(0.0, -10.0)
+        candidates = [
+            _candidate(1, 5.0, 1.0),
+            _candidate(2, 10.0, 9.0),
+            _candidate(3, 6.0, 4.0),
+            _candidate(4, 9.0, 2.0),
+        ]
+
+        children = _select_portfolio_children(
+            baseline_points=baseline_points,
+            candidates=candidates,
+            portfolio_size=2,
+            reference=reference,
+        )
+
+        self.assertEqual([child.candidate.candidate_id for child in children], [4, 1])
+        selected_hv = hypervolume_2d(
+            [*baseline_points, *[child.candidate.point for child in children]],
+            reference=reference,
+        )
+        best_pair_hv = max(
+            hypervolume_2d(
+                [*baseline_points, *[candidate.point for candidate in pair]],
+                reference=reference,
+            )
+            for pair in combinations(candidates, 2)
+        )
+        baseline_hv = hypervolume_2d(baseline_points, reference=reference)
+        self.assertAlmostEqual(selected_hv, best_pair_hv)
+        self.assertAlmostEqual(
+            sum(child.hypervolume_contribution for child in children),
+            selected_hv - baseline_hv,
+        )
 
 
 class FSRS6ADRDirectPortfolioResolverTests(unittest.TestCase):
