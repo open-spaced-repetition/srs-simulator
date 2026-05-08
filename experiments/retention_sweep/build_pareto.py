@@ -541,6 +541,11 @@ def _iter_log_entries(
             title, fsrs6_adr_direct_baseline_dr = _resolve_fsrs6_adr_direct_label(
                 meta, base_dirs
             )
+            if fsrs6_adr_direct_baseline_dr is not None and (
+                fsrs6_adr_direct_baseline_dr < min_retention
+                or fsrs6_adr_direct_baseline_dr > max_retention
+            ):
+                continue
         elif scheduler == "fixed":
             title = f"Ivl={format_float(fixed_interval)}"
         elif scheduler_uses_desired_retention(scheduler):

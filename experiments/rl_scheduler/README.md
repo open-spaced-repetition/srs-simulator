@@ -71,9 +71,14 @@ experiment should continue.
 - **sweep**: external simulation of artifacts and baselines. The current
   batched sweep can batch `(user, scheduler, scheduler parameter)` lanes in one
   simulator call, such as several FSRS-6 desired-retention values plus several
-  FSRS6 ADR Direct policies.
+  FSRS6 ADR Direct policies. In formal experiment runs, sweep logs are written
+  under `<output_root>/<run_id>/sweep/sweep_outputs/`; the standalone
+  `run_sweep_users_batched.py --config` entrypoint still honors the TOML
+  `[sweep].log_dir` shared-log setting.
 - **build-pareto/analyze-pareto**: the external efficiency frontier and Markdown
-  comparison report built from sweep logs. Internal
+  comparison report built from sweep logs. Formal `build-pareto` scans the
+  run root so staged baselines and run-local sweep outputs are compared without
+  stale shared retention-sweep logs. Internal
   reward, loss, acceptance rate, and promotion flags are diagnostics only; they
   do not replace Pareto evidence. Pareto charts should be generated per user;
   do not generate a user-aggregated Pareto plot.
@@ -221,6 +226,9 @@ Formal experiments must satisfy these rules:
   rely on shell history for parameters.
 - Record `seed`, `users`, `simulation`, `gpu_guard`, `performance`, `training`,
   `sweep`, `build_pareto`, and `analyze_pareto` settings in TOML.
+- Treat `[sweep].log_dir` and `[build_pareto].log_dir` as standalone
+  retention-sweep defaults. The formal runner uses the rest of those tables but
+  isolates outputs under the current run root.
 - Preserve config snapshots, resolved configs, command records, manifests, gate
   summaries, and performance summaries for each run.
 - Use a stable `--run-id` so later `sweep`, `build-pareto`, and

@@ -777,6 +777,7 @@ def run_sweep(
                 repo_root=repo_root,
                 run_id=run_id,
                 output_root=output_root,
+                log_dir=outputs_root,
                 record_path=batched_sweep_record_path,
             )
         except Exception as exc:
@@ -4783,6 +4784,7 @@ def _run_configured_batched_retention_sweep(
     repo_root: Path,
     run_id: str,
     output_root: Path,
+    log_dir: Path,
     record_path: Path,
 ) -> dict[str, Any]:
     import argparse
@@ -4800,9 +4802,6 @@ def _run_configured_batched_retention_sweep(
     from simulator.scheduler_spec import parse_scheduler_spec
 
     sweep_config = config.sweep_batched
-    log_dir = _resolve_repo_path(
-        repo_root, sweep_config.log_dir or (output_root / run_id / "sweep_logs")
-    )
     run_root = output_root / run_id
     scheduler_names = {parse_scheduler_spec(raw)[0] for raw in sweep_config.schedulers}
     args = argparse.Namespace(
@@ -5230,12 +5229,11 @@ def _format_build_pareto_command(
     stdout_path: Path,
     stderr_path: Path,
 ) -> list[str]:
-    log_dir = _resolve_repo_path(
-        repo_root,
-        config.build_pareto.log_dir
-        or config.sweep_batched.log_dir
-        or (sweep_stage_root / "sweep_outputs"),
-    )
+    # Formal experiment runs must not scan the standalone retention-sweep log
+    # root from TOML.  The run root contains both stage-baseline/baseline_logs
+    # and sweep/sweep_outputs, so build-pareto can compare baseline and learned
+    # scheduler outputs without being polluted by stale shared logs.
+    log_dir = run_root
     values: dict[str, Any] = {
         "run_id": run_id,
         "seed": config.seed,

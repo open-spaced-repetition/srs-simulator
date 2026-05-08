@@ -32,7 +32,7 @@ def _write_workflow_config(
     analyze_script: Path | None = None,
 ) -> None:
     build_command = (
-        f'command_template = ["{sys.executable}", "{build_script}", "{{output_dir}}"]'
+        f'command_template = ["{sys.executable}", "{build_script}", "{{output_dir}}", "{{log_dir}}"]'
         if build_script is not None
         else ""
     )
@@ -375,10 +375,21 @@ output_dir.mkdir(parents=True, exist_ok=True)
                 run_id=run_id,
             )
 
-        self.assertEqual(build_result.exit_code, 0)
-        self.assertEqual(analyze_result.exit_code, 0)
-        self.assertEqual(build_result.summary["type"], "build-pareto")
-        self.assertEqual(analyze_result.summary["type"], "analyze-pareto")
+            self.assertEqual(build_result.exit_code, 0)
+            self.assertEqual(analyze_result.exit_code, 0)
+            self.assertEqual(build_result.summary["type"], "build-pareto")
+            self.assertEqual(analyze_result.summary["type"], "analyze-pareto")
+            build_command_record = json.loads(
+                (
+                    output_root
+                    / run_id
+                    / "build-pareto"
+                    / "commands"
+                    / "build_pareto_command.json"
+                ).read_text()
+            )
+            self.assertIn(str(output_root / run_id), build_command_record["command"])
+            self.assertNotIn(str(root / "logs"), build_command_record["command"])
 
 
 if __name__ == "__main__":

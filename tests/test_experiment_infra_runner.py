@@ -1436,6 +1436,23 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                 {item["environment"] for item in summary["command_results"]},
                 {"fsrs6", "lstm"},
             )
+            expected_log_root = stage_root / "sweep_outputs"
+            self.assertEqual(
+                {
+                    Path(item["output_dir"]).is_relative_to(expected_log_root)
+                    for item in summary["command_results"]
+                },
+                {True},
+            )
+            self.assertFalse(
+                any(
+                    Path(path).is_relative_to(log_root) for path in summary["log_paths"]
+                )
+            )
+            batch_record = json.loads(
+                (stage_root / "commands" / "batched_sweep_record.json").read_text()
+            )
+            self.assertEqual(Path(batch_record["log_root"]), expected_log_root)
 
     def test_train_overfit_requires_command_template(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
