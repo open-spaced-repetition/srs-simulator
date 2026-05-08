@@ -6,9 +6,10 @@ name is broad by design: it covers PPO/DQN-style reinforcement learning, FQI,
 CEM, simulated annealing, and other policy-search methods as long as the output
 is a scheduler artifact that can enter the same external evaluation pipeline.
 
-The current implemented research lines are `fsrs6_adr_direct` and
-`fsrs6_adr_delta`: black-box optimizers learn scheduler-side FSRS-6 retention
-policies, then use stability `S` and difficulty `D` to compute the next interval.
+The current implemented research lines are `fsrs6_adr_direct`,
+`fsrs6_adr_delta`, and `fsrs6_adp`: black-box optimizers learn scheduler-side
+FSRS-6 retention policies, or directly search the 21 FSRS-6 scheduler weights,
+then use stability `S` and difficulty `D` to compute the next interval.
 A core rule is
 that training and evaluation must not read the environment's hidden memory
 state. A learned scheduler must maintain its own scheduler state. For these
@@ -28,6 +29,8 @@ FSRS-6 state update to obtain `S` and `D`.
   policies over `S,D`.
 - `train_cmaes_fsrs6_adr_delta.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
   full-covariance CMA-ES over the same low-dimensional policy coefficients.
+- `train_cmaes_fsrs6_adp.py`: CMA-ES FSRS-6 trainer that searches adaptive
+  scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
 - `train-overfit` can run these trainers through `[training.batch]` so users are
   batched in one process rather than launched as parallel training subprocesses.
 - `plot_fsrs6_adr_direct_policy_surfaces.py`: Plotly HTML visualizer for learned
@@ -180,6 +183,10 @@ Representative profiles:
 - `configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml`: the same
   DR-conditioned scheduler artifact and evaluation workflow, trained with
   CMA-ES instead of simulated annealing.
+- `configs/fsrs6_adp_cmaes_users_1_8.toml`: the adaptive-parameter family that
+  trains 21 bounded FSRS-6 scheduler weights as deltas from each user's fitted
+  baseline, batches both users and DR values, and still emits one artifact per
+  `(user, DR, lambda)` policy.
 
 Training target:
 
@@ -188,6 +195,9 @@ Training target:
 - Direct action: emit desired retention from scheduler-side FSRS-6 `S,D`.
 - Delta action: apply a logit-space adjustment around the input DR from
   scheduler-side FSRS-6 `S,D` and the requested DR.
+- ADP action: search the full 21 FSRS-6 scheduler weights as bounded
+  standardized deltas from each user's fitted FSRS-6 weights, then evaluate the
+  resulting ordinary FSRS-6 scheduler.
 - Main-profile DR grid: `0.52..0.96` in steps of `0.02`.
 - Direct overfit gate: each artifact is trained for one baseline DR, and both
   relative memorized-average gain and relative memorized-per-minute gain must be
@@ -195,6 +205,9 @@ Training target:
 - Delta overfit gate: one artifact covers the DR grid, and every DR must improve
   both memorized average and memorized per minute against its corresponding
   same-user same-DR baseline.
+- ADP overfit gate: each `(user, DR, lambda)` artifact is checked against the
+  same-user same-DR FSRS-6 baseline with the same `-0.01` floor on both
+  memorized-average and memorized-per-minute gains.
 - Constraint handling: Direct candidates below the `-0.01` relative-gain floor
   are ranked below every candidate satisfying both gate constraints. Delta keeps
   its all-DR positive-gain hard gate.
@@ -209,7 +222,10 @@ DR-conditioned policy uses 10 log polynomial features; set `training.sa.feature_
 "fsrs6_adr_delta_log_linear_v1"` to train the 4-parameter linear variant.
 CMA-ES profiles keep the same `[training.sa]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,
-initial mean, and coefficient bounds in `[training.optimizer]`.
+initial mean, and coefficient bounds in `[training.optimizer]`. ADP profiles add
+`[training.adp].dr_batch_size` and `weight_delta_scale`, plus
+`training.batch_baseline_desired_retention_values = true` when DR values should
+be batched inside each training job.
 
 Batching model:
 
@@ -217,6 +233,8 @@ Batching model:
   inside one training command.
 - `training.sa.dr_batch_size` controls how many DR values enter one GPU chunk.
 - Effective lanes are approximately `dr_batch_size * chains`.
+- ADP uses the same idea, but batches `dr_batch_size * population_size` lanes
+  per job and writes one policy artifact per user/DR/lambda.
 - `[sweep]` contains the batch sweep envs, scheduler list, retention grid, log
   root, and batch sizing. The formal runner uses that table directly, so no
   separate retention_sweep TOML is needed.

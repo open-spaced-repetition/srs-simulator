@@ -27,6 +27,7 @@ EVENT_SCHEDULERS = (
     "sspmmc",
     "fsrs6_adr_direct",
     "fsrs6_adr_delta",
+    "fsrs6_adp",
 )
 VECTORIZED_ENVS = ("lstm", "fsrs6", "fsrs6_default")
 VECTORIZED_SCHEDULERS = (
@@ -42,6 +43,7 @@ VECTORIZED_SCHEDULERS = (
     "sspmmc",
     "fsrs6_adr_direct",
     "fsrs6_adr_delta",
+    "fsrs6_adp",
 )
 BATCHED_ENVS = ("lstm", "fsrs6", "fsrs6_default")
 BATCHED_SCHEDULERS = (
@@ -55,6 +57,7 @@ BATCHED_SCHEDULERS = (
     "memrise",
     "fsrs6_adr_direct",
     "fsrs6_adr_delta",
+    "fsrs6_adp",
 )
 
 

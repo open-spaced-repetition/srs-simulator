@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import sys
 from pathlib import Path
-import logging
-import torch
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -79,7 +79,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         sched_help=(
             "Comma-separated schedulers to sweep "
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
-            "anki_sm2, memrise, fixed, fsrs6_adr_direct, fsrs6_adr_delta)."
+            "anki_sm2, memrise, fixed, fsrs6_adr_direct, fsrs6_adr_delta, "
+            "fsrs6_adp)."
         ),
     )
     add_retention_range_args(parser)
@@ -167,6 +168,44 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "DR policy root or manifest."
         ),
     )
+    parser.add_argument(
+        "--fsrs6-adp-policy",
+        type=Path,
+        default=None,
+        help="Path to an FSRS6 ADP policy JSON when using --sched fsrs6_adp.",
+    )
+    parser.add_argument(
+        "--fsrs6-adp-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing trained FSRS6 ADP policy artifacts, usually "
+            "train-overfit/train_outputs."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adp-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "Training run root; treated as "
+            "<root>/train-overfit/train_outputs for FSRS6 ADP policy discovery."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adp-policy-manifest",
+        type=Path,
+        default=None,
+        help="TOML manifest with [[policies]] FSRS6 ADP entries.",
+    )
+    parser.add_argument(
+        "--fsrs6-adp-lambda-values",
+        default=None,
+        help=(
+            "Optional comma-separated lambda values to select from an FSRS6 ADP "
+            "policy root or manifest."
+        ),
+    )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
     )
@@ -225,6 +264,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if isinstance(args.fsrs6_adr_delta_lambda_values, str):
         args.fsrs6_adr_delta_lambda_values = tuple(
             float(item) for item in parse_csv(args.fsrs6_adr_delta_lambda_values)
+        )
+    if isinstance(args.fsrs6_adp_lambda_values, str):
+        args.fsrs6_adp_lambda_values = tuple(
+            float(item) for item in parse_csv(args.fsrs6_adp_lambda_values)
         )
     return args
 
@@ -311,6 +354,11 @@ def _merge_config_args(
         "fsrs6_adr_delta_train_run_root": ("--fsrs6-adr-delta-train-run-root",),
         "fsrs6_adr_delta_policy_manifest": ("--fsrs6-adr-delta-policy-manifest",),
         "fsrs6_adr_delta_lambda_values": ("--fsrs6-adr-delta-lambda-values",),
+        "fsrs6_adp_policy": ("--fsrs6-adp-policy",),
+        "fsrs6_adp_policy_root": ("--fsrs6-adp-policy-root",),
+        "fsrs6_adp_train_run_root": ("--fsrs6-adp-train-run-root",),
+        "fsrs6_adp_policy_manifest": ("--fsrs6-adp-policy-manifest",),
+        "fsrs6_adp_lambda_values": ("--fsrs6-adp-lambda-values",),
         "log_dir": ("--log-dir",),
         "log_layout": ("--log-layout",),
         "no_log": ("--no-log",),

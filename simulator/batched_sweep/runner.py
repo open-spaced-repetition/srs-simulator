@@ -22,6 +22,7 @@ from simulator.schedulers.fsrs6_adr_delta import FSRS6ADRDeltaBatchSchedulerOps
 from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
 from simulator.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicy
 from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+from simulator.fsrs6_adp_policy import FSRS6ADPPolicy
 from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
@@ -43,6 +44,7 @@ from simulator.batched_sweep.weights import (
 )
 from simulator.batched_sweep.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicySpec
 from simulator.batched_sweep.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicySpec
+from simulator.batched_sweep.fsrs6_adp_policy import FSRS6ADPPolicySpec
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,8 @@ class BatchedSweepContext:
     fsrs6_adr_direct_policy_specs: tuple[FSRS6ADRDirectPolicySpec, ...] = ()
     fsrs6_adr_delta_policy: Path | None = None
     fsrs6_adr_delta_policy_specs: tuple[FSRS6ADRDeltaPolicySpec, ...] = ()
+    fsrs6_adp_policy: Path | None = None
+    fsrs6_adp_policy_specs: tuple[FSRS6ADPPolicySpec, ...] = ()
 
 
 _DR_SCHEDULERS = {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}
@@ -220,8 +224,45 @@ def _build_sweep_lanes(
                     )
             continue
 
+        if name == "fsrs6_adp" and ctx.fsrs6_adp_policy_specs:
+            batch_users = set(batch)
+            for spec in ctx.fsrs6_adp_policy_specs:
+                if spec.user_id not in batch_users:
+                    continue
+                dr_token = _format_float_token(spec.baseline_desired_retention)
+                scheduler_subpath = Path("sched_fsrs6_adp") / f"dr_{dr_token}"
+                if spec.lambda_value is not None:
+                    scheduler_subpath = scheduler_subpath / (
+                        f"lambda_{_format_float_token(spec.lambda_value)}"
+                    )
+                scheduler_root = ctx.log_root / scheduler_subpath
+                lanes.append(
+                    BatchedSweepLogLane(
+                        user_id=spec.user_id,
+                        log_root=scheduler_root,
+                        log_dir=_lane_log_dir(
+                            log_root=ctx.log_root,
+                            user_id=spec.user_id,
+                            scheduler_subpath=scheduler_subpath,
+                            log_layout=ctx.log_layout,
+                        ),
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=None,
+                        fixed_interval=None,
+                        fsrs6_adp_policy=spec.path,
+                        fsrs6_adp_baseline_desired_retention=(
+                            spec.baseline_desired_retention
+                        ),
+                        fsrs6_adp_lambda_value=spec.lambda_value,
+                    )
+                )
+            continue
+
         policy = ctx.fsrs6_adr_direct_policy if name == "fsrs6_adr_direct" else None
         dr_policy = ctx.fsrs6_adr_delta_policy if name == "fsrs6_adr_delta" else None
+        adp_policy = ctx.fsrs6_adp_policy if name == "fsrs6_adp" else None
         scheduler_subpath = Path(f"sched_{name}")
         if name == "fixed" and interval is not None:
             scheduler_subpath = scheduler_subpath / (
@@ -229,6 +270,8 @@ def _build_sweep_lanes(
             )
         elif name == "fsrs6_adr_direct" and policy is not None:
             scheduler_subpath = scheduler_subpath / f"policy_{policy.stem}"
+        elif name == "fsrs6_adp" and adp_policy is not None:
+            scheduler_subpath = scheduler_subpath / f"policy_{adp_policy.stem}"
         if name == "fsrs6_adr_delta" and dr_policy is not None:
             for desired_retention in ctx.dr_values:
                 dr_token = _format_float_token(desired_retention)
@@ -273,6 +316,7 @@ def _build_sweep_lanes(
                 desired_retention=None,
                 fixed_interval=interval,
                 fsrs6_adr_direct_policy=policy,
+                fsrs6_adp_policy=adp_policy,
             )
             for user_id in batch
         )
@@ -690,6 +734,36 @@ def _build_mixed_scheduler_ops(
                 desired_retention=desired_retention,
                 policy=policy,
                 coefficients=coefficients,
+                bounds=Bounds(),
+                priority_mode=args.scheduler_priority,
+                device=device,
+                dtype=torch.float32,
+            )
+        elif name == "fsrs6_adp":
+            policy_paths: list[Path] = []
+            for lane in group_lanes:
+                policy_path = lane.fsrs6_adp_policy
+                if policy_path is None:
+                    raise ValueError(
+                        "--sched fsrs6_adp requires an FSRS6 ADP policy source."
+                    )
+                policy_paths.append(policy_path)
+            policies = [
+                FSRS6ADPPolicy.from_json(policy_path) for policy_path in policy_paths
+            ]
+            scheduler_weights = torch.tensor(
+                [policy.weights for policy in policies],
+                device=device,
+                dtype=torch.float32,
+            )
+            desired_retention = torch.tensor(
+                [policy.baseline_desired_retention for policy in policies],
+                device=device,
+                dtype=torch.float32,
+            )
+            ops = FSRS6BatchSchedulerOps(
+                weights=scheduler_weights,
+                desired_retention=desired_retention,
                 bounds=Bounds(),
                 priority_mode=args.scheduler_priority,
                 device=device,

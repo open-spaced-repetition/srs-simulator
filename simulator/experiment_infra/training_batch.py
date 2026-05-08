@@ -23,6 +23,7 @@ SUPPORTED_TRAINERS = {
     "fsrs6_adr_direct_dr_grid",
     "fsrs6_adr_delta",
     "fsrs6_adr_delta_cmaes",
+    "fsrs6_adp_cmaes",
 }
 
 
@@ -71,6 +72,8 @@ def resolve_in_process_trainer(
         return "fsrs6_adr_direct_cmaes"
     if "train_cmaes_fsrs6_adr_delta.py" in script_names:
         return "fsrs6_adr_delta_cmaes"
+    if "train_cmaes_fsrs6_adp.py" in script_names:
+        return "fsrs6_adp_cmaes"
     if "train_fsrs6_adr_direct_dr_grid.py" in script_names:
         return "fsrs6_adr_direct_dr_grid"
     if "train_fsrs6_adr_delta.py" in script_names:
@@ -99,6 +102,10 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         _baseline_dr_values,
         _dr_batch_size,
         _policy_feature_version,
+    )
+    from experiments.rl_scheduler.train_cmaes_fsrs6_adp import (
+        ADPSettings,
+        optimizer_settings_from_mapping as adp_optimizer_settings_from_mapping,
     )
     from simulator.fsrs6_adr_delta_policy import feature_count
 
@@ -133,6 +140,17 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             coefficient_max=settings.coefficient_max,
         )
         return max(len(baseline_dr_values), dr_lanes * optimizer.population_size)
+    if trainer == "fsrs6_adp_cmaes":
+        optimizer = adp_optimizer_settings_from_mapping(config.training_optimizer)
+        adp_settings = ADPSettings.from_config(
+            config,
+            raw_training_sa=raw_training_sa,
+            dr_count=len(baseline_dr_values),
+        )
+        return max(
+            len(baseline_dr_values),
+            adp_settings.dr_batch_size * optimizer.population_size,
+        )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
 
 
@@ -164,6 +182,10 @@ def run_in_process_train_batch(
         )
     if trainer == "fsrs6_adr_delta_cmaes":
         return _run_fsrs6_adr_delta_cmaes_jobs(
+            jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
+        )
+    if trainer == "fsrs6_adp_cmaes":
+        return _run_fsrs6_adp_cmaes_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
@@ -292,7 +314,6 @@ def _run_fsrs6_adr_direct_jobs(
     from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _clamp_coefficients,
-        _relative_gain_gate_metrics,
         _metrics_from_stats,
         _passes_overfit_gate,
         _policy_feature_version,
@@ -2157,6 +2178,61 @@ def _run_fsrs6_adr_direct_dr_grid_jobs(
                 passed=passed_count > 0,
                 artifact_paths=tuple(artifact_paths),
                 progress_path=progresses[job_index].path,
+            )
+        )
+    return outcomes
+
+
+def _run_fsrs6_adp_cmaes_jobs(
+    *,
+    jobs: list[InProcessTrainJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+) -> list[InProcessTrainOutcome]:
+    from experiments.rl_scheduler.train_cmaes_fsrs6_adp import (
+        ADPTrainJob,
+        run_training_batch_jobs,
+    )
+
+    results = run_training_batch_jobs(
+        jobs=[
+            ADPTrainJob(
+                user_id=job.user_id,
+                lambda_value=job.lambda_value,
+                output_dir=job.output_dir,
+                command_record_path=job.command_record_path,
+            )
+            for job in jobs
+        ],
+        config=config,
+        config_path=config_path,
+        repo_root=repo_root,
+    )
+    result_by_key = {
+        (result.job.user_id, result.job.lambda_value, result.job.output_dir): result
+        for result in results
+    }
+    outcomes: list[InProcessTrainOutcome] = []
+    for job in jobs:
+        result = result_by_key.get((job.user_id, job.lambda_value, job.output_dir))
+        if result is None:
+            outcomes.append(
+                InProcessTrainOutcome(
+                    job=job,
+                    passed=False,
+                    artifact_paths=(),
+                    progress_path=None,
+                    error="ADP trainer did not return an outcome for this job.",
+                )
+            )
+            continue
+        outcomes.append(
+            InProcessTrainOutcome(
+                job=job,
+                passed=result.passed,
+                artifact_paths=result.artifact_paths,
+                progress_path=result.progress_path,
             )
         )
     return outcomes

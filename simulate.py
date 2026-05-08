@@ -34,9 +34,10 @@ from simulator.schedulers import (
     MemriseScheduler,
     FSRS6ADRDeltaScheduler,
     FSRS6ADRDirectScheduler,
+    FSRS6ADPScheduler,
     SSPMMCScheduler,
 )
-from simulator.core import Action, Event, new_first_priority, review_first_priority
+from simulator.core import Action, new_first_priority, review_first_priority
 from simulator.defaults import (
     DEFAULT_COST_LIMIT_MINUTES,
     DEFAULT_DECK_SIZE,
@@ -134,6 +135,14 @@ def _require_fsrs6_adr_delta_policy(path: Path | None) -> Path:
     return path
 
 
+def _require_fsrs6_adp_policy(path: Path | None) -> Path:
+    if path is None:
+        raise ValueError(
+            "FSRS6 ADP scheduler requires --fsrs6-adp-policy pointing to a policy JSON."
+        )
+    return path
+
+
 SCHEDULER_FACTORIES = {
     "fsrs6": lambda args: FSRS6Scheduler(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
@@ -187,6 +196,10 @@ SCHEDULER_FACTORIES = {
         policy_json=_require_fsrs6_adr_delta_policy(args.fsrs6_adr_delta_policy),
         desired_retention=args.desired_retention,
         fsrs_weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
+        priority_mode=args.scheduler_priority,
+    ),
+    "fsrs6_adp": lambda args: FSRS6ADPScheduler(
+        policy_json=_require_fsrs6_adp_policy(args.fsrs6_adp_policy),
         priority_mode=args.scheduler_priority,
     ),
 }
@@ -388,6 +401,12 @@ def main() -> None:
             "Path to an FSRS6 ADR Delta-conditioned policy JSON when using "
             "--sched fsrs6_adr_delta."
         ),
+    )
+    parser.add_argument(
+        "--fsrs6-adp-policy",
+        type=Path,
+        default=None,
+        help="Path to an FSRS6 ADP policy JSON when using --sched fsrs6_adp.",
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed.")
     args = parser.parse_args()
@@ -604,12 +623,15 @@ def _format_plot_footer(args: argparse.Namespace) -> str:
     sspmmc_policy = getattr(args, "sspmmc_policy", None)
     fsrs6_adr_direct_policy = getattr(args, "fsrs6_adr_direct_policy", None)
     fsrs6_adr_delta_policy = getattr(args, "fsrs6_adr_delta_policy", None)
+    fsrs6_adp_policy = getattr(args, "fsrs6_adp_policy", None)
     if sspmmc_policy:
         extra.append(f"sspmmc-policy={sspmmc_policy.stem}")
     if fsrs6_adr_direct_policy:
         extra.append(f"fsrs6-adr-direct-policy={fsrs6_adr_direct_policy.stem}")
     if fsrs6_adr_delta_policy:
         extra.append(f"fsrs6-adr-delta-policy={fsrs6_adr_delta_policy.stem}")
+    if fsrs6_adp_policy:
+        extra.append(f"fsrs6-adp-policy={fsrs6_adp_policy.stem}")
     if short_term_source != "off":
         extra.append(f"learning-steps={','.join(str(step) for step in learning_steps)}")
         extra.append(
@@ -879,6 +901,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     sspmmc_policy = getattr(args, "sspmmc_policy", None)
     fsrs6_adr_direct_policy = getattr(args, "fsrs6_adr_direct_policy", None)
     fsrs6_adr_delta_policy = getattr(args, "fsrs6_adr_delta_policy", None)
+    fsrs6_adp_policy = getattr(args, "fsrs6_adp_policy", None)
     if sspmmc_policy:
         parts.append(f"policy={sspmmc_policy.stem}")
     if fsrs6_adr_direct_policy:
@@ -896,6 +919,14 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         adr_delta_lambda = getattr(args, "fsrs6_adr_delta_lambda_value", None)
         if adr_delta_lambda is not None:
             parts.append(f"lambda={format_float(adr_delta_lambda)}")
+    if fsrs6_adp_policy:
+        parts.append(f"policy={fsrs6_adp_policy.stem}")
+        adp_baseline_dr = getattr(args, "fsrs6_adp_baseline_desired_retention", None)
+        adp_lambda = getattr(args, "fsrs6_adp_lambda_value", None)
+        if adp_baseline_dr is not None:
+            parts.append(f"policy-dr={format_float(adp_baseline_dr)}")
+        if adp_lambda is not None:
+            parts.append(f"lambda={format_float(adp_lambda)}")
     parts.extend(
         [
             f"user={args.user_id or 1}",
@@ -943,6 +974,11 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "fsrs6_adr_delta_lambda_value": getattr(
             args, "fsrs6_adr_delta_lambda_value", None
         ),
+        "fsrs6_adp_policy": str(fsrs6_adp_policy) if fsrs6_adp_policy else None,
+        "fsrs6_adp_baseline_desired_retention": getattr(
+            args, "fsrs6_adp_baseline_desired_retention", None
+        ),
+        "fsrs6_adp_lambda_value": getattr(args, "fsrs6_adp_lambda_value", None),
         "fixed_interval": fixed_interval,
         "seed": args.seed,
         "fuzz": bool(getattr(args, "fuzz", False)),

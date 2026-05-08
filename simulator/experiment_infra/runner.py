@@ -52,7 +52,11 @@ SUPPORTED_RUNNER_STAGES = {
 }
 
 COMMAND_TIMEOUT_EXIT_CODE = 124
-RUN_ID_SCOPED_SWEEP_SCHEDULERS = {"fsrs6_adr_direct", "fsrs6_adr_delta"}
+RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
+    "fsrs6_adr_direct",
+    "fsrs6_adr_delta",
+    "fsrs6_adp",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -4872,6 +4876,13 @@ def _run_configured_batched_retention_sweep(
         fsrs6_adr_delta_lambda_values=config.lambda_grid
         if "fsrs6_adr_delta" in scheduler_names
         else None,
+        fsrs6_adp_policy=None,
+        fsrs6_adp_policy_root=None,
+        fsrs6_adp_train_run_root=run_root if "fsrs6_adp" in scheduler_names else None,
+        fsrs6_adp_policy_manifest=None,
+        fsrs6_adp_lambda_values=config.lambda_grid
+        if "fsrs6_adp" in scheduler_names
+        else None,
     )
     plan = build_batched_sweep_plan(
         repo_root=repo_root,
@@ -4963,6 +4974,13 @@ def _run_configured_batched_retention_sweep(
                 if lane.fsrs6_adr_delta_policy is not None
                 else None,
                 "fsrs6_adr_delta_lambda_value": lane.fsrs6_adr_delta_lambda_value,
+                "fsrs6_adp_policy": str(lane.fsrs6_adp_policy)
+                if lane.fsrs6_adp_policy is not None
+                else None,
+                "fsrs6_adp_baseline_desired_retention": (
+                    lane.fsrs6_adp_baseline_desired_retention
+                ),
+                "fsrs6_adp_lambda_value": lane.fsrs6_adp_lambda_value,
                 "output_dir": str(lane.final_log_dir),
                 "log_paths": [str(path) for path in matched_logs],
                 "exit_code": 0,
@@ -5089,6 +5107,19 @@ def _validate_batched_retention_lane_logs(
                 errors.append(
                     "metadata fsrs6_adr_direct_baseline_desired_retention expected "
                     f"{lane.fsrs6_adr_direct_baseline_desired_retention!r}, "
+                    f"got {actual_baseline_dr!r}"
+                )
+        if lane.fsrs6_adp_baseline_desired_retention is not None:
+            actual_baseline_dr = meta.get("fsrs6_adp_baseline_desired_retention")
+            if not isinstance(actual_baseline_dr, (float, int)) or not math.isclose(
+                float(actual_baseline_dr),
+                lane.fsrs6_adp_baseline_desired_retention,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                errors.append(
+                    "metadata fsrs6_adp_baseline_desired_retention expected "
+                    f"{lane.fsrs6_adp_baseline_desired_retention!r}, "
                     f"got {actual_baseline_dr!r}"
                 )
         if errors:

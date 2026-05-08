@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import io
 import json
@@ -21,7 +23,7 @@ from experiments.retention_sweep.cli_utils import has_flag
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
-DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr_direct", "fsrs6_adr_delta")
+DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr_direct", "fsrs6_adr_delta", "fsrs6_adp")
 DEFAULT_METRIC = "avg_accum_memorized_per_hour"
 USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$")
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
@@ -88,7 +90,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--comparisons",
-        default="fsrs6_adr_direct:fsrs6,fsrs6_adr_delta:fsrs6,fsrs6_adr_delta:fsrs6_adr_direct",
+        default=(
+            "fsrs6_adr_direct:fsrs6,fsrs6_adr_delta:fsrs6,"
+            "fsrs6_adr_delta:fsrs6_adr_direct,fsrs6_adp:fsrs6"
+        ),
         help="Comma-separated pairwise comparisons as left:right.",
     )
     parser.add_argument(
@@ -250,6 +255,7 @@ def parse_desired_retention(item: dict[str, Any]) -> float | None:
     for key in (
         "desired_retention",
         "fsrs6_adr_direct_baseline_desired_retention",
+        "fsrs6_adp_baseline_desired_retention",
         "retention",
     ):
         value = item.get(key)

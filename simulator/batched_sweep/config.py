@@ -82,6 +82,7 @@ class BatchedSweepConfig:
         short_term = _table(raw, "short_term", required=False)
         fsrs6_adr_direct = _table(raw, "fsrs6_adr_direct", required=False)
         fsrs6_adr_delta = _table(raw, "fsrs6_adr_delta", required=False)
+        fsrs6_adp = _table(raw, "fsrs6_adp", required=False)
 
         args = argparse.Namespace(
             config=config_path,
@@ -231,6 +232,30 @@ class BatchedSweepConfig:
                 fsrs6_adr_delta.get("lambda_values"),
                 "fsrs6_adr_delta.lambda_values",
             ),
+            fsrs6_adp_policy=_optional_path(
+                fsrs6_adp.get("policy"),
+                "fsrs6_adp.policy",
+                base_path=base_path,
+            ),
+            fsrs6_adp_policy_root=_optional_path(
+                fsrs6_adp.get("policy_root"),
+                "fsrs6_adp.policy_root",
+                base_path=base_path,
+            ),
+            fsrs6_adp_train_run_root=_optional_path(
+                fsrs6_adp.get("train_run_root"),
+                "fsrs6_adp.train_run_root",
+                base_path=base_path,
+            ),
+            fsrs6_adp_policy_manifest=_optional_path(
+                fsrs6_adp.get("policy_manifest"),
+                "fsrs6_adp.policy_manifest",
+                base_path=base_path,
+            ),
+            fsrs6_adp_lambda_values=_optional_float_list(
+                fsrs6_adp.get("lambda_values"),
+                "fsrs6_adp.lambda_values",
+            ),
         )
         return cls(path=config_path, args=args, envs=envs, schedulers=schedulers)
 
@@ -324,6 +349,14 @@ def _adapt_experiment_config(
         if "fsrs6_adr_delta" in scheduler_names
         else None,
     )
+    fsrs6_adp = _adapt_experiment_policy_source(
+        sweep,
+        prefix="fsrs6_adp",
+        lambda_grid=lambda_grid,
+        default_train_run_root=default_train_run_root
+        if "fsrs6_adp" in scheduler_names
+        else None,
+    )
 
     return {
         "schema_version": raw.get("schema_version", 1),
@@ -350,6 +383,7 @@ def _adapt_experiment_config(
         "short_term": short_term,
         "fsrs6_adr_direct": fsrs6_adr_direct,
         "fsrs6_adr_delta": fsrs6_adr_delta,
+        "fsrs6_adp": fsrs6_adp,
     }
 
 

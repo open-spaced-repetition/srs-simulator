@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 from __future__ import annotations
 
 import json
@@ -1776,6 +1777,64 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
 
         self.assertEqual(trainer, "fsrs6_adr_direct_cmaes")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 32)
+
+    def test_training_batch_resolves_fsrs6_adp_cmaes_and_estimates_grid_lanes(
+        self,
+    ) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            baseline_root.mkdir()
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                command_template=[
+                    "uv",
+                    "run",
+                    "python",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6_adp.py",
+                ],
+                training_extra=(
+                    "batch_baseline_desired_retention_values = true\n"
+                    "\n"
+                    "[training.batch]\n"
+                    "enabled = true\n"
+                    'trainer = "auto"\n'
+                    "\n"
+                    "[training.adp]\n"
+                    "dr_batch_size = 2\n"
+                    "weight_delta_scale = 0.5\n"
+                    "\n"
+                    "[training.optimizer]\n"
+                    'name = "cma_es"\n'
+                    "population_size = 5\n"
+                    "generations = 2\n"
+                    "sigma0 = 0.8\n"
+                ),
+                training_sa_extra=(
+                    "[training.sa]\n"
+                    "retention_min = 0.5\n"
+                    "retention_max = 0.98\n"
+                    "baseline_desired_retention = 0.9\n"
+                    "baseline_desired_retention_values = [0.52, 0.54, 0.56]\n"
+                ),
+            )
+            config = ExperimentConfig.from_toml(config_path)
+
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+
+        self.assertEqual(trainer, "fsrs6_adp_cmaes")
+        self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 10)
 
     def test_train_user_batches_keep_user_jobs_together(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

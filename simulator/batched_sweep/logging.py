@@ -53,6 +53,9 @@ class BatchedSweepLogLane:
     fsrs6_adr_direct_lambda_value: float | None = None
     fsrs6_adr_delta_policy: Path | None = None
     fsrs6_adr_delta_lambda_value: float | None = None
+    fsrs6_adp_policy: Path | None = None
+    fsrs6_adp_baseline_desired_retention: float | None = None
+    fsrs6_adp_lambda_value: float | None = None
     log_dir: Path | None = None
 
     @property
@@ -119,6 +122,7 @@ def _build_log_args(
     log_dir: Path,
     fsrs6_adr_direct_policy: Path | None = None,
     fsrs6_adr_delta_policy: Path | None = None,
+    fsrs6_adp_policy: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         engine="batched",
@@ -142,6 +146,9 @@ def _build_log_args(
         fsrs6_adr_direct_lambda_value=None,
         fsrs6_adr_delta_policy=fsrs6_adr_delta_policy,
         fsrs6_adr_delta_lambda_value=None,
+        fsrs6_adp_policy=fsrs6_adp_policy,
+        fsrs6_adp_baseline_desired_retention=None,
+        fsrs6_adp_lambda_value=None,
         fixed_interval=fixed_interval,
         seed=args.seed,
         fuzz=args.fuzz,
@@ -181,9 +188,7 @@ def simulate_and_log_lanes(
 
     environment = lanes[0].environment
     scheduler_names = {lane.scheduler_name for lane in lanes}
-    scheduler_specs = {lane.scheduler_spec for lane in lanes}
     scheduler_name = lanes[0].scheduler_name if len(scheduler_names) == 1 else "mixed"
-    scheduler_spec = lanes[0].scheduler_spec if len(scheduler_specs) == 1 else "mixed"
     if any(lane.environment != environment for lane in lanes):
         raise ValueError("All sweep lanes must share the same environment.")
 
@@ -259,12 +264,17 @@ def simulate_and_log_lanes(
             log_dir=user_log_dir,
             fsrs6_adr_direct_policy=lane.fsrs6_adr_direct_policy,
             fsrs6_adr_delta_policy=lane.fsrs6_adr_delta_policy,
+            fsrs6_adp_policy=lane.fsrs6_adp_policy,
         )
         log_args.fsrs6_adr_direct_baseline_desired_retention = (
             lane.fsrs6_adr_direct_baseline_desired_retention
         )
         log_args.fsrs6_adr_direct_lambda_value = lane.fsrs6_adr_direct_lambda_value
         log_args.fsrs6_adr_delta_lambda_value = lane.fsrs6_adr_delta_lambda_value
+        log_args.fsrs6_adp_baseline_desired_retention = (
+            lane.fsrs6_adp_baseline_desired_retention
+        )
+        log_args.fsrs6_adp_lambda_value = lane.fsrs6_adp_lambda_value
         write_log(log_args, stats)
 
 
@@ -305,6 +315,7 @@ def simulate_and_log(
             fixed_interval=fixed_interval,
             fsrs6_adr_direct_policy=getattr(args, "fsrs6_adr_direct_policy", None),
             fsrs6_adr_delta_policy=getattr(args, "fsrs6_adr_delta_policy", None),
+            fsrs6_adp_policy=getattr(args, "fsrs6_adp_policy", None),
         )
         for user_id in batch
     ]

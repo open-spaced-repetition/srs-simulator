@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 from __future__ import annotations
 
 import json
@@ -207,6 +208,25 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
                 StageName.ANALYZE_PARETO,
             ),
         )
+
+    def test_checked_in_adp_cmaes_config_uses_dr_and_user_batching(self) -> None:
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_adp_cmaes_users_1_8.toml"
+        )
+
+        self.assertEqual(config.name, "fsrs6_adp_cmaes_users_1_8")
+        self.assertTrue(config.train_batch_baseline_desired_retention_values)
+        self.assertEqual(config.train_artifact_glob, "**/metadata.json")
+        self.assertEqual(config.training_batch.batch_size, 8)
+        self.assertEqual(config.training_adp["dr_batch_size"], 25)
+        self.assertEqual(config.training_adp["weight_delta_scale"], 0.5)
+        self.assertEqual(len(config.training_optimizer["bounds"][0]), 21)
+        self.assertEqual(len(config.training_optimizer["bounds"][1]), 21)
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adp",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adp"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adp:fsrs6",))
 
     def test_checked_in_cmaes_direct_poly_config_uses_six_parameter_policy(
         self,

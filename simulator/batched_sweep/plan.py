@@ -14,6 +14,9 @@ from simulator.batched_sweep.fsrs6_adr_delta_policy import (
 from simulator.batched_sweep.fsrs6_adr_direct_policy import (
     resolve_fsrs6_adr_direct_policy_specs,
 )
+from simulator.batched_sweep.fsrs6_adp_policy import (
+    resolve_fsrs6_adp_policy_specs,
+)
 from simulator.batched_sweep.utils import chunked, dr_values, parse_cuda_devices
 from simulator.scheduler_spec import parse_scheduler_spec
 
@@ -30,6 +33,7 @@ SUPPORTED_SCHEDS = {
     "fixed",
     "fsrs6_adr_direct",
     "fsrs6_adr_delta",
+    "fsrs6_adp",
 }
 
 
@@ -80,6 +84,12 @@ def build_batched_sweep_plan(
                 "(--fsrs6-adr-delta-policy, --fsrs6-adr-delta-policy-root, "
                 "--fsrs6-adr-delta-train-run-root, or "
                 "--fsrs6-adr-delta-policy-manifest)."
+            )
+        if name == "fsrs6_adp" and not _has_fsrs6_adp_source(args):
+            raise ValueError(
+                "--sched fsrs6_adp requires an FSRS6 ADP policy source "
+                "(--fsrs6-adp-policy, --fsrs6-adp-policy-root, "
+                "--fsrs6-adp-train-run-root, or --fsrs6-adp-policy-manifest)."
             )
 
     batch_size = getattr(args, "batch_size", None)
@@ -144,6 +154,17 @@ def build_batched_sweep_plan(
                 policy_manifest=getattr(args, "fsrs6_adr_delta_policy_manifest", None),
                 lambda_values=getattr(args, "fsrs6_adr_delta_lambda_values", None),
             )
+    fsrs6_adp_policy_specs = ()
+    if any(parse_scheduler_spec(raw)[0] == "fsrs6_adp" for raw in schedulers):
+        if _uses_expanded_fsrs6_adp_source(args):
+            fsrs6_adp_policy_specs = resolve_fsrs6_adp_policy_specs(
+                user_ids=user_ids,
+                dr_values=drs,
+                policy_root=getattr(args, "fsrs6_adp_policy_root", None),
+                train_run_root=getattr(args, "fsrs6_adp_train_run_root", None),
+                policy_manifest=getattr(args, "fsrs6_adp_policy_manifest", None),
+                lambda_values=getattr(args, "fsrs6_adp_lambda_values", None),
+            )
 
     ctx = BatchedSweepContext(
         repo_root=repo_root,
@@ -159,6 +180,8 @@ def build_batched_sweep_plan(
         fsrs6_adr_direct_policy_specs=fsrs6_adr_direct_policy_specs,
         fsrs6_adr_delta_policy=getattr(args, "fsrs6_adr_delta_policy", None),
         fsrs6_adr_delta_policy_specs=fsrs6_adr_delta_policy_specs,
+        fsrs6_adp_policy=getattr(args, "fsrs6_adp_policy", None),
+        fsrs6_adp_policy_specs=fsrs6_adp_policy_specs,
     )
     batches = _build_user_batches(
         user_ids=user_ids,
@@ -238,6 +261,10 @@ def _lane_counts_by_user(
                     spec.user_id, 0
                 ) + len(ctx.dr_values)
             continue
+        if name == "fsrs6_adp" and ctx.fsrs6_adp_policy_specs:
+            for spec in ctx.fsrs6_adp_policy_specs:
+                counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
+            continue
         if name == "fsrs6_adr_delta":
             lanes_per_user += len(ctx.dr_values)
             continue
@@ -306,5 +333,36 @@ def _uses_expanded_fsrs6_adr_delta_source(args: argparse.Namespace) -> bool:
             "Configure only one expanded FSRS6 ADR Delta policy source: "
             "--fsrs6-adr-delta-policy-root, --fsrs6-adr-delta-train-run-root, or "
             "--fsrs6-adr-delta-policy-manifest."
+        )
+    return any(expanded)
+
+
+def _has_fsrs6_adp_source(args: argparse.Namespace) -> bool:
+    return any(
+        getattr(args, attr, None) is not None
+        for attr in (
+            "fsrs6_adp_policy",
+            "fsrs6_adp_policy_root",
+            "fsrs6_adp_train_run_root",
+            "fsrs6_adp_policy_manifest",
+        )
+    )
+
+
+def _uses_expanded_fsrs6_adp_source(args: argparse.Namespace) -> bool:
+    expanded = [
+        getattr(args, "fsrs6_adp_policy_root", None) is not None,
+        getattr(args, "fsrs6_adp_train_run_root", None) is not None,
+        getattr(args, "fsrs6_adp_policy_manifest", None) is not None,
+    ]
+    if getattr(args, "fsrs6_adp_policy", None) is not None and any(expanded):
+        raise ValueError(
+            "--fsrs6-adp-policy cannot be combined with expanded FSRS6 ADP policy sources."
+        )
+    if sum(expanded) > 1:
+        raise ValueError(
+            "Configure only one expanded FSRS6 ADP policy source: "
+            "--fsrs6-adp-policy-root, --fsrs6-adp-train-run-root, or "
+            "--fsrs6-adp-policy-manifest."
         )
     return any(expanded)

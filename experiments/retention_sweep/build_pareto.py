@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import argparse
 import json
 import math
@@ -22,7 +24,11 @@ from simulator.scheduler_spec import (
 from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 
-RUN_ID_SCOPED_SCHEDULERS = {"fsrs6_adr_direct", "fsrs6_adr_delta"}
+RUN_ID_SCOPED_SCHEDULERS = {
+    "fsrs6_adr_direct",
+    "fsrs6_adr_delta",
+    "fsrs6_adp",
+}
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
     re.IGNORECASE,
@@ -341,6 +347,47 @@ def _resolve_fsrs6_adr_direct_title(
     return title
 
 
+def _resolve_fsrs6_adp_label(
+    meta: Dict[str, Any], base_dirs: Sequence[Path]
+) -> tuple[str, Optional[float]]:
+    retention = _retention_value(meta.get("fsrs6_adp_baseline_desired_retention"))
+    if retention is not None:
+        return _format_retention_title(retention), retention
+
+    policy_path = meta.get("fsrs6_adp_policy")
+    if not policy_path:
+        return "FSRS6 ADP", None
+    path = Path(policy_path)
+    if not path.is_absolute():
+        for base_dir in base_dirs:
+            candidate = (base_dir / path).resolve()
+            if candidate.exists():
+                path = candidate
+                break
+    title = None
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            retention = _retention_value(payload.get("baseline_desired_retention"))
+            if retention is not None:
+                return _format_retention_title(retention), retention
+            raw_title = payload.get("title")
+            if isinstance(raw_title, str) and raw_title.strip():
+                title = raw_title.strip()
+                retention = _retention_from_text(title)
+                if retention is not None:
+                    return _format_retention_title(retention), retention
+        except (OSError, json.JSONDecodeError):
+            title = None
+    retention = _retention_from_text(str(policy_path)) or _retention_from_text(
+        path.stem
+    )
+    if retention is not None:
+        return _format_retention_title(retention), retention
+    return f"ADP {title or path.stem}", None
+
+
 def _format_scheduler_title(scheduler: str) -> str:
     labels = {
         "anki_sm2": "Anki-SM-2",
@@ -535,6 +582,7 @@ def _iter_log_entries(
             continue
 
         fsrs6_adr_direct_baseline_dr = None
+        fsrs6_adp_baseline_dr = None
         if scheduler == "sspmmc":
             title = _resolve_policy_title(meta, base_dirs)
         elif scheduler == "fsrs6_adr_direct":
@@ -544,6 +592,13 @@ def _iter_log_entries(
             if fsrs6_adr_direct_baseline_dr is not None and (
                 fsrs6_adr_direct_baseline_dr < min_retention
                 or fsrs6_adr_direct_baseline_dr > max_retention
+            ):
+                continue
+        elif scheduler == "fsrs6_adp":
+            title, fsrs6_adp_baseline_dr = _resolve_fsrs6_adp_label(meta, base_dirs)
+            if fsrs6_adp_baseline_dr is not None and (
+                fsrs6_adp_baseline_dr < min_retention
+                or fsrs6_adp_baseline_dr > max_retention
             ):
                 continue
         elif scheduler == "fixed":
@@ -596,6 +651,14 @@ def _iter_log_entries(
             series_identity = _fsrs6_adr_delta_series_identity(entry)
             entry["series_key"] = series_identity
             entry["series_label"] = series_identity
+        elif scheduler == "fsrs6_adp":
+            entry.update(
+                {
+                    "fsrs6_adp_policy": meta.get("fsrs6_adp_policy"),
+                    "fsrs6_adp_baseline_desired_retention": fsrs6_adp_baseline_dr,
+                    "fsrs6_adp_lambda_value": meta.get("fsrs6_adp_lambda_value"),
+                }
+            )
         yield desired_value, entry
 
 
@@ -622,6 +685,16 @@ def _no_desired_dedupe_key(
             title_key = policy_path
             baseline_dr = entry.get("fsrs6_adr_direct_baseline_desired_retention")
             lambda_value = entry.get("fsrs6_adr_direct_lambda_value")
+            if baseline_dr is not None:
+                title_key = f"{title_key}|dr={baseline_dr}"
+            if lambda_value is not None:
+                title_key = f"{title_key}|lambda={lambda_value}"
+    if scheduler_name == "fsrs6_adp":
+        policy_path = entry.get("fsrs6_adp_policy")
+        if isinstance(policy_path, str) and policy_path:
+            title_key = policy_path
+            baseline_dr = entry.get("fsrs6_adp_baseline_desired_retention")
+            lambda_value = entry.get("fsrs6_adp_lambda_value")
             if baseline_dr is not None:
                 title_key = f"{title_key}|dr={baseline_dr}"
             if lambda_value is not None:
