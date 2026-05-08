@@ -883,6 +883,17 @@ def _setup_plot_style() -> None:
     plt.style.use("ggplot")
 
 
+def _plot_ordered_entries(entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        entries,
+        key=lambda entry: (
+            float(entry["memorized_average"]),
+            float(entry["time_average"]),
+            str(entry.get("title") or ""),
+        ),
+    )
+
+
 def _plot_compare_frontier(
     series: List[Dict[str, Any]],
     output_path: Path,
@@ -1012,7 +1023,7 @@ def _plot_compare_frontier(
     avoid_y = []
 
     for item in series:
-        entries = item["entries"]
+        entries = _plot_ordered_entries(item["entries"])
         if not entries:
             continue
         scheduler = item.get("scheduler")

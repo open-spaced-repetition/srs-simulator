@@ -35,6 +35,7 @@ from simulator.core import SimulationStats
 from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
 from experiments.retention_sweep.build_pareto import (
     _build_results,
+    _plot_ordered_entries,
     _split_results_by_series,
 )
 from experiments.retention_sweep.aggregate_users import (
@@ -804,6 +805,32 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertIsNone(results[0]["fsrs6_adr_direct_baseline_desired_retention"])
         self.assertEqual(results[0]["memorized_average"], 42.0)
+
+    def test_build_pareto_orders_no_dr_portfolio_plot_points_by_x_axis(self) -> None:
+        entries = [
+            {
+                "memorized_average": 30.0,
+                "time_average": 3.0,
+                "title": "policy_0",
+            },
+            {
+                "memorized_average": 10.0,
+                "time_average": 1.0,
+                "title": "policy_1",
+            },
+            {
+                "memorized_average": 20.0,
+                "time_average": 2.0,
+                "title": "policy_2",
+            },
+        ]
+
+        ordered = _plot_ordered_entries(entries)
+
+        self.assertEqual(
+            [entry["title"] for entry in ordered],
+            ["policy_1", "policy_2", "policy_0"],
+        )
 
     def test_build_pareto_keeps_fsrs6_adr_direct_runs_separate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
