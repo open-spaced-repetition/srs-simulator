@@ -122,10 +122,10 @@ standard sweep and Pareto stages.
 Direct ADR trains one artifact per `(user, baseline DR, lambda)` and applies the
 overfit gate against the same user's same-DR FSRS-6 baseline, with both relative
 memorized-average and memorized-per-minute gains required to be greater than
-`-0.01`. Delta ADR trains one artifact per `(user, lambda)` over the full DR
-grid; every DR in that grid must improve both memorized average and memorized per
+`0.0`. Delta ADR trains one artifact per `(user, lambda)` over the full DR grid;
+at least 80% of DR points must improve both memorized average and memorized per
 minute. Mean gains are reported and used only to rank candidates that already
-satisfy the all-DR gate.
+satisfy the DR-grid gate.
 ADP uses the Direct overfit gate per DR, but the action is the full FSRS-6
 weight vector. The train lane layout flattens `(user, baseline DR, CMA-ES
 candidate)` and uses `[training.adp].dr_batch_size` plus `[training.batch]` to

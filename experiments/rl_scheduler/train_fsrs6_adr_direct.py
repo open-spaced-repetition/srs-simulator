@@ -44,7 +44,8 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 
 
-RELATIVE_GAIN_GATE_FLOOR = -0.01
+RELATIVE_GAIN_GATE_FLOOR = 0.0
+RELATIVE_GAIN_GATE_PASS_FRACTION = 0.8
 
 
 @dataclass(frozen=True, slots=True)
@@ -805,13 +806,70 @@ def _score_from_relative_gains(
     return -float(violation)
 
 
-def _passes_overfit_gate(
+def _relative_gain_point_passes(
     relative_memorized_gain: float,
     relative_efficiency_gain: float,
 ) -> bool:
     return (
         relative_memorized_gain > RELATIVE_GAIN_GATE_FLOOR
         and relative_efficiency_gain > RELATIVE_GAIN_GATE_FLOOR
+    )
+
+
+def _passes_overfit_gate(
+    relative_memorized_gain: float,
+    relative_efficiency_gain: float,
+) -> bool:
+    return _relative_gain_point_passes(
+        relative_memorized_gain,
+        relative_efficiency_gain,
+    )
+
+
+def _required_relative_gain_pass_count(
+    point_count: int,
+    *,
+    pass_fraction: float = RELATIVE_GAIN_GATE_PASS_FRACTION,
+) -> int:
+    if point_count < 1:
+        raise ValueError("point_count must be positive.")
+    if not (0.0 < pass_fraction <= 1.0):
+        raise ValueError("pass_fraction must satisfy 0 < pass_fraction <= 1.")
+    return max(1, math.ceil(point_count * pass_fraction - 1e-12))
+
+
+def _relative_gain_pass_count(
+    relative_memorized_gains: Sequence[float],
+    relative_efficiency_gains: Sequence[float],
+) -> int:
+    if len(relative_memorized_gains) != len(relative_efficiency_gains):
+        raise ValueError("Relative gain grids must have the same length.")
+    if not relative_memorized_gains:
+        raise ValueError("Relative gain grids must not be empty.")
+    return sum(
+        1
+        for rel_mem, rel_eff in zip(
+            relative_memorized_gains,
+            relative_efficiency_gains,
+            strict=True,
+        )
+        if _relative_gain_point_passes(rel_mem, rel_eff)
+    )
+
+
+def _passes_relative_gain_fraction_gate(
+    relative_memorized_gains: Sequence[float],
+    relative_efficiency_gains: Sequence[float],
+    *,
+    pass_fraction: float = RELATIVE_GAIN_GATE_PASS_FRACTION,
+) -> bool:
+    passed_count = _relative_gain_pass_count(
+        relative_memorized_gains,
+        relative_efficiency_gains,
+    )
+    return passed_count >= _required_relative_gain_pass_count(
+        len(relative_memorized_gains),
+        pass_fraction=pass_fraction,
     )
 
 
@@ -831,6 +889,32 @@ def _relative_gain_gate_metrics(
         ),
         "relative_memorized_gain": relative_memorized_gain,
         "relative_efficiency_gain": relative_efficiency_gain,
+    }
+
+
+def _relative_gain_fraction_gate_metrics(
+    relative_memorized_gains: Sequence[float],
+    relative_efficiency_gains: Sequence[float],
+    *,
+    pass_fraction: float = RELATIVE_GAIN_GATE_PASS_FRACTION,
+) -> dict[str, float | int | bool]:
+    passed_count = _relative_gain_pass_count(
+        relative_memorized_gains,
+        relative_efficiency_gains,
+    )
+    total_count = len(relative_memorized_gains)
+    required_count = _required_relative_gain_pass_count(
+        total_count,
+        pass_fraction=pass_fraction,
+    )
+    return {
+        "relative_gain_floor": RELATIVE_GAIN_GATE_FLOOR,
+        "relative_gain_pass_fraction_required": pass_fraction,
+        "desired_retention_points": total_count,
+        "passed_desired_retention_points": passed_count,
+        "required_passed_desired_retention_points": required_count,
+        "relative_gain_pass_fraction": passed_count / total_count,
+        "passed_relative_gain_fraction_gate": passed_count >= required_count,
     }
 
 

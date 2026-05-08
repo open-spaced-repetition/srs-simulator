@@ -1697,6 +1697,122 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertEqual(performance["execution_shape"]["subprocess_count"], 0)
             self.assertEqual(performance["runtime_metrics"]["batch_runs_attempted"], 1)
 
+    def test_train_overfit_in_process_batch_accepts_eighty_percent_gate(self) -> None:
+        from simulator.experiment_infra.training_batch import InProcessTrainOutcome
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            baseline_root.mkdir()
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                command_template=[
+                    "uv",
+                    "run",
+                    "python",
+                    "experiments/rl_scheduler/train_fsrs6_adr_direct.py",
+                ],
+                training_extra=(
+                    'artifact_metadata_glob = "metadata.json"\n'
+                    "[training.batch]\n"
+                    "enabled = true\n"
+                    'trainer = "auto"\n'
+                ),
+                training_sa_extra=(
+                    "[training.sa]\n"
+                    "baseline_desired_retention = 0.9\n"
+                    "baseline_desired_retention_values = [0.8, 0.9]\n"
+                    'torch_device = "cpu"\n'
+                ),
+            )
+
+            def fake_run_batch(*, jobs, **_kwargs):
+                outcomes = []
+                for index, job in enumerate(jobs):
+                    job.output_dir.mkdir(parents=True, exist_ok=True)
+                    progress_path = job.output_dir / "training_progress.jsonl"
+                    progress_path.write_text(
+                        json.dumps({"event": "artifacts_written"}) + "\n",
+                        encoding="utf-8",
+                    )
+                    (job.output_dir / "policy.pt").write_bytes(b"policy")
+                    metadata_path = job.output_dir / "metadata.json"
+                    metadata_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "artifact_kind": "scheduler-policy",
+                                "artifact_id": (
+                                    f"user-{job.user_id}-dr-"
+                                    f"{job.baseline_desired_retention}-lambda-"
+                                    f"{job.lambda_value}"
+                                ),
+                                "family": "rl_scheduler",
+                                "scheduler_name": "fsrs6",
+                                "environment": "lstm",
+                                "engine": "batched",
+                                "training_user_ids": [job.user_id],
+                                "validation_user_ids": [2],
+                                "seed": 42,
+                                "policy_path": "policy.pt",
+                                "feature_version": "v1",
+                                "action_space": "desired_retention_delta",
+                                "created_at": "2026-04-29T00:00:00Z",
+                                "code_commit": "test",
+                                "lambda_value": job.lambda_value,
+                                "baseline_desired_retention": (
+                                    job.baseline_desired_retention
+                                ),
+                                "training_command_path": str(job.command_record_path),
+                                "capabilities": ["batched"],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    outcomes.append(
+                        InProcessTrainOutcome(
+                            job=job,
+                            passed=index < 5,
+                            artifact_paths=(metadata_path,),
+                            progress_path=progress_path,
+                        )
+                    )
+                return outcomes
+
+            with patch(
+                "simulator.experiment_infra.training_batch.run_in_process_train_batch",
+                side_effect=fake_run_batch,
+            ):
+                result = run_stage(
+                    config_path=config_path,
+                    stage=StageName.TRAIN_OVERFIT,
+                    repo_root=root,
+                    run_id="test-run",
+                )
+
+            self.assertEqual(result.exit_code, 0)
+            stage_root = output_root / "test-run" / "train-overfit"
+            summary = json.loads((stage_root / "training_summary.json").read_text())
+            self.assertTrue(summary["passed"])
+            self.assertEqual(len(summary["command_results"]), 6)
+            self.assertEqual(
+                sum(
+                    1
+                    for item in summary["command_results"]
+                    if item["overfit_gate_passed"]
+                ),
+                5,
+            )
+            batch = json.loads(
+                (stage_root / "commands" / "in_process_batch_0.json").read_text()
+            )
+            self.assertTrue(batch["overfit_gate"]["passed"])
+            self.assertEqual(batch["overfit_gate"]["passed_points"], 5)
+            self.assertEqual(batch["overfit_gate"]["required_passed_points"], 5)
+
     def test_train_overfit_in_process_batch_rejects_unknown_auto_trainer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

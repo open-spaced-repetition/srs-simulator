@@ -15,6 +15,8 @@ from experiments.rl_scheduler.train_cmaes_fsrs6_adr_direct import (
 from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     SASettings,
     _policy_feature_version,
+    _relative_gain_fraction_gate_metrics,
+    _required_relative_gain_pass_count,
     _score_from_relative_gains,
 )
 from simulator.fsrs6_adr_direct_policy import (
@@ -84,7 +86,7 @@ class TrainFSRS6ADRDirectConfigTests(unittest.TestCase):
 
         self.assertEqual(optimizer.initial_mean, (-8.0, 0.0, 0.0))
 
-    def test_score_makes_floor_infeasible_candidates_strictly_worse(self) -> None:
+    def test_score_makes_non_positive_candidates_strictly_worse(self) -> None:
         efficiency_trap = _score_from_relative_gains(
             -0.3347,
             37.9,
@@ -95,22 +97,34 @@ class TrainFSRS6ADRDirectConfigTests(unittest.TestCase):
             1e-9,
             0.5,
         )
-        relaxed_boundary_pass = _score_from_relative_gains(
+        below_baseline_failure = _score_from_relative_gains(
             -0.000386,
             0.023,
             0.5,
         )
-        below_floor_failure = _score_from_relative_gains(
-            -0.0101,
+        zero_boundary_failure = _score_from_relative_gains(
+            0.0,
             37.9,
             0.5,
         )
 
         self.assertLess(efficiency_trap, barely_feasible)
-        self.assertLess(below_floor_failure, barely_feasible)
+        self.assertLess(below_baseline_failure, barely_feasible)
+        self.assertLess(zero_boundary_failure, barely_feasible)
         self.assertLess(efficiency_trap, 0.0)
-        self.assertLess(below_floor_failure, 0.0)
-        self.assertGreater(relaxed_boundary_pass, 0.0)
+        self.assertLess(below_baseline_failure, 0.0)
+        self.assertLessEqual(zero_boundary_failure, 0.0)
+
+    def test_fraction_gate_requires_eighty_percent_points(self) -> None:
+        self.assertEqual(_required_relative_gain_pass_count(5), 4)
+        metrics = _relative_gain_fraction_gate_metrics(
+            [0.01, 0.02, 0.03, 0.04, -0.001],
+            [0.01, 0.02, 0.03, 0.04, 0.30],
+        )
+
+        self.assertTrue(metrics["passed_relative_gain_fraction_gate"])
+        self.assertEqual(metrics["passed_desired_retention_points"], 4)
+        self.assertEqual(metrics["required_passed_desired_retention_points"], 4)
 
 
 if __name__ == "__main__":

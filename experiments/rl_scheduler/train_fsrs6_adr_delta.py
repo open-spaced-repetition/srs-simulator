@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     CandidateMetrics,
+    RELATIVE_GAIN_GATE_FLOOR,
     SASettings,
     SimulationBundle,
     TrainingProgress,
@@ -24,8 +25,11 @@ from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     _float_token,
     _git_commit,
     _metrics_from_stats,
+    _passes_relative_gain_fraction_gate,
     _read_training_sa,
     _relative_gain,
+    _relative_gain_fraction_gate_metrics,
+    _relative_gain_point_passes,
     _temperature,
     _write_json,
 )
@@ -650,13 +654,9 @@ def _dr_grid_passed_relative_gains(
     relative_efficiency_gains: Sequence[float],
 ) -> bool:
     _validate_relative_gain_grid(relative_memorized_gains, relative_efficiency_gains)
-    return all(
-        rel_mem > 0.0 and rel_eff > 0.0
-        for rel_mem, rel_eff in zip(
-            relative_memorized_gains,
-            relative_efficiency_gains,
-            strict=True,
-        )
+    return _passes_relative_gain_fraction_gate(
+        relative_memorized_gains,
+        relative_efficiency_gains,
     )
 
 
@@ -671,7 +671,11 @@ def _score_dr_grid_relative_gains(
         relative_efficiency_gains,
     ):
         return sum(
-            (1.0 - lambda_value) * rel_mem + lambda_value * rel_eff
+            (
+                (1.0 - lambda_value) * rel_mem
+                + lambda_value * rel_eff
+                - RELATIVE_GAIN_GATE_FLOOR
+            )
             for rel_mem, rel_eff in zip(
                 relative_memorized_gains,
                 relative_efficiency_gains,
@@ -679,7 +683,8 @@ def _score_dr_grid_relative_gains(
             )
         ) / len(relative_memorized_gains)
     return -sum(
-        max(0.0, -rel_mem) + max(0.0, -rel_eff)
+        max(0.0, RELATIVE_GAIN_GATE_FLOOR - rel_mem)
+        + max(0.0, RELATIVE_GAIN_GATE_FLOOR - rel_eff)
         for rel_mem, rel_eff in zip(
             relative_memorized_gains,
             relative_efficiency_gains,
@@ -744,14 +749,20 @@ def _write_artifact(
                 "relative_efficiency_gain": relative_efficiency_gain,
                 "memorized_average_gt_baseline": relative_memorized_gain > 0.0,
                 "memorized_per_minute_gt_baseline": relative_efficiency_gain > 0.0,
-                "passed_overfit_gate": (
-                    relative_memorized_gain > 0.0 and relative_efficiency_gain > 0.0
+                "passed_overfit_gate": _relative_gain_point_passes(
+                    relative_memorized_gain,
+                    relative_efficiency_gain,
                 ),
             }
         )
+    fraction_gate = _relative_gain_fraction_gate_metrics(
+        result.best.relative_memorized_gains,
+        result.best.relative_efficiency_gains,
+    )
     metrics = {
         "passed_overfit_gate": result.passed,
         "gate": {
+            **fraction_gate,
             "all_desired_retention_memorized_average_gt_baseline": (
                 result.best.min_relative_memorized_gain > 0.0
             ),

@@ -58,6 +58,25 @@ class TrainFSRS6ADRDeltaConfigTests(unittest.TestCase):
             0.0,
         )
 
+    def test_delta_score_accepts_eighty_percent_positive_dr_points(self) -> None:
+        relative_memorized_gains = [0.01, 0.02, 0.03, 0.04, -0.01]
+        relative_efficiency_gains = [0.02, 0.03, 0.04, 0.05, 0.20]
+
+        self.assertTrue(
+            _dr_grid_passed_relative_gains(
+                relative_memorized_gains,
+                relative_efficiency_gains,
+            )
+        )
+        self.assertGreater(
+            _score_dr_grid_relative_gains(
+                relative_memorized_gains,
+                relative_efficiency_gains,
+                0.5,
+            ),
+            0.0,
+        )
+
     def test_delta_score_accepts_all_dr_positive_candidate(self) -> None:
         relative_memorized_gains = [1e-6, 0.02]
         relative_efficiency_gains = [1e-6, 0.04]

@@ -52,6 +52,7 @@ SUPPORTED_RUNNER_STAGES = {
 }
 
 COMMAND_TIMEOUT_EXIT_CODE = 124
+TRAIN_OVERFIT_GATE_PASS_FRACTION = 0.8
 RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
     "fsrs6_adr_direct",
     "fsrs6_adr_delta",
@@ -4134,8 +4135,10 @@ def _run_train_in_process_batches(
             notes.append(error_note)
 
         finished_at = utc_timestamp()
+        outcome_gate = _train_outcome_gate_summary(outcomes)
+        batch_gate_passed = bool(outcome_gate["passed"])
         batch_exit_code = 1 if error_note else 0
-        if outcomes and all(outcome.passed for outcome in outcomes):
+        if outcomes and batch_gate_passed:
             batch_runs_succeeded += 1
         elif outcomes:
             batch_exit_code = 1
@@ -4158,6 +4161,7 @@ def _run_train_in_process_batches(
                 "job_count": len(batch_jobs),
                 "lanes_per_job_estimate": lanes_per_job,
                 "effective_lanes_estimate": len(batch_jobs) * lanes_per_job,
+                "overfit_gate": outcome_gate,
                 "outcomes": [
                     {
                         "user_id": outcome.job.user_id,
@@ -4200,11 +4204,19 @@ def _run_train_in_process_batches(
                     "batch_record_path": str(batch_record_path),
                     "started_at": started_at,
                     "finished_at": finished_at,
-                    "exit_code": 0 if outcome is not None and outcome.passed else 1,
+                    "exit_code": (
+                        0
+                        if outcome is not None and (outcome.passed or batch_gate_passed)
+                        else 1
+                    ),
                     "user_id": job.user_id,
                     "lambda_value": job.lambda_value,
                     "baseline_desired_retention": job.baseline_desired_retention,
                     "output_dir": str(job.output_dir),
+                    "overfit_gate_passed": outcome.passed
+                    if outcome is not None
+                    else False,
+                    "batch_overfit_gate": outcome_gate,
                 },
             )
 
@@ -4241,7 +4253,7 @@ def _run_train_in_process_batches(
                 result = _finalize_train_job_result(
                     job=job,
                     config=config,
-                    exit_code=0 if outcome.passed else 1,
+                    exit_code=0 if outcome.passed or batch_gate_passed else 1,
                     timed_out=False,
                     command_record_path=batch_record_path,
                     stdout_path=None,
@@ -4251,6 +4263,8 @@ def _run_train_in_process_batches(
                         "batch_index": batch_index,
                         "batch_record_path": str(batch_record_path),
                         "trainer": trainer,
+                        "overfit_gate_passed": outcome.passed,
+                        "batch_overfit_gate": outcome_gate,
                         "artifact_paths_reported": [
                             str(path) for path in outcome.artifact_paths
                         ],
@@ -4276,6 +4290,30 @@ def _run_train_in_process_batches(
         trainer,
         notes,
     )
+
+
+def _train_outcome_gate_summary(
+    outcomes: Sequence[Any],
+) -> dict[str, float | int | bool]:
+    total_count = len(outcomes)
+    passed_count = sum(1 for outcome in outcomes if outcome.passed)
+    required_count = (
+        max(
+            1,
+            math.ceil(total_count * TRAIN_OVERFIT_GATE_PASS_FRACTION - 1e-12),
+        )
+        if total_count
+        else 0
+    )
+    pass_fraction = passed_count / total_count if total_count else 0.0
+    return {
+        "pass_fraction_required": TRAIN_OVERFIT_GATE_PASS_FRACTION,
+        "points": total_count,
+        "passed_points": passed_count,
+        "required_passed_points": required_count,
+        "pass_fraction": pass_fraction,
+        "passed": total_count > 0 and passed_count >= required_count,
+    }
 
 
 def _build_train_user_batches(

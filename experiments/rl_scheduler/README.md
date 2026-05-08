@@ -201,23 +201,26 @@ Training target:
 - Main-profile DR grid: `0.52..0.96` in steps of `0.02`.
 - Direct overfit gate: each artifact is trained for one baseline DR, and both
   relative memorized-average gain and relative memorized-per-minute gain must be
-  greater than `-0.01` against the same-user same-DR baseline.
-- Delta overfit gate: one artifact covers the DR grid, and every DR must improve
-  both memorized average and memorized per minute against its corresponding
-  same-user same-DR baseline.
+  greater than `0.0` against the same-user same-DR baseline. Batched
+  train-overfit runs accept the batch when at least 80% of artifact points pass
+  that gate.
+- Delta overfit gate: one artifact covers the DR grid, and at least 80% of DR
+  points must improve both memorized average and memorized per minute against
+  the corresponding same-user same-DR baselines.
 - ADP overfit gate: each `(user, DR, lambda)` artifact is checked against the
-  same-user same-DR FSRS-6 baseline with the same `-0.01` floor on both
+  same-user same-DR FSRS-6 baseline with the same `0.0` floor on both
   memorized-average and memorized-per-minute gains.
-- Constraint handling: Direct candidates below the `-0.01` relative-gain floor
+- Constraint handling: Direct candidates below the `0.0` relative-gain floor
   are ranked below every candidate satisfying both gate constraints. Delta keeps
-  its all-DR positive-gain hard gate.
+  its 80% positive-gain DR-grid gate.
 
 For ordinary `fsrs6_adr_direct`, the default policy uses 6 log-polynomial features over
 normalized `S,D`; set `training.sa.feature_version = "fsrs6_adr_direct_log_linear_v1"`
 to train the simplified 3-parameter linear variant.
 For `fsrs6_adr_delta`, the action is a logit-space adjustment around the input DR.
-The overfit gate is an all-DR hard constraint; mean relative gains are reported
-and used only to rank candidates that are already feasible. The default
+The overfit gate requires at least 80% of DR points to pass the positive-gain
+constraint; mean relative gains are reported and used only to rank candidates
+that are already feasible. The default
 DR-conditioned policy uses 10 log polynomial features; set `training.sa.feature_version =
 "fsrs6_adr_delta_log_linear_v1"` to train the 4-parameter linear variant.
 CMA-ES profiles keep the same `[training.sa]` policy/evaluation settings and put
