@@ -402,10 +402,17 @@ def _policy_stem(value: Any) -> Optional[str]:
     return Path(value).stem
 
 
-def _fsrs6_adr_delta_series_identity(entry: Dict[str, Any]) -> Optional[str]:
+def _run_series_identity(entry: Dict[str, Any]) -> Optional[str]:
     run_id = entry.get("run_id")
     if isinstance(run_id, str) and run_id.strip():
         return f"run={run_id.strip()}"
+    return None
+
+
+def _fsrs6_adr_delta_series_identity(entry: Dict[str, Any]) -> Optional[str]:
+    run_identity = _run_series_identity(entry)
+    if run_identity is not None:
+        return run_identity
     policy = _policy_stem(entry.get("fsrs6_adr_delta_policy"))
     if policy is not None:
         return f"policy={policy}"
@@ -639,6 +646,9 @@ def _iter_log_entries(
                     ),
                 }
             )
+            series_identity = _run_series_identity(entry)
+            entry["series_key"] = series_identity
+            entry["series_label"] = series_identity
         elif scheduler == "fsrs6_adr_delta":
             entry.update(
                 {
@@ -689,6 +699,9 @@ def _no_desired_dedupe_key(
                 title_key = f"{title_key}|dr={baseline_dr}"
             if lambda_value is not None:
                 title_key = f"{title_key}|lambda={lambda_value}"
+        series_key = entry.get("series_key")
+        if isinstance(series_key, str) and series_key:
+            title_key = f"{title_key}|{series_key}"
     if scheduler_name == "fsrs6_adp":
         policy_path = entry.get("fsrs6_adp_policy")
         if isinstance(policy_path, str) and policy_path:

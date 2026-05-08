@@ -805,6 +805,53 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertIsNone(results[0]["fsrs6_adr_direct_baseline_desired_retention"])
         self.assertEqual(results[0]["memorized_average"], 42.0)
 
+    def test_build_pareto_keeps_fsrs6_adr_direct_runs_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            user_log_dir = (
+                Path(tmp)
+                / "user_1"
+                / "sched_fsrs6_adr_direct"
+                / "dr_0p9"
+                / "lambda_0p5"
+            )
+            policy_path = Path(tmp) / "policy.json"
+            FSRS6ADRDirectPolicy.baseline(desired_retention=0.90).write_json(
+                policy_path
+            )
+            for run_id, memorized in (("poly-run", 10.0), ("linear-run", 20.0)):
+                args = _write_log_args(user_log_dir, False)
+                args.engine = "batched"
+                args.scheduler = "fsrs6_adr_direct"
+                args.scheduler_spec = "fsrs6_adr_direct"
+                args.desired_retention = None
+                args.run_id = run_id
+                args.fsrs6_adr_direct_policy = policy_path
+                args.fsrs6_adr_direct_baseline_desired_retention = 0.90
+                args.fsrs6_adr_direct_lambda_value = 0.5
+                simulate_cli._write_log(args, _stats(memorized=memorized))
+
+            results = _build_results(
+                user_log_dir.parents[2],
+                "fsrs6",
+                {"fsrs6_adr_direct"},
+                0.50,
+                0.98,
+                [REPO_ROOT, user_log_dir],
+                None,
+                None,
+                None,
+                "batched",
+                user_id_filter=1,
+            )
+            series = _split_results_by_series(results)
+
+        self.assertEqual(len(results), 2)
+        self.assertCountEqual(
+            [entry["series_key"] for entry in results],
+            ["run=poly-run", "run=linear-run"],
+        )
+        self.assertEqual([len(entries) for _key, entries in series], [1, 1])
+
     def test_build_pareto_keeps_fsrs6_adr_delta_runs_separate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             user_log_dir = Path(tmp) / "user_1" / "sched_fsrs6_adr_delta" / "dr_0p9"
