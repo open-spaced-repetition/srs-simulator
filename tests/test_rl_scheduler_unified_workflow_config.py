@@ -354,6 +354,72 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
         self.assertIn("Loaded 2 records", report)
 
+    def test_analyze_scheduler_comparison_reports_adp_hypervolume(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "pareto"
+            log_dir.mkdir()
+            (log_dir / "simulation_results_retention_sweep_user_1.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 1,
+                            "desired_retention": 0.5,
+                            "memorized_average": 100.0,
+                            "time_average": 1.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 100.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_adp",
+                            "user_id": 1,
+                            "fsrs6_adp_baseline_desired_retention": 0.5,
+                            "memorized_average": 110.0,
+                            "time_average": 1.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 110.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            args = parse_analyze_args(
+                [
+                    "--log-dir",
+                    str(log_dir),
+                    "--env",
+                    "fsrs6",
+                    "--sched",
+                    "fsrs6,fsrs6_adp",
+                    "--comparisons",
+                    "fsrs6_adp:fsrs6",
+                    "--start-user",
+                    "1",
+                    "--end-user",
+                    "1",
+                    "--start-retention",
+                    "0.50",
+                    "--end-retention",
+                    "0.52",
+                ]
+            )
+            report = render_report(args)
+
+        self.assertIn("### Hypervolume vs FSRS6 baseline", report)
+        self.assertIn("| user | baseline HV | fsrs6_adp HV | HV delta |", report)
+        self.assertIn("| 1 | 0.25 | 0.75 | 0.50 | 1 |", report)
+
     def test_runner_executes_build_and_analyze_pareto_stages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -753,7 +753,7 @@ def hypervolume_summary_table(
     env: str,
     *,
     baseline_scheduler: str = "fsrs6",
-    portfolio_scheduler: str = "fsrs6_adr_direct",
+    target_scheduler: str = "fsrs6_adr_direct",
 ) -> str:
     output_rows: list[list[str]] = []
     user_ids = sorted({row.user_id for row in rows if row.environment == env})
@@ -765,43 +765,48 @@ def hypervolume_summary_table(
             and row.user_id == user_id
             and row.scheduler == baseline_scheduler
         ]
-        portfolio = [
+        target = [
             row
             for row in rows
             if row.environment == env
             and row.user_id == user_id
-            and row.scheduler == portfolio_scheduler
+            and row.scheduler == target_scheduler
         ]
-        if not baseline or not portfolio:
+        if not baseline or not target:
             continue
         baseline_points = [
             ObjectivePoint(row.memorized_average, -row.time_average) for row in baseline
         ]
-        portfolio_points = [
-            ObjectivePoint(row.memorized_average, -row.time_average)
-            for row in portfolio
+        target_points = [
+            ObjectivePoint(row.memorized_average, -row.time_average) for row in target
         ]
         reference = reference_point(baseline_points, margin_fraction=0.05)
         baseline_hv = hypervolume_2d(baseline_points, reference=reference)
-        combined_points = [*baseline_points, *portfolio_points]
-        portfolio_hv = hypervolume_2d(combined_points, reference=reference)
+        combined_points = [*baseline_points, *target_points]
+        target_hv = hypervolume_2d(combined_points, reference=reference)
         frontier_indices = non_dominated_indices(combined_points)
-        frontier_child_count = sum(
+        frontier_target_count = sum(
             1 for index in frontier_indices if index >= len(baseline_points)
         )
         output_rows.append(
             [
                 str(user_id),
                 fmt_float(baseline_hv, 2),
-                fmt_float(portfolio_hv, 2),
-                fmt_float(portfolio_hv - baseline_hv, 2),
-                str(frontier_child_count),
+                fmt_float(target_hv, 2),
+                fmt_float(target_hv - baseline_hv, 2),
+                str(frontier_target_count),
             ]
         )
     if not output_rows:
-        return "No baseline + portfolio rows available."
+        return f"No {baseline_scheduler} + {target_scheduler} rows available."
     return markdown_table(
-        ["user", "baseline HV", "portfolio HV", "HV delta", "frontier children"],
+        [
+            "user",
+            "baseline HV",
+            f"{target_scheduler} HV",
+            "HV delta",
+            "frontier target points",
+        ],
         output_rows,
     )
 
@@ -899,9 +904,23 @@ def print_env_report(
     print(f"\n### Pareto frontier by user\n\nTotal frontier points: {total}\n")
     print(markdown_table(["scheduler", "frontier points", "users"], pareto_rows))
 
-    if "fsrs6" in schedulers and "fsrs6_adr_direct" in schedulers:
-        print("\n### Hypervolume vs FSRS6 baseline\n")
-        print(hypervolume_summary_table(rows, env))
+    if "fsrs6" in schedulers:
+        target_schedulers = tuple(
+            scheduler for scheduler in schedulers if scheduler != "fsrs6"
+        )
+        for target_scheduler in target_schedulers:
+            title = "### Hypervolume vs FSRS6 baseline"
+            if len(target_schedulers) > 1:
+                title = f"{title}: {target_scheduler}"
+            print(f"\n{title}\n")
+            print(
+                hypervolume_summary_table(
+                    rows,
+                    env,
+                    baseline_scheduler="fsrs6",
+                    target_scheduler=target_scheduler,
+                )
+            )
 
 
 def render_report(args: argparse.Namespace) -> str:
