@@ -34,7 +34,6 @@ expected_engine = "batched"
 stage_mode = "copy"
 environments = ["fsrs6", "lstm"]
 desired_retention_values = [
-  0.50,
   0.52,
   0.54,
   0.56,
@@ -58,7 +57,6 @@ desired_retention_values = [
   0.92,
   0.94,
   0.96,
-  0.98,
 ]
 
 [simulation]
@@ -111,7 +109,7 @@ command_template = [
 [training.batch]
 enabled = true
 trainer = "auto"
-batch_size = 8
+max_lanes_per_batch = 3200
 
 [training.sa]
 feature_version = "fsrs6_adr_delta_log_linear_v1"
@@ -127,7 +125,6 @@ retention_max = 0.98
 baseline_desired_retention = 0.90
 dr_batch_size = 25
 baseline_desired_retention_values = [
-  0.50,
   0.52,
   0.54,
   0.56,
@@ -151,7 +148,6 @@ baseline_desired_retention_values = [
   0.92,
   0.94,
   0.96,
-  0.98,
 ]
 torch_device = "cuda"
 short_term_threshold = 0.5
@@ -160,12 +156,12 @@ short_term_loops_limit = 10
 [training.optimizer]
 name = "cma_es"
 population_size = 32
-generations = 10
+generations = 20
 sigma0 = 0.8
 initial_mean = [0.0, 0.0, 0.0, 0.0]
 bounds = [
-  [-8.0, -8.0, -8.0, -8.0],
-  [8.0, 8.0, 8.0, 8.0],
+  [-12.0, -12.0, -12.0, -12.0],
+  [12.0, 12.0, 12.0, 12.0],
 ]
 
 [sweep]
@@ -179,8 +175,8 @@ log_layout = "user"
 batch_size = 8
 torch_device = "cuda"
 benchmark_partition = "0"
-start_retention = 0.50
-end_retention = 0.98
+start_retention = 0.52
+end_retention = 0.96
 step = 0.02
 no_progress = true
 no_log = false
@@ -191,8 +187,8 @@ schedulers = ["fsrs6", "fsrs6_adr_delta"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
-start_retention = 0.50
-end_retention = 0.98
+start_retention = 0.52
+end_retention = 0.96
 short_term = "off"
 short_term_source = "any"
 engine = "batched"
@@ -207,8 +203,8 @@ envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6", "fsrs6_adr_delta"]
 comparisons = ["fsrs6_adr_delta:fsrs6"]
 result_glob = "analysis.md"
-start_retention = 0.50
-end_retention = 0.98
+start_retention = 0.52
+end_retention = 0.96
 short_term = "off"
 engine = "batched"
 fuzz = "off"

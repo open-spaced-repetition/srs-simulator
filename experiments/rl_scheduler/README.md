@@ -180,7 +180,7 @@ Training target:
 - Direct action: emit desired retention from scheduler-side FSRS-6 `S,D`.
 - Delta action: apply a logit-space adjustment around the input DR from
   scheduler-side FSRS-6 `S,D` and the requested DR.
-- DR grid: typically `0.50..0.98`.
+- Main-profile DR grid: `0.52..0.96` in steps of `0.02`.
 - Direct overfit gate: each artifact is trained for one baseline DR, and both
   memorized average and memorized per minute must improve against the same-user
   same-DR baseline.
