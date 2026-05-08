@@ -189,10 +189,10 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
         self.assertEqual(
             len(config.training_sa["baseline_desired_retention_values"]),
-            25,
+            23,
         )
         self.assertEqual(config.training_optimizer["population_size"], 32)
-        self.assertEqual(config.training_batch.max_lanes_per_batch, 3200)
+        self.assertEqual(config.training_batch.max_lanes_per_batch, 6400)
         self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_direct",))
         self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr_direct"))
         self.assertEqual(
@@ -207,6 +207,32 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
                 StageName.ANALYZE_PARETO,
             ),
         )
+
+    def test_checked_in_cmaes_direct_poly_config_uses_six_parameter_policy(
+        self,
+    ) -> None:
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_adr_direct_cmaes_users_1_8.toml"
+        )
+
+        self.assertEqual(config.name, "fsrs6_adr_direct_cmaes_users_1_8")
+        self.assertEqual(
+            config.training_sa["feature_version"],
+            "fsrs6_adr_direct_log_poly_v1",
+        )
+        self.assertEqual(
+            len(config.training_sa["baseline_desired_retention_values"]),
+            23,
+        )
+        self.assertEqual(config.training_optimizer["population_size"], 32)
+        self.assertEqual(config.training_optimizer["generations"], 20)
+        self.assertEqual(len(config.training_optimizer["bounds"][0]), 6)
+        self.assertEqual(len(config.training_optimizer["bounds"][1]), 6)
+        self.assertEqual(config.training_batch.max_lanes_per_batch, 6400)
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_direct",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr_direct"))
 
     def test_experiment_config_loads_new_workflow_stages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

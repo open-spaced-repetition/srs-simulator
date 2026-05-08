@@ -171,6 +171,9 @@ Representative profiles:
   both FSRS6 and LSTM environments.
 - `configs/fsrs6_adr_delta_linear_sa_users_1_8.toml`: the same workflow
   using the simplified 4-parameter `fsrs6_adr_delta_log_linear_v1` feature version.
+- `configs/fsrs6_adr_direct_cmaes_users_1_8.toml`: the ordinary
+  `fsrs6_adr_direct` scheduler trained with CMA-ES using the 6-parameter
+  `fsrs6_adr_direct_log_poly_v1` policy per user and baseline desired retention.
 - `configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml`: the ordinary
   `fsrs6_adr_direct` scheduler trained with CMA-ES using one simplified 3-parameter
   `fsrs6_adr_direct_log_linear_v1` policy per user and baseline desired retention.
@@ -187,14 +190,14 @@ Training target:
   scheduler-side FSRS-6 `S,D` and the requested DR.
 - Main-profile DR grid: `0.52..0.96` in steps of `0.02`.
 - Direct overfit gate: each artifact is trained for one baseline DR, and both
-  memorized average and memorized per minute must improve against the same-user
-  same-DR baseline.
+  relative memorized-average gain and relative memorized-per-minute gain must be
+  greater than `-0.01` against the same-user same-DR baseline.
 - Delta overfit gate: one artifact covers the DR grid, and every DR must improve
   both memorized average and memorized per minute against its corresponding
   same-user same-DR baseline.
-- Constraint handling: candidates with non-positive memorized-average or
-  memorized-per-minute gain are ranked below every candidate satisfying both
-  gate constraints.
+- Constraint handling: Direct candidates below the `-0.01` relative-gain floor
+  are ranked below every candidate satisfying both gate constraints. Delta keeps
+  its all-DR positive-gain hard gate.
 
 For ordinary `fsrs6_adr_direct`, the default policy uses 6 log-polynomial features over
 normalized `S,D`; set `training.sa.feature_version = "fsrs6_adr_direct_log_linear_v1"`

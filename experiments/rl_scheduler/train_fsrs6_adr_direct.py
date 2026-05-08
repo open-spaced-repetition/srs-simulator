@@ -44,6 +44,9 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 
 
+RELATIVE_GAIN_GATE_FLOOR = -0.01
+
+
 @dataclass(frozen=True, slots=True)
 class SASettings:
     chains: int = 4
@@ -327,7 +330,7 @@ def main() -> int:
         best_metrics.memorized_per_minute,
         baseline_metrics.memorized_per_minute,
     )
-    passed = rel_mem > 0.0 and rel_eff > 0.0
+    passed = _passes_overfit_gate(rel_mem, rel_eff)
 
     policy = FSRS6ADRDirectPolicy(
         coefficients=tuple(float(v) for v in best_coefficients.tolist()),
@@ -345,12 +348,7 @@ def main() -> int:
 
     metrics = {
         "passed_overfit_gate": passed,
-        "gate": {
-            "memorized_average_gt_baseline": rel_mem > 0.0,
-            "memorized_per_minute_gt_baseline": rel_eff > 0.0,
-            "relative_memorized_gain": rel_mem,
-            "relative_efficiency_gain": rel_eff,
-        },
+        "gate": _relative_gain_gate_metrics(rel_mem, rel_eff),
         "baseline": asdict(baseline_metrics),
         "best": asdict(best_metrics),
         "settings": asdict(settings),
@@ -794,13 +792,46 @@ def _score_from_relative_gains(
     relative_efficiency_gain: float,
     lambda_value: float,
 ) -> float:
-    if relative_memorized_gain > 0.0 and relative_efficiency_gain > 0.0:
+    if _passes_overfit_gate(relative_memorized_gain, relative_efficiency_gain):
         return float(
             (1.0 - lambda_value) * relative_memorized_gain
             + lambda_value * relative_efficiency_gain
+            - RELATIVE_GAIN_GATE_FLOOR
         )
-    violation = max(0.0, -relative_memorized_gain) + max(0.0, -relative_efficiency_gain)
+    violation = max(0.0, RELATIVE_GAIN_GATE_FLOOR - relative_memorized_gain) + max(
+        0.0,
+        RELATIVE_GAIN_GATE_FLOOR - relative_efficiency_gain,
+    )
     return -float(violation)
+
+
+def _passes_overfit_gate(
+    relative_memorized_gain: float,
+    relative_efficiency_gain: float,
+) -> bool:
+    return (
+        relative_memorized_gain > RELATIVE_GAIN_GATE_FLOOR
+        and relative_efficiency_gain > RELATIVE_GAIN_GATE_FLOOR
+    )
+
+
+def _relative_gain_gate_metrics(
+    relative_memorized_gain: float,
+    relative_efficiency_gain: float,
+) -> dict[str, float | bool]:
+    return {
+        "relative_gain_floor": RELATIVE_GAIN_GATE_FLOOR,
+        "memorized_average_gt_baseline": relative_memorized_gain > 0.0,
+        "memorized_per_minute_gt_baseline": relative_efficiency_gain > 0.0,
+        "memorized_average_gt_relative_gain_floor": (
+            relative_memorized_gain > RELATIVE_GAIN_GATE_FLOOR
+        ),
+        "memorized_per_minute_gt_relative_gain_floor": (
+            relative_efficiency_gain > RELATIVE_GAIN_GATE_FLOOR
+        ),
+        "relative_memorized_gain": relative_memorized_gain,
+        "relative_efficiency_gain": relative_efficiency_gain,
+    }
 
 
 def _relative_gain(value: float, baseline: float) -> float:

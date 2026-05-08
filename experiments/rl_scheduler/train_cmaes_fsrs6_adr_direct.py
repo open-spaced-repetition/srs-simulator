@@ -28,9 +28,11 @@ from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     _evaluate_fsrs6_baseline,
     _evaluate_sa_candidates,
     _git_commit,
+    _passes_overfit_gate,
     _policy_feature_version,
     _read_training_sa,
     _relative_gain,
+    _relative_gain_gate_metrics,
     _score,
     _write_json,
 )
@@ -374,7 +376,7 @@ def _run_cmaes(
         best_coefficients=best_coefficients.detach().cpu(),
         best_score=best_score,
         history=history,
-        passed=rel_mem > 0.0 and rel_eff > 0.0,
+        passed=_passes_overfit_gate(rel_mem, rel_eff),
     )
 
 
@@ -424,12 +426,7 @@ def write_artifact(
         metrics_path,
         {
             "passed_overfit_gate": result.passed,
-            "gate": {
-                "memorized_average_gt_baseline": rel_mem > 0.0,
-                "memorized_per_minute_gt_baseline": rel_eff > 0.0,
-                "relative_memorized_gain": rel_mem,
-                "relative_efficiency_gain": rel_eff,
-            },
+            "gate": _relative_gain_gate_metrics(rel_mem, rel_eff),
             "baseline": asdict(result.baseline),
             "best": asdict(result.best),
             "best_score": result.best_score,

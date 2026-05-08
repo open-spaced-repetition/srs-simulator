@@ -292,7 +292,9 @@ def _run_fsrs6_adr_direct_jobs(
     from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _clamp_coefficients,
+        _relative_gain_gate_metrics,
         _metrics_from_stats,
+        _passes_overfit_gate,
         _policy_feature_version,
         _relative_gain,
         _score,
@@ -612,7 +614,7 @@ def _run_fsrs6_adr_direct_jobs(
             best_metrics[job_index].memorized_per_minute,
             baselines[job_index].memorized_per_minute,
         )
-        passed = rel_mem > 0.0 and rel_eff > 0.0
+        passed = _passes_overfit_gate(rel_mem, rel_eff)
         progresses[job_index].write(
             "artifacts_written",
             device=train_bundle.device,
@@ -650,7 +652,9 @@ def _write_fsrs6_adr_direct_artifact(
     from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         _artifact_id,
         _git_commit,
+        _passes_overfit_gate,
         _relative_gain,
+        _relative_gain_gate_metrics,
         _write_json,
     )
     from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
@@ -658,7 +662,7 @@ def _write_fsrs6_adr_direct_artifact(
     output_dir.mkdir(parents=True, exist_ok=True)
     rel_mem = _relative_gain(best.memorized_average, baseline.memorized_average)
     rel_eff = _relative_gain(best.memorized_per_minute, baseline.memorized_per_minute)
-    passed = rel_mem > 0.0 and rel_eff > 0.0
+    passed = _passes_overfit_gate(rel_mem, rel_eff)
     policy = FSRS6ADRDirectPolicy(
         coefficients=tuple(float(v) for v in best_coefficients.tolist()),
         retention_min=settings.retention_min,
@@ -677,12 +681,7 @@ def _write_fsrs6_adr_direct_artifact(
         metrics_path,
         {
             "passed_overfit_gate": passed,
-            "gate": {
-                "memorized_average_gt_baseline": rel_mem > 0.0,
-                "memorized_per_minute_gt_baseline": rel_eff > 0.0,
-                "relative_memorized_gain": rel_mem,
-                "relative_efficiency_gain": rel_eff,
-            },
+            "gate": _relative_gain_gate_metrics(rel_mem, rel_eff),
             "baseline": asdict(baseline),
             "best": asdict(best),
             "settings": asdict(settings),
@@ -745,6 +744,7 @@ def _run_fsrs6_adr_direct_cmaes_jobs(
     from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _metrics_from_stats,
+        _passes_overfit_gate,
         _policy_feature_version,
         _relative_gain,
         _score,
@@ -1001,7 +1001,7 @@ def _run_fsrs6_adr_direct_cmaes_jobs(
             best_coefficients=best_coefficients_for_job.detach().cpu(),
             best_score=best_scores[job_index],
             history=histories[job_index],
-            passed=rel_mem > 0.0 and rel_eff > 0.0,
+            passed=_passes_overfit_gate(rel_mem, rel_eff),
         )
         progresses[job_index].write(
             "cmaes_completed",
@@ -1765,6 +1765,7 @@ def _run_fsrs6_adr_direct_dr_grid_jobs(
     from experiments.rl_scheduler.train_fsrs6_adr_direct import (
         SASettings,
         _clamp_coefficients,
+        _passes_overfit_gate,
         _read_training_sa,
         _temperature,
     )
@@ -2126,7 +2127,7 @@ def _run_fsrs6_adr_direct_dr_grid_jobs(
                         best=best,
                         best_score=best_scores[job_index][dr_index],
                         history=histories[job_index][dr_index],
-                        passed=rel_mem > 0.0 and rel_eff > 0.0,
+                        passed=_passes_overfit_gate(rel_mem, rel_eff),
                     )
                 )
 

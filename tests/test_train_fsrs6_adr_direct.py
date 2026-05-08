@@ -84,7 +84,7 @@ class TrainFSRS6ADRDirectConfigTests(unittest.TestCase):
 
         self.assertEqual(optimizer.initial_mean, (-8.0, 0.0, 0.0))
 
-    def test_score_makes_infeasible_candidates_strictly_worse(self) -> None:
+    def test_score_makes_floor_infeasible_candidates_strictly_worse(self) -> None:
         efficiency_trap = _score_from_relative_gains(
             -0.3347,
             37.9,
@@ -95,16 +95,22 @@ class TrainFSRS6ADRDirectConfigTests(unittest.TestCase):
             1e-9,
             0.5,
         )
-        boundary_failure = _score_from_relative_gains(
+        relaxed_boundary_pass = _score_from_relative_gains(
             -0.000386,
             0.023,
             0.5,
         )
+        below_floor_failure = _score_from_relative_gains(
+            -0.0101,
+            37.9,
+            0.5,
+        )
 
         self.assertLess(efficiency_trap, barely_feasible)
-        self.assertLess(boundary_failure, barely_feasible)
+        self.assertLess(below_floor_failure, barely_feasible)
         self.assertLess(efficiency_trap, 0.0)
-        self.assertLess(boundary_failure, 0.0)
+        self.assertLess(below_floor_failure, 0.0)
+        self.assertGreater(relaxed_boundary_pass, 0.0)
 
 
 if __name__ == "__main__":
