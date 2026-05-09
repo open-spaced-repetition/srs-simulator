@@ -43,7 +43,7 @@ from experiments.rl_scheduler.portfolio_selection import (
     selection_executor,
     selection_payload_from_candidate_metrics,
 )
-from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
+from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     ObjectivePoint,
     dominates,
     exclusive_hypervolume_contributions,

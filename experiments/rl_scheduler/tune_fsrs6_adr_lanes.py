@@ -17,20 +17,20 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.rl_scheduler.policy_search_common import (
     PolicySearchSettings,
     _build_bundle,
-    _evaluate_direct_candidates,
+    _evaluate_adr_candidates,
     _read_training_policy_search,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig
-from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.short_term_config import resolve_short_term_config
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Tune FSRS6 ADR Direct effective lanes by timing one candidate evaluation "
+            "Tune FSRS6 ADR effective lanes by timing one candidate evaluation "
             "per lane count."
         ),
         allow_abbrev=False,
@@ -86,7 +86,7 @@ def main() -> int:
     summary_path = output_dir / "lane_tuning_summary.json"
 
     summary: dict[str, Any] = {
-        "type": "fsrs6-adr-direct-lane-tuning",
+        "type": "fsrs6-adr-lane-tuning",
         "config_path": str(args.config),
         "output_dir": str(output_dir),
         "user_id": user_id,
@@ -177,7 +177,7 @@ def _run_lane_probe(
             torch.cuda.reset_peak_memory_stats(bundle.device)
             torch.cuda.synchronize(bundle.device)
         started = time.monotonic()
-        metrics = _evaluate_direct_candidates(
+        metrics = _evaluate_adr_candidates(
             config=config,
             settings=settings,
             bundle=bundle,
@@ -217,7 +217,7 @@ def _baseline_coefficients(
     lanes: int,
     device: torch.device,
 ) -> torch.Tensor:
-    policy = FSRS6ADRDirectPolicy.baseline(
+    policy = FSRS6ADRPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,

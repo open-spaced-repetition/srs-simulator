@@ -1242,7 +1242,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                             "artifact_kind": "scheduler-policy",
                             "artifact_id": f"user-1-dr-{desired_retention}",
                             "family": "rl_scheduler",
-                            "scheduler_name": "fsrs6_adr_direct",
+                            "scheduler_name": "fsrs6_adr",
                             "environment": "lstm",
                             "engine": "batched",
                             "training_user_ids": [1],
@@ -1584,7 +1584,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr_direct.py",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr.py",
                 ],
                 training_extra=(
                     'artifact_metadata_glob = "metadata.json"\n'
@@ -1708,7 +1708,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr_direct.py",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr.py",
                 ],
                 training_extra=(
                     'artifact_metadata_glob = "metadata.json"\n'
@@ -1837,7 +1837,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             )
             self.assertIn("invalid-config", summary["failures"])
 
-    def test_training_batch_resolves_fsrs6_adr_direct_cmaes_and_estimates_lanes(
+    def test_training_batch_resolves_fsrs6_adr_cmaes_and_estimates_lanes(
         self,
     ) -> None:
         from simulator.experiment_infra.training_batch import (
@@ -1858,7 +1858,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr_direct.py",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr.py",
                 ],
                 training_extra=(
                     "[training.batch]\n"
@@ -1873,7 +1873,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                 ),
                 training_policy_search_extra=(
                     "[training.policy_search]\n"
-                    'feature_version = "fsrs6_adr_direct_log_linear_v1"\n'
+                    'feature_version = "fsrs6_adr_log_linear_v1"\n'
                     "retention_min = 0.5\n"
                     "retention_max = 0.98\n"
                     "baseline_desired_retention = 0.9\n"
@@ -1886,10 +1886,10 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             command_template=config.train_command_template,
         )
 
-        self.assertEqual(trainer, "fsrs6_adr_direct_cmaes")
+        self.assertEqual(trainer, "fsrs6_adr_cmaes")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 32)
 
-    def test_training_batch_resolves_fsrs6_adr_direct_portfolio_and_estimates_lanes(
+    def test_training_batch_resolves_fsrs6_adr_portfolio_and_estimates_lanes(
         self,
     ) -> None:
         from simulator.experiment_infra.training_batch import (
@@ -1910,7 +1910,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_fsrs6_adr_direct_portfolio.py",
+                    "experiments/rl_scheduler/train_fsrs6_adr_portfolio.py",
                 ],
                 training_extra=(
                     "[training.batch]\n"
@@ -1940,7 +1940,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             command_template=config.train_command_template,
         )
 
-        self.assertEqual(trainer, "fsrs6_adr_direct_portfolio")
+        self.assertEqual(trainer, "fsrs6_adr_portfolio")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 6)
 
     def test_training_batch_resolves_fsrs6_adp_cmaes_and_estimates_grid_lanes(

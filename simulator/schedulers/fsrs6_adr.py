@@ -27,15 +27,15 @@ from simulator.math.fsrs_batch import (
     fsrs6_stability_after_success as fsrs6_stability_after_success_batch,
     fsrs6_stability_short_term as fsrs6_stability_short_term_batch,
 )
-from simulator.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicy
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 if TYPE_CHECKING:
     import torch
 
 
-class FSRS6ADRDeltaScheduler(Scheduler):
+class FSRS6ADRScheduler(Scheduler):
     """
-    DR-conditioned adaptive desired-retention policy over scheduler-side FSRS-6 S/D state.
+    Adaptive desired-retention policy scheduler over scheduler-side FSRS-6 S/D state.
     """
 
     PRIORITY_MODES = {
@@ -49,17 +49,15 @@ class FSRS6ADRDeltaScheduler(Scheduler):
         self,
         *,
         policy_json: str | Path,
-        desired_retention: float,
         fsrs_weights: Optional[Sequence[float]] = None,
         priority_mode: str = "low_retrievability",
     ) -> None:
         if priority_mode not in self.PRIORITY_MODES:
             raise ValueError(f"Unknown priority_mode '{priority_mode}'")
-        self.policy = FSRS6ADRDeltaPolicy.from_json(policy_json)
-        self.desired_retention = self._validate_desired_retention(desired_retention)
+        self.policy = FSRS6ADRPolicy.from_json(policy_json)
         weights = resolve_fsrs6_weights(fsrs_weights)
         if len(weights) != 21:
-            raise ValueError("FSRS6ADRDeltaScheduler expects 21 FSRS-6 weights.")
+            raise ValueError("FSRS6ADRScheduler expects 21 FSRS-6 weights.")
         self.params = FSRS6Params(tuple(float(w) for w in weights), bounds=Bounds())
         self.priority_mode = priority_mode
 
@@ -115,34 +113,20 @@ class FSRS6ADRDeltaScheduler(Scheduler):
     def _interval_for_state(self, state: dict[str, Any]) -> float:
         stability = float(state["s"])
         difficulty = float(state["d"])
-        retention = self.policy.evaluate(
-            stability,
-            difficulty,
-            self.desired_retention,
-        )
+        retention = self.policy.evaluate(stability, difficulty)
         return fsrs6_next_interval(self.params, stability, retention)
-
-    def _validate_desired_retention(self, desired_retention: float) -> float:
-        value = float(desired_retention)
-        if not (self.policy.retention_min <= value <= self.policy.retention_max):
-            raise ValueError(
-                "desired_retention must be inside the FSRS6 ADR Delta policy "
-                f"retention bounds [{self.policy.retention_min}, "
-                f"{self.policy.retention_max}]."
-            )
-        return value
 
 
 @dataclass
-class FSRS6ADRDeltaVectorizedState:
+class FSRS6ADRVectorizedState:
     s: "torch.Tensor"
     d: "torch.Tensor"
 
 
-class FSRS6ADRDeltaVectorizedSchedulerOps:
+class FSRS6ADRVectorizedSchedulerOps:
     def __init__(
         self,
-        scheduler: FSRS6ADRDeltaScheduler,
+        scheduler: FSRS6ADRScheduler,
         *,
         device: "torch.device",
         dtype: "torch.dtype",
@@ -157,29 +141,19 @@ class FSRS6ADRDeltaVectorizedSchedulerOps:
         self._weights = torch.tensor(
             scheduler.params.weights, device=device, dtype=dtype
         )
-        self._fsrs_bounds = scheduler.params.bounds
-        self._policy_bounds = scheduler.policy.bounds
+        self._bounds = scheduler.params.bounds
         self._policy = scheduler.policy
         self._feature_count = scheduler.policy.feature_count
         self._coefficients = torch.tensor(
             self._policy.coefficients, device=device, dtype=dtype
         )
-        self._zero_coefficients = bool(torch.all(self._coefficients == 0.0).item())
-        self._desired_retention = torch.tensor(
-            scheduler.desired_retention, device=device, dtype=dtype
-        )
         self._retention_min = float(self._policy.retention_min)
         self._retention_max = float(self._policy.retention_max)
-        self._retention_span = self._retention_max - self._retention_min
-        self._log_s_min = float(
-            torch.log(torch.tensor(self._policy_bounds.s_min)).item()
-        )
+        self._log_s_min = float(torch.log(torch.tensor(self._bounds.s_min)).item())
         self._log_s_span = float(
-            torch.log(
-                torch.tensor(self._policy_bounds.s_max / self._policy_bounds.s_min)
-            ).item()
+            torch.log(torch.tensor(self._bounds.s_max / self._bounds.s_min)).item()
         )
-        self._d_span = self._policy_bounds.d_max - self._policy_bounds.d_min
+        self._d_span = self._bounds.d_max - self._bounds.d_min
         self._decay = -self._weights[20]
         self._factor = (
             torch.pow(torch.tensor(0.9, device=device, dtype=dtype), 1.0 / self._decay)
@@ -187,29 +161,23 @@ class FSRS6ADRDeltaVectorizedSchedulerOps:
         )
         self._mean_reversion_d = vmath.clamp(
             self._weights[4] - torch.exp(self._weights[5] * 3.0) + 1.0,
-            self._fsrs_bounds.d_min,
-            self._fsrs_bounds.d_max,
+            self._bounds.d_min,
+            self._bounds.d_max,
         )
         self._priority_mode = scheduler.priority_mode
 
-    def init_state(self, deck_size: int) -> FSRS6ADRDeltaVectorizedState:
+    def init_state(self, deck_size: int) -> FSRS6ADRVectorizedState:
         s = self._torch.full(
-            (deck_size,),
-            self._fsrs_bounds.s_min,
-            dtype=self.dtype,
-            device=self.device,
+            (deck_size,), self._bounds.s_min, dtype=self.dtype, device=self.device
         )
         d = self._torch.full(
-            (deck_size,),
-            self._fsrs_bounds.d_min,
-            dtype=self.dtype,
-            device=self.device,
+            (deck_size,), self._bounds.d_min, dtype=self.dtype, device=self.device
         )
-        return FSRS6ADRDeltaVectorizedState(s=s, d=d)
+        return FSRS6ADRVectorizedState(s=s, d=d)
 
     def review_priority(
         self,
-        state: FSRS6ADRDeltaVectorizedState,
+        state: FSRS6ADRVectorizedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -220,7 +188,7 @@ class FSRS6ADRDeltaVectorizedSchedulerOps:
             self._factor,
             elapsed,
             state.s[idx],
-            self._fsrs_bounds.s_min,
+            self._bounds.s_min,
         )
         if self._priority_mode == "low_retrievability":
             return r_sched
@@ -232,7 +200,7 @@ class FSRS6ADRDeltaVectorizedSchedulerOps:
 
     def update_review(
         self,
-        state: FSRS6ADRDeltaVectorizedState,
+        state: FSRS6ADRVectorizedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -247,7 +215,7 @@ class FSRS6ADRDeltaVectorizedSchedulerOps:
             self._factor,
             elapsed,
             sched_s,
-            self._fsrs_bounds.s_min,
+            self._bounds.s_min,
         )
         short = elapsed < 1.0
         success = rating > 1
@@ -276,91 +244,61 @@ class FSRS6ADRDeltaVectorizedSchedulerOps:
             sched_d,
             rating,
             self._mean_reversion_d,
-            self._fsrs_bounds.d_min,
-            self._fsrs_bounds.d_max,
+            self._bounds.d_min,
+            self._bounds.d_max,
         )
-        state.s[idx] = self._vmath.clamp(
-            new_s, self._fsrs_bounds.s_min, self._fsrs_bounds.s_max
-        )
-        state.d[idx] = self._vmath.clamp(
-            new_d, self._fsrs_bounds.d_min, self._fsrs_bounds.d_max
-        )
+        state.s[idx] = self._vmath.clamp(new_s, self._bounds.s_min, self._bounds.s_max)
+        state.d[idx] = self._vmath.clamp(new_d, self._bounds.d_min, self._bounds.d_max)
         return self._interval_for_state(state.s[idx], state.d[idx])
 
     def update_learn(
         self,
-        state: FSRS6ADRDeltaVectorizedState,
+        state: FSRS6ADRVectorizedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":
         if idx.numel() == 0:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
         s_init, d_init = self._vmath.init_state(
-            self._weights, rating, self._fsrs_bounds.d_min, self._fsrs_bounds.d_max
+            self._weights, rating, self._bounds.d_min, self._bounds.d_max
         )
-        state.s[idx] = self._vmath.clamp(
-            s_init, self._fsrs_bounds.s_min, self._fsrs_bounds.s_max
-        )
-        state.d[idx] = self._vmath.clamp(
-            d_init, self._fsrs_bounds.d_min, self._fsrs_bounds.d_max
-        )
+        state.s[idx] = self._vmath.clamp(s_init, self._bounds.s_min, self._bounds.s_max)
+        state.d[idx] = self._vmath.clamp(d_init, self._bounds.d_min, self._bounds.d_max)
         return self._interval_for_state(state.s[idx], state.d[idx])
 
     def _retention_for_state(
         self, s: "torch.Tensor", d: "torch.Tensor"
     ) -> "torch.Tensor":
-        desired = self._desired_retention.expand_as(s)
-        if self._zero_coefficients:
-            return desired
         s_norm = (
             self._torch.log(
-                self._torch.clamp(
-                    s, self._policy_bounds.s_min, self._policy_bounds.s_max
-                )
+                self._torch.clamp(s, self._bounds.s_min, self._bounds.s_max)
             )
             - self._log_s_min
         ) / self._log_s_span
         d_norm = (
-            self._torch.clamp(d, self._policy_bounds.d_min, self._policy_bounds.d_max)
-            - self._policy_bounds.d_min
+            self._torch.clamp(d, self._bounds.d_min, self._bounds.d_max)
+            - self._bounds.d_min
         ) / self._d_span
-        dr_norm = (desired - self._retention_min) / self._retention_span
         s_norm = self._torch.clamp(s_norm, 0.0, 1.0)
         d_norm = self._torch.clamp(d_norm, 0.0, 1.0)
-        dr_norm = self._torch.clamp(dr_norm, 0.0, 1.0)
-        adjustment = self._adjustment_for_normalized_state(
-            self._coefficients,
-            s_norm,
-            d_norm,
-            dr_norm,
+        logit = (
+            self._coefficients[0]
+            + self._coefficients[1] * s_norm
+            + self._coefficients[2] * d_norm
         )
-        logit = self._torch.logit(dr_norm) + adjustment
-        return self._retention_min + self._retention_span * self._torch.sigmoid(logit)
-
-    def _adjustment_for_normalized_state(
-        self,
-        coefficients: "torch.Tensor",
-        s_norm: "torch.Tensor",
-        d_norm: "torch.Tensor",
-        dr_norm: "torch.Tensor",
-    ) -> "torch.Tensor":
-        adjustment = (
-            coefficients[0]
-            + coefficients[1] * s_norm
-            + coefficients[2] * d_norm
-            + coefficients[3] * dr_norm
+        if self._feature_count == 3:
+            return self._retention_min + (
+                self._retention_max - self._retention_min
+            ) * self._torch.sigmoid(logit)
+        logit = (
+            logit
+            + self._coefficients[3] * s_norm * d_norm
+            + self._coefficients[4] * s_norm * s_norm
+            + self._coefficients[5] * d_norm * d_norm
         )
-        if self._feature_count == 4:
-            return adjustment
-        return (
-            adjustment
-            + coefficients[4] * s_norm * d_norm
-            + coefficients[5] * s_norm * dr_norm
-            + coefficients[6] * d_norm * dr_norm
-            + coefficients[7] * s_norm * s_norm
-            + coefficients[8] * d_norm * d_norm
-            + coefficients[9] * dr_norm * dr_norm
-        )
+        return self._retention_min + (
+            self._retention_max - self._retention_min
+        ) * self._torch.sigmoid(logit)
 
     def _interval_for_state(
         self, s: "torch.Tensor", d: "torch.Tensor"
@@ -373,20 +311,19 @@ class FSRS6ADRDeltaVectorizedSchedulerOps:
 
 
 @dataclass
-class FSRS6ADRDeltaBatchState:
+class FSRS6ADRBatchState:
     s: "torch.Tensor"
     d: "torch.Tensor"
 
 
-class FSRS6ADRDeltaBatchSchedulerOps:
-    PRIORITY_MODES = FSRS6ADRDeltaScheduler.PRIORITY_MODES
+class FSRS6ADRBatchSchedulerOps:
+    PRIORITY_MODES = FSRS6ADRScheduler.PRIORITY_MODES
 
     def __init__(
         self,
         *,
         weights: "torch.Tensor",
-        desired_retention: "float | torch.Tensor",
-        policy: FSRS6ADRDeltaPolicy,
+        policy: FSRS6ADRPolicy,
         bounds: Bounds,
         priority_mode: str,
         device: "torch.device",
@@ -399,14 +336,13 @@ class FSRS6ADRDeltaBatchSchedulerOps:
             raise ValueError(f"Unknown priority_mode '{priority_mode}'")
         if weights.ndim != 2 or weights.shape[1] != 21:
             raise ValueError(
-                "FSRS6ADRDeltaBatchSchedulerOps expects weights shape (users, 21)."
+                "FSRS6ADRBatchSchedulerOps expects weights shape (users, 21)."
             )
         self._torch = torch
         self.device = device
         self.dtype = dtype
         self._weights = weights.to(device=device, dtype=dtype)
-        self._fsrs_bounds = bounds
-        self._policy_bounds = policy.bounds
+        self._bounds = bounds
         self._policy = policy
         self._feature_count = policy.feature_count
         if coefficients is None:
@@ -418,80 +354,52 @@ class FSRS6ADRDeltaBatchSchedulerOps:
             expected_shape = (weights.shape[0], self._feature_count)
             if coefficients.ndim != 2 or coefficients.shape != expected_shape:
                 raise ValueError(
-                    "FSRS6 ADR Delta batch coefficients must have shape "
+                    "FSRS6 ADR batch coefficients must have shape "
                     f"(users, {self._feature_count})."
                 )
             self._coefficients = coefficients.to(device=device, dtype=dtype)
             self._per_user_coefficients = True
-        desired = torch.as_tensor(desired_retention, device=device, dtype=dtype)
-        invalid = (
-            ~torch.isfinite(desired)
-            | (desired < float(policy.retention_min))
-            | (desired > float(policy.retention_max))
-        )
-        if desired.ndim == 0:
-            if bool(invalid.item()):
-                raise ValueError(
-                    "desired_retention must be inside the FSRS6 ADR Delta policy bounds."
-                )
-            desired = desired.expand(self._weights.shape[0])
-        elif desired.ndim == 1 and int(desired.shape[0]) == int(self._weights.shape[0]):
-            if bool(torch.any(invalid).item()):
-                raise ValueError(
-                    "desired_retention values must be inside the FSRS6 ADR Delta "
-                    "policy bounds."
-                )
-        else:
-            raise ValueError(
-                "desired_retention must be a scalar or a tensor with shape (users,)."
-            )
-        self._desired_retention = desired
         self._retention_min = float(policy.retention_min)
         self._retention_max = float(policy.retention_max)
-        self._retention_span = self._retention_max - self._retention_min
-        self._log_s_min = float(
-            torch.log(torch.tensor(self._policy_bounds.s_min)).item()
-        )
+        self._log_s_min = float(torch.log(torch.tensor(bounds.s_min)).item())
         self._log_s_span = float(
-            torch.log(
-                torch.tensor(self._policy_bounds.s_max / self._policy_bounds.s_min)
-            ).item()
+            torch.log(torch.tensor(bounds.s_max / bounds.s_min)).item()
         )
-        self._d_span = self._policy_bounds.d_max - self._policy_bounds.d_min
+        self._d_span = bounds.d_max - bounds.d_min
         self._decay = -self._weights[:, 20]
         base = torch.tensor(0.9, device=device, dtype=dtype)
         self._factor = torch.pow(base, 1.0 / self._decay) - 1.0
         self._init_d = torch.clamp(
             self._weights[:, 4] - torch.exp(self._weights[:, 5] * 3.0) + 1.0,
-            self._fsrs_bounds.d_min,
-            self._fsrs_bounds.d_max,
+            bounds.d_min,
+            bounds.d_max,
         )
         self._priority_mode = priority_mode
 
-    def init_state(self, user_count: int, deck_size: int) -> FSRS6ADRDeltaBatchState:
+    def init_state(self, user_count: int, deck_size: int) -> FSRS6ADRBatchState:
         s = self._torch.full(
             (user_count, deck_size),
-            self._fsrs_bounds.s_min,
+            self._bounds.s_min,
             dtype=self.dtype,
             device=self.device,
         )
         d = self._torch.full(
             (user_count, deck_size),
-            self._fsrs_bounds.d_min,
+            self._bounds.d_min,
             dtype=self.dtype,
             device=self.device,
         )
-        return FSRS6ADRDeltaBatchState(s=s, d=d)
+        return FSRS6ADRBatchState(s=s, d=d)
 
     def review_priority(
-        self, state: FSRS6ADRDeltaBatchState, elapsed: "torch.Tensor"
+        self, state: FSRS6ADRBatchState, elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
         r_sched = fsrs6_forgetting_curve_batch(
             self._decay[:, None],
             self._factor[:, None],
             elapsed,
             state.s,
-            self._fsrs_bounds.s_min,
+            self._bounds.s_min,
         )
         if self._priority_mode == "low_retrievability":
             return r_sched
@@ -505,7 +413,7 @@ class FSRS6ADRDeltaBatchSchedulerOps:
 
     def update_review(
         self,
-        state: FSRS6ADRDeltaBatchState,
+        state: FSRS6ADRBatchState,
         user_idx: "torch.Tensor",
         card_idx: "torch.Tensor",
         elapsed: "torch.Tensor",
@@ -525,7 +433,7 @@ class FSRS6ADRDeltaBatchSchedulerOps:
             factor,
             elapsed,
             sched_s,
-            self._fsrs_bounds.s_min,
+            self._bounds.s_min,
         )
         short = elapsed < 1.0
         success = rating > 1
@@ -550,14 +458,14 @@ class FSRS6ADRDeltaBatchSchedulerOps:
             sched_d,
             rating,
             init_d,
-            self._fsrs_bounds.d_min,
-            self._fsrs_bounds.d_max,
+            self._bounds.d_min,
+            self._bounds.d_max,
         )
         state.s[user_idx, card_idx] = self._torch.clamp(
-            new_s, self._fsrs_bounds.s_min, self._fsrs_bounds.s_max
+            new_s, self._bounds.s_min, self._bounds.s_max
         )
         state.d[user_idx, card_idx] = self._torch.clamp(
-            new_d, self._fsrs_bounds.d_min, self._fsrs_bounds.d_max
+            new_d, self._bounds.d_min, self._bounds.d_max
         )
         return self._interval_for_state(
             state.s[user_idx, card_idx],
@@ -567,7 +475,7 @@ class FSRS6ADRDeltaBatchSchedulerOps:
 
     def update_learn(
         self,
-        state: FSRS6ADRDeltaBatchState,
+        state: FSRS6ADRBatchState,
         user_idx: "torch.Tensor",
         card_idx: "torch.Tensor",
         rating: "torch.Tensor",
@@ -576,13 +484,13 @@ class FSRS6ADRDeltaBatchSchedulerOps:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
         weights = self._weights.index_select(0, user_idx)
         s_init, d_init = fsrs6_init_state_batch(
-            weights, rating, self._fsrs_bounds.d_min, self._fsrs_bounds.d_max
+            weights, rating, self._bounds.d_min, self._bounds.d_max
         )
         state.s[user_idx, card_idx] = self._torch.clamp(
-            s_init, self._fsrs_bounds.s_min, self._fsrs_bounds.s_max
+            s_init, self._bounds.s_min, self._bounds.s_max
         )
         state.d[user_idx, card_idx] = self._torch.clamp(
-            d_init, self._fsrs_bounds.d_min, self._fsrs_bounds.d_max
+            d_init, self._bounds.d_min, self._bounds.d_max
         )
         return self._interval_for_state(
             state.s[user_idx, card_idx],
@@ -593,93 +501,48 @@ class FSRS6ADRDeltaBatchSchedulerOps:
     def _retention_for_state(
         self, s: "torch.Tensor", d: "torch.Tensor", user_idx: "torch.Tensor"
     ) -> "torch.Tensor":
-        desired = self._desired_retention.index_select(0, user_idx)
         s_norm = (
             self._torch.log(
-                self._torch.clamp(
-                    s, self._policy_bounds.s_min, self._policy_bounds.s_max
-                )
+                self._torch.clamp(s, self._bounds.s_min, self._bounds.s_max)
             )
             - self._log_s_min
         ) / self._log_s_span
         d_norm = (
-            self._torch.clamp(d, self._policy_bounds.d_min, self._policy_bounds.d_max)
-            - self._policy_bounds.d_min
+            self._torch.clamp(d, self._bounds.d_min, self._bounds.d_max)
+            - self._bounds.d_min
         ) / self._d_span
-        dr_norm = (desired - self._retention_min) / self._retention_span
         s_norm = self._torch.clamp(s_norm, 0.0, 1.0)
         d_norm = self._torch.clamp(d_norm, 0.0, 1.0)
-        dr_norm = self._torch.clamp(dr_norm, 0.0, 1.0)
         if self._per_user_coefficients:
             coefficients = self._coefficients.index_select(0, user_idx)
-            adjustment = self._adjustment_for_normalized_state(
-                coefficients,
-                s_norm,
-                d_norm,
-                dr_norm,
+            logit = (
+                coefficients[:, 0]
+                + coefficients[:, 1] * s_norm
+                + coefficients[:, 2] * d_norm
             )
-            zero_coefficients = self._torch.all(coefficients == 0.0, dim=1)
+            if self._feature_count != 3:
+                logit = (
+                    logit
+                    + coefficients[:, 3] * s_norm * d_norm
+                    + coefficients[:, 4] * s_norm * s_norm
+                    + coefficients[:, 5] * d_norm * d_norm
+                )
         else:
-            adjustment = self._adjustment_for_normalized_state(
-                self._coefficients,
-                s_norm,
-                d_norm,
-                dr_norm,
+            logit = (
+                self._coefficients[0]
+                + self._coefficients[1] * s_norm
+                + self._coefficients[2] * d_norm
             )
-            zero_coefficients = self._torch.full(
-                desired.shape,
-                bool(self._torch.all(self._coefficients == 0.0).item()),
-                device=self.device,
-                dtype=self._torch.bool,
-            )
-        logit = self._torch.logit(dr_norm) + adjustment
-        retention = self._retention_min + self._retention_span * self._torch.sigmoid(
-            logit
-        )
-        return self._torch.where(zero_coefficients, desired, retention)
-
-    def _adjustment_for_normalized_state(
-        self,
-        coefficients: "torch.Tensor",
-        s_norm: "torch.Tensor",
-        d_norm: "torch.Tensor",
-        dr_norm: "torch.Tensor",
-    ) -> "torch.Tensor":
-        if coefficients.ndim == 1:
-            adjustment = (
-                coefficients[0]
-                + coefficients[1] * s_norm
-                + coefficients[2] * d_norm
-                + coefficients[3] * dr_norm
-            )
-            if self._feature_count == 4:
-                return adjustment
-            return (
-                adjustment
-                + coefficients[4] * s_norm * d_norm
-                + coefficients[5] * s_norm * dr_norm
-                + coefficients[6] * d_norm * dr_norm
-                + coefficients[7] * s_norm * s_norm
-                + coefficients[8] * d_norm * d_norm
-                + coefficients[9] * dr_norm * dr_norm
-            )
-        adjustment = (
-            coefficients[:, 0]
-            + coefficients[:, 1] * s_norm
-            + coefficients[:, 2] * d_norm
-            + coefficients[:, 3] * dr_norm
-        )
-        if self._feature_count == 4:
-            return adjustment
-        return (
-            adjustment
-            + coefficients[:, 4] * s_norm * d_norm
-            + coefficients[:, 5] * s_norm * dr_norm
-            + coefficients[:, 6] * d_norm * dr_norm
-            + coefficients[:, 7] * s_norm * s_norm
-            + coefficients[:, 8] * d_norm * d_norm
-            + coefficients[:, 9] * dr_norm * dr_norm
-        )
+            if self._feature_count != 3:
+                logit = (
+                    logit
+                    + self._coefficients[3] * s_norm * d_norm
+                    + self._coefficients[4] * s_norm * s_norm
+                    + self._coefficients[5] * d_norm * d_norm
+                )
+        return self._retention_min + (
+            self._retention_max - self._retention_min
+        ) * self._torch.sigmoid(logit)
 
     def _interval_for_state(
         self, s: "torch.Tensor", d: "torch.Tensor", user_idx: "torch.Tensor"
@@ -692,7 +555,7 @@ class FSRS6ADRDeltaBatchSchedulerOps:
 
 
 __all__ = [
-    "FSRS6ADRDeltaBatchSchedulerOps",
-    "FSRS6ADRDeltaScheduler",
-    "FSRS6ADRDeltaVectorizedSchedulerOps",
+    "FSRS6ADRBatchSchedulerOps",
+    "FSRS6ADRScheduler",
+    "FSRS6ADRVectorizedSchedulerOps",
 ]

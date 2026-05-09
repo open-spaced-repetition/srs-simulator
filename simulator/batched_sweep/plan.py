@@ -10,11 +10,8 @@ import torch
 
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.batched_sweep.runner import BatchedSweepContext, _build_sweep_lanes
-from simulator.batched_sweep.fsrs6_adr_delta_policy import (
-    resolve_fsrs6_adr_delta_policy_specs,
-)
-from simulator.batched_sweep.fsrs6_adr_direct_policy import (
-    resolve_fsrs6_adr_direct_policy_specs,
+from simulator.batched_sweep.fsrs6_adr_policy import (
+    resolve_fsrs6_adr_policy_specs,
 )
 from simulator.batched_sweep.fsrs6_adp_policy import (
     resolve_fsrs6_adp_policy_specs,
@@ -33,8 +30,7 @@ SUPPORTED_SCHEDS = {
     "anki_sm2",
     "memrise",
     "fixed",
-    "fsrs6_adr_direct",
-    "fsrs6_adr_delta",
+    "fsrs6_adr",
     "fsrs6_adp",
 }
 
@@ -77,18 +73,11 @@ def build_batched_sweep_plan(
         name, _, _ = parse_scheduler_spec(raw)
         if name not in SUPPORTED_SCHEDS:
             raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
-        if name == "fsrs6_adr_direct" and not _has_fsrs6_adr_direct_source(args):
+        if name == "fsrs6_adr" and not _has_fsrs6_adr_source(args):
             raise ValueError(
-                "--sched fsrs6_adr_direct requires an FSRS6 ADR Direct policy source "
-                "(--fsrs6-adr-direct-policy, --fsrs6-adr-direct-policy-root, "
-                "--fsrs6-adr-direct-train-run-root, or --fsrs6-adr-direct-policy-manifest)."
-            )
-        if name == "fsrs6_adr_delta" and not _has_fsrs6_adr_delta_source(args):
-            raise ValueError(
-                "--sched fsrs6_adr_delta requires an FSRS6 ADR Delta policy source "
-                "(--fsrs6-adr-delta-policy, --fsrs6-adr-delta-policy-root, "
-                "--fsrs6-adr-delta-train-run-root, or "
-                "--fsrs6-adr-delta-policy-manifest)."
+                "--sched fsrs6_adr requires an FSRS6 ADR policy source "
+                "(--fsrs6-adr-policy, --fsrs6-adr-policy-root, "
+                "--fsrs6-adr-train-run-root, or --fsrs6-adr-policy-manifest)."
             )
         if name == "fsrs6_adp" and not _has_fsrs6_adp_source(args):
             raise ValueError(
@@ -139,26 +128,16 @@ def build_batched_sweep_plan(
         raise ValueError("--cuda-devices was provided but CUDA is not available.")
     device = torch.device(args.torch_device) if args.torch_device else None
 
-    fsrs6_adr_direct_policy_specs = ()
-    if any(parse_scheduler_spec(raw)[0] == "fsrs6_adr_direct" for raw in schedulers):
-        if _uses_expanded_fsrs6_adr_direct_source(args):
-            fsrs6_adr_direct_policy_specs = resolve_fsrs6_adr_direct_policy_specs(
+    fsrs6_adr_policy_specs = ()
+    if any(parse_scheduler_spec(raw)[0] == "fsrs6_adr" for raw in schedulers):
+        if _uses_expanded_fsrs6_adr_source(args):
+            fsrs6_adr_policy_specs = resolve_fsrs6_adr_policy_specs(
                 user_ids=user_ids,
                 dr_values=drs,
-                policy_root=getattr(args, "fsrs6_adr_direct_policy_root", None),
-                train_run_root=getattr(args, "fsrs6_adr_direct_train_run_root", None),
-                policy_manifest=getattr(args, "fsrs6_adr_direct_policy_manifest", None),
-                lambda_values=getattr(args, "fsrs6_adr_direct_lambda_values", None),
-            )
-    fsrs6_adr_delta_policy_specs = ()
-    if any(parse_scheduler_spec(raw)[0] == "fsrs6_adr_delta" for raw in schedulers):
-        if _uses_expanded_fsrs6_adr_delta_source(args):
-            fsrs6_adr_delta_policy_specs = resolve_fsrs6_adr_delta_policy_specs(
-                user_ids=user_ids,
-                policy_root=getattr(args, "fsrs6_adr_delta_policy_root", None),
-                train_run_root=getattr(args, "fsrs6_adr_delta_train_run_root", None),
-                policy_manifest=getattr(args, "fsrs6_adr_delta_policy_manifest", None),
-                lambda_values=getattr(args, "fsrs6_adr_delta_lambda_values", None),
+                policy_root=getattr(args, "fsrs6_adr_policy_root", None),
+                train_run_root=getattr(args, "fsrs6_adr_train_run_root", None),
+                policy_manifest=getattr(args, "fsrs6_adr_policy_manifest", None),
+                lambda_values=getattr(args, "fsrs6_adr_lambda_values", None),
             )
     fsrs6_adp_policy_specs = ()
     if any(parse_scheduler_spec(raw)[0] == "fsrs6_adp" for raw in schedulers):
@@ -182,10 +161,8 @@ def build_batched_sweep_plan(
         schedulers=schedulers,
         dr_values=drs,
         log_layout=log_layout,
-        fsrs6_adr_direct_policy=getattr(args, "fsrs6_adr_direct_policy", None),
-        fsrs6_adr_direct_policy_specs=fsrs6_adr_direct_policy_specs,
-        fsrs6_adr_delta_policy=getattr(args, "fsrs6_adr_delta_policy", None),
-        fsrs6_adr_delta_policy_specs=fsrs6_adr_delta_policy_specs,
+        fsrs6_adr_policy=getattr(args, "fsrs6_adr_policy", None),
+        fsrs6_adr_policy_specs=fsrs6_adr_policy_specs,
         fsrs6_adp_policy=getattr(args, "fsrs6_adp_policy", None),
         fsrs6_adp_policy_specs=fsrs6_adp_policy_specs,
     )
@@ -352,22 +329,13 @@ def _lane_counts_by_user(
         if name in {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}:
             lanes_per_user += len(ctx.dr_values)
             continue
-        if name == "fsrs6_adr_direct" and ctx.fsrs6_adr_direct_policy_specs:
-            for spec in ctx.fsrs6_adr_direct_policy_specs:
+        if name == "fsrs6_adr" and ctx.fsrs6_adr_policy_specs:
+            for spec in ctx.fsrs6_adr_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
-            continue
-        if name == "fsrs6_adr_delta" and ctx.fsrs6_adr_delta_policy_specs:
-            for spec in ctx.fsrs6_adr_delta_policy_specs:
-                counts_by_user[spec.user_id] = counts_by_user.get(
-                    spec.user_id, 0
-                ) + len(ctx.dr_values)
             continue
         if name == "fsrs6_adp" and ctx.fsrs6_adp_policy_specs:
             for spec in ctx.fsrs6_adp_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
-            continue
-        if name == "fsrs6_adr_delta":
-            lanes_per_user += len(ctx.dr_values)
             continue
         lanes_per_user += 1
     return {
@@ -375,65 +343,33 @@ def _lane_counts_by_user(
     }
 
 
-def _has_fsrs6_adr_direct_source(args: argparse.Namespace) -> bool:
+def _has_fsrs6_adr_source(args: argparse.Namespace) -> bool:
     return any(
         getattr(args, attr, None) is not None
         for attr in (
-            "fsrs6_adr_direct_policy",
-            "fsrs6_adr_direct_policy_root",
-            "fsrs6_adr_direct_train_run_root",
-            "fsrs6_adr_direct_policy_manifest",
+            "fsrs6_adr_policy",
+            "fsrs6_adr_policy_root",
+            "fsrs6_adr_train_run_root",
+            "fsrs6_adr_policy_manifest",
         )
     )
 
 
-def _uses_expanded_fsrs6_adr_direct_source(args: argparse.Namespace) -> bool:
+def _uses_expanded_fsrs6_adr_source(args: argparse.Namespace) -> bool:
     expanded = [
-        getattr(args, "fsrs6_adr_direct_policy_root", None) is not None,
-        getattr(args, "fsrs6_adr_direct_train_run_root", None) is not None,
-        getattr(args, "fsrs6_adr_direct_policy_manifest", None) is not None,
+        getattr(args, "fsrs6_adr_policy_root", None) is not None,
+        getattr(args, "fsrs6_adr_train_run_root", None) is not None,
+        getattr(args, "fsrs6_adr_policy_manifest", None) is not None,
     ]
-    if getattr(args, "fsrs6_adr_direct_policy", None) is not None and any(expanded):
+    if getattr(args, "fsrs6_adr_policy", None) is not None and any(expanded):
         raise ValueError(
-            "--fsrs6-adr-direct-policy cannot be combined with expanded FSRS6 ADR Direct policy sources."
+            "--fsrs6-adr-policy cannot be combined with expanded FSRS6 ADR policy sources."
         )
     if sum(expanded) > 1:
         raise ValueError(
-            "Configure only one expanded FSRS6 ADR Direct policy source: "
-            "--fsrs6-adr-direct-policy-root, --fsrs6-adr-direct-train-run-root, or "
-            "--fsrs6-adr-direct-policy-manifest."
-        )
-    return any(expanded)
-
-
-def _has_fsrs6_adr_delta_source(args: argparse.Namespace) -> bool:
-    return any(
-        getattr(args, attr, None) is not None
-        for attr in (
-            "fsrs6_adr_delta_policy",
-            "fsrs6_adr_delta_policy_root",
-            "fsrs6_adr_delta_train_run_root",
-            "fsrs6_adr_delta_policy_manifest",
-        )
-    )
-
-
-def _uses_expanded_fsrs6_adr_delta_source(args: argparse.Namespace) -> bool:
-    expanded = [
-        getattr(args, "fsrs6_adr_delta_policy_root", None) is not None,
-        getattr(args, "fsrs6_adr_delta_train_run_root", None) is not None,
-        getattr(args, "fsrs6_adr_delta_policy_manifest", None) is not None,
-    ]
-    if getattr(args, "fsrs6_adr_delta_policy", None) is not None and any(expanded):
-        raise ValueError(
-            "--fsrs6-adr-delta-policy cannot be combined with expanded FSRS6 ADR Delta "
-            "policy sources."
-        )
-    if sum(expanded) > 1:
-        raise ValueError(
-            "Configure only one expanded FSRS6 ADR Delta policy source: "
-            "--fsrs6-adr-delta-policy-root, --fsrs6-adr-delta-train-run-root, or "
-            "--fsrs6-adr-delta-policy-manifest."
+            "Configure only one expanded FSRS6 ADR policy source: "
+            "--fsrs6-adr-policy-root, --fsrs6-adr-train-run-root, or "
+            "--fsrs6-adr-policy-manifest."
         )
     return any(expanded)
 

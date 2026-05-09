@@ -16,7 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.rl_scheduler.policy_search_common import CandidateMetrics
-from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
+from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     ObjectivePoint,
     PortfolioCandidate,
     _SelectionTask,
@@ -37,10 +37,10 @@ from experiments.rl_scheduler.portfolio_selection import (
     hypervolume_2d as payload_hypervolume_2d,
     select_sms_emoa_survivor_indices,
 )
-from simulator.batched_sweep.fsrs6_adr_direct_policy import (
-    resolve_fsrs6_adr_direct_policy_specs,
+from simulator.batched_sweep.fsrs6_adr_policy import (
+    resolve_fsrs6_adr_policy_specs,
 )
-from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 
 def _metrics(memorized: float, time_average: float) -> CandidateMetrics:
@@ -215,7 +215,7 @@ def _oracle_select_sms_emoa_survivors(
     return survivors
 
 
-class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
+class FSRS6ADRPortfolioMathTests(unittest.TestCase):
     def test_portfolio_selection_module_does_not_import_torch(self) -> None:
         code = (
             "import sys\n"
@@ -527,8 +527,8 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
             patch.dict(
                 os.environ,
                 {
-                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
-                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS": "2",
+                    "FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
+                    "FSRS6_ADR_PORTFOLIO_SELECTION_WORKERS": "2",
                 },
                 clear=True,
             ),
@@ -567,7 +567,7 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
     def test_selection_process_pool_can_be_disabled_by_env(self) -> None:
         with patch.dict(
             os.environ,
-            {"FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "0"},
+            {"FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL": "0"},
             clear=True,
         ):
             self.assertFalse(_selection_process_pool_enabled(128))
@@ -575,7 +575,7 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
     def test_selection_process_pool_can_be_forced_by_env(self) -> None:
         with patch.dict(
             os.environ,
-            {"FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1"},
+            {"FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL": "1"},
             clear=True,
         ):
             self.assertTrue(_selection_process_pool_enabled(4))
@@ -588,7 +588,7 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
             ),
             patch.dict(
                 os.environ,
-                {"FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1"},
+                {"FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL": "1"},
                 clear=True,
             ),
         ):
@@ -603,8 +603,8 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
             patch.dict(
                 os.environ,
                 {
-                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
-                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS": "2",
+                    "FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
+                    "FSRS6_ADR_PORTFOLIO_SELECTION_WORKERS": "2",
                 },
                 clear=True,
             ),
@@ -615,8 +615,8 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
-                "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS": "0",
+                "FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
+                "FSRS6_ADR_PORTFOLIO_SELECTION_WORKERS": "0",
             },
             clear=True,
         ):
@@ -662,7 +662,7 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
         )
 
 
-class FSRS6ADRDirectPortfolioResolverTests(unittest.TestCase):
+class FSRS6ADRPortfolioResolverTests(unittest.TestCase):
     def test_policy_resolver_discovers_portfolio_children_without_dr_grid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -671,14 +671,14 @@ class FSRS6ADRDirectPortfolioResolverTests(unittest.TestCase):
                     root / "user_1" / "lambda_0" / "policies" / f"policy_{index}"
                 )
                 policy_dir.mkdir(parents=True)
-                FSRS6ADRDirectPolicy(
+                FSRS6ADRPolicy(
                     coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                     baseline_desired_retention=None,
                 ).write_json(policy_dir / "policy.json")
                 (policy_dir / "metadata.json").write_text(
                     json.dumps(
                         {
-                            "scheduler_name": "fsrs6_adr_direct",
+                            "scheduler_name": "fsrs6_adr",
                             "training_user_ids": [1],
                             "policy_path": "policy.json",
                             "baseline_desired_retention": None,
@@ -689,7 +689,7 @@ class FSRS6ADRDirectPortfolioResolverTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            specs = resolve_fsrs6_adr_direct_policy_specs(
+            specs = resolve_fsrs6_adr_policy_specs(
                 user_ids=[1],
                 dr_values=[0.50, 0.52],
                 policy_root=root,
@@ -709,14 +709,14 @@ class FSRS6ADRDirectPortfolioResolverTests(unittest.TestCase):
             root = Path(tmp)
             policy_dir = root / "user_1" / "lambda_0" / "policies" / "policy_0"
             policy_dir.mkdir(parents=True)
-            FSRS6ADRDirectPolicy(
+            FSRS6ADRPolicy(
                 coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
                 baseline_desired_retention=0.9,
             ).write_json(policy_dir / "policy.json")
             (policy_dir / "metadata.json").write_text(
                 json.dumps(
                     {
-                        "scheduler_name": "fsrs6_adr_direct",
+                        "scheduler_name": "fsrs6_adr",
                         "training_user_ids": [1],
                         "policy_path": "policy.json",
                         "baseline_desired_retention": None,
@@ -728,7 +728,7 @@ class FSRS6ADRDirectPortfolioResolverTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "metadata has null"):
-                resolve_fsrs6_adr_direct_policy_specs(
+                resolve_fsrs6_adr_policy_specs(
                     user_ids=[1],
                     dr_values=[0.90],
                     policy_root=root,

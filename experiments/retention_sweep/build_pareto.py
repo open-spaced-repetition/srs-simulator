@@ -25,8 +25,7 @@ from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 
 RUN_ID_SCOPED_SCHEDULERS = {
-    "fsrs6_adr_direct",
-    "fsrs6_adr_delta",
+    "fsrs6_adr",
     "fsrs6_adp",
 }
 SA_FSRS6_DR_TOKEN_RE = re.compile(
@@ -297,18 +296,16 @@ def _format_retention_title(retention: float) -> str:
     return f"DR={format_float(retention * 100)}%"
 
 
-def _resolve_fsrs6_adr_direct_label(
+def _resolve_fsrs6_adr_label(
     meta: Dict[str, Any], base_dirs: Sequence[Path]
 ) -> tuple[str, Optional[float]]:
-    retention = _retention_value(
-        meta.get("fsrs6_adr_direct_baseline_desired_retention")
-    )
+    retention = _retention_value(meta.get("fsrs6_adr_baseline_desired_retention"))
     if retention is not None:
         return _format_retention_title(retention), retention
 
-    policy_path = meta.get("fsrs6_adr_direct_policy")
+    policy_path = meta.get("fsrs6_adr_policy")
     if not policy_path:
-        return "FSRS6 ADR Direct", None
+        return "FSRS6 ADR", None
     path = Path(policy_path)
     if not path.is_absolute():
         for base_dir in base_dirs:
@@ -340,10 +337,8 @@ def _resolve_fsrs6_adr_direct_label(
     return f"ADR {title or path.stem}", None
 
 
-def _resolve_fsrs6_adr_direct_title(
-    meta: Dict[str, Any], base_dirs: Sequence[Path]
-) -> str:
-    title, _retention = _resolve_fsrs6_adr_direct_label(meta, base_dirs)
+def _resolve_fsrs6_adr_title(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> str:
+    title, _retention = _resolve_fsrs6_adr_label(meta, base_dirs)
     return title
 
 
@@ -467,19 +462,7 @@ def _run_series_identity(entry: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _fsrs6_adr_delta_series_identity(entry: Dict[str, Any]) -> Optional[str]:
-    run_identity = _run_series_identity(entry)
-    if run_identity is not None:
-        return run_identity
-    policy = _policy_stem(entry.get("fsrs6_adr_delta_policy"))
-    if policy is not None:
-        return f"policy={policy}"
-    return None
-
-
 def _desired_dedupe_identity(entry: Dict[str, Any]) -> Optional[str]:
-    if entry.get("scheduler") == "fsrs6_adr_delta":
-        return _fsrs6_adr_delta_series_identity(entry)
     return None
 
 
@@ -646,17 +629,15 @@ def _iter_log_entries(
         if time_average <= 0:
             continue
 
-        fsrs6_adr_direct_baseline_dr = None
+        fsrs6_adr_baseline_dr = None
         fsrs6_adp_baseline_dr = None
         if scheduler == "sspmmc":
             title = _resolve_policy_title(meta, base_dirs)
-        elif scheduler == "fsrs6_adr_direct":
-            title, fsrs6_adr_direct_baseline_dr = _resolve_fsrs6_adr_direct_label(
-                meta, base_dirs
-            )
-            if fsrs6_adr_direct_baseline_dr is not None and (
-                fsrs6_adr_direct_baseline_dr < min_retention
-                or fsrs6_adr_direct_baseline_dr > max_retention
+        elif scheduler == "fsrs6_adr":
+            title, fsrs6_adr_baseline_dr = _resolve_fsrs6_adr_label(meta, base_dirs)
+            if fsrs6_adr_baseline_dr is not None and (
+                fsrs6_adr_baseline_dr < min_retention
+                or fsrs6_adr_baseline_dr > max_retention
             ):
                 continue
         elif scheduler == "fsrs6_adp":
@@ -694,29 +675,15 @@ def _iter_log_entries(
             "engine": engine_value,
             "run_id": meta.get("run_id"),
         }
-        if scheduler == "fsrs6_adr_direct":
+        if scheduler == "fsrs6_adr":
             entry.update(
                 {
-                    "fsrs6_adr_direct_policy": meta.get("fsrs6_adr_direct_policy"),
-                    "fsrs6_adr_direct_baseline_desired_retention": fsrs6_adr_direct_baseline_dr,
-                    "fsrs6_adr_direct_lambda_value": meta.get(
-                        "fsrs6_adr_direct_lambda_value"
-                    ),
+                    "fsrs6_adr_policy": meta.get("fsrs6_adr_policy"),
+                    "fsrs6_adr_baseline_desired_retention": fsrs6_adr_baseline_dr,
+                    "fsrs6_adr_lambda_value": meta.get("fsrs6_adr_lambda_value"),
                 }
             )
             series_identity = _run_series_identity(entry)
-            entry["series_key"] = series_identity
-            entry["series_label"] = series_identity
-        elif scheduler == "fsrs6_adr_delta":
-            entry.update(
-                {
-                    "fsrs6_adr_delta_policy": meta.get("fsrs6_adr_delta_policy"),
-                    "fsrs6_adr_delta_lambda_value": meta.get(
-                        "fsrs6_adr_delta_lambda_value"
-                    ),
-                }
-            )
-            series_identity = _fsrs6_adr_delta_series_identity(entry)
             entry["series_key"] = series_identity
             entry["series_label"] = series_identity
         elif scheduler == "fsrs6_adp":
@@ -747,12 +714,12 @@ def _no_desired_dedupe_key(
         return None
 
     title_key = title
-    if scheduler_name == "fsrs6_adr_direct":
-        policy_path = entry.get("fsrs6_adr_direct_policy")
+    if scheduler_name == "fsrs6_adr":
+        policy_path = entry.get("fsrs6_adr_policy")
         if isinstance(policy_path, str) and policy_path:
             title_key = policy_path
-            baseline_dr = entry.get("fsrs6_adr_direct_baseline_desired_retention")
-            lambda_value = entry.get("fsrs6_adr_direct_lambda_value")
+            baseline_dr = entry.get("fsrs6_adr_baseline_desired_retention")
+            lambda_value = entry.get("fsrs6_adr_lambda_value")
             if baseline_dr is not None:
                 title_key = f"{title_key}|dr={baseline_dr}"
             if lambda_value is not None:

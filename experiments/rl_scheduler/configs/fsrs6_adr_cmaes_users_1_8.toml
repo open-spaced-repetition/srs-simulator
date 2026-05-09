@@ -1,8 +1,8 @@
 schema_version = 1
-name = "fsrs6_adr_direct_cmaes_users_1_8"
+name = "fsrs6_adr_cmaes_users_1_8"
 family = "rl_scheduler"
 seed = 42
-output_root = "artifacts/rl_scheduler/fsrs6_adr_direct_cmaes_users_1_8"
+output_root = "artifacts/rl_scheduler/fsrs6_adr_cmaes_users_1_8"
 stages = [
   "dry-run",
   "preflight",
@@ -92,7 +92,7 @@ command_template = [
   "uv",
   "run",
   "python",
-  "experiments/rl_scheduler/train_cmaes_fsrs6_adr_direct.py",
+  "experiments/rl_scheduler/train_cmaes_fsrs6_adr.py",
   "--config",
   "{config_path}",
   "--user-id",
@@ -113,7 +113,7 @@ trainer = "auto"
 max_lanes_per_batch = 6400
 
 [training.policy_search]
-feature_version = "fsrs6_adr_direct_log_poly_v1"
+feature_version = "fsrs6_adr_log_poly_v1"
 coefficient_min = -12.0
 coefficient_max = 12.0
 retention_min = 0.50
@@ -161,9 +161,9 @@ bounds = [
 [sweep]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6_adr_direct"]
-run_id = "fsrs6_adr_direct_cmaes_users_1_8_v1"
-fsrs6_adr_direct_train_run_root = "artifacts/rl_scheduler/fsrs6_adr_direct_cmaes_users_1_8/fsrs6_adr_direct_cmaes_users_1_8_v1"
+schedulers = ["fsrs6_adr"]
+run_id = "fsrs6_adr_cmaes_users_1_8_v1"
+fsrs6_adr_train_run_root = "artifacts/rl_scheduler/fsrs6_adr_cmaes_users_1_8/fsrs6_adr_cmaes_users_1_8_v1"
 log_dir = "logs/retention_sweep"
 log_layout = "user"
 batch_size = 8
@@ -177,7 +177,7 @@ no_log = false
 
 [build_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adr_direct"]
+schedulers = ["fsrs6", "fsrs6_adr"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
@@ -194,8 +194,8 @@ hide_labels = true
 
 [analyze_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adr_direct"]
-comparisons = ["fsrs6_adr_direct:fsrs6"]
+schedulers = ["fsrs6", "fsrs6_adr"]
+comparisons = ["fsrs6_adr:fsrs6"]
 result_glob = "analysis.md"
 start_retention = 0.52
 end_retention = 0.96

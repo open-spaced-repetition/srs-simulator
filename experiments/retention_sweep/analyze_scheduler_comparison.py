@@ -20,7 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from simulator.experiment_infra import ExperimentConfig
 from experiments.retention_sweep.cli_utils import has_flag
-from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
+from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     ObjectivePoint,
     hypervolume_2d,
     non_dominated_indices,
@@ -29,7 +29,7 @@ from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
-DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr_direct", "fsrs6_adr_delta", "fsrs6_adp")
+DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr", "fsrs6_adp")
 DEFAULT_METRIC = "avg_accum_memorized_per_hour"
 USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$")
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
@@ -97,10 +97,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--comparisons",
-        default=(
-            "fsrs6_adr_direct:fsrs6,fsrs6_adr_delta:fsrs6,"
-            "fsrs6_adr_delta:fsrs6_adr_direct,fsrs6_adp:fsrs6"
-        ),
+        default="fsrs6_adr:fsrs6,fsrs6_adp:fsrs6",
         help="Comma-separated pairwise comparisons as left:right.",
     )
     parser.add_argument(
@@ -261,7 +258,7 @@ def load_result_items(path: Path) -> list[dict[str, Any]]:
 def parse_desired_retention(item: dict[str, Any]) -> float | None:
     for key in (
         "desired_retention",
-        "fsrs6_adr_direct_baseline_desired_retention",
+        "fsrs6_adr_baseline_desired_retention",
         "fsrs6_adp_baseline_desired_retention",
         "retention",
     ):
@@ -306,7 +303,7 @@ def row_from_item(
 ) -> SweepRow | None:
     desired_retention = parse_desired_retention(item)
     if desired_retention is None and item.get("scheduler") not in {
-        "fsrs6_adr_direct",
+        "fsrs6_adr",
         "fsrs6_adp",
     }:
         return None
@@ -326,8 +323,8 @@ def row_from_item(
 
 
 def _row_series_identity(item: dict[str, Any]) -> str | None:
-    if item.get("scheduler") == "fsrs6_adr_direct":
-        policy = item.get("fsrs6_adr_direct_policy")
+    if item.get("scheduler") == "fsrs6_adr":
+        policy = item.get("fsrs6_adr_policy")
         if isinstance(policy, str) and policy.strip():
             return policy
     if item.get("scheduler") == "fsrs6_adp":
@@ -760,7 +757,7 @@ def hypervolume_summary_table(
     env: str,
     *,
     baseline_scheduler: str = "fsrs6",
-    target_scheduler: str = "fsrs6_adr_direct",
+    target_scheduler: str = "fsrs6_adr",
 ) -> str:
     output_rows: list[list[str]] = []
     user_ids = sorted({row.user_id for row in rows if row.environment == env})

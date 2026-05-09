@@ -104,7 +104,7 @@ baseline_desired_retention_values = [0.5, 0.52]
 [sweep]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6_adr_direct"]
+schedulers = ["fsrs6_adr"]
 log_dir = "{log_dir.as_posix()}"
 log_layout = "user"
 batch_size = 2
@@ -118,7 +118,7 @@ no_log = false
 [build_pareto]
 {build_command}
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adr_direct"]
+schedulers = ["fsrs6", "fsrs6_adr"]
 log_dir = "{log_dir.as_posix()}"
 start_retention = 0.50
 end_retention = 0.52
@@ -130,8 +130,8 @@ hide_labels = true
 [analyze_pareto]
 {analyze_command}
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adr_direct"]
-comparisons = ["fsrs6_adr_direct:fsrs6"]
+schedulers = ["fsrs6", "fsrs6_adr"]
+comparisons = ["fsrs6_adr:fsrs6"]
 start_retention = 0.50
 end_retention = 0.52
 short_term = "off"
@@ -148,44 +148,17 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 class UnifiedWorkflowConfigTests(unittest.TestCase):
-    def test_checked_in_delta_linear_cmaes_config_uses_unified_workflow(self) -> None:
-        config = ExperimentConfig.from_toml(
-            REPO_ROOT
-            / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adr_delta_linear_cmaes_users_1_8.toml"
-        )
-
-        self.assertEqual(config.name, "fsrs6_adr_delta_linear_cmaes_users_1_8")
-        self.assertEqual(
-            config.training_policy_search["feature_version"],
-            "fsrs6_adr_delta_log_linear_v1",
-        )
-        self.assertEqual(config.training_optimizer["name"], "cma_es")
-        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_delta",))
-        self.assertEqual(
-            config.stages,
-            (
-                StageName.DRY_RUN,
-                StageName.PREFLIGHT,
-                StageName.STAGE_BASELINE,
-                StageName.TRAIN_OVERFIT,
-                StageName.SWEEP,
-                StageName.BUILD_PARETO,
-                StageName.ANALYZE_PARETO,
-            ),
-        )
-
     def test_checked_in_cmaes_linear_config_uses_unified_workflow(self) -> None:
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adr_direct_linear_cmaes_users_1_8.toml"
+            / "fsrs6_adr_linear_cmaes_users_1_8.toml"
         )
 
-        self.assertEqual(config.name, "fsrs6_adr_direct_linear_cmaes_users_1_8")
+        self.assertEqual(config.name, "fsrs6_adr_linear_cmaes_users_1_8")
         self.assertEqual(
             config.training_policy_search["feature_version"],
-            "fsrs6_adr_direct_log_linear_v1",
+            "fsrs6_adr_log_linear_v1",
         )
         self.assertEqual(
             len(config.training_policy_search["baseline_desired_retention_values"]),
@@ -193,8 +166,8 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
         self.assertEqual(config.training_optimizer["population_size"], 32)
         self.assertEqual(config.training_batch.max_lanes_per_batch, 6400)
-        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_direct",))
-        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr_direct"))
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
         self.assertEqual(
             config.stages,
             (
@@ -208,7 +181,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             ),
         )
 
-    def test_checked_in_direct_linear_portfolio_config_uses_portfolio_children(
+    def test_checked_in_adr_linear_portfolio_config_uses_portfolio_children(
         self,
     ) -> None:
         from simulator.experiment_infra.training_batch import (
@@ -219,10 +192,10 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adr_direct_linear_portfolio_users_1_8.toml"
+            / "fsrs6_adr_linear_portfolio_users_1_8.toml"
         )
 
-        self.assertEqual(config.name, "fsrs6_adr_direct_linear_portfolio_users_1_8")
+        self.assertEqual(config.name, "fsrs6_adr_linear_portfolio_users_1_8")
         self.assertEqual(config.lambda_grid, (0.0,))
         self.assertEqual(config.train_artifact_glob, "policies/**/metadata.json")
         self.assertTrue(config.train_batch_baseline_desired_retention_values)
@@ -230,7 +203,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.training_batch.trainer, "auto")
         self.assertEqual(
             config.training_policy_search["feature_version"],
-            "fsrs6_adr_direct_log_linear_v1",
+            "fsrs6_adr_log_linear_v1",
         )
         self.assertEqual(
             len(config.training_policy_search["baseline_desired_retention_values"]),
@@ -239,16 +212,16 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.training_portfolio["population_size"], 64)
         self.assertEqual(config.training_portfolio["offspring_size"], 32)
         self.assertEqual(config.training_portfolio["portfolio_size"], 23)
-        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_direct",))
-        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr_direct"))
-        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adr_direct:fsrs6",))
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adr:fsrs6",))
 
         trainer = resolve_in_process_trainer(
             configured_trainer=config.training_batch.trainer,
             command_template=config.train_command_template,
         )
 
-        self.assertEqual(trainer, "fsrs6_adr_direct_portfolio")
+        self.assertEqual(trainer, "fsrs6_adr_portfolio")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 64)
 
     def test_checked_in_adp_cmaes_config_uses_dr_and_user_batching(self) -> None:
@@ -291,19 +264,19 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adp"))
         self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adp:fsrs6",))
 
-    def test_checked_in_cmaes_direct_poly_config_uses_six_parameter_policy(
+    def test_checked_in_cmaes_adr_poly_config_uses_six_parameter_policy(
         self,
     ) -> None:
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adr_direct_cmaes_users_1_8.toml"
+            / "fsrs6_adr_cmaes_users_1_8.toml"
         )
 
-        self.assertEqual(config.name, "fsrs6_adr_direct_cmaes_users_1_8")
+        self.assertEqual(config.name, "fsrs6_adr_cmaes_users_1_8")
         self.assertEqual(
             config.training_policy_search["feature_version"],
-            "fsrs6_adr_direct_log_poly_v1",
+            "fsrs6_adr_log_poly_v1",
         )
         self.assertEqual(
             len(config.training_policy_search["baseline_desired_retention_values"]),
@@ -314,8 +287,8 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(len(config.training_optimizer["bounds"][0]), 6)
         self.assertEqual(len(config.training_optimizer["bounds"][1]), 6)
         self.assertEqual(config.training_batch.max_lanes_per_batch, 6400)
-        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_direct",))
-        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr_direct"))
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
 
     def test_experiment_config_loads_new_workflow_stages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -328,9 +301,9 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.stages[-2], StageName.BUILD_PARETO)
         self.assertEqual(config.stages[-1], StageName.ANALYZE_PARETO)
         self.assertEqual(config.baseline.environments, ("fsrs6", "lstm"))
-        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_direct",))
-        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr_direct"))
-        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adr_direct:fsrs6",))
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adr:fsrs6",))
 
     def test_build_pareto_users_config_expands_per_user_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -353,7 +326,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(args.start_user, 1)
         self.assertEqual(args.end_user, 2)
         self.assertEqual(args.env, "fsrs6,lstm")
-        self.assertEqual(args.sched, "fsrs6,fsrs6_adr_direct")
+        self.assertEqual(args.sched, "fsrs6,fsrs6_adr")
         self.assertTrue(
             any(
                 "simulation_results_retention_sweep_user_1.json" in item
@@ -389,7 +362,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
                         },
                         {
                             "environment": "fsrs6",
-                            "scheduler": "fsrs6_adr_direct",
+                            "scheduler": "fsrs6_adr",
                             "user_id": 1,
                             "desired_retention": 0.5,
                             "memorized_average": 110.0,
@@ -410,11 +383,9 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             )
             report = render_report(args)
 
-        self.assertIn("fsrs6_adr_direct - fsrs6", report)
+        self.assertIn("fsrs6_adr - fsrs6", report)
         self.assertIn("### Same-user same-DR dominance", report)
-        self.assertIn(
-            "| fsrs6_adr_direct - fsrs6 | 1 | 1/1 | 0/1 | 0/1 | 0/1 | 0/1 |", report
-        )
+        self.assertIn("| fsrs6_adr - fsrs6 | 1 | 1/1 | 0/1 | 0/1 | 0/1 | 0/1 |", report)
         self.assertIn("Loaded 2 records", report)
 
     def test_analyze_scheduler_comparison_reports_no_dr_adp_hypervolume(

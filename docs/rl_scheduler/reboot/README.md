@@ -36,9 +36,9 @@ only by default.
 The second slice adds a minimal TOML runner:
 
 ```bash
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --stage dry-run --run-id fsrs6_adr_direct_linear_cmaes_users_1_8_v1
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_direct_linear_cmaes_users_1_8_v1
-uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/fsrs6_adr_direct_linear_cmaes_users_1_8/fsrs6_adr_direct_linear_cmaes_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_cmaes_users_1_8.toml --stage dry-run --run-id fsrs6_adr_linear_cmaes_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_linear_cmaes_users_1_8_v1
+uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/fsrs6_adr_linear_cmaes_users_1_8/fsrs6_adr_linear_cmaes_users_1_8_v1
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 ```
 

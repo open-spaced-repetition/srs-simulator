@@ -5,7 +5,7 @@ experiment-infrastructure objective. The goal is to reduce experiment
 turnaround time by batching enough independent work into each GPU call while
 preserving simulator semantics, reproducibility, and formal gates.
 
-The current priority is the RL scheduler line, especially `fsrs6_adr_direct` training
+The current priority is the RL scheduler line, especially `fsrs6_adr` training
 and validation. The same principles also apply to retention sweeps and future
 scheduler families.
 
@@ -37,10 +37,10 @@ scheduler families.
   retention outside the engine.
 - `run_sweep_users_batched.py` supports one CUDA device through `--torch-device`
   and round-robin multi-device process assignment through `--cuda-devices`.
-- `fsrs6_adr_direct` training can evaluate multiple optimizer candidates by
+- `fsrs6_adr` training can evaluate multiple optimizer candidates by
   duplicating a train user into many lanes, but trainer progress is written only
   at the end.
-- `FSRS6ADRDirectBatchSchedulerOps` already supports per-lane coefficients, so the
+- `FSRS6ADRBatchSchedulerOps` already supports per-lane coefficients, so the
   scheduler side can evaluate multiple policy candidates without reading
   environment memory state. The scheduler must keep its own FSRS-6 `S` and `D`
   state.
@@ -49,7 +49,7 @@ scheduler families.
 
 Observed failure mode from the first GPU trial:
 
-- A full-size `fsrs6_adr_direct` overfit run with 32 candidate lanes, 1825 days,
+- A full-size `fsrs6_adr` overfit run with 32 candidate lanes, 1825 days,
   deck 10000, and LSTM environment produced sustained CUDA activity but no intermediate
   training artifact for more than 12 minutes.
 - GPU utilization fluctuated instead of saturating, while CPU stayed mostly
@@ -197,7 +197,7 @@ Run profiling before and after any performance-related change.
 Useful commands:
 
 ```bash
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --stage preflight --run-id gpu-probe
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_cmaes_users_1_8.toml --stage preflight --run-id gpu-probe
 
 uv run python experiments/retention_sweep/run_sweep_users_batched.py \
   --start-user 1 --end-user 100 \
@@ -303,15 +303,15 @@ Exit criteria:
 - A train-user overfit failure blocks broad validation unless the report points
   to a specific implementation bug.
 
-## Initial FSRS6 ADR Direct Lane Probe
+## Initial FSRS6 ADR Lane Probe
 
 Probe context:
 
 - Date: 2026-04-30
 - GPU: NVIDIA GeForce RTX 4090 D, 24 GB
-- Config: superseded by `experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml`
+- Config: superseded by `experiments/rl_scheduler/configs/fsrs6_adr_linear_cmaes_users_1_8.toml`
 - Workload: LSTM environment, user 1, 365 days, deck 5000, short-term steps
-- Command family: `experiments/rl_scheduler/tune_fsrs6_adr_direct_lanes.py`
+- Command family: `experiments/rl_scheduler/tune_fsrs6_adr_lanes.py`
 
 Results:
 

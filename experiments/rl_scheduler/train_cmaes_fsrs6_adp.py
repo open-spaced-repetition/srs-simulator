@@ -17,29 +17,25 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import (
-    CMAESSettings,
-    _optimizer_seed,
-)
 from experiments.rl_scheduler.policy_search_common import (
+    CMAESSettings,
     CandidateMetrics,
     PolicySearchSettings,
     TrainingProgress,
     _artifact_id as _adr_artifact_id,
+    _baseline_dr_values,
     _build_bundle,
     _float_token,
     _git_commit,
     _iter_chunks,
     _metrics_from_stats,
     _passes_overfit_gate,
+    _optimizer_seed,
     _read_training_policy_search,
     _relative_gain,
     _relative_gain_gate_metrics,
     _score,
     _write_json,
-)
-from experiments.rl_scheduler.adr_delta_common import (
-    _baseline_dr_values,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
@@ -980,7 +976,7 @@ def _artifact_id(
         lambda_value,
         baseline_desired_retention,
         seed,
-    ).replace("fsrs6-adr-direct", "fsrs6-adp")
+    ).replace("fsrs6-adr", "fsrs6-adp")
 
 
 def _clipped_dimension_count(

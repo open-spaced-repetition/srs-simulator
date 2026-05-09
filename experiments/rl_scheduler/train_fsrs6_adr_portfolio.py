@@ -30,14 +30,12 @@ from experiments.rl_scheduler.policy_search_common import (
     _write_json,
 )
 from experiments.rl_scheduler.portfolio_selection import (
+    DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
+    DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
     LightweightSelectionPool,
     SelectionPayload,
     SelectionPoint,
     SelectionTask,
-    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_ENV,
-    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_WORKERS_ENV,
-    DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
-    DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
     baseline_aware_candidate_ranks as _selection_candidate_ranks,
     dominates as _selection_dominates,
     exclusive_hypervolume_contributions as _selection_contributions,
@@ -53,18 +51,16 @@ from experiments.rl_scheduler.portfolio_selection import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
-from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
-from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
+from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 
 
-_SELECTION_PROCESS_POOL_ENV = LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_ENV
-_SELECTION_PROCESS_POOL_WORKERS_ENV = (
-    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_WORKERS_ENV
-)
+_SELECTION_PROCESS_POOL_ENV = "FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL"
+_SELECTION_PROCESS_POOL_WORKERS_ENV = "FSRS6_ADR_PORTFOLIO_SELECTION_WORKERS"
 _SELECTION_ENV_VARS = (
     _SELECTION_PROCESS_POOL_ENV,
     "FSRS6_PORTFOLIO_SELECTION_PROCESS_POOL",
@@ -231,7 +227,7 @@ class UserPortfolioResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an FSRS6 ADR Direct policy portfolio with SMS-EMOA.",
+        description="Train an FSRS6 ADR policy portfolio with SMS-EMOA.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", type=Path, required=True)
@@ -389,7 +385,7 @@ def run_portfolio_train_jobs(
         learning_steps=learning_steps,
         relearning_steps=relearning_steps,
     )
-    initial_metrics = _evaluate_direct_coefficients(
+    initial_metrics = _evaluate_adr_coefficients(
         config=config,
         settings=settings,
         bundle=initial_bundle,
@@ -489,7 +485,7 @@ def run_portfolio_train_jobs(
                 offspring_coefficients.append(coefficients)
                 offspring_ids.append(candidate_ids)
             evaluation_started = time.perf_counter()
-            offspring_metrics = _evaluate_direct_coefficients(
+            offspring_metrics = _evaluate_adr_coefficients(
                 config=config,
                 settings=settings,
                 bundle=offspring_bundle,
@@ -858,7 +854,7 @@ def _evaluate_fsrs6_baseline_grid(
     ]
 
 
-def _evaluate_direct_coefficients(
+def _evaluate_adr_coefficients(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
@@ -881,13 +877,13 @@ def _evaluate_direct_coefficients(
         device=bundle.device,
         dtype=torch.float32,
     )
-    template = FSRS6ADRDirectPolicy.baseline(
+    template = FSRS6ADRPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         feature_version=feature_version,
     )
-    sched_ops = FSRS6ADRDirectBatchSchedulerOps(
+    sched_ops = FSRS6ADRBatchSchedulerOps(
         weights=bundle.scheduler_weights,
         policy=template,
         coefficients=flat_coefficients,
@@ -1106,14 +1102,14 @@ def _write_portfolio_artifacts(
     for child in result.selected_children:
         child_dir = output_dir / "policies" / f"policy_{child.portfolio_index}"
         child_dir.mkdir(parents=True, exist_ok=True)
-        policy = FSRS6ADRDirectPolicy(
+        policy = FSRS6ADRPolicy(
             coefficients=child.candidate.coefficients,
             retention_min=settings.retention_min,
             retention_max=settings.retention_max,
             baseline_desired_retention=None,
             feature_version=feature_version,
             title=(
-                f"fsrs6_adr_direct_portfolio_u{result.job.user_id}_"
+                f"fsrs6_adr_portfolio_u{result.job.user_id}_"
                 f"policy_{child.portfolio_index}"
             ),
         )
@@ -1140,7 +1136,7 @@ def _write_portfolio_artifacts(
                 "artifact_kind": "scheduler-policy",
                 "artifact_id": (f"{portfolio_id}-policy-{child.portfolio_index}"),
                 "family": config.family,
-                "scheduler_name": "fsrs6_adr_direct",
+                "scheduler_name": "fsrs6_adr",
                 "environment": config.simulation.environment,
                 "engine": config.simulation.engine,
                 "training_user_ids": [result.job.user_id],
@@ -1184,7 +1180,7 @@ def _write_portfolio_artifacts(
         {
             "schema_version": SCHEMA_VERSION,
             "portfolio_id": portfolio_id,
-            "scheduler_name": "fsrs6_adr_direct",
+            "scheduler_name": "fsrs6_adr",
             "training_user_ids": [result.job.user_id],
             "lambda_value": result.job.lambda_value,
             "baseline_desired_retention": None,
@@ -1261,7 +1257,7 @@ def _constant_retention_coefficients(
     settings: PolicySearchSettings,
     feature_version: str,
 ) -> tuple[float, ...]:
-    policy = FSRS6ADRDirectPolicy.baseline(
+    policy = FSRS6ADRPolicy.baseline(
         desired_retention=desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
@@ -1328,7 +1324,7 @@ def _generator_for_job(
 
 def _portfolio_id(*, user_id: int, lambda_value: float, seed: int) -> str:
     return (
-        f"fsrs6-adr-direct-portfolio-user-{user_id}-"
+        f"fsrs6-adr-portfolio-user-{user_id}-"
         f"lambda-{_float_token(lambda_value)}-seed-{seed}"
     )
 

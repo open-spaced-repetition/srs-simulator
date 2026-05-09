@@ -30,13 +30,13 @@ from simulator.experiment_infra.schemas import ExperimentConfig
 from simulator.math.fsrs import Bounds
 from simulator.models.fsrs import FSRS6BatchEnvOps
 from simulator.models.lstm_batch import LSTMBatchedEnvOps, PackedLSTMWeights
-from simulator.fsrs6_adr_direct_policy import (
+from simulator.fsrs6_adr_policy import (
     FEATURE_VERSION,
-    FSRS6ADRDirectPolicy,
+    FSRS6ADRPolicy,
     feature_count,
 )
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
-from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
+from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
@@ -121,6 +121,76 @@ class CandidateMetrics:
     total_reviews: int
     total_lapses: int
     total_cost: float
+
+
+@dataclass(frozen=True, slots=True)
+class CMAESSettings:
+    name: str = "cma_es"
+    population_size: int = 32
+    generations: int = 10
+    sigma0: float = 0.8
+    initial_mean: tuple[float, ...] = ()
+    bounds: tuple[tuple[float, ...], tuple[float, ...]] = ((), ())
+    seed: int | None = None
+
+    @classmethod
+    def from_mapping(
+        cls,
+        raw: Mapping[str, Any],
+        *,
+        coefficient_count: int,
+        coefficient_min: float,
+        coefficient_max: float,
+    ) -> CMAESSettings:
+        defaults = cls()
+        name = _str(raw.get("name", defaults.name), "training.optimizer.name")
+        if name != "cma_es":
+            raise ValueError("training.optimizer.name must be 'cma_es'.")
+        return cls(
+            name=name,
+            population_size=_int(
+                raw.get("population_size", defaults.population_size),
+                "training.optimizer.population_size",
+                2,
+            ),
+            generations=_int(
+                raw.get("generations", defaults.generations),
+                "training.optimizer.generations",
+                1,
+            ),
+            sigma0=_float_gt(
+                raw.get("sigma0", defaults.sigma0),
+                "training.optimizer.sigma0",
+                0.0,
+            ),
+            initial_mean=_float_tuple(
+                raw.get("initial_mean", [0.0] * coefficient_count),
+                "training.optimizer.initial_mean",
+                coefficient_count,
+            ),
+            bounds=_bounds(
+                raw.get(
+                    "bounds",
+                    [
+                        [coefficient_min] * coefficient_count,
+                        [coefficient_max] * coefficient_count,
+                    ],
+                ),
+                coefficient_count,
+            ),
+            seed=_optional_int(raw.get("seed"), "training.optimizer.seed", 0),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "population_size": self.population_size,
+            "generations": self.generations,
+            "sigma0": self.sigma0,
+            "initial_mean": list(self.initial_mean),
+            "bounds": [list(self.bounds[0]), list(self.bounds[1])],
+            "seed": self.seed,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +315,7 @@ def _build_bundle(
         )
     else:
         raise SystemExit(
-            "FSRS6 ADR Direct trainer supports lstm, fsrs6, and fsrs6_default environments."
+            "FSRS6 ADR trainer supports lstm, fsrs6, and fsrs6_default environments."
         )
 
     (
@@ -323,7 +393,7 @@ def _evaluate_fsrs6_baseline(
     return _metrics_from_stats(stats[0])
 
 
-def _evaluate_direct_candidates(
+def _evaluate_adr_candidates(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
@@ -332,13 +402,13 @@ def _evaluate_direct_candidates(
     feature_version: str = FEATURE_VERSION,
     seed: int,
 ) -> list[CandidateMetrics]:
-    template = FSRS6ADRDirectPolicy.baseline(
+    template = FSRS6ADRPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         feature_version=feature_version,
     )
-    sched_ops = FSRS6ADRDirectBatchSchedulerOps(
+    sched_ops = FSRS6ADRBatchSchedulerOps(
         weights=bundle.scheduler_weights,
         policy=template,
         coefficients=coefficients,
@@ -540,6 +610,47 @@ def _relative_gain(value: float, baseline: float) -> float:
     return (float(value) - float(baseline)) / denom
 
 
+def _baseline_dr_values(
+    raw_training_policy: Mapping[str, Any],
+    settings: PolicySearchSettings,
+) -> tuple[float, ...]:
+    raw_values = raw_training_policy.get("baseline_desired_retention_values")
+    if raw_values is None:
+        values = (settings.baseline_desired_retention,)
+    else:
+        if isinstance(raw_values, str) or not isinstance(raw_values, Sequence):
+            raise ValueError(
+                "training.policy_search.baseline_desired_retention_values must be an array."
+            )
+        values = tuple(
+            _float(item, "training.policy_search.baseline_desired_retention_values")
+            for item in raw_values
+        )
+    if len(set(values)) != len(values):
+        raise ValueError(
+            "training.policy_search.baseline_desired_retention_values must not contain duplicates."
+        )
+    for value in values:
+        if not (settings.retention_min <= value <= settings.retention_max):
+            raise ValueError(
+                "training.policy_search.baseline_desired_retention_values must be inside "
+                "the retention bounds."
+            )
+    return values
+
+
+def _dr_batch_size(raw_training_policy: Mapping[str, Any], value_count: int) -> int:
+    default = min(max(value_count, 1), 4)
+    return min(
+        _int(
+            raw_training_policy.get("dr_batch_size", default),
+            "training.policy_search.dr_batch_size",
+            1,
+        ),
+        value_count,
+    )
+
+
 def _progress_gpu_snapshot(device: torch.device | None) -> dict[str, int] | None:
     if device is None or device.type != "cuda" or not torch.cuda.is_available():
         return None
@@ -577,7 +688,19 @@ def _artifact_id(
 ) -> str:
     lambda_token = _float_token(lambda_value)
     dr_token = _float_token(baseline_desired_retention)
-    return f"fsrs6-adr-direct-user-{user_id}-dr-{dr_token}-lambda-{lambda_token}-seed-{seed}"
+    return f"fsrs6-adr-user-{user_id}-dr-{dr_token}-lambda-{lambda_token}-seed-{seed}"
+
+
+def _optimizer_seed(
+    *,
+    config: ExperimentConfig,
+    settings: CMAESSettings,
+    user_id: int,
+    lambda_value: float,
+) -> int:
+    if settings.seed is not None:
+        return settings.seed
+    return int(config.seed + 1009 * user_id + round(lambda_value * 1000))
 
 
 def _float_token(value: float) -> str:
@@ -621,6 +744,12 @@ def _int(value: Any, field_name: str, minimum: int) -> int:
     return value
 
 
+def _optional_int(value: Any, field_name: str, minimum: int) -> int | None:
+    if value is None:
+        return None
+    return _int(value, field_name, minimum)
+
+
 def _float(value: Any, field_name: str, minimum: float | None = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (float, int)):
         raise ValueError(f"{field_name} must be a number.")
@@ -628,6 +757,38 @@ def _float(value: Any, field_name: str, minimum: float | None = None) -> float:
     if minimum is not None and result < minimum:
         raise ValueError(f"{field_name} must be >= {minimum}.")
     return result
+
+
+def _float_gt(value: Any, field_name: str, minimum: float) -> float:
+    result = _float(value, field_name)
+    if result <= minimum:
+        raise ValueError(f"{field_name} must be > {minimum}.")
+    return result
+
+
+def _float_tuple(value: Any, field_name: str, expected_count: int) -> tuple[float, ...]:
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{field_name} must be an array.")
+    values = tuple(
+        _float(item, f"{field_name}[{idx}]") for idx, item in enumerate(value)
+    )
+    if len(values) != expected_count:
+        raise ValueError(f"{field_name} must contain {expected_count} values.")
+    return values
+
+
+def _bounds(
+    value: Any, expected_count: int
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    if isinstance(value, str) or not isinstance(value, Sequence) or len(value) != 2:
+        raise ValueError("training.optimizer.bounds must be [lower, upper].")
+    lower = _float_tuple(value[0], "training.optimizer.bounds[0]", expected_count)
+    upper = _float_tuple(value[1], "training.optimizer.bounds[1]", expected_count)
+    if any(lo >= hi for lo, hi in zip(lower, upper, strict=True)):
+        raise ValueError(
+            "training.optimizer.bounds lower values must be < upper values."
+        )
+    return lower, upper
 
 
 def _str(value: Any, field_name: str) -> str:

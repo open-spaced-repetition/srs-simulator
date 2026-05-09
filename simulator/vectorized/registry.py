@@ -16,8 +16,7 @@ from simulator.schedulers import (
     FSRS6Scheduler,
     HLRScheduler,
     MemriseScheduler,
-    FSRS6ADRDeltaScheduler,
-    FSRS6ADRDirectScheduler,
+    FSRS6ADRScheduler,
     SSPMMCScheduler,
 )
 from simulator.schedulers.anki_sm2 import AnkiSM2VectorizedSchedulerOps
@@ -29,8 +28,7 @@ from simulator.schedulers.fsrs import (
 from simulator.schedulers.hlr import HLRVectorizedSchedulerOps
 from simulator.schedulers.lstm import LSTMVectorizedSchedulerOps
 from simulator.schedulers.memrise import MemriseVectorizedSchedulerOps
-from simulator.schedulers.fsrs6_adr_delta import FSRS6ADRDeltaVectorizedSchedulerOps
-from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectVectorizedSchedulerOps
+from simulator.schedulers.fsrs6_adr import FSRS6ADRVectorizedSchedulerOps
 from simulator.schedulers.sspmmc import SSPMMCVectorizedSchedulerOps
 from simulator.vectorized.types import (
     VectorizedConfig,
@@ -77,14 +75,8 @@ def resolve_scheduler_ops(
         return AnkiSM2VectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
     if isinstance(scheduler, SSPMMCScheduler):
         return SSPMMCVectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
-    if isinstance(scheduler, FSRS6ADRDirectScheduler):
-        return FSRS6ADRDirectVectorizedSchedulerOps(
-            scheduler, device=device, dtype=dtype
-        )
-    if isinstance(scheduler, FSRS6ADRDeltaScheduler):
-        return FSRS6ADRDeltaVectorizedSchedulerOps(
-            scheduler, device=device, dtype=dtype
-        )
+    if isinstance(scheduler, FSRS6ADRScheduler):
+        return FSRS6ADRVectorizedSchedulerOps(scheduler, device=device, dtype=dtype)
     if isinstance(scheduler, DASHScheduler):
         raise ValueError(
             "Vectorized engine does not support DASHScheduler; "
@@ -95,5 +87,5 @@ def resolve_scheduler_ops(
     raise ValueError(
         "Vectorized engine requires a supported scheduler "
         "(FSRS6, FSRS3, HLR, fixed, Memrise, Anki SM-2, SSPMMC, "
-        "FSRS6 ADR Direct, or FSRS6 ADR Delta)."
+        "or FSRS6 ADR)."
     )

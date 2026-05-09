@@ -15,18 +15,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import (
-    CMAESSettings,
-    _optimizer_seed,
-)
 from experiments.rl_scheduler.policy_search_common import (
+    CMAESSettings,
     CandidateMetrics,
     PolicySearchSettings,
     TrainingProgress,
     _artifact_id,
     _build_bundle,
     _evaluate_fsrs6_baseline,
-    _evaluate_direct_candidates,
+    _evaluate_adr_candidates,
     _git_commit,
     _passes_overfit_gate,
     _policy_feature_version,
@@ -34,12 +31,13 @@ from experiments.rl_scheduler.policy_search_common import (
     _relative_gain,
     _relative_gain_gate_metrics,
     _score,
+    _optimizer_seed,
     _write_json,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
-from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy, feature_count
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy, feature_count
 from simulator.short_term_config import resolve_short_term_config
 
 
@@ -55,7 +53,7 @@ class CMAESFSRS6TrainingResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an FSRS6 ADR Direct scheduler policy with CMA-ES.",
+        description="Train an FSRS6 ADR scheduler policy with CMA-ES.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", type=Path, required=True)
@@ -265,7 +263,7 @@ def baseline_coefficients(
     settings: PolicySearchSettings,
     feature_version: str,
 ) -> tuple[float, ...]:
-    return FSRS6ADRDirectPolicy.baseline(
+    return FSRS6ADRPolicy.baseline(
         desired_retention=settings.baseline_desired_retention,
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
@@ -320,7 +318,7 @@ def _run_cmaes(
             device=bundle.device,
             dtype=torch.float32,
         )
-        metrics = _evaluate_direct_candidates(
+        metrics = _evaluate_adr_candidates(
             config=config,
             settings=settings,
             bundle=bundle,
@@ -403,14 +401,14 @@ def write_artifact(
         result.best.memorized_per_minute,
         result.baseline.memorized_per_minute,
     )
-    policy = FSRS6ADRDirectPolicy(
+    policy = FSRS6ADRPolicy(
         coefficients=tuple(float(v) for v in result.best_coefficients.tolist()),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         baseline_desired_retention=settings.baseline_desired_retention,
         feature_version=feature_version,
         title=(
-            f"fsrs6_adr_direct_cmaes_u{user_id}_dr_"
+            f"fsrs6_adr_cmaes_u{user_id}_dr_"
             f"{settings.baseline_desired_retention:.2f}_lambda_{lambda_value:g}"
         ),
     )
@@ -449,7 +447,7 @@ def write_artifact(
                 config.seed,
             ),
             "family": config.family,
-            "scheduler_name": "fsrs6_adr_direct",
+            "scheduler_name": "fsrs6_adr",
             "environment": config.simulation.environment,
             "engine": config.simulation.engine,
             "training_user_ids": [user_id],

@@ -7,10 +7,10 @@ CEM, CMA-ES, portfolio search, and other policy-search methods as long as the
 output is a scheduler artifact that can enter the same external evaluation
 pipeline.
 
-The current implemented research lines are `fsrs6_adr_direct`,
-`fsrs6_adr_delta`, and `fsrs6_adp`: black-box optimizers learn scheduler-side
-FSRS-6 retention policies, or directly search the 21 FSRS-6 scheduler weights,
-then use stability `S` and difficulty `D` to compute the next interval.
+The current implemented research lines are `fsrs6_adr` and `fsrs6_adp`:
+black-box optimizers learn scheduler-side FSRS-6 retention policies, or directly
+search the 21 FSRS-6 scheduler weights, then use stability `S` and difficulty
+`D` to compute the next interval.
 A core rule is
 that training and evaluation must not read the environment's hidden memory
 state. A learned scheduler must maintain its own scheduler state. For these
@@ -20,24 +20,20 @@ FSRS-6 state update to obtain `S` and `D`.
 ## Directory Layout
 
 - `run_experiment.py`: TOML-driven stage runner.
-- `train_cmaes_fsrs6_adr_direct.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr_direct`
+- `train_cmaes_fsrs6_adr.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr`
   policies over `S,D`.
-- `train_cmaes_fsrs6_adr_delta.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
-  full-covariance CMA-ES over the same low-dimensional policy coefficients.
 - `train_cmaes_fsrs6_adp.py`: CMA-ES FSRS-6 trainer that searches adaptive
   scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
 - `train_fsrs6_adp_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
   ordinary `fsrs6_adp` child policies, optimizing hypervolume against the FSRS-6
   DR-grid baseline.
-- `policy_search_common.py` and `adr_delta_common.py`: shared policy-search
-  settings, metric, artifact, and evaluation helpers used by the active trainers.
+- `policy_search_common.py`: shared policy-search settings, metric, artifact,
+  and evaluation helpers used by the active trainers.
 - `train-overfit` can run these trainers through `[training.batch]` so users are
   batched in one process rather than launched as parallel training subprocesses.
-- `plot_fsrs6_adr_direct_policy_surfaces.py`: Plotly HTML visualizer for learned
+- `plot_fsrs6_adr_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
-- `plot_fsrs6_adr_delta_policy_surfaces.py`: Plotly HTML visualizer for learned
-  `f(S, D, DR) -> desired_retention` slices across input DR values.
-- `tune_fsrs6_adr_direct_lanes.py`: GPU lane tuning and throughput probe.
+- `tune_fsrs6_adr_lanes.py`: GPU lane tuning and throughput probe.
 - `inspect_run.py`: reads machine-readable evidence under a run root.
 - `validate_artifact.py`: validates scheduler artifact metadata and referenced
   files.
@@ -74,7 +70,7 @@ experiment should continue.
 - **sweep**: external simulation of artifacts and baselines. The current
   batched sweep can batch `(user, scheduler, scheduler parameter)` lanes in one
   simulator call, such as several FSRS-6 desired-retention values plus several
-  FSRS6 ADR Direct policies. In formal experiment runs, sweep logs are written
+  FSRS6 ADR policies. In formal experiment runs, sweep logs are written
   under `<output_root>/<run_id>/sweep/sweep_outputs/`; the standalone
   `run_sweep_users_batched.py --config` entrypoint still honors the TOML
   `[sweep].log_dir` shared-log setting.
@@ -142,44 +138,34 @@ uv run python experiments/rl_scheduler/validate_artifact.py \
   --require-files
 ```
 
-Visualize learned FSRS6 ADR Direct policy surfaces:
+Visualize learned FSRS6 ADR policy surfaces:
 
 ```bash
-uv run python experiments/rl_scheduler/plot_fsrs6_adr_direct_policy_surfaces.py \
-  --train-run-root <output_root>/<run-id> \
-  --users 1,2,3 \
-  --lambda-values 0.5
-
-uv run python experiments/rl_scheduler/plot_fsrs6_adr_delta_policy_surfaces.py \
+uv run python experiments/rl_scheduler/plot_fsrs6_adr_policy_surfaces.py \
   --train-run-root <output_root>/<run-id> \
   --users 1,2,3 \
   --lambda-values 0.5
 ```
 
 The visualizer writes one interactive Plotly HTML per user/lambda under
-`experiments/rl_scheduler/plots/fsrs6_adr_direct_policy_surfaces/`. Each figure uses
+`experiments/rl_scheduler/plots/fsrs6_adr_policy_surfaces/`. Each figure uses
 stability `S` and difficulty `D` as the horizontal axes, policy output retention
 as the vertical axis, and one translucent surface per baseline DR.
-The DR-conditioned visualizer writes to
-`experiments/rl_scheduler/plots/fsrs6_adr_delta_policy_surfaces/` and plots one
-translucent surface per input DR slice from `metrics.json` or `--dr-values`.
 
 ## Current Main Experiments
 
 Representative profiles:
 
-- `configs/fsrs6_adr_direct_cmaes_users_1_8.toml`: the ordinary
-  `fsrs6_adr_direct` scheduler trained with CMA-ES using the 6-parameter
-  `fsrs6_adr_direct_log_poly_v1` policy per user and baseline desired retention.
-- `configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml`: the ordinary
-  `fsrs6_adr_direct` scheduler trained with CMA-ES using one simplified 3-parameter
-  `fsrs6_adr_direct_log_linear_v1` policy per user and baseline desired retention.
-- `configs/fsrs6_adr_direct_linear_portfolio_users_1_8.toml`: the ordinary
-  `fsrs6_adr_direct` scheduler trained as 23 simplified 3-parameter
-  `fsrs6_adr_direct_log_linear_v1` portfolio children per user with SMS-EMOA
+- `configs/fsrs6_adr_cmaes_users_1_8.toml`: the ordinary
+  `fsrs6_adr` scheduler trained with CMA-ES using the 6-parameter
+  `fsrs6_adr_log_poly_v1` policy per user and baseline desired retention.
+- `configs/fsrs6_adr_linear_cmaes_users_1_8.toml`: the ordinary
+  `fsrs6_adr` scheduler trained with CMA-ES using one simplified 3-parameter
+  `fsrs6_adr_log_linear_v1` policy per user and baseline desired retention.
+- `configs/fsrs6_adr_linear_portfolio_users_1_8.toml`: the ordinary
+  `fsrs6_adr` scheduler trained as 23 simplified 3-parameter
+  `fsrs6_adr_log_linear_v1` portfolio children per user with SMS-EMOA
   hypervolume optimization.
-- `configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml`: the same
-  DR-conditioned scheduler artifact and evaluation workflow, trained with CMA-ES.
 - `configs/fsrs6_adp_cmaes_users_1_8.toml`: the adaptive-parameter family that
   trains 21 bounded FSRS-6 scheduler weights as deltas from each user's fitted
   baseline, batches both users and DR values, and still emits one artifact per
@@ -191,38 +177,26 @@ Representative profiles:
 Training target:
 
 - Baseline scheduler: FSRS-6.
-- Candidate schedulers: FSRS6 ADR Direct, FSRS6 ADR Delta, and FSRS6 ADP.
-- Direct action: emit desired retention from scheduler-side FSRS-6 `S,D`.
-- Delta action: apply a logit-space adjustment around the input DR from
-  scheduler-side FSRS-6 `S,D` and the requested DR.
+- Candidate schedulers: FSRS6 ADR and FSRS6 ADP.
+- ADR action: emit desired retention from scheduler-side FSRS-6 `S,D`.
 - ADP action: search the full 21 FSRS-6 scheduler weights as bounded
   standardized deltas from each user's fitted FSRS-6 weights, then evaluate the
   resulting ordinary FSRS-6 scheduler.
 - Main-profile DR grid: `0.52..0.96` in steps of `0.02`.
-- Direct overfit gate: each artifact is trained for one baseline DR, and both
+- ADR overfit gate: each artifact is trained for one baseline DR, and both
   relative memorized-average gain and relative memorized-per-minute gain must be
   greater than `0.0` against the same-user same-DR baseline. Batched
   train-overfit runs accept the batch when at least 80% of artifact points pass
   that gate.
-- Delta overfit gate: one artifact covers the DR grid, and at least 80% of DR
-  points must improve both memorized average and memorized per minute against
-  the corresponding same-user same-DR baselines.
 - ADP overfit gate: each `(user, DR, lambda)` artifact is checked against the
   same-user same-DR FSRS-6 baseline with the same `0.0` floor on both
   memorized-average and memorized-per-minute gains.
-- Constraint handling: Direct candidates below the `0.0` relative-gain floor
-  are ranked below every candidate satisfying both gate constraints. Delta keeps
-  its 80% positive-gain DR-grid gate.
+- Constraint handling: ADR candidates below the `0.0` relative-gain floor
+  are ranked below every candidate satisfying both gate constraints.
 
-For ordinary `fsrs6_adr_direct`, the default policy uses 6 log-polynomial features over
-normalized `S,D`; set `training.policy_search.feature_version = "fsrs6_adr_direct_log_linear_v1"`
+For ordinary `fsrs6_adr`, the default policy uses 6 log-polynomial features over
+normalized `S,D`; set `training.policy_search.feature_version = "fsrs6_adr_log_linear_v1"`
 to train the simplified 3-parameter linear variant.
-For `fsrs6_adr_delta`, the action is a logit-space adjustment around the input DR.
-The overfit gate requires at least 80% of DR points to pass the positive-gain
-constraint; mean relative gains are reported and used only to rank candidates
-that are already feasible. The default
-DR-conditioned policy uses 10 log polynomial features; set `training.policy_search.feature_version =
-"fsrs6_adr_delta_log_linear_v1"` to train the 4-parameter linear variant.
 CMA-ES profiles keep the same `[training.policy_search]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,
 initial mean, and coefficient bounds in `[training.optimizer]`. ADP profiles add
@@ -238,15 +212,15 @@ Batching model:
 - CMA-ES effective lanes are approximately `dr_batch_size * population_size`.
 - ADP uses the same idea, but batches `dr_batch_size * population_size` lanes
   per job and writes one policy artifact per user/DR/lambda.
-- Portfolio SMS-EMOA selection for ADR Direct and ADP uses a lightweight
+- Portfolio SMS-EMOA selection for ADR and ADP uses a lightweight
   bounded process pool for batches with at least 8 users, capped at 32 workers
   by default, to avoid the old unbounded spawned-worker memory growth. Worker
   payloads contain only primitive metric tuples and do not import trainer/Torch
   modules. Set `FSRS6_PORTFOLIO_SELECTION_PROCESS_POOL=0` to force local
-  selection, or `=1` to force the pool for smaller batches; cap workers with
-  `FSRS6_PORTFOLIO_SELECTION_WORKERS`. The older
-  `FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_*` names remain supported for existing
-  ADR Direct scripts.
+  selection globally, or `=1` to force the pool for smaller batches; cap workers
+  with `FSRS6_PORTFOLIO_SELECTION_WORKERS`. ADR-only runs can use
+  `FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL` and
+  `FSRS6_ADR_PORTFOLIO_SELECTION_WORKERS`.
 - `[sweep]` contains the batch sweep envs, scheduler list, retention grid, log
   root, and batch sizing. The formal runner uses that table directly, so no
   separate retention_sweep TOML is needed.

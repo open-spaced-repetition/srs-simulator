@@ -54,8 +54,7 @@ SUPPORTED_RUNNER_STAGES = {
 COMMAND_TIMEOUT_EXIT_CODE = 124
 TRAIN_OVERFIT_GATE_PASS_FRACTION = 0.8
 RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
-    "fsrs6_adr_direct",
-    "fsrs6_adr_delta",
+    "fsrs6_adr",
     "fsrs6_adp",
 }
 PORTFOLIO_CHILD_ACTION_SPACES = {
@@ -97,7 +96,7 @@ class SweepBatchLane:
     scheduler_spec: str
     desired_retention: float | None
     fixed_interval: float | None
-    fsrs6_adr_direct_policy_path: Path | None
+    fsrs6_adr_policy_path: Path | None
     lambda_value: float | None
     lambda_token: str | None
     baseline_desired_retention: float | None
@@ -4423,7 +4422,7 @@ def _build_sweep_artifact_lane(
         scheduler_spec=metadata.scheduler_name,
         desired_retention=None,
         fixed_interval=None,
-        fsrs6_adr_direct_policy_path=metadata.policy_path,
+        fsrs6_adr_policy_path=metadata.policy_path,
         lambda_value=lambda_value,
         lambda_token=lambda_token,
         baseline_desired_retention=baseline_dr,
@@ -4457,7 +4456,7 @@ def _build_sweep_baseline_lanes(
                     scheduler_spec=config.baseline.scheduler,
                     desired_retention=desired_retention,
                     fixed_interval=None,
-                    fsrs6_adr_direct_policy_path=None,
+                    fsrs6_adr_policy_path=None,
                     lambda_value=None,
                     lambda_token=None,
                     baseline_desired_retention=desired_retention,
@@ -4485,8 +4484,8 @@ def _sweep_batch_lane_result(job: SweepBatchLane) -> dict[str, Any]:
         "scheduler_spec": job.scheduler_spec,
         "desired_retention": job.desired_retention,
         "fixed_interval": job.fixed_interval,
-        "fsrs6_adr_direct_policy": str(job.fsrs6_adr_direct_policy_path)
-        if job.fsrs6_adr_direct_policy_path is not None
+        "fsrs6_adr_policy": str(job.fsrs6_adr_policy_path)
+        if job.fsrs6_adr_policy_path is not None
         else None,
         "baseline_desired_retention": job.baseline_desired_retention,
         "baseline_desired_retention_token": job.baseline_desired_retention_token,
@@ -4522,24 +4521,19 @@ def _run_batched_sweep_jobs(
         {
             job.scheduler_name
             for job in jobs
-            if job.scheduler_name not in {"fsrs6", "fsrs6_adr_direct"}
+            if job.scheduler_name not in {"fsrs6", "fsrs6_adr"}
         }
     )
     if unsupported:
         raise ValueError(
-            "Batched sweep currently supports fsrs6 and fsrs6_adr_direct lanes, "
+            "Batched sweep currently supports fsrs6 and fsrs6_adr lanes, "
             f"got {unsupported}."
         )
     for job in jobs:
         if job.scheduler_name == "fsrs6" and job.desired_retention is None:
             raise ValueError("Batched fsrs6 sweep lanes require desired_retention.")
-        if (
-            job.scheduler_name == "fsrs6_adr_direct"
-            and job.fsrs6_adr_direct_policy_path is None
-        ):
-            raise ValueError(
-                "Batched fsrs6_adr_direct sweep lanes require a policy path."
-            )
+        if job.scheduler_name == "fsrs6_adr" and job.fsrs6_adr_policy_path is None:
+            raise ValueError("Batched fsrs6_adr sweep lanes require a policy path.")
 
     import argparse
 
@@ -4564,9 +4558,9 @@ def _run_batched_sweep_jobs(
     )
     from simulator.math.fsrs import Bounds
     from simulator.models.fsrs import FSRS6BatchEnvOps
-    from simulator.fsrs6_adr_direct_policy import FSRS6ADRDirectPolicy
+    from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
     from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
-    from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
+    from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
     from simulator.short_term_config import resolve_short_term_config
     from simulator.vectorized.multiuser_engine import simulate_multiuser
 
@@ -4662,21 +4656,19 @@ def _run_batched_sweep_jobs(
             )
         )
 
-    if fsrs6_adr_direct_indices := lane_index_by_scheduler.get("fsrs6_adr_direct"):
+    if fsrs6_adr_indices := lane_index_by_scheduler.get("fsrs6_adr"):
         group_indices = torch.tensor(
-            fsrs6_adr_direct_indices,
+            fsrs6_adr_indices,
             device=device,
             dtype=torch.int64,
         )
         adr_policy_paths: list[Path] = []
-        for index in fsrs6_adr_direct_indices:
-            policy_path = jobs[index].fsrs6_adr_direct_policy_path
+        for index in fsrs6_adr_indices:
+            policy_path = jobs[index].fsrs6_adr_policy_path
             if policy_path is None:
-                raise ValueError(
-                    "Batched fsrs6_adr_direct sweep lanes require a policy path."
-                )
+                raise ValueError("Batched fsrs6_adr sweep lanes require a policy path.")
             adr_policy_paths.append(policy_path)
-        policies = [FSRS6ADRDirectPolicy.from_json(path) for path in adr_policy_paths]
+        policies = [FSRS6ADRPolicy.from_json(path) for path in adr_policy_paths]
         template = policies[0]
         for policy in policies[1:]:
             if not math.isclose(
@@ -4691,7 +4683,7 @@ def _run_batched_sweep_jobs(
                 abs_tol=1e-9,
             ):
                 raise ValueError(
-                    "Batched fsrs6_adr_direct sweep requires identical policy retention bounds."
+                    "Batched fsrs6_adr sweep requires identical policy retention bounds."
                 )
         coefficients = torch.tensor(
             [policy.coefficients for policy in policies],
@@ -4701,7 +4693,7 @@ def _run_batched_sweep_jobs(
         scheduler_groups.append(
             _MixedSchedulerGroup(
                 lane_indices=group_indices,
-                ops=FSRS6ADRDirectBatchSchedulerOps(
+                ops=FSRS6ADRBatchSchedulerOps(
                     weights=fsrs_weights.index_select(0, group_indices),
                     policy=template,
                     coefficients=coefficients,
@@ -4811,7 +4803,7 @@ def _run_batched_sweep_jobs(
             desired_retention=job.desired_retention,
             scheduler_priority=config.simulation.scheduler_priority,
             sspmmc_policy=None,
-            fsrs6_adr_direct_policy=job.fsrs6_adr_direct_policy_path,
+            fsrs6_adr_policy=job.fsrs6_adr_policy_path,
             fixed_interval=job.fixed_interval,
             seed=config.seed,
             fuzz=config.simulation.fuzz,
@@ -4923,23 +4915,12 @@ def _run_configured_batched_retention_sweep(
             "short_term_loops_limit",
             DEFAULT_SHORT_TERM_LOOPS_LIMIT,
         ),
-        fsrs6_adr_direct_policy=None,
-        fsrs6_adr_direct_policy_root=None,
-        fsrs6_adr_direct_train_run_root=run_root
-        if "fsrs6_adr_direct" in scheduler_names
-        else None,
-        fsrs6_adr_direct_policy_manifest=None,
-        fsrs6_adr_direct_lambda_values=config.lambda_grid
-        if "fsrs6_adr_direct" in scheduler_names
-        else None,
-        fsrs6_adr_delta_policy=None,
-        fsrs6_adr_delta_policy_root=None,
-        fsrs6_adr_delta_train_run_root=run_root
-        if "fsrs6_adr_delta" in scheduler_names
-        else None,
-        fsrs6_adr_delta_policy_manifest=None,
-        fsrs6_adr_delta_lambda_values=config.lambda_grid
-        if "fsrs6_adr_delta" in scheduler_names
+        fsrs6_adr_policy=None,
+        fsrs6_adr_policy_root=None,
+        fsrs6_adr_train_run_root=run_root if "fsrs6_adr" in scheduler_names else None,
+        fsrs6_adr_policy_manifest=None,
+        fsrs6_adr_lambda_values=config.lambda_grid
+        if "fsrs6_adr" in scheduler_names
         else None,
         fsrs6_adp_policy=None,
         fsrs6_adp_policy_root=None,
@@ -5029,17 +5010,13 @@ def _run_configured_batched_retention_sweep(
                 "scheduler_spec": lane.scheduler_spec,
                 "desired_retention": lane.desired_retention,
                 "fixed_interval": lane.fixed_interval,
-                "fsrs6_adr_direct_policy": str(lane.fsrs6_adr_direct_policy)
-                if lane.fsrs6_adr_direct_policy is not None
+                "fsrs6_adr_policy": str(lane.fsrs6_adr_policy)
+                if lane.fsrs6_adr_policy is not None
                 else None,
-                "fsrs6_adr_direct_baseline_desired_retention": (
-                    lane.fsrs6_adr_direct_baseline_desired_retention
+                "fsrs6_adr_baseline_desired_retention": (
+                    lane.fsrs6_adr_baseline_desired_retention
                 ),
-                "fsrs6_adr_direct_lambda_value": lane.fsrs6_adr_direct_lambda_value,
-                "fsrs6_adr_delta_policy": str(lane.fsrs6_adr_delta_policy)
-                if lane.fsrs6_adr_delta_policy is not None
-                else None,
-                "fsrs6_adr_delta_lambda_value": lane.fsrs6_adr_delta_lambda_value,
+                "fsrs6_adr_lambda_value": lane.fsrs6_adr_lambda_value,
                 "fsrs6_adp_policy": str(lane.fsrs6_adp_policy)
                 if lane.fsrs6_adp_policy is not None
                 else None,
@@ -5163,17 +5140,17 @@ def _validate_batched_retention_lane_logs(
                     "metadata desired_retention expected "
                     f"{lane.desired_retention!r}, got {actual_retention!r}"
                 )
-        if lane.fsrs6_adr_direct_baseline_desired_retention is not None:
-            actual_baseline_dr = meta.get("fsrs6_adr_direct_baseline_desired_retention")
+        if lane.fsrs6_adr_baseline_desired_retention is not None:
+            actual_baseline_dr = meta.get("fsrs6_adr_baseline_desired_retention")
             if not isinstance(actual_baseline_dr, (float, int)) or not math.isclose(
                 float(actual_baseline_dr),
-                lane.fsrs6_adr_direct_baseline_desired_retention,
+                lane.fsrs6_adr_baseline_desired_retention,
                 rel_tol=0.0,
                 abs_tol=1e-9,
             ):
                 errors.append(
-                    "metadata fsrs6_adr_direct_baseline_desired_retention expected "
-                    f"{lane.fsrs6_adr_direct_baseline_desired_retention!r}, "
+                    "metadata fsrs6_adr_baseline_desired_retention expected "
+                    f"{lane.fsrs6_adr_baseline_desired_retention!r}, "
                     f"got {actual_baseline_dr!r}"
                 )
         if lane.fsrs6_adp_baseline_desired_retention is not None:
@@ -5682,9 +5659,7 @@ def _validate_train_artifacts(
             )
         is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
         if baseline_desired_retention is not None and not is_portfolio_child:
-            if metadata.scheduler_name == "fsrs6_adr_delta":
-                pass
-            elif metadata.baseline_desired_retention is None or not math.isclose(
+            if metadata.baseline_desired_retention is None or not math.isclose(
                 metadata.baseline_desired_retention,
                 baseline_desired_retention,
                 rel_tol=0.0,
@@ -5696,11 +5671,7 @@ def _validate_train_artifacts(
                     f"{baseline_desired_retention}, "
                     f"got {metadata.baseline_desired_retention}."
                 )
-        if (
-            allowed_baseline_desired_retentions is not None
-            and metadata.scheduler_name != "fsrs6_adr_delta"
-            and not is_portfolio_child
-        ):
+        if allowed_baseline_desired_retentions is not None and not is_portfolio_child:
             if metadata.baseline_desired_retention is None:
                 return (
                     f"Invalid scheduler artifact metadata {path}: "
@@ -5806,7 +5777,6 @@ def _validate_sweep_artifact_metadata(
     baseline_dr_values = _training_baseline_desired_retention_values(config)
     if (
         _training_metadata_requires_baseline_dr(config)
-        and metadata.scheduler_name != "fsrs6_adr_delta"
         and metadata.action_space not in PORTFOLIO_CHILD_ACTION_SPACES
     ):
         actual_dr = metadata.baseline_desired_retention

@@ -8,25 +8,40 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
-from simulator.batched_sweep.fsrs6_adr_direct_policy import parse_float_token
-from simulator.fsrs6_adr_delta_policy import FSRS6ADRDeltaPolicy
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 
 @dataclass(frozen=True, slots=True)
-class FSRS6ADRDeltaPolicySpec:
+class FSRS6ADRPolicySpec:
     user_id: int
+    baseline_desired_retention: float | None
     lambda_value: float | None
+    policy_index: int | None
     path: Path
 
 
-def resolve_fsrs6_adr_delta_policy_specs(
+def format_float_token(value: float) -> str:
+    token = format(value, ".12g")
+    return token.replace("-", "neg_").replace("+", "").replace(".", "p")
+
+
+def parse_float_token(value: str) -> float:
+    token = value.strip()
+    if not token:
+        raise ValueError("empty float token")
+    token = token.replace("neg_", "-").replace("p", ".")
+    return float(token)
+
+
+def resolve_fsrs6_adr_policy_specs(
     *,
     user_ids: Sequence[int],
+    dr_values: Sequence[float],
     policy_root: Path | None = None,
     train_run_root: Path | None = None,
     policy_manifest: Path | None = None,
     lambda_values: Sequence[float] | None = None,
-) -> tuple[FSRS6ADRDeltaPolicySpec, ...]:
+) -> tuple[FSRS6ADRPolicySpec, ...]:
     sources = [
         policy_root is not None,
         train_run_root is not None,
@@ -34,7 +49,7 @@ def resolve_fsrs6_adr_delta_policy_specs(
     ]
     if sum(sources) != 1:
         raise ValueError(
-            "Configure exactly one FSRS6 ADR Delta policy source: "
+            "Configure exactly one FSRS6 ADR policy source: "
             "policy_root, train_run_root, or policy_manifest."
         )
     if train_run_root is not None:
@@ -43,6 +58,7 @@ def resolve_fsrs6_adr_delta_policy_specs(
         return _load_policy_manifest(
             policy_manifest=policy_manifest,
             user_ids=user_ids,
+            dr_values=dr_values,
             lambda_values=lambda_values,
         )
     if policy_root is None:
@@ -50,6 +66,7 @@ def resolve_fsrs6_adr_delta_policy_specs(
     return _discover_policy_root(
         policy_root=policy_root,
         user_ids=user_ids,
+        dr_values=dr_values,
         lambda_values=lambda_values,
     )
 
@@ -58,20 +75,25 @@ def _discover_policy_root(
     *,
     policy_root: Path,
     user_ids: Sequence[int],
+    dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
-) -> tuple[FSRS6ADRDeltaPolicySpec, ...]:
+) -> tuple[FSRS6ADRPolicySpec, ...]:
     root = policy_root.expanduser()
     if not root.exists():
-        raise FileNotFoundError(f"FSRS6 ADR Delta policy root does not exist: {root}")
+        raise FileNotFoundError(f"FSRS6 ADR policy root does not exist: {root}")
     user_set = set(user_ids)
     lambda_filter = _normalized_lambda_filter(lambda_values)
-    specs: list[FSRS6ADRDeltaPolicySpec] = []
+    specs: list[FSRS6ADRPolicySpec] = []
     for policy_path in sorted(root.rglob("policy.json")):
         path_user_id = _extract_path_int(policy_path, "user_")
         if path_user_id is not None and path_user_id not in user_set:
             continue
-        spec = _spec_from_policy_path(policy_path)
+        spec = _spec_from_policy_path(policy_path, dr_values=dr_values)
         if spec.user_id not in user_set:
+            continue
+        if spec.baseline_desired_retention is not None and not _matches_grid(
+            spec.baseline_desired_retention, dr_values
+        ):
             continue
         if lambda_filter is not None and not _matches_lambda(
             spec.lambda_value, lambda_filter
@@ -81,12 +103,14 @@ def _discover_policy_root(
 
     if not specs:
         raise FileNotFoundError(
-            f"No FSRS6 ADR Delta policies under {root} matched users={list(user_ids)}."
+            "No FSRS6 ADR policies under "
+            f"{root} matched users={list(user_ids)} and DR grid={list(dr_values)}."
         )
     _reject_duplicate_policy_specs(specs)
     _require_complete_policy_root(
         specs=specs,
         user_ids=user_ids,
+        dr_values=dr_values,
         lambda_values=lambda_values,
     )
     return tuple(specs)
@@ -96,23 +120,28 @@ def _load_policy_manifest(
     *,
     policy_manifest: Path,
     user_ids: Sequence[int],
+    dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
-) -> tuple[FSRS6ADRDeltaPolicySpec, ...]:
+) -> tuple[FSRS6ADRPolicySpec, ...]:
     manifest_path = policy_manifest.expanduser()
     if not manifest_path.exists():
         raise FileNotFoundError(
-            f"FSRS6 ADR Delta policy manifest does not exist: {manifest_path}"
+            f"FSRS6 ADR policy manifest does not exist: {manifest_path}"
         )
     with manifest_path.open("rb") as handle:
         raw = tomllib.load(handle)
     entries = _manifest_entries(raw)
     user_set = set(user_ids)
     lambda_filter = _normalized_lambda_filter(lambda_values)
-    specs: list[FSRS6ADRDeltaPolicySpec] = []
+    specs: list[FSRS6ADRPolicySpec] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, Mapping):
             raise ValueError(f"policies[{index}] must be a TOML table.")
         user_id = _require_int(entry.get("user_id"), f"policies[{index}].user_id")
+        baseline_dr = _optional_float(
+            entry.get("baseline_desired_retention"),
+            f"policies[{index}].baseline_desired_retention",
+        )
         lambda_value = _optional_float(
             entry.get("lambda_value"), f"policies[{index}].lambda_value"
         )
@@ -126,6 +155,12 @@ def _load_policy_manifest(
                 f"Policy manifest entry {index} uses user_id={user_id}, "
                 f"which is outside configured users {list(user_ids)}."
             )
+        if baseline_dr is not None and not _matches_grid(baseline_dr, dr_values):
+            raise ValueError(
+                f"Policy manifest entry {index} uses "
+                f"baseline_desired_retention={baseline_dr}, which is outside "
+                f"configured retention grid {list(dr_values)}."
+            )
         if lambda_filter is not None and not _matches_lambda(
             lambda_value, lambda_filter
         ):
@@ -134,14 +169,16 @@ def _load_policy_manifest(
             _validate_policy_spec(
                 path=path,
                 user_id=user_id,
+                baseline_desired_retention=baseline_dr,
                 lambda_value=lambda_value,
+                policy_index=_optional_int(
+                    entry.get("policy_index"), f"policies[{index}].policy_index"
+                ),
                 source=f"manifest entry {index}",
             )
         )
     if not specs:
-        raise ValueError(
-            f"FSRS6 ADR Delta policy manifest {manifest_path} did not produce any lanes."
-        )
+        raise ValueError(f"Policy manifest {manifest_path} did not produce any lanes.")
     _reject_duplicate_policy_specs(specs)
     return tuple(specs)
 
@@ -157,18 +194,29 @@ def _manifest_entries(raw: Mapping[str, Any]) -> Sequence[Any]:
     return entries
 
 
-def _spec_from_policy_path(policy_path: Path) -> FSRS6ADRDeltaPolicySpec:
-    FSRS6ADRDeltaPolicy.from_json(policy_path)
+def _spec_from_policy_path(
+    policy_path: Path,
+    *,
+    dr_values: Sequence[float],
+) -> FSRS6ADRPolicySpec:
+    policy = FSRS6ADRPolicy.from_json(policy_path)
     metadata = _load_sibling_metadata(policy_path)
     path_user_id = _extract_path_int(policy_path, "user_")
     path_lambda = _extract_path_float(policy_path, "lambda_")
+    path_policy_index = _extract_path_int(policy_path, "policy_")
     metadata_user_id = _metadata_user_id(metadata, policy_path)
+    metadata_baseline_dr = _metadata_float(
+        metadata,
+        "baseline_desired_retention",
+        policy_path,
+    )
     metadata_lambda = _metadata_float(metadata, "lambda_value", policy_path)
+    metadata_policy_index = _metadata_int(metadata, "portfolio_index", policy_path)
 
     user_id = metadata_user_id if metadata_user_id is not None else path_user_id
     if user_id is None:
         raise ValueError(
-            f"Could not infer user_id for FSRS6 ADR Delta policy {policy_path}. "
+            f"Could not infer user_id for FSRS6 ADR policy {policy_path}. "
             "Use a user_<id> path component or metadata.json."
         )
     if (
@@ -181,6 +229,38 @@ def _spec_from_policy_path(policy_path: Path) -> FSRS6ADRDeltaPolicySpec:
             f"metadata has {metadata_user_id}."
         )
 
+    metadata_has_null_baseline = (
+        metadata is not None
+        and "baseline_desired_retention" in metadata
+        and metadata.get("baseline_desired_retention") is None
+    )
+    if metadata_has_null_baseline:
+        baseline_dr = None
+    else:
+        baseline_dr = (
+            metadata_baseline_dr
+            if metadata_baseline_dr is not None
+            else policy.baseline_desired_retention
+        )
+    if baseline_dr is None:
+        if policy.baseline_desired_retention is not None:
+            raise ValueError(
+                f"Policy {policy_path} has baseline_desired_retention="
+                f"{policy.baseline_desired_retention}, metadata has null."
+            )
+        matched_dr = None
+    elif policy.baseline_desired_retention is None or not math.isclose(
+        baseline_dr,
+        policy.baseline_desired_retention,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        raise ValueError(
+            f"Policy {policy_path} has baseline_desired_retention="
+            f"{policy.baseline_desired_retention}, metadata has {baseline_dr}."
+        )
+    else:
+        matched_dr = _matching_grid_value(baseline_dr, dr_values)
     lambda_value = metadata_lambda if metadata_lambda is not None else path_lambda
     if (
         metadata_lambda is not None
@@ -191,9 +271,13 @@ def _spec_from_policy_path(policy_path: Path) -> FSRS6ADRDeltaPolicySpec:
             f"Policy {policy_path} lambda mismatch: path has {path_lambda}, "
             f"metadata has {metadata_lambda}."
         )
-    return FSRS6ADRDeltaPolicySpec(
+    return FSRS6ADRPolicySpec(
         user_id=user_id,
+        baseline_desired_retention=matched_dr,
         lambda_value=lambda_value,
+        policy_index=metadata_policy_index
+        if metadata_policy_index is not None
+        else path_policy_index,
         path=policy_path.resolve(),
     )
 
@@ -202,18 +286,54 @@ def _validate_policy_spec(
     *,
     path: Path,
     user_id: int,
+    baseline_desired_retention: float | None,
     lambda_value: float | None,
+    policy_index: int | None,
     source: str,
-) -> FSRS6ADRDeltaPolicySpec:
+) -> FSRS6ADRPolicySpec:
     if not path.exists():
-        raise FileNotFoundError(f"Missing FSRS6 ADR Delta policy for {source}: {path}")
-    FSRS6ADRDeltaPolicy.from_json(path)
+        raise FileNotFoundError(f"Missing FSRS6 ADR policy for {source}: {path}")
+    policy = FSRS6ADRPolicy.from_json(path)
+    if baseline_desired_retention is None:
+        if policy.baseline_desired_retention is not None:
+            raise ValueError(
+                f"Policy {path} has baseline_desired_retention="
+                f"{policy.baseline_desired_retention}, expected null from {source}."
+            )
+    elif policy.baseline_desired_retention is None or not math.isclose(
+        policy.baseline_desired_retention,
+        baseline_desired_retention,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        raise ValueError(
+            f"Policy {path} has baseline_desired_retention="
+            f"{policy.baseline_desired_retention}, expected "
+            f"{baseline_desired_retention} from {source}."
+        )
     metadata = _load_sibling_metadata(path)
     metadata_user_id = _metadata_user_id(metadata, path)
     if metadata_user_id is not None and metadata_user_id != user_id:
         raise ValueError(
             f"Policy {path} metadata user_id={metadata_user_id}, "
             f"expected {user_id} from {source}."
+        )
+    metadata_baseline_dr = _metadata_float(metadata, "baseline_desired_retention", path)
+    if baseline_desired_retention is None:
+        if metadata_baseline_dr is not None:
+            raise ValueError(
+                f"Policy {path} metadata baseline_desired_retention="
+                f"{metadata_baseline_dr}, expected null."
+            )
+    elif metadata_baseline_dr is not None and not math.isclose(
+        metadata_baseline_dr,
+        baseline_desired_retention,
+        rel_tol=0.0,
+        abs_tol=1e-9,
+    ):
+        raise ValueError(
+            f"Policy {path} metadata baseline_desired_retention="
+            f"{metadata_baseline_dr}, expected {baseline_desired_retention}."
         )
     metadata_lambda = _metadata_float(metadata, "lambda_value", path)
     effective_lambda = lambda_value if lambda_value is not None else metadata_lambda
@@ -226,17 +346,24 @@ def _validate_policy_spec(
             f"Policy {path} metadata lambda_value={metadata_lambda}, "
             f"expected {lambda_value} from {source}."
         )
-    return FSRS6ADRDeltaPolicySpec(
+    return FSRS6ADRPolicySpec(
         user_id=user_id,
+        baseline_desired_retention=baseline_desired_retention,
         lambda_value=effective_lambda,
+        policy_index=policy_index
+        if policy_index is not None
+        else _metadata_int(metadata, "portfolio_index", path)
+        if metadata is not None
+        else _extract_path_int(path, "policy_"),
         path=path.resolve(),
     )
 
 
 def _require_complete_policy_root(
     *,
-    specs: Sequence[FSRS6ADRDeltaPolicySpec],
+    specs: Sequence[FSRS6ADRPolicySpec],
     user_ids: Sequence[int],
+    dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
 ) -> None:
     if lambda_values is not None:
@@ -249,47 +376,93 @@ def _require_complete_policy_root(
         )
         if not expected_lambdas and any(spec.lambda_value is None for spec in specs):
             expected_lambdas = (None,)
-    observed = {_policy_key(spec.user_id, spec.lambda_value) for spec in specs}
-    missing: list[tuple[int, float | None]] = []
+    if any(spec.baseline_desired_retention is None for spec in specs):
+        return
+    observed = {
+        _policy_key(
+            spec.user_id,
+            spec.baseline_desired_retention,
+            spec.lambda_value,
+            spec.policy_index,
+        )
+        for spec in specs
+    }
+    missing: list[tuple[int, float, float | None]] = []
     for user_id in user_ids:
-        for lambda_value in expected_lambdas:
-            if _policy_key(user_id, lambda_value) not in observed:
-                missing.append((int(user_id), lambda_value))
+        for baseline_dr in dr_values:
+            for lambda_value in expected_lambdas:
+                key = _policy_key(user_id, baseline_dr, lambda_value)
+                if key not in observed:
+                    missing.append((int(user_id), float(baseline_dr), lambda_value))
     if missing:
         preview = "\n".join(
-            _format_missing_policy(user_id, lambda_value)
-            for user_id, lambda_value in missing[:10]
+            _format_missing_policy(user_id, baseline_dr, lambda_value)
+            for user_id, baseline_dr, lambda_value in missing[:10]
         )
         suffix = "" if len(missing) <= 10 else f"\n... and {len(missing) - 10} more"
-        raise FileNotFoundError(f"Missing FSRS6 ADR Delta policies:\n{preview}{suffix}")
+        raise FileNotFoundError(f"Missing FSRS6 ADR policies:\n{preview}{suffix}")
 
 
-def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADRDeltaPolicySpec]) -> None:
-    by_key: dict[tuple[int, int | None], Path] = {}
+def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADRPolicySpec]) -> None:
+    by_key: dict[tuple[int, int | None, int | None, int | None], Path] = {}
     for spec in specs:
-        key = _policy_key(spec.user_id, spec.lambda_value)
+        key = _policy_key(
+            spec.user_id,
+            spec.baseline_desired_retention,
+            spec.lambda_value,
+            spec.policy_index,
+        )
         previous = by_key.get(key)
         if previous is not None:
             raise ValueError(
-                "Duplicate FSRS6 ADR Delta policy for "
-                f"user={spec.user_id}, lambda={spec.lambda_value}: "
+                "Duplicate FSRS6 ADR policy for "
+                f"user={spec.user_id}, baseline_desired_retention="
+                f"{spec.baseline_desired_retention}, lambda={spec.lambda_value}: "
                 f"{previous} and {spec.path}"
             )
         by_key[key] = spec.path
 
 
-def _policy_key(user_id: int, lambda_value: float | None) -> tuple[int, int | None]:
+def _policy_key(
+    user_id: int,
+    baseline_desired_retention: float | None,
+    lambda_value: float | None,
+    policy_index: int | None = None,
+) -> tuple[int, int | None, int | None, int | None]:
     lambda_key = (
         None if lambda_value is None else round(float(lambda_value) * 1_000_000)
     )
-    return (int(user_id), lambda_key)
+    baseline_key = (
+        None
+        if baseline_desired_retention is None
+        else round(float(baseline_desired_retention) * 1_000_000)
+    )
+    return (
+        int(user_id),
+        baseline_key,
+        lambda_key,
+        policy_index if baseline_key is None else None,
+    )
 
 
-def _format_missing_policy(user_id: int, lambda_value: float | None) -> str:
-    label = f"user={user_id}"
+def _format_missing_policy(
+    user_id: int, baseline_dr: float, lambda_value: float | None
+) -> str:
+    label = f"user={user_id}, baseline_desired_retention={baseline_dr:.2f}"
     if lambda_value is not None:
         label += f", lambda={lambda_value:g}"
     return label
+
+
+def _matches_grid(value: float, dr_values: Sequence[float]) -> bool:
+    return any(math.isclose(value, dr, rel_tol=0.0, abs_tol=1e-9) for dr in dr_values)
+
+
+def _matching_grid_value(value: float, dr_values: Sequence[float]) -> float:
+    for dr in dr_values:
+        if math.isclose(value, dr, rel_tol=0.0, abs_tol=1e-9):
+            return float(dr)
+    return float(value)
 
 
 def _normalized_lambda_filter(
@@ -300,7 +473,10 @@ def _normalized_lambda_filter(
     return tuple(float(value) for value in lambda_values)
 
 
-def _matches_lambda(value: float | None, lambda_values: Sequence[float]) -> bool:
+def _matches_lambda(
+    value: float | None,
+    lambda_values: Sequence[float],
+) -> bool:
     if value is None:
         return False
     return any(
@@ -318,10 +494,10 @@ def _load_sibling_metadata(path: Path) -> Mapping[str, Any] | None:
     if not isinstance(raw, Mapping):
         raise ValueError(f"Artifact metadata must be a JSON object: {metadata_path}")
     scheduler_name = raw.get("scheduler_name")
-    if scheduler_name is not None and scheduler_name != "fsrs6_adr_delta":
+    if scheduler_name is not None and scheduler_name != "fsrs6_adr":
         raise ValueError(
             f"Artifact metadata {metadata_path} scheduler_name={scheduler_name!r}; "
-            "expected 'fsrs6_adr_delta'."
+            "expected 'fsrs6_adr'."
         )
     policy_path_raw = raw.get("policy_path")
     if isinstance(policy_path_raw, str) and policy_path_raw.strip():
@@ -359,6 +535,16 @@ def _metadata_float(
     return _optional_float(metadata[key], f"metadata.{key} for {path}")
 
 
+def _metadata_int(
+    metadata: Mapping[str, Any] | None,
+    key: str,
+    path: Path,
+) -> int | None:
+    if metadata is None or key not in metadata:
+        return None
+    return _optional_int(metadata[key], f"metadata.{key} for {path}")
+
+
 def _extract_path_int(path: Path, prefix: str) -> int | None:
     for part in reversed(path.parts):
         if part.startswith(prefix):
@@ -387,6 +573,12 @@ def _require_int(value: Any, field_name: str) -> int:
     return int(value)
 
 
+def _optional_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _require_int(value, field_name)
+
+
 def _require_float(value: Any, field_name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (float, int)):
         raise ValueError(f"{field_name} must be a number.")
@@ -409,6 +601,8 @@ def _require_path(value: Any, field_name: str, *, base_path: Path) -> Path:
 
 
 __all__ = [
-    "FSRS6ADRDeltaPolicySpec",
-    "resolve_fsrs6_adr_delta_policy_specs",
+    "FSRS6ADRPolicySpec",
+    "format_float_token",
+    "parse_float_token",
+    "resolve_fsrs6_adr_policy_specs",
 ]

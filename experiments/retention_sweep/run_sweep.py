@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
         env_help="Comma-separated list of environments to sweep.",
         sched_help=(
             "Comma-separated list of schedulers to sweep "
-            "(include sspmmc, fsrs6_adr_direct, or fsrs6_adr_delta to run policies; "
+            "(include sspmmc or fsrs6_adr to run policies; "
             "use fixed@<days> for fixed intervals)."
         ),
     )
@@ -113,19 +113,10 @@ def parse_args() -> argparse.Namespace:
         help="Desired retention value logged for SSP-MMC runs.",
     )
     parser.add_argument(
-        "--fsrs6-adr-direct-policy",
+        "--fsrs6-adr-policy",
         type=Path,
         default=None,
-        help="Path to an FSRS6 ADR Direct policy JSON when using --sched fsrs6_adr_direct.",
-    )
-    parser.add_argument(
-        "--fsrs6-adr-delta-policy",
-        type=Path,
-        default=None,
-        help=(
-            "Path to an FSRS6 ADR Delta-conditioned policy JSON when using "
-            "--sched fsrs6_adr_delta."
-        ),
+        help="Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr.",
     )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
@@ -202,12 +193,9 @@ def _progress_label(args: argparse.Namespace) -> str:
     if args.scheduler == "sspmmc":
         if args.sspmmc_policy:
             label = f"{label}:{args.sspmmc_policy.stem}"
-    elif args.scheduler == "fsrs6_adr_direct":
-        if args.fsrs6_adr_direct_policy:
-            label = f"{label}:{args.fsrs6_adr_direct_policy.stem}"
-    elif args.scheduler == "fsrs6_adr_delta":
-        if args.fsrs6_adr_delta_policy:
-            label = f"{label}:{args.fsrs6_adr_delta_policy.stem}"
+    elif args.scheduler == "fsrs6_adr":
+        if args.fsrs6_adr_policy:
+            label = f"{label}:{args.fsrs6_adr_policy.stem}"
     elif scheduler_uses_desired_retention(args.scheduler):
         label = f"{label} dr={args.desired_retention:.2f}"
     return f"u{args.user_id} {label}" if args.user_id is not None else label
@@ -494,12 +482,9 @@ def main() -> None:
     non_dr_schedulers: List[str] = []
     fixed_schedulers = [spec for spec in scheduler_specs if spec[0] == "fixed"]
     has_sspmmc = any(spec[0] == "sspmmc" for spec in scheduler_specs)
-    has_fsrs6_adr_direct = any(
-        spec[0] == "fsrs6_adr_direct" for spec in scheduler_specs
-    )
-    has_fsrs6_adr_delta = any(spec[0] == "fsrs6_adr_delta" for spec in scheduler_specs)
+    has_fsrs6_adr = any(spec[0] == "fsrs6_adr" for spec in scheduler_specs)
     for name, _, _ in scheduler_specs:
-        if name in {"sspmmc", "fsrs6_adr_direct", "fixed"}:
+        if name in {"sspmmc", "fsrs6_adr", "fixed"}:
             continue
         if scheduler_uses_desired_retention(name):
             if name not in dr_schedulers:
@@ -509,13 +494,13 @@ def main() -> None:
                 non_dr_schedulers.append(name)
     run_dr = bool(dr_schedulers)
     run_sspmmc = has_sspmmc
-    run_fsrs6_adr_direct = has_fsrs6_adr_direct
+    run_fsrs6_adr = has_fsrs6_adr
     run_fixed = bool(fixed_schedulers)
     run_non_dr = bool(non_dr_schedulers)
     if (
         not run_dr
         and not run_sspmmc
-        and not run_fsrs6_adr_direct
+        and not run_fsrs6_adr
         and not run_fixed
         and not run_non_dr
     ):
@@ -524,10 +509,8 @@ def main() -> None:
     sspmmc_policies = _resolve_policy_paths(args, repo_root, run_sspmmc)
     if run_sspmmc and not sspmmc_policies:
         raise SystemExit("No SSP-MMC policies found. Provide --sspmmc-policy-dir.")
-    if run_fsrs6_adr_direct and args.fsrs6_adr_direct_policy is None:
-        raise SystemExit("--sched fsrs6_adr_direct requires --fsrs6-adr-direct-policy.")
-    if has_fsrs6_adr_delta and args.fsrs6_adr_delta_policy is None:
-        raise SystemExit("--sched fsrs6_adr_delta requires --fsrs6-adr-delta-policy.")
+    if run_fsrs6_adr and args.fsrs6_adr_policy is None:
+        raise SystemExit("--sched fsrs6_adr requires --fsrs6-adr-policy.")
 
     priority_fn = (
         review_first_priority if args.priority == "review-first" else new_first_priority
@@ -611,12 +594,12 @@ def main() -> None:
                         StatefulCostModel,
                     )
 
-            if run_fsrs6_adr_direct:
+            if run_fsrs6_adr:
                 run_args = argparse.Namespace(**vars(args))
                 run_args.environment = environment
-                run_args.scheduler = "fsrs6_adr_direct"
+                run_args.scheduler = "fsrs6_adr"
                 run_args.desired_retention = None
-                run_args.scheduler_spec = "fsrs6_adr_direct"
+                run_args.scheduler_spec = "fsrs6_adr"
                 run_args.log_dir = log_dir
                 _run_once(
                     run_args,
