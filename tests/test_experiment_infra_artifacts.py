@@ -91,7 +91,7 @@ class ExperimentInfraArtifactTests(unittest.TestCase):
         self.assertFalse(adr_capability.supports_desired_retention)
         capability = get_scheduler_capability("dash")
         self.assertTrue(capability.supports(engine="event", environment="fsrs6"))
-        self.assertFalse(capability.supports(engine="vectorized", environment="fsrs6"))
+        self.assertFalse(capability.supports(engine="batched", environment="fsrs6"))
 
 
 if __name__ == "__main__":

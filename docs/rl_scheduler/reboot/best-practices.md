@@ -5,8 +5,7 @@
 - Keep simulator core, scheduler runtime, artifact schema, and experiment
   orchestration separate.
 - Treat the event engine as the semantic reference.
-- Make vectorized and batched engines expose typed ops and explicit capability
-  flags.
+- Make event and batched engines expose typed ops and explicit capability flags.
 - Do not let `simulator/` import from `experiments/`.
 - Keep artifact loaders responsible for schema normalization only; schedulers
   should consume normalized config.

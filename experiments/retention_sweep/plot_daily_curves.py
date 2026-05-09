@@ -90,7 +90,10 @@ def _meta_matches(
         return False
     if sched is not None and meta.get("scheduler") != sched:
         return False
-    if engine != "any" and meta.get("engine") != engine:
+    engine_value = meta.get("engine")
+    if engine_value not in {"event", "batched"}:
+        return False
+    if engine != "any" and engine_value != engine:
         return False
 
     source_value = meta.get("short_term_source")
@@ -412,7 +415,7 @@ def main() -> int:
     parser.add_argument("--sched", type=str, default=None, help="Filter by scheduler.")
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized", "batched", "any"],
+        choices=["event", "batched", "any"],
         default="any",
         help="Filter by engine.",
     )

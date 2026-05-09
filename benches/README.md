@@ -28,4 +28,4 @@ uv run python benches/run_batched_bench.py --srs-benchmark-root ../srs-benchmark
 
 Notes
 - The runner disables plots and progress bars to reduce noise.
-- Report results by engine (event vs vectorized) when evaluating perf changes.
+- Report results by affected engine (event or batched) when evaluating perf changes.

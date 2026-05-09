@@ -353,7 +353,7 @@ class BaselineSource:
     def __post_init__(self) -> None:
         if self.scheduler != "fsrs6":
             raise ValueError("baseline.scheduler must be fsrs6 for formal gates.")
-        if self.expected_engine not in {"event", "vectorized", "batched"}:
+        if self.expected_engine not in {"event", "batched"}:
             raise ValueError("baseline.expected_engine is invalid.")
         if self.stage_mode not in {"copy", "hardlink"}:
             raise ValueError("baseline.stage_mode must be copy or hardlink.")
@@ -431,7 +431,7 @@ class SimulationScope:
         )
 
     def __post_init__(self) -> None:
-        if self.engine not in {"event", "vectorized", "batched"}:
+        if self.engine not in {"event", "batched"}:
             raise ValueError("simulation.engine is invalid.")
         if self.environment not in {
             "lstm",
@@ -739,7 +739,7 @@ class BuildParetoConfig:
             raise ValueError(
                 "build_pareto.short_term_source must be steps, sched, or any."
             )
-        if self.engine not in {"event", "vectorized", "batched", "any"}:
+        if self.engine not in {"event", "batched", "any"}:
             raise ValueError("build_pareto.engine is invalid.")
 
     def to_dict(self) -> dict[str, Any]:
@@ -828,7 +828,7 @@ class AnalyzeParetoConfig:
     def __post_init__(self) -> None:
         if self.short_term not in {"on", "off", "any"}:
             raise ValueError("analyze_pareto.short_term must be on, off, or any.")
-        if self.engine not in {"event", "vectorized", "batched", "any"}:
+        if self.engine not in {"event", "batched", "any"}:
             raise ValueError("analyze_pareto.engine is invalid.")
         if self.fuzz not in {"on", "off", "any"}:
             raise ValueError("analyze_pareto.fuzz must be on, off, or any.")

@@ -95,12 +95,12 @@ class SSPMMCScheduler(Scheduler):
 
 
 @dataclass
-class SSPMMCVectorizedState:
+class SSPMMCBatchedState:
     s: "torch.Tensor"
     d: "torch.Tensor"
 
 
-class SSPMMCVectorizedSchedulerOps:
+class SSPMMCBatchedSchedulerOps:
     def __init__(
         self,
         scheduler: SSPMMCScheduler,
@@ -109,7 +109,7 @@ class SSPMMCVectorizedSchedulerOps:
         dtype: "torch.dtype",
     ) -> None:
         import torch
-        from simulator.vectorized import math as vmath
+        from simulator.batched_engine import math as vmath
 
         self._torch = torch
         self._vmath = vmath
@@ -164,23 +164,23 @@ class SSPMMCVectorizedSchedulerOps:
                 self._policy_s_min, device=device, dtype=dtype
             )
 
-    def init_state(self, deck_size: int) -> SSPMMCVectorizedState:
+    def init_state(self, deck_size: int) -> SSPMMCBatchedState:
         s = self._torch.full(
             (deck_size,), self._bounds.s_min, dtype=self.dtype, device=self.device
         )
         d = self._torch.full(
             (deck_size,), self._bounds.d_min, dtype=self.dtype, device=self.device
         )
-        return SSPMMCVectorizedState(s=s, d=d)
+        return SSPMMCBatchedState(s=s, d=d)
 
     def review_priority(
-        self, state: SSPMMCVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+        self, state: SSPMMCBatchedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
         return self._torch.zeros(idx.numel(), device=self.device, dtype=self.dtype)
 
     def update_review(
         self,
-        state: SSPMMCVectorizedState,
+        state: SSPMMCBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -238,7 +238,7 @@ class SSPMMCVectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: SSPMMCVectorizedState,
+        state: SSPMMCBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":

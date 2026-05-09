@@ -201,8 +201,6 @@ def _build_command(
     disable_progress: bool,
     disable_summary: bool,
     emit_progress_events: bool,
-    torch_device: str | None,
-    inject_torch_device: bool,
 ) -> list[str]:
     cmd = build_retention_command(
         uv_cmd=uv_cmd,
@@ -210,8 +208,6 @@ def _build_command(
         env=environments,
         sched=schedulers,
         user_id=user_id,
-        torch_device=torch_device,
-        inject_torch_device=inject_torch_device,
     )
     cmd.extend(extra_args)
     if disable_progress and not has_flag(extra_args, "--no-progress"):
@@ -285,11 +281,6 @@ def main() -> int:
     user_ids = list(range(args.start_user, args.end_user + 1))
     envs = parse_csv(args.env) or ["lstm"]
     schedulers = parse_csv(args.sched) or ["fsrs6"]
-    inject_torch_device = bool(cuda_devices) and not has_flag(
-        extra_args, "--torch-device"
-    )
-    if inject_torch_device:
-        extra_args = list(extra_args)
     overall_total = None
     show_overall = use_parent_progress
     if show_overall:
@@ -330,8 +321,6 @@ def main() -> int:
                 disable_progress,
                 not enable_child_summary or use_parent_progress,
                 use_parent_progress,
-                torch_device="cuda:0" if device is not None else None,
-                inject_torch_device=inject_torch_device,
             )
             prefix = f"CUDA_VISIBLE_DEVICES={device} " if device is not None else ""
             return FanoutJob(

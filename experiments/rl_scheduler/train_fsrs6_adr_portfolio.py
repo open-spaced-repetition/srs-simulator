@@ -56,7 +56,7 @@ from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
-from simulator.vectorized.multiuser_engine import simulate_multiuser
+from simulator.batched_engine.multiuser_engine import simulate_multiuser
 
 
 _SELECTION_PROCESS_POOL_ENV = "FSRS6_ADR_PORTFOLIO_SELECTION_PROCESS_POOL"
@@ -1158,7 +1158,7 @@ def _write_portfolio_artifacts(
                 if result.job.command_record_path
                 else None,
                 "metrics_path": "metrics.json",
-                "capabilities": ["event", "vectorized", "batched"],
+                "capabilities": ["event", "batched"],
             },
         )
         artifact_paths.append(metadata_path)

@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 
 from simulator.button_usage import load_button_usage_config, normalize_button_usage
-from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
+from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
 
 
 def load_usage(

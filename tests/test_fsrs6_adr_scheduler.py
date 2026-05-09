@@ -23,12 +23,12 @@ from simulator.schedulers.fsrs import (
     FSRS3BatchSchedulerOps,
     FSRS6BatchSchedulerOps,
     FSRS6Scheduler,
-    FSRS6VectorizedSchedulerOps,
+    FSRS6BatchedSchedulerOps,
 )
 from simulator.schedulers.fsrs6_adr import (
     FSRS6ADRBatchSchedulerOps,
     FSRS6ADRScheduler,
-    FSRS6ADRVectorizedSchedulerOps,
+    FSRS6ADRBatchedSchedulerOps,
 )
 
 
@@ -133,7 +133,7 @@ class FSRS6ADRSchedulerTests(unittest.TestCase):
 
         self.assertAlmostEqual(adr_interval, fsrs_interval, places=9)
 
-    def test_linear_vectorized_baseline_policy_matches_fsrs6_scheduler(self) -> None:
+    def test_linear_batched_baseline_policy_matches_fsrs6_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
             FSRS6ADRPolicy.baseline(
@@ -143,12 +143,12 @@ class FSRS6ADRSchedulerTests(unittest.TestCase):
                 feature_version=SA_FEATURE_VERSION_LOG_LINEAR,
             ).write_json(policy_path)
 
-            fsrs = FSRS6VectorizedSchedulerOps(
+            fsrs = FSRS6BatchedSchedulerOps(
                 FSRS6Scheduler(weights=None, desired_retention=0.9),
                 device=torch.device("cpu"),
                 dtype=torch.float32,
             )
-            adr = FSRS6ADRVectorizedSchedulerOps(
+            adr = FSRS6ADRBatchedSchedulerOps(
                 FSRS6ADRScheduler(policy_json=policy_path, fsrs_weights=None),
                 device=torch.device("cpu"),
                 dtype=torch.float32,

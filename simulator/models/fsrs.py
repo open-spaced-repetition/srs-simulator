@@ -128,12 +128,12 @@ class FSRS3Model(MemoryModel):
 
 
 @dataclass
-class FSRS6VectorizedEnvState:
+class FSRS6BatchedEnvState:
     mem_s: "torch.Tensor"
     mem_d: "torch.Tensor"
 
 
-class FSRS6VectorizedEnvOps:
+class FSRS6BatchedEnvOps:
     def __init__(
         self,
         environment: FSRS6Model,
@@ -142,7 +142,7 @@ class FSRS6VectorizedEnvOps:
         dtype: "torch.dtype | None",
     ) -> None:
         import torch
-        from simulator.vectorized import math as vmath
+        from simulator.batched_engine import math as vmath
 
         self._torch = torch
         self._vmath = vmath
@@ -165,7 +165,7 @@ class FSRS6VectorizedEnvOps:
             self._bounds.d_max,
         )
 
-    def init_state(self, deck_size: int) -> FSRS6VectorizedEnvState:
+    def init_state(self, deck_size: int) -> FSRS6BatchedEnvState:
         mem_s = self._torch.full(
             (deck_size,),
             self._bounds.s_min,
@@ -178,11 +178,11 @@ class FSRS6VectorizedEnvOps:
             dtype=self.dtype,
             device=self.device,
         )
-        return FSRS6VectorizedEnvState(mem_s=mem_s, mem_d=mem_d)
+        return FSRS6BatchedEnvState(mem_s=mem_s, mem_d=mem_d)
 
     def retrievability(
         self,
-        state: FSRS6VectorizedEnvState,
+        state: FSRS6BatchedEnvState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -196,7 +196,7 @@ class FSRS6VectorizedEnvOps:
 
     def update_review(
         self,
-        state: FSRS6VectorizedEnvState,
+        state: FSRS6BatchedEnvState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -246,7 +246,7 @@ class FSRS6VectorizedEnvOps:
 
     def update_learn(
         self,
-        state: FSRS6VectorizedEnvState,
+        state: FSRS6BatchedEnvState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> None:

@@ -38,8 +38,8 @@ from simulator.fsrs6_adr_policy import (
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
-from simulator.vectorized.multiuser_engine import simulate_multiuser
-from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
+from simulator.batched_engine.multiuser_engine import simulate_multiuser
+from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
 
 
 RELATIVE_GAIN_GATE_FLOOR = 0.0

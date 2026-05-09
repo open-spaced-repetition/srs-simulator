@@ -7,13 +7,13 @@ import torch
 
 from simulator.core import SimulationStats
 from simulator.fuzz import resolve_max_interval
-from simulator.vectorized.fuzz import (
+from simulator.batched_engine.fuzz import (
     round_intervals,
     with_learning_fuzz,
     with_review_fuzz,
 )
-from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
-from simulator.vectorized.types import VectorizedConfig
+from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
+from simulator.batched_engine.types import BatchedEngineConfig
 
 
 def _prefix_count(costs: torch.Tensor, limit: torch.Tensor) -> torch.Tensor:
@@ -46,7 +46,7 @@ def simulate_multiuser(
     short_term_loops_limit: Optional[int] = None,
     batch_stats: Optional[dict[str, list[int]]] = None,
 ) -> list[SimulationStats]:
-    config = VectorizedConfig(
+    config = BatchedEngineConfig(
         device=torch.device(device) if device is not None else None,
         dtype=dtype,
     )

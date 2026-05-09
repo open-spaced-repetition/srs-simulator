@@ -23,7 +23,7 @@ from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.fsrs6_adp_policy import FSRS6ADPPolicy
 from simulator.short_term_config import resolve_short_term_config
-from simulator.vectorized.mixed_scheduler import (
+from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
     MixedSchedulerGroup as _MixedSchedulerGroup,
 )

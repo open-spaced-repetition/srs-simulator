@@ -37,7 +37,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if argv is None:
         argv = sys.argv[1:]
     parser = argparse.ArgumentParser(
-        description="Run multi-user retention sweeps with batched vectorized simulation.",
+        description="Run multi-user retention sweeps with the batched tensor engine.",
         allow_abbrev=False,
     )
     parser.add_argument(

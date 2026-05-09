@@ -8,7 +8,6 @@ from simulator.scheduler_spec import scheduler_uses_desired_retention
 
 class EngineName(StrEnum):
     EVENT = "event"
-    VECTORIZED = "vectorized"
     BATCHED = "batched"
 
 
@@ -20,21 +19,6 @@ EVENT_SCHEDULERS = (
     "fsrs3_default",
     "hlr",
     "dash",
-    "lstm",
-    "fixed",
-    "anki_sm2",
-    "memrise",
-    "sspmmc",
-    "fsrs6_adr",
-    "fsrs6_adp",
-)
-VECTORIZED_ENVS = ("lstm", "fsrs6", "fsrs6_default")
-VECTORIZED_SCHEDULERS = (
-    "fsrs6",
-    "fsrs6_default",
-    "fsrs3",
-    "fsrs3_default",
-    "hlr",
     "lstm",
     "fixed",
     "anki_sm2",
@@ -79,16 +63,12 @@ class SchedulerCapability:
 
 
 def build_scheduler_capabilities() -> dict[str, SchedulerCapability]:
-    schedulers = sorted(
-        set(EVENT_SCHEDULERS) | set(VECTORIZED_SCHEDULERS) | set(BATCHED_SCHEDULERS)
-    )
+    schedulers = sorted(set(EVENT_SCHEDULERS) | set(BATCHED_SCHEDULERS))
     capabilities: dict[str, SchedulerCapability] = {}
     for scheduler in schedulers:
         envs_by_engine: dict[EngineName, tuple[str, ...]] = {}
         if scheduler in EVENT_SCHEDULERS:
             envs_by_engine[EngineName.EVENT] = EVENT_ENVS
-        if scheduler in VECTORIZED_SCHEDULERS:
-            envs_by_engine[EngineName.VECTORIZED] = VECTORIZED_ENVS
         if scheduler in BATCHED_SCHEDULERS:
             envs_by_engine[EngineName.BATCHED] = BATCHED_ENVS
         capabilities[scheduler] = SchedulerCapability(

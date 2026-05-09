@@ -118,12 +118,12 @@ class FSRS6ADRScheduler(Scheduler):
 
 
 @dataclass
-class FSRS6ADRVectorizedState:
+class FSRS6ADRBatchedState:
     s: "torch.Tensor"
     d: "torch.Tensor"
 
 
-class FSRS6ADRVectorizedSchedulerOps:
+class FSRS6ADRBatchedSchedulerOps:
     def __init__(
         self,
         scheduler: FSRS6ADRScheduler,
@@ -132,7 +132,7 @@ class FSRS6ADRVectorizedSchedulerOps:
         dtype: "torch.dtype",
     ) -> None:
         import torch
-        from simulator.vectorized import math as vmath
+        from simulator.batched_engine import math as vmath
 
         self._torch = torch
         self._vmath = vmath
@@ -166,18 +166,18 @@ class FSRS6ADRVectorizedSchedulerOps:
         )
         self._priority_mode = scheduler.priority_mode
 
-    def init_state(self, deck_size: int) -> FSRS6ADRVectorizedState:
+    def init_state(self, deck_size: int) -> FSRS6ADRBatchedState:
         s = self._torch.full(
             (deck_size,), self._bounds.s_min, dtype=self.dtype, device=self.device
         )
         d = self._torch.full(
             (deck_size,), self._bounds.d_min, dtype=self.dtype, device=self.device
         )
-        return FSRS6ADRVectorizedState(s=s, d=d)
+        return FSRS6ADRBatchedState(s=s, d=d)
 
     def review_priority(
         self,
-        state: FSRS6ADRVectorizedState,
+        state: FSRS6ADRBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -200,7 +200,7 @@ class FSRS6ADRVectorizedSchedulerOps:
 
     def update_review(
         self,
-        state: FSRS6ADRVectorizedState,
+        state: FSRS6ADRBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -253,7 +253,7 @@ class FSRS6ADRVectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: FSRS6ADRVectorizedState,
+        state: FSRS6ADRBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -557,5 +557,5 @@ class FSRS6ADRBatchSchedulerOps:
 __all__ = [
     "FSRS6ADRBatchSchedulerOps",
     "FSRS6ADRScheduler",
-    "FSRS6ADRVectorizedSchedulerOps",
+    "FSRS6ADRBatchedSchedulerOps",
 ]

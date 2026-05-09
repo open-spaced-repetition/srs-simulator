@@ -65,7 +65,7 @@ def _stats(days: int = 2, memorized: float = 10.0) -> SimulationStats:
 
 def _write_log_args(log_dir: Path, write_daily_csv: bool | None) -> argparse.Namespace:
     kwargs = {
-        "engine": "vectorized",
+        "engine": "batched",
         "days": 2,
         "deck": 10,
         "learn_limit": 1,

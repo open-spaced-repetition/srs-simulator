@@ -249,7 +249,7 @@ def add_torch_device_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--torch-device",
         default=None,
-        help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
+        help="Torch device for the batched engine (e.g. cuda, cuda:0, cpu).",
     )
 
 

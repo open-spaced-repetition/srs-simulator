@@ -23,11 +23,11 @@ class FixedIntervalScheduler(Scheduler):
 
 
 @dataclass
-class FixedVectorizedState:
+class FixedBatchedState:
     interval: float
 
 
-class FixedVectorizedSchedulerOps:
+class FixedBatchedSchedulerOps:
     def __init__(
         self,
         scheduler: FixedIntervalScheduler,
@@ -43,17 +43,17 @@ class FixedVectorizedSchedulerOps:
         self._interval = float(scheduler.interval)
         self._interval_days = max(1, int(round(self._interval)))
 
-    def init_state(self, deck_size: int) -> FixedVectorizedState:
-        return FixedVectorizedState(interval=self._interval)
+    def init_state(self, deck_size: int) -> FixedBatchedState:
+        return FixedBatchedState(interval=self._interval)
 
     def review_priority(
-        self, state: FixedVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+        self, state: FixedBatchedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
         return self._torch.zeros(idx.numel(), device=self.device, dtype=self.dtype)
 
     def update_review(
         self,
-        state: FixedVectorizedState,
+        state: FixedBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -68,7 +68,7 @@ class FixedVectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: FixedVectorizedState,
+        state: FixedBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":

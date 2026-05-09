@@ -467,7 +467,7 @@ def write_artifact(
             "metrics_path": "metrics.json",
             "optimizer": "cma_es",
             "optimizer_settings": optimizer,
-            "capabilities": ["event", "vectorized", "batched"],
+            "capabilities": ["event", "batched"],
         },
     )
     return policy_path, metrics_path, metadata_path

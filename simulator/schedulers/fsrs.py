@@ -179,12 +179,12 @@ FSRSScheduler = FSRS6Scheduler
 
 
 @dataclass
-class FSRSVectorizedState:
+class FSRSBatchedState:
     s: "torch.Tensor"
     d: "torch.Tensor"
 
 
-class FSRS6VectorizedSchedulerOps:
+class FSRS6BatchedSchedulerOps:
     def __init__(
         self,
         scheduler: FSRS6Scheduler,
@@ -193,7 +193,7 @@ class FSRS6VectorizedSchedulerOps:
         dtype: "torch.dtype",
     ) -> None:
         import torch
-        from simulator.vectorized import math as vmath
+        from simulator.batched_engine import math as vmath
 
         self._torch = torch
         self._vmath = vmath
@@ -222,17 +222,17 @@ class FSRS6VectorizedSchedulerOps:
         )
         self._priority_mode = scheduler.priority_mode
 
-    def init_state(self, deck_size: int) -> FSRSVectorizedState:
+    def init_state(self, deck_size: int) -> FSRSBatchedState:
         s = self._torch.full(
             (deck_size,), self._bounds.s_min, dtype=self.dtype, device=self.device
         )
         d = self._torch.full(
             (deck_size,), self._bounds.d_min, dtype=self.dtype, device=self.device
         )
-        return FSRSVectorizedState(s=s, d=d)
+        return FSRSBatchedState(s=s, d=d)
 
     def review_priority(
-        self, state: FSRSVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+        self, state: FSRSBatchedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
         if idx.numel() == 0:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
@@ -253,7 +253,7 @@ class FSRS6VectorizedSchedulerOps:
 
     def update_review(
         self,
-        state: FSRSVectorizedState,
+        state: FSRSBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -313,7 +313,7 @@ class FSRS6VectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: FSRSVectorizedState,
+        state: FSRSBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -653,7 +653,7 @@ class FSRS3BatchSchedulerOps:
         return self._torch.clamp(state.s[user_idx, card_idx] * interval_factor, min=1.0)
 
 
-class FSRS3VectorizedSchedulerOps:
+class FSRS3BatchedSchedulerOps:
     def __init__(
         self,
         scheduler: FSRS3Scheduler,
@@ -662,7 +662,7 @@ class FSRS3VectorizedSchedulerOps:
         dtype: "torch.dtype",
     ) -> None:
         import torch
-        from simulator.vectorized import math as vmath
+        from simulator.batched_engine import math as vmath
 
         self._torch = torch
         self._vmath = vmath
@@ -675,17 +675,17 @@ class FSRS3VectorizedSchedulerOps:
         self._fsrs3_ln = math.log(0.9)
         self._log_desired = math.log(scheduler.desired_retention)
 
-    def init_state(self, deck_size: int) -> FSRSVectorizedState:
+    def init_state(self, deck_size: int) -> FSRSBatchedState:
         s = self._torch.full(
             (deck_size,), self._bounds.s_min, dtype=self.dtype, device=self.device
         )
         d = self._torch.full(
             (deck_size,), self._bounds.d_min, dtype=self.dtype, device=self.device
         )
-        return FSRSVectorizedState(s=s, d=d)
+        return FSRSBatchedState(s=s, d=d)
 
     def review_priority(
-        self, state: FSRSVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+        self, state: FSRSBatchedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
         if idx.numel() == 0:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
@@ -695,7 +695,7 @@ class FSRS3VectorizedSchedulerOps:
 
     def update_review(
         self,
-        state: FSRSVectorizedState,
+        state: FSRSBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -730,7 +730,7 @@ class FSRS3VectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: FSRSVectorizedState,
+        state: FSRSBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":

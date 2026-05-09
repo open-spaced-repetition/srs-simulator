@@ -51,7 +51,7 @@ from simulator.fsrs6_adp_policy import (
 from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
-from simulator.vectorized.multiuser_engine import simulate_multiuser
+from simulator.batched_engine.multiuser_engine import simulate_multiuser
 
 
 @dataclass(frozen=True, slots=True)
@@ -944,7 +944,7 @@ def _write_grid_artifacts(
                 "metrics_path": "metrics.json",
                 "optimizer": "cma_es",
                 "optimizer_settings": optimizer,
-                "capabilities": ["event", "vectorized", "batched"],
+                "capabilities": ["event", "batched"],
             },
         )
         artifact_paths.append(metadata_path)

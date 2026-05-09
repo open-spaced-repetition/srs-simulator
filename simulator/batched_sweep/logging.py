@@ -9,8 +9,8 @@ from pathlib import Path
 import torch
 
 from simulator.core import SimulationStats
-from simulator.vectorized.multiuser_engine import simulate_multiuser
-from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
+from simulator.batched_engine.multiuser_engine import simulate_multiuser
+from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
 
 
 def progress_callback_from_queue(

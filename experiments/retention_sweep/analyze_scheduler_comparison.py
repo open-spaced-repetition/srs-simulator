@@ -126,7 +126,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized", "batched", "any"],
+        choices=["event", "batched", "any"],
         default="batched",
         help="Filter logs by simulation engine.",
     )
@@ -356,7 +356,10 @@ def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
             user_id = int(item.get("user_id", -1))
             if not (args.start_user <= user_id <= args.end_user):
                 continue
-            if args.engine != "any" and item.get("engine") != args.engine:
+            engine_value = item.get("engine")
+            if engine_value not in {"event", "batched"}:
+                continue
+            if args.engine != "any" and engine_value != args.engine:
                 continue
             if not bool_filter_matches(item.get("short_term"), args.short_term):
                 continue

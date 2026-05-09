@@ -31,7 +31,7 @@ from simulator.experiment_infra.schemas import (
     StageName,
 )
 from simulator.retention_sweep.log_filter import LogFilenameFilter
-from simulator.vectorized.mixed_scheduler import (
+from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
     MixedSchedulerGroup as _MixedSchedulerGroup,
 )
@@ -4562,7 +4562,7 @@ def _run_batched_sweep_jobs(
     from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
     from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
     from simulator.short_term_config import resolve_short_term_config
-    from simulator.vectorized.multiuser_engine import simulate_multiuser
+    from simulator.batched_engine.multiuser_engine import simulate_multiuser
 
     device_name = _resolve_performance_device(config)
     torch_device = config.training_policy_search.get("torch_device")

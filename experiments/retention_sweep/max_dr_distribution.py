@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized", "batched", "any"],
+        choices=["event", "batched", "any"],
         default="any",
         help="Filter logs by simulation engine (default: any).",
     )
@@ -135,14 +135,14 @@ def _infer_engine(meta: Dict[str, Any], path: Path) -> str | None:
         lowered = value.strip().lower()
         if lowered == "batch":
             lowered = "batched"
-        if lowered in {"event", "vectorized", "batched"}:
+        if lowered in {"event", "batched"}:
             return lowered
     match = re.search(r"_engine=([^_]+)_", path.name)
     if match:
         lowered = match.group(1).strip().lower()
         if lowered == "batch":
             lowered = "batched"
-        if lowered in {"event", "vectorized", "batched"}:
+        if lowered in {"event", "batched"}:
             return lowered
     return None
 
@@ -207,6 +207,8 @@ def main() -> None:
             continue
 
         engine = _infer_engine(meta, path)
+        if engine not in {"event", "batched"}:
+            continue
         if args.engine != "any" and engine != args.engine:
             continue
 

@@ -272,7 +272,7 @@ class LSTMScheduler(Scheduler):
 
 
 @dataclass
-class LSTMVectorizedSchedulerState:
+class LSTMBatchedSchedulerState:
     lstm_h: "torch.Tensor"
     lstm_c: "torch.Tensor"
     mem_w: "torch.Tensor"
@@ -281,7 +281,7 @@ class LSTMVectorizedSchedulerState:
     has_curves: "torch.Tensor"
 
 
-class LSTMVectorizedSchedulerOps:
+class LSTMBatchedSchedulerOps:
     def __init__(
         self,
         scheduler: LSTMScheduler,
@@ -325,7 +325,7 @@ class LSTMVectorizedSchedulerOps:
         self._min_interval = torch.tensor(self.min_interval, device=device, dtype=dtype)
         self._max_interval = torch.tensor(self.max_interval, device=device, dtype=dtype)
 
-    def init_state(self, deck_size: int) -> LSTMVectorizedSchedulerState:
+    def init_state(self, deck_size: int) -> LSTMBatchedSchedulerState:
         lstm_h = self._torch.zeros(
             (self.n_rnns, deck_size, self.n_hidden),
             dtype=self.dtype,
@@ -344,7 +344,7 @@ class LSTMVectorizedSchedulerOps:
         has_curves = self._torch.zeros(
             deck_size, dtype=self._torch.bool, device=self.device
         )
-        return LSTMVectorizedSchedulerState(
+        return LSTMBatchedSchedulerState(
             lstm_h=lstm_h,
             lstm_c=lstm_c,
             mem_w=mem_w,
@@ -355,7 +355,7 @@ class LSTMVectorizedSchedulerOps:
 
     def review_priority(
         self,
-        state: LSTMVectorizedSchedulerState,
+        state: LSTMBatchedSchedulerState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -381,7 +381,7 @@ class LSTMVectorizedSchedulerOps:
 
     def update_review(
         self,
-        state: LSTMVectorizedSchedulerState,
+        state: LSTMBatchedSchedulerState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -394,7 +394,7 @@ class LSTMVectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: LSTMVectorizedSchedulerState,
+        state: LSTMBatchedSchedulerState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -406,7 +406,7 @@ class LSTMVectorizedSchedulerOps:
 
     def _update_curves(
         self,
-        state: LSTMVectorizedSchedulerState,
+        state: LSTMBatchedSchedulerState,
         idx: "torch.Tensor",
         delays: "torch.Tensor",
         ratings: "torch.Tensor",
@@ -452,7 +452,7 @@ class LSTMVectorizedSchedulerOps:
 
     def _target_interval(
         self,
-        state: LSTMVectorizedSchedulerState,
+        state: LSTMBatchedSchedulerState,
         idx: "torch.Tensor",
         prev_interval: "torch.Tensor | None",
     ) -> "torch.Tensor":
@@ -462,7 +462,7 @@ class LSTMVectorizedSchedulerOps:
 
     def _target_interval_integer(
         self,
-        state: LSTMVectorizedSchedulerState,
+        state: LSTMBatchedSchedulerState,
         idx: "torch.Tensor",
         prev_interval: "torch.Tensor | None",
     ) -> "torch.Tensor":
@@ -516,7 +516,7 @@ class LSTMVectorizedSchedulerOps:
 
     def _target_interval_float(
         self,
-        state: LSTMVectorizedSchedulerState,
+        state: LSTMBatchedSchedulerState,
         idx: "torch.Tensor",
         prev_interval: "torch.Tensor | None",
     ) -> "torch.Tensor":

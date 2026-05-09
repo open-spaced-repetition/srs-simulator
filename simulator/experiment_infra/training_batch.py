@@ -14,7 +14,7 @@ from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
-from simulator.vectorized.multiuser_engine import simulate_multiuser
+from simulator.batched_engine.multiuser_engine import simulate_multiuser
 
 
 SUPPORTED_TRAINERS = {

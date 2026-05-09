@@ -59,7 +59,7 @@ from simulator.fsrs6_adp_policy import FEATURE_VERSION, FSRS6ADPPolicy, WEIGHT_C
 from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
-from simulator.vectorized.multiuser_engine import simulate_multiuser
+from simulator.batched_engine.multiuser_engine import simulate_multiuser
 
 
 @dataclass(frozen=True, slots=True)
@@ -1224,7 +1224,7 @@ def _write_portfolio_artifacts(
                 else None,
                 "metrics_path": "metrics.json",
                 "optimizer": "sms_emoa",
-                "capabilities": ["event", "vectorized", "batched"],
+                "capabilities": ["event", "batched"],
             },
         )
         artifact_paths.append(metadata_path)

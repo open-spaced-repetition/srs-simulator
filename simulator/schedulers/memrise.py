@@ -41,11 +41,11 @@ class MemriseScheduler(Scheduler):
 
 
 @dataclass
-class MemriseVectorizedState:
+class MemriseBatchedState:
     interval: float
 
 
-class MemriseVectorizedSchedulerOps:
+class MemriseBatchedSchedulerOps:
     def __init__(
         self,
         scheduler: MemriseScheduler,
@@ -61,12 +61,12 @@ class MemriseVectorizedSchedulerOps:
         self._sequence = torch.tensor(scheduler.sequence, device=device, dtype=dtype)
         self._seq_len = int(self._sequence.numel())
 
-    def init_state(self, deck_size: int) -> MemriseVectorizedState:
-        return MemriseVectorizedState(interval=1.0)
+    def init_state(self, deck_size: int) -> MemriseBatchedState:
+        return MemriseBatchedState(interval=1.0)
 
     def review_priority(
         self,
-        state: MemriseVectorizedState,
+        state: MemriseBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
     ) -> "torch.Tensor":
@@ -74,7 +74,7 @@ class MemriseVectorizedSchedulerOps:
 
     def update_review(
         self,
-        state: MemriseVectorizedState,
+        state: MemriseBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -101,7 +101,7 @@ class MemriseVectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: MemriseVectorizedState,
+        state: MemriseBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":

@@ -191,8 +191,7 @@ Run profiling before and after any performance-related change.
 4. Record JSON performance summaries for every point.
 5. Compare throughput, memory, output count, and gate metrics.
 6. Keep simulator CSV logs disabled unless diagnosing simulator behavior.
-7. Report event, vectorized, and batched baselines only for paths affected by
-   the change.
+7. Report event and batched baselines only for paths affected by the change.
 
 Useful commands:
 

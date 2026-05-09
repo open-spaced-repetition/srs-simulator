@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized", "batched", "any"],
+        choices=["event", "batched", "any"],
         default="any",
         help="Filter logs by simulation engine.",
     )
@@ -130,7 +130,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--compare-engine",
         action="store_true",
-        help="Plot event/vectorized/batched as separate series when logs include meta.engine.",
+        help="Plot event/batched as separate series when logs include meta.engine.",
     )
     parser.add_argument(
         "--results-path",
@@ -469,8 +469,7 @@ def _desired_dedupe_identity(entry: Dict[str, Any]) -> Optional[str]:
 def _engine_rank(engine: Optional[str]) -> int:
     order = {
         "batched": 0,
-        "vectorized": 1,
-        "event": 2,
+        "event": 1,
     }
     return order.get(engine or "", len(order))
 
@@ -592,6 +591,8 @@ def _iter_log_entries(
                 continue
 
         engine_value = meta.get("engine")
+        if engine_value not in {"event", "batched"}:
+            continue
         if engine_filter is not None:
             if engine_value != engine_filter:
                 continue
@@ -1305,7 +1306,7 @@ def main() -> None:
         short_term_series = [False, True]
     engine_series = [engine_filter]
     if args.compare_engine:
-        engine_series = ["event", "vectorized", "batched"]
+        engine_series = ["event", "batched"]
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:

@@ -7,12 +7,12 @@ import torch
 
 
 @dataclass(frozen=True)
-class VectorizedConfig:
+class BatchedEngineConfig:
     device: Optional[torch.device] = None
     dtype: Optional[torch.dtype] = None
 
 
-class VectorizedEnvOps(Protocol):
+class BatchedEnvOps(Protocol):
     device: torch.device
     dtype: torch.dtype
 
@@ -34,7 +34,7 @@ class VectorizedEnvOps(Protocol):
     def update_learn(self, state, idx: torch.Tensor, rating: torch.Tensor) -> None: ...
 
 
-class VectorizedSchedulerOps(Protocol):
+class BatchedSchedulerOps(Protocol):
     device: torch.device
     dtype: torch.dtype
 

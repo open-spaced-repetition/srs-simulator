@@ -50,7 +50,7 @@ Deliverables:
   elapsed time, throughput, peak memory, shared-memory growth, and fallback
   status.
 - Versioned scheduler artifact metadata schemas for any new RL/FQI family.
-- Unified scheduler capability registry for event/vectorized/batched support.
+- Unified scheduler capability registry for event/batched support.
 - First slice may use stdlib typed dataclasses to avoid dependency churn; migrate
   to `pydantic` when validators or JSON schema emission outgrow the scaffold.
 

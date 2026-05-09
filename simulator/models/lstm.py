@@ -507,7 +507,7 @@ class LSTMModel(MemoryModel):
 
 
 @dataclass
-class LSTMVectorizedEnvState:
+class LSTMBatchedEnvState:
     lstm_h: Tensor
     lstm_c: Tensor
     mem_w: Tensor
@@ -516,7 +516,7 @@ class LSTMVectorizedEnvState:
     has_curves: Tensor
 
 
-class LSTMVectorizedEnvOps:
+class LSTMBatchedEnvOps:
     def __init__(
         self,
         environment: LSTMModel,
@@ -548,7 +548,7 @@ class LSTMVectorizedEnvOps:
                 environment.default_duration_ms, device=self.device, dtype=self.dtype
             )
 
-    def init_state(self, deck_size: int) -> LSTMVectorizedEnvState:
+    def init_state(self, deck_size: int) -> LSTMBatchedEnvState:
         lstm_h = torch.zeros(
             (self.n_rnns, deck_size, self.n_hidden),
             dtype=self.dtype,
@@ -565,7 +565,7 @@ class LSTMVectorizedEnvOps:
             (deck_size, self.n_curves), dtype=self.dtype, device=self.device
         )
         has_curves = torch.zeros(deck_size, dtype=torch.bool, device=self.device)
-        return LSTMVectorizedEnvState(
+        return LSTMBatchedEnvState(
             lstm_h=lstm_h,
             lstm_c=lstm_c,
             mem_w=mem_w,
@@ -575,7 +575,7 @@ class LSTMVectorizedEnvOps:
         )
 
     def retrievability(
-        self, state: LSTMVectorizedEnvState, idx: Tensor, elapsed: Tensor
+        self, state: LSTMBatchedEnvState, idx: Tensor, elapsed: Tensor
     ) -> Tensor:
         elapsed_clamped = torch.clamp(elapsed, min=0.0)
         memorized = torch.full(
@@ -597,7 +597,7 @@ class LSTMVectorizedEnvOps:
 
     def update_review(
         self,
-        state: LSTMVectorizedEnvState,
+        state: LSTMBatchedEnvState,
         idx: Tensor,
         elapsed: Tensor,
         rating: Tensor,
@@ -608,7 +608,7 @@ class LSTMVectorizedEnvOps:
         self._update_curves(state, idx, elapsed, rating)
 
     def update_learn(
-        self, state: LSTMVectorizedEnvState, idx: Tensor, rating: Tensor
+        self, state: LSTMBatchedEnvState, idx: Tensor, rating: Tensor
     ) -> None:
         if idx.numel() == 0:
             return
@@ -617,7 +617,7 @@ class LSTMVectorizedEnvOps:
 
     def _update_curves(
         self,
-        state: LSTMVectorizedEnvState,
+        state: LSTMBatchedEnvState,
         idx: Tensor,
         delays: Tensor,
         ratings: Tensor,

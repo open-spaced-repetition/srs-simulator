@@ -34,7 +34,6 @@ from experiments.retention_sweep.cli_utils import (
     add_log_args,
     add_retention_range_args,
     add_short_term_args,
-    add_torch_device_arg,
     parse_csv,
 )
 
@@ -153,15 +152,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized"],
-        default="vectorized",
-        help=(
-            "Simulation engine: vectorized (default) or event "
-            "(FSRS6 environment + FSRS6 scheduler, or LSTM environment + "
-            "FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC/LSTM schedulers)."
-        ),
+        choices=["event"],
+        default="event",
+        help="Simulation engine: event-driven simulator with per-event logging support.",
     )
-    add_torch_device_arg(parser)
     parser.add_argument(
         "--no-summary",
         action="store_true",
@@ -289,11 +283,8 @@ def _run_once(
     )
     run_args.short_term_source = short_term_source
     run_args.short_term = bool(short_term_source)
-    if short_term_source in {"steps", "sched"} and run_args.engine not in {
-        "event",
-        "vectorized",
-    }:
-        raise SystemExit("Short-term scheduling requires --engine event or vectorized.")
+    if short_term_source in {"steps", "sched"} and run_args.engine != "event":
+        raise SystemExit("Short-term scheduling requires --engine event.")
     if short_term_source == "sched":
         if run_args.scheduler != "lstm":
             raise SystemExit("--short-term-source=sched requires --sched lstm.")
@@ -360,34 +351,19 @@ def _run_once(
             )
         )
     try:
-        if run_args.engine == "vectorized":
-            stats = _run_vectorized(
-                run_args,
-                env,
-                agent,
-                behavior,
-                cost_model,
-                progress_callback,
-                short_term_source,
-                learning_steps,
-                relearning_steps,
-            )
-        else:
-            stats = run_simulation(
-                days=run_args.days,
-                deck_size=run_args.deck,
-                environment=env,
-                scheduler=agent,
-                behavior=behavior,
-                cost_model=cost_model,
-                fuzz=run_args.fuzz,
-                seed_fn=rng.random,
-                progress=False,
-                progress_callback=progress_callback,
-                short_term_loops_limit=getattr(
-                    run_args, "short_term_loops_limit", None
-                ),
-            )
+        stats = run_simulation(
+            days=run_args.days,
+            deck_size=run_args.deck,
+            environment=env,
+            scheduler=agent,
+            behavior=behavior,
+            cost_model=cost_model,
+            fuzz=run_args.fuzz,
+            seed_fn=rng.random,
+            progress=False,
+            progress_callback=progress_callback,
+            short_term_loops_limit=getattr(run_args, "short_term_loops_limit", None),
+        )
     finally:
         progress_close()
     if not run_args.no_log:
@@ -395,42 +371,6 @@ def _run_once(
         simulate_cli._write_log(run_args, stats)
     if run_args.plot:
         simulate_cli.plot_simulation(stats, run_args)
-
-
-def _run_vectorized(
-    run_args: argparse.Namespace,
-    env,
-    agent,
-    behavior,
-    cost_model,
-    progress_callback,
-    short_term_source,
-    learning_steps,
-    relearning_steps,
-):
-    from simulator.vectorized import simulate as simulate_vectorized
-
-    try:
-        return simulate_vectorized(
-            days=run_args.days,
-            deck_size=run_args.deck,
-            environment=env,
-            scheduler=agent,
-            behavior=behavior,
-            cost_model=cost_model,
-            seed=run_args.seed,
-            device=run_args.torch_device,
-            fuzz=run_args.fuzz,
-            progress=False,
-            progress_callback=progress_callback,
-            short_term_source=short_term_source,
-            learning_steps=learning_steps,
-            relearning_steps=relearning_steps,
-            short_term_threshold=getattr(run_args, "short_term_threshold", 0.5),
-            short_term_loops_limit=getattr(run_args, "short_term_loops_limit", None),
-        )
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
 
 
 def main() -> None:

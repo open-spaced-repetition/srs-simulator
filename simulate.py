@@ -54,7 +54,6 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
-from simulator.vectorized import simulate as simulate_vectorized
 from simulator.short_term import ShortTermScheduler
 from simulator.short_term_config import (
     parse_steps as _parse_steps,
@@ -255,24 +254,16 @@ def main() -> None:
         default=DEFAULT_SHORT_TERM_LOOPS_LIMIT,
         help=(
             "Max short-term review loops per day (per user). "
-            "Applies to vectorized short-term simulation."
+            "Remaining short-term cards carry over to the next day."
         ),
     )
     parser.add_argument(
         "--engine",
-        choices=["event", "vectorized"],
-        default="vectorized",
+        choices=["event"],
+        default="event",
         help=(
-            "Simulation engine: vectorized (default) or event "
-            "(FSRS6 environment + FSRS6/FSRS3/HLR/fixed/Memrise/Anki SM-2/SSPMMC/LSTM "
-            "schedulers, or LSTM environment + FSRS6/FSRS3/HLR/fixed/Memrise/"
-            "Anki SM-2/SSPMMC/LSTM schedulers)."
+            "Simulation engine: event-driven simulator with per-event logging support."
         ),
-    )
-    parser.add_argument(
-        "--torch-device",
-        default=None,
-        help="Torch device for vectorized engine (e.g. cuda, cuda:0, cpu).",
     )
     parser.add_argument(
         "--days",
@@ -402,11 +393,8 @@ def main() -> None:
     args.short_term_source = short_term_source
     args.short_term = bool(short_term_source)
 
-    if short_term_source in {"steps", "sched"} and args.engine not in {
-        "event",
-        "vectorized",
-    }:
-        raise SystemExit("Short-term scheduling requires --engine event or vectorized.")
+    if short_term_source in {"steps", "sched"} and args.engine != "event":
+        raise SystemExit("Short-term scheduling requires --engine event.")
     if short_term_source == "sched":
         if args.scheduler != "lstm":
             raise SystemExit("--short-term-source=sched requires --sched lstm.")
@@ -420,23 +408,22 @@ def main() -> None:
     rng = random.Random(args.seed)
     env = ENVIRONMENT_FACTORIES[args.env](args)
     agent = SCHEDULER_FACTORIES[args.scheduler](args)
-    if args.engine == "event":
-        if short_term_source == "steps":
-            agent = ShortTermScheduler(
-                agent,
-                learning_steps=learning_steps,
-                relearning_steps=relearning_steps,
-                threshold_days=args.short_term_threshold,
-                allow_short_term_interval=False,
-            )
-        elif short_term_source == "sched":
-            agent = ShortTermScheduler(
-                agent,
-                learning_steps=[],
-                relearning_steps=[],
-                threshold_days=args.short_term_threshold,
-                allow_short_term_interval=True,
-            )
+    if short_term_source == "steps":
+        agent = ShortTermScheduler(
+            agent,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+            threshold_days=args.short_term_threshold,
+            allow_short_term_interval=False,
+        )
+    elif short_term_source == "sched":
+        agent = ShortTermScheduler(
+            agent,
+            learning_steps=[],
+            relearning_steps=[],
+            threshold_days=args.short_term_threshold,
+            allow_short_term_interval=True,
+        )
     cost_limit = (
         args.cost_limit_minutes * 60.0 if args.cost_limit_minutes is not None else None
     )
@@ -477,45 +464,18 @@ def main() -> None:
             )
         )
     start_time = time.perf_counter()
-    if args.engine == "vectorized":
-        if args.log_reviews:
-            sys.stderr.write(
-                "Vectorized engine does not emit per-event logs; "
-                "--log-reviews ignored.\n"
-            )
-        try:
-            stats = simulate_vectorized(
-                days=args.days,
-                deck_size=args.deck,
-                environment=env,
-                scheduler=agent,
-                behavior=behavior,
-                cost_model=cost_model,
-                seed=args.seed,
-                device=args.torch_device,
-                fuzz=args.fuzz,
-                progress=not args.no_progress,
-                short_term_source=short_term_source,
-                learning_steps=learning_steps,
-                relearning_steps=relearning_steps,
-                short_term_threshold=args.short_term_threshold,
-                short_term_loops_limit=args.short_term_loops_limit,
-            )
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-    else:
-        stats = simulate(
-            days=args.days,
-            deck_size=args.deck,
-            environment=env,
-            scheduler=agent,
-            behavior=behavior,
-            cost_model=cost_model,
-            fuzz=args.fuzz,
-            seed_fn=rng.random,
-            progress=not args.no_progress,
-            short_term_loops_limit=args.short_term_loops_limit,
-        )
+    stats = simulate(
+        days=args.days,
+        deck_size=args.deck,
+        environment=env,
+        scheduler=agent,
+        behavior=behavior,
+        cost_model=cost_model,
+        fuzz=args.fuzz,
+        seed_fn=rng.random,
+        progress=not args.no_progress,
+        short_term_loops_limit=args.short_term_loops_limit,
+    )
     elapsed = time.perf_counter() - start_time
     sys.stderr.write(f"Simulation time: {elapsed:.2f}s\n")
     timing = getattr(stats, "timing", None)

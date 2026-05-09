@@ -323,11 +323,11 @@ def _passing_review_interval(
 
 
 @dataclass
-class AnkiVectorizedState:
+class AnkiBatchedState:
     ease: "torch.Tensor"
 
 
-class AnkiSM2VectorizedSchedulerOps:
+class AnkiSM2BatchedSchedulerOps:
     def __init__(
         self,
         scheduler: AnkiSM2Scheduler,
@@ -348,20 +348,20 @@ class AnkiSM2VectorizedSchedulerOps:
         self._ease_min = float(scheduler.ease_min)
         self._ease_max = float(scheduler.ease_max)
 
-    def init_state(self, deck_size: int) -> AnkiVectorizedState:
+    def init_state(self, deck_size: int) -> AnkiBatchedState:
         ease = self._torch.full(
             (deck_size,), self._ease_start, device=self.device, dtype=self.dtype
         )
-        return AnkiVectorizedState(ease=ease)
+        return AnkiBatchedState(ease=ease)
 
     def review_priority(
-        self, state: AnkiVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+        self, state: AnkiBatchedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
         return self._torch.zeros(idx.numel(), device=self.device, dtype=self.dtype)
 
     def update_review(
         self,
-        state: AnkiVectorizedState,
+        state: AnkiBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -386,7 +386,7 @@ class AnkiSM2VectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: AnkiVectorizedState,
+        state: AnkiBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":

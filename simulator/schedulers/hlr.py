@@ -53,12 +53,12 @@ class HLRScheduler(Scheduler):
 
 
 @dataclass
-class HLRVectorizedState:
+class HLRBatchedState:
     right: "torch.Tensor"
     wrong: "torch.Tensor"
 
 
-class HLRVectorizedSchedulerOps:
+class HLRBatchedSchedulerOps:
     def __init__(
         self,
         scheduler: HLRScheduler,
@@ -74,19 +74,19 @@ class HLRVectorizedSchedulerOps:
         self._w = torch.tensor(scheduler.w, device=device, dtype=dtype)
         self._log_factor = math.log(scheduler.desired_retention) / math.log(0.5)
 
-    def init_state(self, deck_size: int) -> HLRVectorizedState:
+    def init_state(self, deck_size: int) -> HLRBatchedState:
         right = self._torch.zeros(deck_size, dtype=self.dtype, device=self.device)
         wrong = self._torch.zeros(deck_size, dtype=self.dtype, device=self.device)
-        return HLRVectorizedState(right=right, wrong=wrong)
+        return HLRBatchedState(right=right, wrong=wrong)
 
     def review_priority(
-        self, state: HLRVectorizedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
+        self, state: HLRBatchedState, idx: "torch.Tensor", elapsed: "torch.Tensor"
     ) -> "torch.Tensor":
         return self._torch.zeros(idx.numel(), device=self.device, dtype=self.dtype)
 
     def update_review(
         self,
-        state: HLRVectorizedState,
+        state: HLRBatchedState,
         idx: "torch.Tensor",
         elapsed: "torch.Tensor",
         rating: "torch.Tensor",
@@ -105,7 +105,7 @@ class HLRVectorizedSchedulerOps:
 
     def update_learn(
         self,
-        state: HLRVectorizedState,
+        state: HLRBatchedState,
         idx: "torch.Tensor",
         rating: "torch.Tensor",
     ) -> "torch.Tensor":

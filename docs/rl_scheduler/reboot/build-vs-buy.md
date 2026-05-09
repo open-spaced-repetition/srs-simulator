@@ -100,7 +100,7 @@ Current pattern:
 Replacement:
 
 - `polars` for scan/filter/group/aggregate.
-- `paretoset` or a small vectorized NumPy implementation for non-dominated
+- `paretoset` or a small array-based NumPy implementation for non-dominated
   filtering.
 
 Keep custom:
@@ -128,7 +128,7 @@ Keep custom:
 
 ## Do Not Replace
 
-- Simulator event/vectorized/batched engine semantics.
+- Simulator event/batched engine semantics.
 - SRS memory/scheduler/behavior/cost models.
 - Exact FSRS6 baseline reuse rules.
 - Train-user overfit feasibility gate.
