@@ -209,6 +209,49 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             ),
         )
 
+    def test_checked_in_direct_linear_portfolio_config_uses_portfolio_children(
+        self,
+    ) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_adr_direct_linear_portfolio_users_1_8.toml"
+        )
+
+        self.assertEqual(config.name, "fsrs6_adr_direct_linear_portfolio_users_1_8")
+        self.assertEqual(config.lambda_grid, (0.0,))
+        self.assertEqual(config.train_artifact_glob, "policies/**/metadata.json")
+        self.assertTrue(config.train_batch_baseline_desired_retention_values)
+        self.assertTrue(config.training_batch.enabled)
+        self.assertEqual(config.training_batch.trainer, "auto")
+        self.assertEqual(
+            config.training_sa["feature_version"],
+            "fsrs6_adr_direct_log_linear_v1",
+        )
+        self.assertEqual(
+            len(config.training_sa["baseline_desired_retention_values"]),
+            23,
+        )
+        self.assertEqual(config.training_portfolio["population_size"], 64)
+        self.assertEqual(config.training_portfolio["offspring_size"], 32)
+        self.assertEqual(config.training_portfolio["portfolio_size"], 23)
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_direct",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr_direct"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adr_direct:fsrs6",))
+
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+
+        self.assertEqual(trainer, "fsrs6_adr_direct_portfolio")
+        self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 64)
+
     def test_checked_in_adp_cmaes_config_uses_dr_and_user_batching(self) -> None:
         config = ExperimentConfig.from_toml(
             REPO_ROOT

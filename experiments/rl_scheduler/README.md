@@ -183,6 +183,10 @@ Representative profiles:
 - `configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml`: the ordinary
   `fsrs6_adr_direct` scheduler trained with CMA-ES using one simplified 3-parameter
   `fsrs6_adr_direct_log_linear_v1` policy per user and baseline desired retention.
+- `configs/fsrs6_adr_direct_linear_portfolio_users_1_8.toml`: the ordinary
+  `fsrs6_adr_direct` scheduler trained as 23 simplified 3-parameter
+  `fsrs6_adr_direct_log_linear_v1` portfolio children per user with SMS-EMOA
+  hypervolume optimization.
 - `configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml`: the same
   DR-conditioned scheduler artifact and evaluation workflow, trained with
   CMA-ES instead of simulated annealing.

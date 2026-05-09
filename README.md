@@ -73,6 +73,7 @@ profiles and machine-readable stage records:
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage dry-run --run-id fsrs6_adr_direct_sa_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage all --run-id fsrs6_adr_direct_sa_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_direct_linear_cmaes_users_1_8_v1
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_portfolio_users_1_8.toml --stage all --run-id fsrs6_adr_direct_linear_portfolio_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_sa_users_1_8.toml --stage all --run-id fsrs6_adr_delta_linear_sa_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_delta_linear_cmaes_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adp_cmaes_users_1_8.toml --stage all --run-id fsrs6_adp_cmaes_users_1_8_v1
@@ -110,6 +111,10 @@ training budget with the simplified 4-parameter
 3-parameter `fsrs6_adr_direct_log_linear_v1` policy per user and baseline desired
 retention with CMA-ES, then evaluates the resulting ordinary `fsrs6_adr_direct`
 schedulers.
+`fsrs6_adr_direct_linear_portfolio_users_1_8.toml` trains 23 simplified
+3-parameter `fsrs6_adr_direct_log_linear_v1` portfolio children per user with
+SMS-EMOA hypervolume optimization, then evaluates them as ordinary
+`fsrs6_adr_direct` schedulers.
 `fsrs6_adr_delta_linear_cmaes_users_1_8.toml` uses the same scheduler artifact
 and sweep path, but trains the 4-parameter DR-conditioned policy with CMA-ES
 instead of simulated annealing.
