@@ -573,11 +573,12 @@ class TrainingBatchConfig:
             "fsrs6_adr_delta",
             "fsrs6_adr_delta_cmaes",
             "fsrs6_adp_cmaes",
+            "fsrs6_adp_portfolio",
         }:
             raise ValueError(
                 "training.batch.trainer must be auto, fsrs6_adr_direct, fsrs6_adr_direct_cmaes, "
                 "fsrs6_adr_direct_portfolio, fsrs6_adr_direct_dr_grid, fsrs6_adr_delta, "
-                "fsrs6_adr_delta_cmaes, or fsrs6_adp_cmaes."
+                "fsrs6_adr_delta_cmaes, fsrs6_adp_cmaes, or fsrs6_adp_portfolio."
             )
 
     def to_dict(self) -> dict[str, Any]:

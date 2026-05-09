@@ -228,6 +228,27 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adp"))
         self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adp:fsrs6",))
 
+    def test_checked_in_adp_portfolio_config_uses_portfolio_children(self) -> None:
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_adp_portfolio_users_1_8.toml"
+        )
+
+        self.assertEqual(config.name, "fsrs6_adp_portfolio_users_1_8")
+        self.assertEqual(config.lambda_grid, (0.0,))
+        self.assertEqual(config.train_artifact_glob, "policies/**/metadata.json")
+        self.assertTrue(config.training_batch.enabled)
+        self.assertEqual(config.training_batch.trainer, "auto")
+        self.assertEqual(config.training_portfolio["population_size"], 64)
+        self.assertEqual(config.training_portfolio["offspring_size"], 32)
+        self.assertEqual(config.training_portfolio["portfolio_size"], 23)
+        self.assertEqual(config.training_portfolio["retention_mutation_scale"], 0.02)
+        self.assertEqual(config.training_adp["weight_delta_scale"], 0.5)
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adp",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adp"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adp:fsrs6",))
+
     def test_checked_in_cmaes_direct_poly_config_uses_six_parameter_policy(
         self,
     ) -> None:
@@ -354,7 +375,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
         self.assertIn("Loaded 2 records", report)
 
-    def test_analyze_scheduler_comparison_reports_adp_hypervolume(
+    def test_analyze_scheduler_comparison_reports_no_dr_adp_hypervolume(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -380,7 +401,10 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
                             "environment": "fsrs6",
                             "scheduler": "fsrs6_adp",
                             "user_id": 1,
-                            "fsrs6_adp_baseline_desired_retention": 0.5,
+                            "desired_retention": None,
+                            "fsrs6_adp_baseline_desired_retention": None,
+                            "fsrs6_adp_policy": "/tmp/policy_0/policy.json",
+                            "title": "ADP policy_0",
                             "memorized_average": 110.0,
                             "time_average": 1.0,
                             "reviews_average": 10.0,

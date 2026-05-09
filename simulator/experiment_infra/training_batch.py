@@ -25,6 +25,7 @@ SUPPORTED_TRAINERS = {
     "fsrs6_adr_delta",
     "fsrs6_adr_delta_cmaes",
     "fsrs6_adp_cmaes",
+    "fsrs6_adp_portfolio",
 }
 
 
@@ -75,6 +76,8 @@ def resolve_in_process_trainer(
         return "fsrs6_adr_delta_cmaes"
     if "train_cmaes_fsrs6_adp.py" in script_names:
         return "fsrs6_adp_cmaes"
+    if "train_fsrs6_adp_portfolio.py" in script_names:
+        return "fsrs6_adp_portfolio"
     if "train_fsrs6_adr_direct_portfolio.py" in script_names:
         return "fsrs6_adr_direct_portfolio"
     if "train_fsrs6_adr_direct_dr_grid.py" in script_names:
@@ -108,6 +111,9 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
     )
     from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
         PortfolioSettings,
+    )
+    from experiments.rl_scheduler.train_fsrs6_adp_portfolio import (
+        ADPPortfolioSettings,
     )
     from experiments.rl_scheduler.train_cmaes_fsrs6_adp import (
         ADPSettings,
@@ -170,6 +176,17 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             len(baseline_dr_values),
             adp_settings.dr_batch_size * optimizer.population_size,
         )
+    if trainer == "fsrs6_adp_portfolio":
+        portfolio = ADPPortfolioSettings.from_mapping(
+            config.training_portfolio,
+            settings=settings,
+            default_seed_retention_values=baseline_dr_values,
+        )
+        return max(
+            len(portfolio.seed_retention_values or ()),
+            portfolio.population_size,
+            portfolio.offspring_size,
+        )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
 
 
@@ -209,6 +226,10 @@ def run_in_process_train_batch(
         )
     if trainer == "fsrs6_adp_cmaes":
         return _run_fsrs6_adp_cmaes_jobs(
+            jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
+        )
+    if trainer == "fsrs6_adp_portfolio":
+        return _run_fsrs6_adp_portfolio_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
@@ -2305,6 +2326,63 @@ def _run_fsrs6_adp_cmaes_jobs(
                 passed=result.passed,
                 artifact_paths=result.artifact_paths,
                 progress_path=result.progress_path,
+            )
+        )
+    return outcomes
+
+
+def _run_fsrs6_adp_portfolio_jobs(
+    *,
+    jobs: list[InProcessTrainJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+) -> list[InProcessTrainOutcome]:
+    from experiments.rl_scheduler.train_fsrs6_adp_portfolio import (
+        ADPPortfolioTrainJob,
+        run_portfolio_train_jobs,
+    )
+
+    results = run_portfolio_train_jobs(
+        jobs=[
+            ADPPortfolioTrainJob(
+                user_id=job.user_id,
+                lambda_value=job.lambda_value,
+                output_dir=job.output_dir,
+                command_record_path=job.command_record_path,
+            )
+            for job in jobs
+        ],
+        config=config,
+        config_path=config_path,
+        repo_root=repo_root,
+        execution_mode="in_process_batch",
+    )
+    result_by_key = {
+        (result.job.user_id, result.job.lambda_value, result.job.output_dir): result
+        for result in results
+    }
+    outcomes: list[InProcessTrainOutcome] = []
+    for job in jobs:
+        result = result_by_key.get((job.user_id, job.lambda_value, job.output_dir))
+        if result is None:
+            outcomes.append(
+                InProcessTrainOutcome(
+                    job=job,
+                    passed=False,
+                    artifact_paths=(),
+                    progress_path=None,
+                    error="ADP portfolio trainer did not return an outcome for this job.",
+                )
+            )
+            continue
+        outcomes.append(
+            InProcessTrainOutcome(
+                job=job,
+                passed=result.passed,
+                artifact_paths=result.artifact_paths,
+                progress_path=result.progress_path,
+                error=result.error,
             )
         )
     return outcomes

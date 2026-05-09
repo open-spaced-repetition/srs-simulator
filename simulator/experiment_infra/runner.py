@@ -58,6 +58,10 @@ RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
     "fsrs6_adr_delta",
     "fsrs6_adp",
 }
+PORTFOLIO_CHILD_ACTION_SPACES = {
+    "sd_retention_function_portfolio_child",
+    "fsrs6_adp_weight_delta_portfolio_child",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -4402,7 +4406,7 @@ def _build_sweep_artifact_lane(
             / f"sched_{metadata.scheduler_name}"
             / f"lambda_{lambda_token}"
         )
-        if metadata.action_space == "sd_retention_function_portfolio_child":
+        if metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES:
             output_dir = output_dir / metadata.policy_path.parent.name
     return SweepBatchLane(
         source="artifact",
@@ -5665,9 +5669,7 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: lambda_value expected "
                 f"{lambda_value}, got {metadata.lambda_value}."
             )
-        is_portfolio_child = (
-            metadata.action_space == "sd_retention_function_portfolio_child"
-        )
+        is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
         if baseline_desired_retention is not None and not is_portfolio_child:
             if metadata.scheduler_name == "fsrs6_adr_delta":
                 pass
@@ -5794,7 +5796,7 @@ def _validate_sweep_artifact_metadata(
     if (
         _training_metadata_requires_baseline_dr(config)
         and metadata.scheduler_name != "fsrs6_adr_delta"
-        and metadata.action_space != "sd_retention_function_portfolio_child"
+        and metadata.action_space not in PORTFOLIO_CHILD_ACTION_SPACES
     ):
         actual_dr = metadata.baseline_desired_retention
         if actual_dr is None or not any(

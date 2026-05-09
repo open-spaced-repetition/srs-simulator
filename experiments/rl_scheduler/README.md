@@ -31,6 +31,9 @@ FSRS-6 state update to obtain `S` and `D`.
   full-covariance CMA-ES over the same low-dimensional policy coefficients.
 - `train_cmaes_fsrs6_adp.py`: CMA-ES FSRS-6 trainer that searches adaptive
   scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
+- `train_fsrs6_adp_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
+  ordinary `fsrs6_adp` child policies, optimizing hypervolume against the FSRS-6
+  DR-grid baseline.
 - `train-overfit` can run these trainers through `[training.batch]` so users are
   batched in one process rather than launched as parallel training subprocesses.
 - `plot_fsrs6_adr_direct_policy_surfaces.py`: Plotly HTML visualizer for learned
@@ -187,11 +190,14 @@ Representative profiles:
   trains 21 bounded FSRS-6 scheduler weights as deltas from each user's fitted
   baseline, batches both users and DR values, and still emits one artifact per
   `(user, DR, lambda)` policy.
+- `configs/fsrs6_adp_portfolio_users_1_8.toml`: the adaptive-parameter portfolio
+  family that jointly mutates runtime desired retention and the 21 ADP weight
+  deltas, then exports 23 no-DR `fsrs6_adp` child artifacts per user.
 
 Training target:
 
 - Baseline scheduler: FSRS-6.
-- Candidate schedulers: FSRS6 ADR Direct and FSRS6 ADR Delta.
+- Candidate schedulers: FSRS6 ADR Direct, FSRS6 ADR Delta, and FSRS6 ADP.
 - Direct action: emit desired retention from scheduler-side FSRS-6 `S,D`.
 - Delta action: apply a logit-space adjustment around the input DR from
   scheduler-side FSRS-6 `S,D` and the requested DR.

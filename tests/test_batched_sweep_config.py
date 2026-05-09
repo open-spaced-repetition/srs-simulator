@@ -942,6 +942,102 @@ class FSRS6ADRDeltaPolicyExpansionTests(unittest.TestCase):
 
 
 class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
+    def test_policy_root_expands_portfolio_children_without_dr_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            for index, desired_retention in enumerate((0.83, 0.87)):
+                policy_dir = (
+                    root / "user_1" / "lambda_0" / "policies" / f"policy_{index}"
+                )
+                policy_dir.mkdir(parents=True)
+                _write_adp_policy(policy_dir / "policy.json", dr=desired_retention)
+                (policy_dir / "metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "scheduler_name": "fsrs6_adp",
+                            "training_user_ids": [1],
+                            "policy_path": "policy.json",
+                            "baseline_desired_retention": None,
+                            "scheduler_desired_retention": desired_retention,
+                            "lambda_value": 0.0,
+                            "portfolio_index": index,
+                            "action_space": "fsrs6_adp_weight_delta_portfolio_child",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            specs = resolve_fsrs6_adp_policy_specs(
+                user_ids=[1],
+                dr_values=[0.50, 0.52],
+                policy_root=root,
+                lambda_values=[0.0],
+            )
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6_adp"],
+                dr_values=[0.50, 0.52],
+                fsrs6_adp_policy_specs=specs,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="fsrs6")
+
+        self.assertEqual(len(specs), 2)
+        self.assertEqual(
+            [spec.baseline_desired_retention for spec in specs], [None, None]
+        )
+        self.assertEqual([spec.policy_index for spec in specs], [0, 1])
+        self.assertEqual(
+            [
+                lane.final_log_dir.relative_to(Path(tmp) / "logs").as_posix()
+                for lane in lanes
+            ],
+            [
+                "user_1/sched_fsrs6_adp/policy_0/lambda_0",
+                "user_1/sched_fsrs6_adp/policy_1/lambda_0",
+            ],
+        )
+        self.assertEqual(
+            [lane.fsrs6_adp_baseline_desired_retention for lane in lanes],
+            [None, None],
+        )
+
+    def test_policy_root_rejects_portfolio_metadata_desired_retention_mismatch(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            policy_dir = root / "user_1" / "lambda_0" / "policies" / "policy_0"
+            policy_dir.mkdir(parents=True)
+            _write_adp_policy(policy_dir / "policy.json", dr=0.83)
+            (policy_dir / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "scheduler_name": "fsrs6_adp",
+                        "training_user_ids": [1],
+                        "policy_path": "policy.json",
+                        "baseline_desired_retention": None,
+                        "scheduler_desired_retention": 0.84,
+                        "lambda_value": 0.0,
+                        "portfolio_index": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "scheduler_desired_retention"):
+                resolve_fsrs6_adp_policy_specs(
+                    user_ids=[1],
+                    dr_values=[0.50, 0.52],
+                    policy_root=root,
+                    lambda_values=[0.0],
+                )
+
     def test_policy_root_expands_user_dr_lambda_lanes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "train_outputs"

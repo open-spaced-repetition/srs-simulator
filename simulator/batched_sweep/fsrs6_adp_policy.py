@@ -14,8 +14,9 @@ from simulator.fsrs6_adp_policy import FSRS6ADPPolicy
 @dataclass(frozen=True, slots=True)
 class FSRS6ADPPolicySpec:
     user_id: int
-    baseline_desired_retention: float
+    baseline_desired_retention: float | None
     lambda_value: float | None
+    policy_index: int | None
     path: Path
 
 
@@ -77,7 +78,10 @@ def _discover_policy_root(
         spec = _spec_from_policy_path(policy_path, dr_values=dr_values)
         if spec.user_id not in user_set:
             continue
-        if not _matches_grid(spec.baseline_desired_retention, dr_values):
+        if spec.baseline_desired_retention is not None and not _matches_grid(
+            spec.baseline_desired_retention,
+            dr_values,
+        ):
             continue
         if lambda_filter is not None and not _matches_lambda(
             spec.lambda_value,
@@ -122,13 +126,17 @@ def _load_policy_manifest(
         if not isinstance(entry, Mapping):
             raise ValueError(f"policies[{index}] must be a TOML table.")
         user_id = _require_int(entry.get("user_id"), f"policies[{index}].user_id")
-        baseline_dr = _require_float(
+        baseline_dr = _optional_float(
             entry.get("baseline_desired_retention"),
             f"policies[{index}].baseline_desired_retention",
         )
         lambda_value = _optional_float(
             entry.get("lambda_value"),
             f"policies[{index}].lambda_value",
+        )
+        policy_index = _optional_int(
+            entry.get("policy_index"),
+            f"policies[{index}].policy_index",
         )
         path = _require_path(
             entry.get("path"),
@@ -140,7 +148,7 @@ def _load_policy_manifest(
                 f"Policy manifest entry {index} uses user_id={user_id}, "
                 f"which is outside configured users {list(user_ids)}."
             )
-        if not _matches_grid(baseline_dr, dr_values):
+        if baseline_dr is not None and not _matches_grid(baseline_dr, dr_values):
             raise ValueError(
                 f"Policy manifest entry {index} uses "
                 f"baseline_desired_retention={baseline_dr}, which is outside "
@@ -157,6 +165,7 @@ def _load_policy_manifest(
                 user_id=user_id,
                 baseline_desired_retention=baseline_dr,
                 lambda_value=lambda_value,
+                policy_index=policy_index,
                 source=f"manifest entry {index}",
             )
         )
@@ -175,39 +184,90 @@ def _spec_from_policy_path(
     metadata = _load_sibling_metadata(policy_path)
     path_user_id = _extract_path_int(policy_path, "user_")
     path_lambda = _extract_path_float(policy_path, "lambda_")
+    path_policy_index = _extract_path_int(policy_path, "policy_")
     metadata_user_id = _metadata_user_id(metadata, policy_path)
     metadata_baseline_dr = _metadata_float(
         metadata,
         "baseline_desired_retention",
         policy_path,
     )
+    metadata_scheduler_dr = _metadata_float(
+        metadata,
+        "scheduler_desired_retention",
+        policy_path,
+    )
     metadata_lambda = _metadata_float(metadata, "lambda_value", policy_path)
+    metadata_policy_index = _metadata_int(metadata, "portfolio_index", policy_path)
     user_id = metadata_user_id if metadata_user_id is not None else path_user_id
     if user_id is None:
         raise ValueError(
             f"Could not infer user_id for FSRS6 ADP policy {policy_path}. "
             "Use a user_<id> path component or metadata.json."
         )
-    baseline_dr = (
-        metadata_baseline_dr
-        if metadata_baseline_dr is not None
-        else policy.baseline_desired_retention
-    )
-    if not math.isclose(
-        baseline_dr,
-        policy.baseline_desired_retention,
-        rel_tol=0.0,
-        abs_tol=1e-9,
+    if (
+        metadata_user_id is not None
+        and path_user_id is not None
+        and metadata_user_id != path_user_id
     ):
         raise ValueError(
-            f"Policy {policy_path} has baseline_desired_retention="
-            f"{policy.baseline_desired_retention}, metadata has {baseline_dr}."
+            f"Policy {policy_path} user_id mismatch: path has {path_user_id}, "
+            f"metadata has {metadata_user_id}."
         )
+
+    metadata_has_null_baseline = (
+        metadata is not None
+        and "baseline_desired_retention" in metadata
+        and metadata.get("baseline_desired_retention") is None
+    )
+    if metadata_has_null_baseline:
+        baseline_dr = None
+        if metadata_scheduler_dr is not None and not math.isclose(
+            metadata_scheduler_dr,
+            policy.baseline_desired_retention,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                f"Policy {policy_path} has scheduler desired retention "
+                f"{policy.baseline_desired_retention}, metadata "
+                f"scheduler_desired_retention has {metadata_scheduler_dr}."
+            )
+        matched_dr = None
+    else:
+        baseline_dr = (
+            metadata_baseline_dr
+            if metadata_baseline_dr is not None
+            else policy.baseline_desired_retention
+        )
+        if not math.isclose(
+            baseline_dr,
+            policy.baseline_desired_retention,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                f"Policy {policy_path} has baseline_desired_retention="
+                f"{policy.baseline_desired_retention}, metadata has {baseline_dr}."
+            )
+        matched_dr = _matching_grid_value(baseline_dr, dr_values)
+
     lambda_value = metadata_lambda if metadata_lambda is not None else path_lambda
+    if (
+        metadata_lambda is not None
+        and path_lambda is not None
+        and not math.isclose(metadata_lambda, path_lambda, rel_tol=0.0, abs_tol=1e-9)
+    ):
+        raise ValueError(
+            f"Policy {policy_path} lambda mismatch: path has {path_lambda}, "
+            f"metadata has {metadata_lambda}."
+        )
     return FSRS6ADPPolicySpec(
         user_id=user_id,
-        baseline_desired_retention=_matching_grid_value(baseline_dr, dr_values),
+        baseline_desired_retention=matched_dr,
         lambda_value=lambda_value,
+        policy_index=metadata_policy_index
+        if metadata_policy_index is not None
+        else path_policy_index,
         path=policy_path.resolve(),
     )
 
@@ -216,14 +276,45 @@ def _validate_policy_spec(
     *,
     path: Path,
     user_id: int,
-    baseline_desired_retention: float,
+    baseline_desired_retention: float | None,
     lambda_value: float | None,
+    policy_index: int | None,
     source: str,
 ) -> FSRS6ADPPolicySpec:
     if not path.exists():
         raise FileNotFoundError(f"Missing FSRS6 ADP policy for {source}: {path}")
     policy = FSRS6ADPPolicy.from_json(path)
-    if not math.isclose(
+    metadata = _load_sibling_metadata(path)
+    metadata_user_id = _metadata_user_id(metadata, path)
+    if metadata_user_id is not None and metadata_user_id != user_id:
+        raise ValueError(
+            f"Policy {path} metadata user_id={metadata_user_id}, "
+            f"expected {user_id} from {source}."
+        )
+    metadata_baseline_dr = _metadata_float(metadata, "baseline_desired_retention", path)
+    metadata_scheduler_dr = _metadata_float(
+        metadata,
+        "scheduler_desired_retention",
+        path,
+    )
+    if baseline_desired_retention is None:
+        if metadata_baseline_dr is not None:
+            raise ValueError(
+                f"Policy {path} metadata baseline_desired_retention="
+                f"{metadata_baseline_dr}, expected null."
+            )
+        if metadata_scheduler_dr is not None and not math.isclose(
+            metadata_scheduler_dr,
+            policy.baseline_desired_retention,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                f"Policy {path} has scheduler desired retention "
+                f"{policy.baseline_desired_retention}, metadata "
+                f"scheduler_desired_retention has {metadata_scheduler_dr}."
+            )
+    elif not math.isclose(
         policy.baseline_desired_retention,
         baseline_desired_retention,
         rel_tol=0.0,
@@ -234,14 +325,19 @@ def _validate_policy_spec(
             f"{policy.baseline_desired_retention}, expected "
             f"{baseline_desired_retention} from {source}."
         )
-    metadata = _load_sibling_metadata(path)
-    metadata_user_id = _metadata_user_id(metadata, path)
-    if metadata_user_id is not None and metadata_user_id != user_id:
-        raise ValueError(
-            f"Policy {path} metadata user_id={metadata_user_id}, "
-            f"expected {user_id} from {source}."
-        )
+    if baseline_desired_retention is not None and metadata_baseline_dr is not None:
+        if not math.isclose(
+            metadata_baseline_dr,
+            baseline_desired_retention,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        ):
+            raise ValueError(
+                f"Policy {path} metadata baseline_desired_retention="
+                f"{metadata_baseline_dr}, expected {baseline_desired_retention}."
+            )
     metadata_lambda = _metadata_float(metadata, "lambda_value", path)
+    effective_lambda = lambda_value if lambda_value is not None else metadata_lambda
     if (
         lambda_value is not None
         and metadata_lambda is not None
@@ -251,10 +347,16 @@ def _validate_policy_spec(
             f"Policy {path} metadata lambda_value={metadata_lambda}, "
             f"expected {lambda_value} from {source}."
         )
+    metadata_policy_index = _metadata_int(metadata, "portfolio_index", path)
     return FSRS6ADPPolicySpec(
         user_id=user_id,
         baseline_desired_retention=baseline_desired_retention,
-        lambda_value=lambda_value if lambda_value is not None else metadata_lambda,
+        lambda_value=effective_lambda,
+        policy_index=policy_index
+        if policy_index is not None
+        else metadata_policy_index
+        if metadata_policy_index is not None
+        else _extract_path_int(path, "policy_"),
         path=path.resolve(),
     )
 
@@ -277,6 +379,8 @@ def _require_complete_policy_root(
     dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
 ) -> None:
+    if any(spec.baseline_desired_retention is None for spec in specs):
+        return
     if lambda_values is not None:
         expected_lambdas = tuple(float(value) for value in lambda_values)
     else:
@@ -292,6 +396,7 @@ def _require_complete_policy_root(
             spec.user_id,
             spec.baseline_desired_retention,
             spec.lambda_value,
+            spec.policy_index,
         )
         for spec in specs
     }
@@ -312,36 +417,44 @@ def _require_complete_policy_root(
 
 
 def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADPPolicySpec]) -> None:
-    by_key: dict[tuple[int, int, int | None], Path] = {}
+    by_key: dict[tuple[int, int | None, int | None, int | None], Path] = {}
     for spec in specs:
         key = _policy_key(
             spec.user_id,
             spec.baseline_desired_retention,
             spec.lambda_value,
+            spec.policy_index,
         )
         previous = by_key.get(key)
         if previous is not None:
             raise ValueError(
                 "Duplicate FSRS6 ADP policy for "
                 f"user={spec.user_id}, baseline_desired_retention="
-                f"{spec.baseline_desired_retention}, lambda={spec.lambda_value}: "
-                f"{previous} and {spec.path}"
+                f"{spec.baseline_desired_retention}, lambda={spec.lambda_value}, "
+                f"policy_index={spec.policy_index}: {previous} and {spec.path}"
             )
         by_key[key] = spec.path
 
 
 def _policy_key(
     user_id: int,
-    baseline_desired_retention: float,
+    baseline_desired_retention: float | None,
     lambda_value: float | None,
-) -> tuple[int, int, int | None]:
+    policy_index: int | None = None,
+) -> tuple[int, int | None, int | None, int | None]:
     lambda_key = (
         None if lambda_value is None else round(float(lambda_value) * 1_000_000)
     )
+    baseline_key = (
+        None
+        if baseline_desired_retention is None
+        else round(float(baseline_desired_retention) * 1_000_000)
+    )
     return (
         int(user_id),
-        round(float(baseline_desired_retention) * 1_000_000),
+        baseline_key,
         lambda_key,
+        policy_index if baseline_key is None else None,
     )
 
 
@@ -384,66 +497,95 @@ def _matches_lambda(value: float | None, lambda_values: Sequence[float]) -> bool
     )
 
 
-def _load_sibling_metadata(policy_path: Path) -> dict[str, Any]:
-    metadata_path = policy_path.parent / "metadata.json"
+def _load_sibling_metadata(path: Path) -> Mapping[str, Any] | None:
+    metadata_path = path.parent / "metadata.json"
     if not metadata_path.exists():
-        return {}
-    with metadata_path.open("r", encoding="utf-8") as handle:
-        loaded = json.load(handle)
-    return loaded if isinstance(loaded, dict) else {}
-
-
-def _metadata_user_id(metadata: Mapping[str, Any], policy_path: Path) -> int | None:
-    raw = metadata.get("training_user_ids")
-    if raw is None:
         return None
-    if isinstance(raw, str) or not isinstance(raw, Sequence) or len(raw) != 1:
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        raw = json.load(handle)
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"Artifact metadata must be a JSON object: {metadata_path}")
+    scheduler_name = raw.get("scheduler_name")
+    if scheduler_name is not None and scheduler_name != "fsrs6_adp":
         raise ValueError(
-            f"metadata.training_user_ids in {policy_path} must contain one user id."
+            f"Artifact metadata {metadata_path} scheduler_name={scheduler_name!r}; "
+            "expected 'fsrs6_adp'."
+        )
+    policy_path_raw = raw.get("policy_path")
+    if isinstance(policy_path_raw, str) and policy_path_raw.strip():
+        metadata_policy_path = Path(policy_path_raw)
+        if not metadata_policy_path.is_absolute():
+            metadata_policy_path = metadata_path.parent / metadata_policy_path
+        if metadata_policy_path.resolve() != path.resolve():
+            raise ValueError(
+                f"Artifact metadata {metadata_path} points to "
+                f"{metadata_policy_path}, not {path}."
+            )
+    return raw
+
+
+def _metadata_user_id(metadata: Mapping[str, Any] | None, path: Path) -> int | None:
+    if metadata is None or "training_user_ids" not in metadata:
+        return None
+    raw = metadata["training_user_ids"]
+    if isinstance(raw, str) or not isinstance(raw, Sequence):
+        raise ValueError(f"metadata training_user_ids must be an array: {path}")
+    if len(raw) != 1:
+        raise ValueError(
+            f"metadata training_user_ids must contain exactly one user for {path}."
         )
     return _require_int(raw[0], "metadata.training_user_ids[0]")
 
 
 def _metadata_float(
-    metadata: Mapping[str, Any],
-    field_name: str,
-    policy_path: Path,
+    metadata: Mapping[str, Any] | None,
+    key: str,
+    path: Path,
 ) -> float | None:
-    if field_name not in metadata or metadata[field_name] is None:
+    if metadata is None or key not in metadata:
         return None
-    try:
-        return _require_float(metadata[field_name], f"metadata.{field_name}")
-    except ValueError as exc:
-        raise ValueError(f"Invalid metadata for {policy_path}: {exc}") from exc
+    return _optional_float(metadata[key], f"metadata.{key} for {path}")
+
+
+def _metadata_int(
+    metadata: Mapping[str, Any] | None,
+    key: str,
+    path: Path,
+) -> int | None:
+    if metadata is None or key not in metadata:
+        return None
+    return _optional_int(metadata[key], f"metadata.{key} for {path}")
 
 
 def _extract_path_int(path: Path, prefix: str) -> int | None:
     for part in reversed(path.parts):
         if part.startswith(prefix):
-            suffix = part[len(prefix) :]
-            if suffix.isdigit():
-                return int(suffix)
+            token = part[len(prefix) :]
+            try:
+                return int(token)
+            except ValueError:
+                continue
     return None
 
 
 def _extract_path_float(path: Path, prefix: str) -> float | None:
     for part in reversed(path.parts):
         if part.startswith(prefix):
-            suffix = part[len(prefix) :]
+            token = part[len(prefix) :]
             try:
-                return float(suffix.replace("neg_", "-").replace("p", "."))
+                return float(token.replace("neg_", "-").replace("p", "."))
             except ValueError:
-                return None
+                continue
     return None
 
 
 def _require_path(value: Any, field_name: str, *, base_path: Path) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty path.")
-    path = Path(value)
-    if not path.is_absolute():
-        path = base_path / path
-    return path
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (base_path / path).resolve()
 
 
 def _require_float(value: Any, field_name: str) -> float:
@@ -462,6 +604,12 @@ def _require_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{field_name} must be an integer.")
     return int(value)
+
+
+def _optional_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _require_int(value, field_name)
 
 
 __all__ = [

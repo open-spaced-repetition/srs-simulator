@@ -1,0 +1,213 @@
+schema_version = 1
+name = "fsrs6_adp_portfolio_users_1_8"
+family = "rl_scheduler"
+seed = 42
+output_root = "artifacts/rl_scheduler/fsrs6_adp_portfolio_users_1_8"
+stages = [
+  "dry-run",
+  "preflight",
+  "stage-baseline",
+  "train-overfit",
+  "sweep",
+  "build-pareto",
+  "analyze-pareto",
+]
+
+[users]
+train = [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+]
+validation = []
+reserved_test = []
+
+[baseline]
+scheduler = "fsrs6"
+log_root = "logs/retention_sweep"
+expected_engine = "batched"
+stage_mode = "copy"
+environments = ["fsrs6", "lstm"]
+desired_retention_values = [
+  0.52,
+  0.54,
+  0.56,
+  0.58,
+  0.60,
+  0.62,
+  0.64,
+  0.66,
+  0.68,
+  0.70,
+  0.72,
+  0.74,
+  0.76,
+  0.78,
+  0.80,
+  0.82,
+  0.84,
+  0.86,
+  0.88,
+  0.90,
+  0.92,
+  0.94,
+  0.96,
+]
+
+[simulation]
+engine = "batched"
+environment = "fsrs6"
+days = 1825
+deck = 10000
+learn_limit = 10
+review_limit = 9999
+cost_limit_minutes = 720.0
+priority = "new-first"
+scheduler_priority = "low_retrievability"
+fuzz = false
+
+[gpu_guard]
+required = true
+device = "cuda"
+smoke = true
+
+[performance]
+device = "cuda"
+memory_budget_fraction = 0.80
+timeout_seconds = 5400.0
+progress_interval_seconds = 30.0
+write_performance_summary = true
+diagnostic_csv_logs = false
+
+[training]
+lambda_grid = [0.0]
+artifact_metadata_glob = "policies/**/metadata.json"
+max_parallel_commands = 1
+batch_baseline_desired_retention_values = true
+command_template = [
+  "uv",
+  "run",
+  "python",
+  "experiments/rl_scheduler/train_fsrs6_adp_portfolio.py",
+  "--config",
+  "{config_path}",
+  "--user-id",
+  "{user_id}",
+  "--lambda",
+  "{lambda_value}",
+  "--output-dir",
+  "{output_dir}",
+  "--training-command-path",
+  "{command_record_path}",
+]
+
+[training.batch]
+enabled = true
+trainer = "auto"
+max_lanes_per_batch = 6400
+
+[training.sa]
+chains = 32
+iterations = 10
+initial_temp = 0.05
+final_temp = 0.005
+proposal_scale = 0.35
+coefficient_min = -12.0
+coefficient_max = 12.0
+retention_min = 0.50
+retention_max = 0.98
+baseline_desired_retention = 0.90
+baseline_desired_retention_values = [
+  0.52,
+  0.54,
+  0.56,
+  0.58,
+  0.60,
+  0.62,
+  0.64,
+  0.66,
+  0.68,
+  0.70,
+  0.72,
+  0.74,
+  0.76,
+  0.78,
+  0.80,
+  0.82,
+  0.84,
+  0.86,
+  0.88,
+  0.90,
+  0.92,
+  0.94,
+  0.96,
+]
+torch_device = "cuda"
+short_term_threshold = 0.5
+short_term_loops_limit = 10
+
+[training.adp]
+weight_delta_scale = 0.5
+
+[training.portfolio]
+algorithm = "sms_emoa"
+population_size = 64
+generations = 20
+offspring_size = 32
+portfolio_size = 23
+mutation_scale = 0.35
+retention_mutation_scale = 0.02
+reference_margin_fraction = 0.05
+hv_epsilon = 0.0
+
+[sweep]
+log_glob = "**/*.jsonl"
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6_adp"]
+run_id = "fsrs6_adp_portfolio_users_1_8_v1"
+fsrs6_adp_train_run_root = "artifacts/rl_scheduler/fsrs6_adp_portfolio_users_1_8/fsrs6_adp_portfolio_users_1_8_v1"
+log_dir = "logs/retention_sweep"
+log_layout = "user"
+batch_size = 8
+torch_device = "cuda"
+benchmark_partition = "0"
+start_retention = 0.52
+end_retention = 0.96
+step = 0.02
+no_progress = true
+no_log = false
+
+[build_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "fsrs6_adp"]
+log_dir = "logs/retention_sweep"
+result_glob = "simulation_results_retention_sweep_user_*.json"
+plot_glob = "*.png"
+start_retention = 0.52
+end_retention = 0.96
+short_term = "off"
+short_term_source = "any"
+engine = "batched"
+max_parallel = 8
+compare_short_term = false
+compare_engine = false
+no_plot = false
+hide_labels = true
+
+[analyze_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "fsrs6_adp"]
+comparisons = ["fsrs6_adp:fsrs6"]
+result_glob = "analysis.md"
+start_retention = 0.52
+end_retention = 0.96
+short_term = "off"
+engine = "batched"
+fuzz = "off"
+metric = "avg_accum_memorized_per_hour"
+no_dedupe = false

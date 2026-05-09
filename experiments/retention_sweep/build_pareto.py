@@ -347,6 +347,56 @@ def _resolve_fsrs6_adr_direct_title(
     return title
 
 
+def _load_policy_sibling_metadata(
+    policy_path: Path,
+    *,
+    scheduler_name: str,
+) -> Optional[Dict[str, Any]]:
+    metadata_path = policy_path.parent / "metadata.json"
+    if not metadata_path.exists():
+        return None
+    try:
+        with metadata_path.open("r", encoding="utf-8") as fh:
+            loaded = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    if loaded.get("scheduler_name") not in {None, scheduler_name}:
+        return None
+    raw_policy_path = loaded.get("policy_path")
+    if isinstance(raw_policy_path, str) and raw_policy_path.strip():
+        metadata_policy_path = Path(raw_policy_path)
+        if not metadata_policy_path.is_absolute():
+            metadata_policy_path = metadata_path.parent / metadata_policy_path
+        if metadata_policy_path.resolve() != policy_path.resolve():
+            return None
+    return loaded
+
+
+def _fsrs6_adp_portfolio_child_label(
+    policy_path: Path,
+    metadata: Dict[str, Any],
+) -> str:
+    policy_index = metadata.get("portfolio_index")
+    if isinstance(policy_index, int):
+        return f"ADP policy_{policy_index}"
+    return f"ADP {policy_path.parent.name}"
+
+
+def _is_fsrs6_adp_portfolio_child(metadata: Optional[Dict[str, Any]]) -> bool:
+    if metadata is None:
+        return False
+    return (
+        "baseline_desired_retention" in metadata
+        and metadata.get("baseline_desired_retention") is None
+        and (
+            metadata.get("action_space") == "fsrs6_adp_weight_delta_portfolio_child"
+            or "portfolio_index" in metadata
+        )
+    )
+
+
 def _resolve_fsrs6_adp_label(
     meta: Dict[str, Any], base_dirs: Sequence[Path]
 ) -> tuple[str, Optional[float]]:
@@ -365,6 +415,14 @@ def _resolve_fsrs6_adp_label(
                 path = candidate
                 break
     title = None
+    sibling_metadata = _load_policy_sibling_metadata(
+        path,
+        scheduler_name="fsrs6_adp",
+    )
+    if _is_fsrs6_adp_portfolio_child(sibling_metadata):
+        if sibling_metadata is None:
+            raise AssertionError("portfolio metadata unexpectedly missing")
+        return _fsrs6_adp_portfolio_child_label(path, sibling_metadata), None
     if path.exists():
         try:
             with path.open("r", encoding="utf-8") as fh:

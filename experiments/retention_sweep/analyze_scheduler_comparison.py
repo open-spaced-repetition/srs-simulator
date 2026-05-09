@@ -305,7 +305,10 @@ def row_from_item(
     metric: str,
 ) -> SweepRow | None:
     desired_retention = parse_desired_retention(item)
-    if desired_retention is None and item.get("scheduler") != "fsrs6_adr_direct":
+    if desired_retention is None and item.get("scheduler") not in {
+        "fsrs6_adr_direct",
+        "fsrs6_adp",
+    }:
         return None
     return SweepRow(
         environment=str(item["environment"]),
@@ -325,6 +328,10 @@ def row_from_item(
 def _row_series_identity(item: dict[str, Any]) -> str | None:
     if item.get("scheduler") == "fsrs6_adr_direct":
         policy = item.get("fsrs6_adr_direct_policy")
+        if isinstance(policy, str) and policy.strip():
+            return policy
+    if item.get("scheduler") == "fsrs6_adp":
+        policy = item.get("fsrs6_adp_policy")
         if isinstance(policy, str) and policy.strip():
             return policy
     title = item.get("title")
