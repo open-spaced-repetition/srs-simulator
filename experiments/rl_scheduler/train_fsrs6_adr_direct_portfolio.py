@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
+import os
 import sys
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -171,6 +175,14 @@ class SelectedPortfolioChild:
     candidate: PortfolioCandidate
     hypervolume_contribution: float
     pareto_rank: int
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectionTask:
+    baseline_points: tuple[ObjectivePoint, ...]
+    candidates: tuple[PortfolioCandidate, ...]
+    population_size: int
+    reference: ObjectivePoint
 
 
 @dataclass(frozen=True, slots=True)
@@ -411,110 +423,131 @@ def run_portfolio_train_jobs(
         for job in jobs
     ]
     history_by_job: list[list[dict[str, float]]] = [[] for _job in jobs]
+    baseline_points_by_job = [
+        [point_from_metrics(metrics) for metrics in baselines]
+        for baselines in baseline_metrics_by_job
+    ]
     references = [
         reference_point(
-            [point_from_metrics(metrics) for metrics in baselines],
+            baseline_points,
             margin_fraction=portfolio.reference_margin_fraction,
         )
-        for baselines in baseline_metrics_by_job
+        for baseline_points in baseline_points_by_job
     ]
     baseline_hv = [
         hypervolume_2d(
-            [point_from_metrics(metrics) for metrics in baselines],
+            baseline_points,
             reference=references[index],
         )
-        for index, baselines in enumerate(baseline_metrics_by_job)
+        for index, baseline_points in enumerate(baseline_points_by_job)
     ]
 
-    for generation in range(portfolio.generations):
-        offspring_coefficients: list[list[tuple[float, ...]]] = []
-        offspring_ids: list[list[int]] = []
-        for job_index, generator in enumerate(generators):
-            coefficients, candidate_ids, next_id = _make_offspring(
-                population=populations[job_index],
-                next_candidate_id=next_candidate_ids[job_index],
-                offspring_size=portfolio.offspring_size,
-                mutation_scale=portfolio.mutation_scale,
-                coefficient_min=settings.coefficient_min,
-                coefficient_max=settings.coefficient_max,
-                device=offspring_bundle.device,
-                generator=generator,
-            )
-            next_candidate_ids[job_index] = next_id
-            offspring_coefficients.append(coefficients)
-            offspring_ids.append(candidate_ids)
-        offspring_metrics = _evaluate_direct_coefficients(
-            config=config,
-            settings=settings,
-            bundle=offspring_bundle,
-            coefficients_by_job=offspring_coefficients,
-            feature_version=feature_version,
-            seed=config.seed,
-        )
-        for job_index in range(len(jobs)):
-            offspring = [
-                PortfolioCandidate(
-                    candidate_id=offspring_ids[job_index][candidate_index],
-                    coefficients=offspring_coefficients[job_index][candidate_index],
-                    metrics=offspring_metrics[job_index][candidate_index],
+    selection_executor = _selection_executor(len(jobs))
+    try:
+        for generation in range(portfolio.generations):
+            offspring_coefficients: list[list[tuple[float, ...]]] = []
+            offspring_ids: list[list[int]] = []
+            for job_index, generator in enumerate(generators):
+                coefficients, candidate_ids, next_id = _make_offspring(
+                    population=populations[job_index],
+                    next_candidate_id=next_candidate_ids[job_index],
+                    offspring_size=portfolio.offspring_size,
+                    mutation_scale=portfolio.mutation_scale,
+                    coefficient_min=settings.coefficient_min,
+                    coefficient_max=settings.coefficient_max,
+                    device=offspring_bundle.device,
+                    generator=generator,
                 )
-                for candidate_index in range(portfolio.offspring_size)
-            ]
-            combined = [*populations[job_index], *offspring]
-            populations[job_index] = select_sms_emoa_survivors(
-                baseline_points=[
-                    point_from_metrics(metrics)
-                    for metrics in baseline_metrics_by_job[job_index]
-                ],
-                candidates=combined,
-                population_size=portfolio.population_size,
-                reference=references[job_index],
+                next_candidate_ids[job_index] = next_id
+                offspring_coefficients.append(coefficients)
+                offspring_ids.append(candidate_ids)
+            evaluation_started = time.perf_counter()
+            offspring_metrics = _evaluate_direct_coefficients(
+                config=config,
+                settings=settings,
+                bundle=offspring_bundle,
+                coefficients_by_job=offspring_coefficients,
+                feature_version=feature_version,
+                seed=config.seed,
             )
-            candidate_points = [candidate.point for candidate in populations[job_index]]
-            current_hv = hypervolume_2d(
-                [
-                    *[
-                        point_from_metrics(metrics)
-                        for metrics in baseline_metrics_by_job[job_index]
-                    ],
-                    *candidate_points,
-                ],
-                reference=references[job_index],
-            )
-            contributions = exclusive_hypervolume_contributions(
-                baseline_points=[
-                    point_from_metrics(metrics)
-                    for metrics in baseline_metrics_by_job[job_index]
-                ],
-                candidate_points=candidate_points,
-                reference=references[job_index],
-            )
-            entry = {
-                "generation": float(generation),
-                "baseline_hypervolume": baseline_hv[job_index],
-                "portfolio_hypervolume": current_hv,
-                "hypervolume_improvement": current_hv - baseline_hv[job_index],
-                "max_candidate_contribution": max(contributions)
-                if contributions
-                else 0.0,
-                "frontier_candidate_count": float(
-                    _frontier_candidate_count(
-                        baseline_points=[
-                            point_from_metrics(metrics)
-                            for metrics in baseline_metrics_by_job[job_index]
-                        ],
-                        candidate_points=candidate_points,
+            offspring_evaluation_seconds = time.perf_counter() - evaluation_started
+
+            selection_tasks: list[_SelectionTask] = []
+            for job_index in range(len(jobs)):
+                offspring = [
+                    PortfolioCandidate(
+                        candidate_id=offspring_ids[job_index][candidate_index],
+                        coefficients=offspring_coefficients[job_index][candidate_index],
+                        metrics=offspring_metrics[job_index][candidate_index],
                     )
-                ),
-            }
-            history_by_job[job_index].append(entry)
-            progresses[job_index].write(
-                "sms_emoa_generation",
-                device=offspring_bundle.device,
-                effective_lanes=portfolio.offspring_size,
-                batch_effective_lanes=len(jobs) * portfolio.offspring_size,
-                **entry,
+                    for candidate_index in range(portfolio.offspring_size)
+                ]
+                selection_tasks.append(
+                    _SelectionTask(
+                        baseline_points=tuple(baseline_points_by_job[job_index]),
+                        candidates=tuple([*populations[job_index], *offspring]),
+                        population_size=portfolio.population_size,
+                        reference=references[job_index],
+                    )
+                )
+
+            selection_started = time.perf_counter()
+            populations, selection_worker_seconds_by_job = (
+                _select_survivors_for_generation(
+                    tasks=selection_tasks,
+                    executor=selection_executor,
+                )
             )
+            selection_seconds = time.perf_counter() - selection_started
+
+            for job_index in range(len(jobs)):
+                post_selection_started = time.perf_counter()
+                candidate_points = [
+                    candidate.point for candidate in populations[job_index]
+                ]
+                current_hv = hypervolume_2d(
+                    [*baseline_points_by_job[job_index], *candidate_points],
+                    reference=references[job_index],
+                )
+                contributions = exclusive_hypervolume_contributions(
+                    baseline_points=baseline_points_by_job[job_index],
+                    candidate_points=candidate_points,
+                    reference=references[job_index],
+                )
+                frontier_candidate_count = _frontier_candidate_count(
+                    baseline_points=baseline_points_by_job[job_index],
+                    candidate_points=candidate_points,
+                )
+                post_selection_metrics_seconds = (
+                    time.perf_counter() - post_selection_started
+                )
+                entry = {
+                    "generation": float(generation),
+                    "baseline_hypervolume": baseline_hv[job_index],
+                    "portfolio_hypervolume": current_hv,
+                    "hypervolume_improvement": current_hv - baseline_hv[job_index],
+                    "max_candidate_contribution": max(contributions)
+                    if contributions
+                    else 0.0,
+                    "frontier_candidate_count": float(frontier_candidate_count),
+                    "offspring_evaluation_seconds": offspring_evaluation_seconds,
+                    "selection_seconds": selection_seconds,
+                    "selection_worker_seconds": selection_worker_seconds_by_job[
+                        job_index
+                    ],
+                    "post_selection_metrics_seconds": (post_selection_metrics_seconds),
+                }
+                history_by_job[job_index].append(entry)
+                progresses[job_index].write(
+                    "sms_emoa_generation",
+                    device=offspring_bundle.device,
+                    effective_lanes=portfolio.offspring_size,
+                    batch_effective_lanes=len(jobs) * portfolio.offspring_size,
+                    **entry,
+                )
+    finally:
+        if selection_executor is not None:
+            selection_executor.shutdown()
     del offspring_bundle
     _clear_cuda_cache(device)
 
@@ -618,17 +651,38 @@ def reference_point(
 
 
 def non_dominated_indices(points: Sequence[ObjectivePoint]) -> list[int]:
+    if not points:
+        return []
+    sorted_points = sorted(
+        enumerate(points),
+        key=lambda item: (
+            -item[1].memorized_average,
+            -item[1].negative_time_average,
+            item[0],
+        ),
+    )
+    max_y_from_greater_x = float("-inf")
     indices: list[int] = []
-    for index, candidate in enumerate(points):
-        dominated = False
-        for other_index, other in enumerate(points):
-            if index == other_index:
-                continue
-            if dominates(other, candidate):
-                dominated = True
-                break
-        if not dominated:
-            indices.append(index)
+    start = 0
+    while start < len(sorted_points):
+        x_value = sorted_points[start][1].memorized_average
+        end = start + 1
+        while (
+            end < len(sorted_points)
+            and sorted_points[end][1].memorized_average == x_value
+        ):
+            end += 1
+        group = sorted_points[start:end]
+        group_max_y = max(point.negative_time_average for _index, point in group)
+        if group_max_y > max_y_from_greater_x:
+            indices.extend(
+                index
+                for index, point in group
+                if point.negative_time_average == group_max_y
+            )
+        max_y_from_greater_x = max(max_y_from_greater_x, group_max_y)
+        start = end
+    indices.sort()
     return indices
 
 
@@ -649,27 +703,12 @@ def hypervolume_2d(
     *,
     reference: ObjectivePoint,
 ) -> float:
-    clipped = [
-        ObjectivePoint(
-            memorized_average=max(point.memorized_average, reference.memorized_average),
-            negative_time_average=max(
-                point.negative_time_average,
-                reference.negative_time_average,
-            ),
-        )
-        for point in points
-        if point.memorized_average > reference.memorized_average
-        and point.negative_time_average > reference.negative_time_average
-    ]
-    if not clipped:
+    frontier = _frontier_points_sorted(points, reference=reference)
+    if not frontier:
         return 0.0
-    frontier = [clipped[index] for index in non_dominated_indices(clipped)]
-    frontier.sort(
-        key=lambda point: (point.memorized_average, point.negative_time_average)
-    )
     hv = 0.0
     previous_x = reference.memorized_average
-    for point in frontier:
+    for _index, point in frontier:
         width = max(0.0, point.memorized_average - previous_x)
         height = max(0.0, point.negative_time_average - reference.negative_time_average)
         hv += width * height
@@ -683,20 +722,88 @@ def exclusive_hypervolume_contributions(
     candidate_points: Sequence[ObjectivePoint],
     reference: ObjectivePoint,
 ) -> list[float]:
+    contributions = [0.0 for _candidate in candidate_points]
+    if not candidate_points:
+        return contributions
     all_points = [*baseline_points, *candidate_points]
-    total = hypervolume_2d(all_points, reference=reference)
-    contributions: list[float] = []
     baseline_count = len(baseline_points)
-    for candidate_index in range(len(candidate_points)):
-        without = [
-            point
-            for index, point in enumerate(all_points)
-            if index != baseline_count + candidate_index
+    frontier = _frontier_points_sorted(all_points, reference=reference)
+    coordinate_counts: dict[tuple[float, float], int] = {}
+    for _index, point in frontier:
+        key = (point.memorized_average, point.negative_time_average)
+        coordinate_counts[key] = coordinate_counts.get(key, 0) + 1
+    for global_index, point in frontier:
+        if global_index < baseline_count:
+            continue
+        candidate_index = global_index - baseline_count
+        key = (point.memorized_average, point.negative_time_average)
+        if coordinate_counts[key] > 1:
+            continue
+        left_boundary = max(
+            [
+                reference.memorized_average,
+                *[
+                    other.memorized_average
+                    for other_index, other in enumerate(all_points)
+                    if other_index != global_index
+                    and other.memorized_average < point.memorized_average
+                    and other.negative_time_average >= point.negative_time_average
+                ],
+            ]
+        )
+        if left_boundary >= point.memorized_average:
+            continue
+        local_reference = ObjectivePoint(
+            memorized_average=left_boundary,
+            negative_time_average=reference.negative_time_average,
+        )
+        blockers = [
+            ObjectivePoint(
+                memorized_average=min(other.memorized_average, point.memorized_average),
+                negative_time_average=min(
+                    other.negative_time_average,
+                    point.negative_time_average,
+                ),
+            )
+            for other_index, other in enumerate(all_points)
+            if other_index != global_index
+            and min(other.memorized_average, point.memorized_average) > left_boundary
+            and min(other.negative_time_average, point.negative_time_average)
+            > reference.negative_time_average
         ]
-        contributions.append(
-            max(0.0, total - hypervolume_2d(without, reference=reference))
+        rectangle_area = (point.memorized_average - left_boundary) * (
+            point.negative_time_average - reference.negative_time_average
+        )
+        contributions[candidate_index] = max(
+            0.0,
+            rectangle_area - hypervolume_2d(blockers, reference=local_reference),
         )
     return contributions
+
+
+def _frontier_points_sorted(
+    points: Sequence[ObjectivePoint],
+    *,
+    reference: ObjectivePoint,
+) -> list[tuple[int, ObjectivePoint]]:
+    contributing = [
+        (index, point)
+        for index, point in enumerate(points)
+        if point.memorized_average > reference.memorized_average
+        and point.negative_time_average > reference.negative_time_average
+    ]
+    if not contributing:
+        return []
+    local_frontier = non_dominated_indices([point for _index, point in contributing])
+    frontier = [contributing[index] for index in local_frontier]
+    frontier.sort(
+        key=lambda item: (
+            item[1].memorized_average,
+            item[1].negative_time_average,
+            item[0],
+        )
+    )
+    return frontier
 
 
 def select_sms_emoa_survivors(
@@ -734,6 +841,43 @@ def select_sms_emoa_survivors(
         )
         del survivors[remove_index]
     return survivors
+
+
+def _select_sms_emoa_survivors_timed(
+    task: _SelectionTask,
+) -> tuple[list[PortfolioCandidate], float]:
+    started = time.perf_counter()
+    survivors = select_sms_emoa_survivors(
+        baseline_points=task.baseline_points,
+        candidates=task.candidates,
+        population_size=task.population_size,
+        reference=task.reference,
+    )
+    return survivors, time.perf_counter() - started
+
+
+def _selection_executor(job_count: int) -> ProcessPoolExecutor | None:
+    if job_count <= 1:
+        return None
+    max_workers = min(job_count, os.cpu_count() or 1)
+    if max_workers <= 1:
+        return None
+    context = multiprocessing.get_context("spawn")
+    return ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
+
+
+def _select_survivors_for_generation(
+    *,
+    tasks: Sequence[_SelectionTask],
+    executor: ProcessPoolExecutor | None,
+) -> tuple[list[list[PortfolioCandidate]], list[float]]:
+    if executor is None:
+        results = [_select_sms_emoa_survivors_timed(task) for task in tasks]
+    else:
+        results = list(executor.map(_select_sms_emoa_survivors_timed, tasks))
+    survivors = [result[0] for result in results]
+    elapsed = [result[1] for result in results]
+    return survivors, elapsed
 
 
 def _baseline_dr_values(
