@@ -238,6 +238,13 @@ Batching model:
 - CMA-ES effective lanes are approximately `dr_batch_size * population_size`.
 - ADP uses the same idea, but batches `dr_batch_size * population_size` lanes
   per job and writes one policy artifact per user/DR/lambda.
+- Portfolio SMS-EMOA selection uses a lightweight bounded process pool for
+  batches with at least 8 users, capped at 32 workers by default, to avoid the
+  old unbounded spawned-worker memory growth. Worker payloads contain only
+  primitive metric tuples and do not import trainer/Torch modules. Set
+  `FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL=0` to force local
+  selection, or `=1` to force the pool for smaller batches; cap workers with
+  `FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS`.
 - `[sweep]` contains the batch sweep envs, scheduler list, retention grid, log
   root, and batch sizing. The formal runner uses that table directly, so no
   separate retention_sweep TOML is needed.

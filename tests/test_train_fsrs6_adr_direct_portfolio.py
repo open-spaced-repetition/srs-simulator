@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from itertools import combinations
 from pathlib import Path
 import random
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -16,11 +19,23 @@ from experiments.rl_scheduler.policy_search_common import CandidateMetrics
 from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
     ObjectivePoint,
     PortfolioCandidate,
+    _SelectionTask,
+    _selection_payload,
+    _selection_executor,
+    _selection_process_pool_enabled,
+    _selection_process_pool_worker_count,
+    _select_survivors_for_generation,
     _select_portfolio_children,
     exclusive_hypervolume_contributions,
     hypervolume_2d,
     non_dominated_indices,
     select_sms_emoa_survivors,
+)
+from experiments.rl_scheduler.portfolio_selection import (
+    SelectionPoint,
+    assert_selection_worker_is_lightweight,
+    hypervolume_2d as payload_hypervolume_2d,
+    select_sms_emoa_survivor_indices,
 )
 from simulator.batched_sweep.fsrs6_adr_direct_policy import (
     resolve_fsrs6_adr_direct_policy_specs,
@@ -201,6 +216,26 @@ def _oracle_select_sms_emoa_survivors(
 
 
 class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
+    def test_portfolio_selection_module_does_not_import_torch(self) -> None:
+        code = (
+            "import sys\n"
+            "import experiments.rl_scheduler.portfolio_selection\n"
+            "raise SystemExit(1 if 'torch' in sys.modules else 0)\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            check=False,
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_selection_worker_initializer_rejects_torch_import(self) -> None:
+        with patch.dict(sys.modules, {"torch": object()}):
+            with self.assertRaises(RuntimeError):
+                assert_selection_worker_is_lightweight()
+
     def test_hypervolume_2d_uses_non_dominated_union(self) -> None:
         hv = hypervolume_2d(
             [
@@ -393,6 +428,200 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
                 [candidate.candidate_id for candidate in actual],
                 [candidate.candidate_id for candidate in expected],
             )
+
+    def test_payload_api_matches_object_api(self) -> None:
+        baseline_points = [
+            ObjectivePoint(1.0, -4.0),
+            ObjectivePoint(4.0, -7.0),
+        ]
+        candidates = [
+            _candidate(10, 1.5, 3.0),
+            _candidate(11, 5.0, 8.0),
+            _candidate(12, 3.0, 2.5),
+            _candidate(13, 3.0, 2.5),
+            _candidate(14, 6.0, 9.0),
+        ]
+        reference = ObjectivePoint(0.0, -10.0)
+        payload = _selection_payload(
+            baseline_points=baseline_points,
+            candidates=candidates,
+            population_size=3,
+            reference=reference,
+        )
+
+        survivor_indices = select_sms_emoa_survivor_indices(payload)
+        object_survivors = select_sms_emoa_survivors(
+            baseline_points=baseline_points,
+            candidates=candidates,
+            population_size=3,
+            reference=reference,
+        )
+
+        self.assertEqual(
+            [candidates[index].candidate_id for index in survivor_indices],
+            [candidate.candidate_id for candidate in object_survivors],
+        )
+
+    def test_payload_hypervolume_matches_object_wrapper(self) -> None:
+        points = [
+            ObjectivePoint(1.0, 5.0),
+            ObjectivePoint(3.0, 2.0),
+            ObjectivePoint(1.5, 1.0),
+        ]
+        reference = ObjectivePoint(0.0, 0.0)
+
+        self.assertAlmostEqual(
+            payload_hypervolume_2d(
+                [
+                    SelectionPoint(
+                        point.memorized_average,
+                        point.negative_time_average,
+                    )
+                    for point in points
+                ],
+                reference=SelectionPoint(
+                    reference.memorized_average,
+                    reference.negative_time_average,
+                ),
+            ),
+            hypervolume_2d(points, reference=reference),
+        )
+
+    def test_local_and_process_pool_backends_match(self) -> None:
+        baseline_points = [ObjectivePoint(1.0, -4.0)]
+        reference = ObjectivePoint(0.0, -10.0)
+        candidate_groups = [
+            [
+                _candidate(10, 1.5, 3.0),
+                _candidate(11, 5.0, 8.0),
+                _candidate(12, 3.0, 2.5),
+            ],
+            [
+                _candidate(20, 2.0, 4.0),
+                _candidate(21, 2.0, 4.0),
+                _candidate(22, 6.0, 9.0),
+            ],
+        ]
+        tasks = [
+            _SelectionTask(
+                candidates=tuple(candidates),
+                payload=_selection_payload(
+                    baseline_points=baseline_points,
+                    candidates=candidates,
+                    population_size=2,
+                    reference=reference,
+                ),
+            )
+            for candidates in candidate_groups
+        ]
+        local_survivors, _local_seconds = _select_survivors_for_generation(
+            tasks=tasks,
+            executor=None,
+        )
+
+        with (
+            patch(
+                "experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio.os.cpu_count",
+                return_value=2,
+            ),
+            patch.dict(
+                os.environ,
+                {
+                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
+                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS": "2",
+                },
+                clear=True,
+            ),
+        ):
+            executor = _selection_executor(len(tasks))
+            self.assertIsNotNone(executor)
+            assert executor is not None
+            try:
+                pool_survivors, _pool_seconds = _select_survivors_for_generation(
+                    tasks=tasks,
+                    executor=executor,
+                )
+            finally:
+                executor.shutdown()
+
+        self.assertEqual(
+            [
+                [candidate.candidate_id for candidate in survivor_group]
+                for survivor_group in pool_survivors
+            ],
+            [
+                [candidate.candidate_id for candidate in survivor_group]
+                for survivor_group in local_survivors
+            ],
+        )
+
+    def test_selection_process_pool_is_disabled_by_default_for_small_jobs(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(_selection_process_pool_enabled(4))
+            self.assertIsNone(_selection_executor(4))
+
+    def test_selection_process_pool_is_enabled_by_default_for_large_jobs(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(_selection_process_pool_enabled(8))
+
+    def test_selection_process_pool_can_be_disabled_by_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "0"},
+            clear=True,
+        ):
+            self.assertFalse(_selection_process_pool_enabled(128))
+
+    def test_selection_process_pool_can_be_forced_by_env(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1"},
+            clear=True,
+        ):
+            self.assertTrue(_selection_process_pool_enabled(4))
+
+    def test_selection_process_pool_worker_count_defaults_to_thirty_two(self) -> None:
+        with (
+            patch(
+                "experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio.os.cpu_count",
+                return_value=64,
+            ),
+            patch.dict(
+                os.environ,
+                {"FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1"},
+                clear=True,
+            ),
+        ):
+            self.assertEqual(_selection_process_pool_worker_count(128), 32)
+
+    def test_selection_process_pool_worker_count_respects_cap(self) -> None:
+        with (
+            patch(
+                "experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio.os.cpu_count",
+                return_value=32,
+            ),
+            patch.dict(
+                os.environ,
+                {
+                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
+                    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS": "2",
+                },
+                clear=True,
+            ),
+        ):
+            self.assertEqual(_selection_process_pool_worker_count(128), 2)
+
+    def test_selection_process_pool_worker_count_rejects_invalid_cap(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL": "1",
+                "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS": "0",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(ValueError):
+                _selection_process_pool_worker_count(128)
 
     def test_portfolio_child_selection_greedily_maximizes_exported_hv(
         self,

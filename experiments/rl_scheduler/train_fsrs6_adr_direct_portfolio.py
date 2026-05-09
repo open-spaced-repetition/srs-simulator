@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor
-import multiprocessing
 import os
 import sys
 import time
@@ -32,6 +30,18 @@ from experiments.rl_scheduler.policy_search_common import (
     _read_training_policy_search,
     _write_json,
 )
+from experiments.rl_scheduler.portfolio_selection import (
+    LightweightSelectionPool,
+    SelectionPayload,
+    SelectionPoint,
+    baseline_aware_candidate_ranks as _selection_candidate_ranks,
+    dominates as _selection_dominates,
+    exclusive_hypervolume_contributions as _selection_contributions,
+    hypervolume_2d as _selection_hypervolume_2d,
+    non_dominated_indices as _selection_non_dominated_indices,
+    select_sms_emoa_payload_timed,
+    select_sms_emoa_survivor_indices,
+)
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
@@ -41,6 +51,12 @@ from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.schedulers.fsrs6_adr_direct import FSRS6ADRDirectBatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
+
+
+_SELECTION_PROCESS_POOL_ENV = "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL"
+_SELECTION_PROCESS_POOL_WORKERS_ENV = "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS"
+_DEFAULT_SELECTION_PROCESS_POOL_WORKERS = 32
+_DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,10 +195,8 @@ class SelectedPortfolioChild:
 
 @dataclass(frozen=True, slots=True)
 class _SelectionTask:
-    baseline_points: tuple[ObjectivePoint, ...]
     candidates: tuple[PortfolioCandidate, ...]
-    population_size: int
-    reference: ObjectivePoint
+    payload: SelectionPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,12 +496,16 @@ def run_portfolio_train_jobs(
                     )
                     for candidate_index in range(portfolio.offspring_size)
                 ]
+                candidates = tuple([*populations[job_index], *offspring])
                 selection_tasks.append(
                     _SelectionTask(
-                        baseline_points=tuple(baseline_points_by_job[job_index]),
-                        candidates=tuple([*populations[job_index], *offspring]),
-                        population_size=portfolio.population_size,
-                        reference=references[job_index],
+                        candidates=candidates,
+                        payload=_selection_payload(
+                            baseline_points=baseline_points_by_job[job_index],
+                            candidates=candidates,
+                            population_size=portfolio.population_size,
+                            reference=references[job_index],
+                        ),
                     )
                 )
 
@@ -650,52 +668,46 @@ def reference_point(
     )
 
 
-def non_dominated_indices(points: Sequence[ObjectivePoint]) -> list[int]:
-    if not points:
-        return []
-    sorted_points = sorted(
-        enumerate(points),
-        key=lambda item: (
-            -item[1].memorized_average,
-            -item[1].negative_time_average,
-            item[0],
-        ),
+def _selection_point(point: ObjectivePoint) -> SelectionPoint:
+    return SelectionPoint(
+        memorized_average=point.memorized_average,
+        negative_time_average=point.negative_time_average,
     )
-    max_y_from_greater_x = float("-inf")
-    indices: list[int] = []
-    start = 0
-    while start < len(sorted_points):
-        x_value = sorted_points[start][1].memorized_average
-        end = start + 1
-        while (
-            end < len(sorted_points)
-            and sorted_points[end][1].memorized_average == x_value
-        ):
-            end += 1
-        group = sorted_points[start:end]
-        group_max_y = max(point.negative_time_average for _index, point in group)
-        if group_max_y > max_y_from_greater_x:
-            indices.extend(
-                index
-                for index, point in group
-                if point.negative_time_average == group_max_y
-            )
-        max_y_from_greater_x = max(max_y_from_greater_x, group_max_y)
-        start = end
-    indices.sort()
-    return indices
+
+
+def _selection_points(points: Sequence[ObjectivePoint]) -> list[SelectionPoint]:
+    return [_selection_point(point) for point in points]
+
+
+def _selection_payload(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidates: Sequence[PortfolioCandidate],
+    population_size: int,
+    reference: ObjectivePoint,
+) -> SelectionPayload:
+    return SelectionPayload(
+        baseline_memorized=tuple(point.memorized_average for point in baseline_points),
+        baseline_negative_time=tuple(
+            point.negative_time_average for point in baseline_points
+        ),
+        candidate_ids=tuple(candidate.candidate_id for candidate in candidates),
+        memorized=tuple(
+            candidate.metrics.memorized_average for candidate in candidates
+        ),
+        time_average=tuple(candidate.metrics.time_average for candidate in candidates),
+        reference_memorized=reference.memorized_average,
+        reference_negative_time=reference.negative_time_average,
+        population_size=population_size,
+    )
+
+
+def non_dominated_indices(points: Sequence[ObjectivePoint]) -> list[int]:
+    return _selection_non_dominated_indices(_selection_points(points))
 
 
 def dominates(lhs: ObjectivePoint, rhs: ObjectivePoint) -> bool:
-    no_worse = (
-        lhs.memorized_average >= rhs.memorized_average
-        and lhs.negative_time_average >= rhs.negative_time_average
-    )
-    strictly_better = (
-        lhs.memorized_average > rhs.memorized_average
-        or lhs.negative_time_average > rhs.negative_time_average
-    )
-    return no_worse and strictly_better
+    return _selection_dominates(_selection_point(lhs), _selection_point(rhs))
 
 
 def hypervolume_2d(
@@ -703,17 +715,10 @@ def hypervolume_2d(
     *,
     reference: ObjectivePoint,
 ) -> float:
-    frontier = _frontier_points_sorted(points, reference=reference)
-    if not frontier:
-        return 0.0
-    hv = 0.0
-    previous_x = reference.memorized_average
-    for _index, point in frontier:
-        width = max(0.0, point.memorized_average - previous_x)
-        height = max(0.0, point.negative_time_average - reference.negative_time_average)
-        hv += width * height
-        previous_x = max(previous_x, point.memorized_average)
-    return float(hv)
+    return _selection_hypervolume_2d(
+        _selection_points(points),
+        reference=_selection_point(reference),
+    )
 
 
 def exclusive_hypervolume_contributions(
@@ -722,88 +727,11 @@ def exclusive_hypervolume_contributions(
     candidate_points: Sequence[ObjectivePoint],
     reference: ObjectivePoint,
 ) -> list[float]:
-    contributions = [0.0 for _candidate in candidate_points]
-    if not candidate_points:
-        return contributions
-    all_points = [*baseline_points, *candidate_points]
-    baseline_count = len(baseline_points)
-    frontier = _frontier_points_sorted(all_points, reference=reference)
-    coordinate_counts: dict[tuple[float, float], int] = {}
-    for _index, point in frontier:
-        key = (point.memorized_average, point.negative_time_average)
-        coordinate_counts[key] = coordinate_counts.get(key, 0) + 1
-    for global_index, point in frontier:
-        if global_index < baseline_count:
-            continue
-        candidate_index = global_index - baseline_count
-        key = (point.memorized_average, point.negative_time_average)
-        if coordinate_counts[key] > 1:
-            continue
-        left_boundary = max(
-            [
-                reference.memorized_average,
-                *[
-                    other.memorized_average
-                    for other_index, other in enumerate(all_points)
-                    if other_index != global_index
-                    and other.memorized_average < point.memorized_average
-                    and other.negative_time_average >= point.negative_time_average
-                ],
-            ]
-        )
-        if left_boundary >= point.memorized_average:
-            continue
-        local_reference = ObjectivePoint(
-            memorized_average=left_boundary,
-            negative_time_average=reference.negative_time_average,
-        )
-        blockers = [
-            ObjectivePoint(
-                memorized_average=min(other.memorized_average, point.memorized_average),
-                negative_time_average=min(
-                    other.negative_time_average,
-                    point.negative_time_average,
-                ),
-            )
-            for other_index, other in enumerate(all_points)
-            if other_index != global_index
-            and min(other.memorized_average, point.memorized_average) > left_boundary
-            and min(other.negative_time_average, point.negative_time_average)
-            > reference.negative_time_average
-        ]
-        rectangle_area = (point.memorized_average - left_boundary) * (
-            point.negative_time_average - reference.negative_time_average
-        )
-        contributions[candidate_index] = max(
-            0.0,
-            rectangle_area - hypervolume_2d(blockers, reference=local_reference),
-        )
-    return contributions
-
-
-def _frontier_points_sorted(
-    points: Sequence[ObjectivePoint],
-    *,
-    reference: ObjectivePoint,
-) -> list[tuple[int, ObjectivePoint]]:
-    contributing = [
-        (index, point)
-        for index, point in enumerate(points)
-        if point.memorized_average > reference.memorized_average
-        and point.negative_time_average > reference.negative_time_average
-    ]
-    if not contributing:
-        return []
-    local_frontier = non_dominated_indices([point for _index, point in contributing])
-    frontier = [contributing[index] for index in local_frontier]
-    frontier.sort(
-        key=lambda item: (
-            item[1].memorized_average,
-            item[1].negative_time_average,
-            item[0],
-        )
+    return _selection_contributions(
+        baseline_points=_selection_points(baseline_points),
+        candidate_points=_selection_points(candidate_points),
+        reference=_selection_point(reference),
     )
-    return frontier
 
 
 def select_sms_emoa_survivors(
@@ -813,70 +741,85 @@ def select_sms_emoa_survivors(
     population_size: int,
     reference: ObjectivePoint,
 ) -> list[PortfolioCandidate]:
-    if population_size < 1:
-        raise ValueError("population_size must be positive.")
-    survivors = list(candidates)
-    while len(survivors) > population_size:
-        ranks = _baseline_aware_candidate_ranks(
-            baseline_points=baseline_points,
-            candidate_points=[candidate.point for candidate in survivors],
-        )
-        contributions = exclusive_hypervolume_contributions(
-            baseline_points=baseline_points,
-            candidate_points=[candidate.point for candidate in survivors],
-            reference=reference,
-        )
-        worst_rank = max(ranks)
-        removal_candidates = [
-            index for index, rank in enumerate(ranks) if rank == worst_rank
-        ]
-        remove_index = min(
-            removal_candidates,
-            key=lambda index: (
-                contributions[index],
-                survivors[index].metrics.memorized_average,
-                -survivors[index].metrics.time_average,
-                -survivors[index].candidate_id,
-            ),
-        )
-        del survivors[remove_index]
-    return survivors
+    payload = _selection_payload(
+        baseline_points=baseline_points,
+        candidates=candidates,
+        population_size=population_size,
+        reference=reference,
+    )
+    survivor_indices = select_sms_emoa_survivor_indices(payload)
+    return [candidates[index] for index in survivor_indices]
 
 
 def _select_sms_emoa_survivors_timed(
     task: _SelectionTask,
 ) -> tuple[list[PortfolioCandidate], float]:
-    started = time.perf_counter()
-    survivors = select_sms_emoa_survivors(
-        baseline_points=task.baseline_points,
-        candidates=task.candidates,
-        population_size=task.population_size,
-        reference=task.reference,
-    )
-    return survivors, time.perf_counter() - started
+    result = select_sms_emoa_payload_timed(task.payload)
+    survivors = [task.candidates[index] for index in result.survivor_indices]
+    return survivors, result.elapsed_seconds
 
 
-def _selection_executor(job_count: int) -> ProcessPoolExecutor | None:
+def _selection_process_pool_worker_count(job_count: int) -> int:
     if job_count <= 1:
+        return 0
+    cpu_count = os.cpu_count() or 1
+    raw_worker_count = os.environ.get(_SELECTION_PROCESS_POOL_WORKERS_ENV, "").strip()
+    if raw_worker_count:
+        try:
+            worker_count = int(raw_worker_count)
+        except ValueError as exc:
+            raise ValueError(
+                f"{_SELECTION_PROCESS_POOL_WORKERS_ENV} must be a positive integer."
+            ) from exc
+        if worker_count < 1:
+            raise ValueError(
+                f"{_SELECTION_PROCESS_POOL_WORKERS_ENV} must be a positive integer."
+            )
+    else:
+        worker_count = _DEFAULT_SELECTION_PROCESS_POOL_WORKERS
+    return min(job_count, cpu_count, worker_count)
+
+
+def _selection_process_pool_enabled(job_count: int) -> bool:
+    if job_count <= 1:
+        return False
+    raw_enabled = os.environ.get(_SELECTION_PROCESS_POOL_ENV, "").strip().lower()
+    if raw_enabled in {"1", "true", "yes", "on"}:
+        return True
+    if raw_enabled in {"0", "false", "no", "off"}:
+        return False
+    if raw_enabled:
+        raise ValueError(
+            f"{_SELECTION_PROCESS_POOL_ENV} must be 1/true/on or 0/false/off."
+        )
+    return job_count >= _DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS
+
+
+def _selection_executor(job_count: int) -> LightweightSelectionPool | None:
+    if not _selection_process_pool_enabled(job_count):
         return None
-    max_workers = min(job_count, os.cpu_count() or 1)
+    max_workers = _selection_process_pool_worker_count(job_count)
     if max_workers <= 1:
         return None
-    context = multiprocessing.get_context("spawn")
-    return ProcessPoolExecutor(max_workers=max_workers, mp_context=context)
+    return LightweightSelectionPool(max_workers=max_workers)
 
 
 def _select_survivors_for_generation(
     *,
     tasks: Sequence[_SelectionTask],
-    executor: ProcessPoolExecutor | None,
+    executor: LightweightSelectionPool | None,
 ) -> tuple[list[list[PortfolioCandidate]], list[float]]:
     if executor is None:
         results = [_select_sms_emoa_survivors_timed(task) for task in tasks]
+        survivors = [result[0] for result in results]
+        elapsed = [result[1] for result in results]
     else:
-        results = list(executor.map(_select_sms_emoa_survivors_timed, tasks))
-    survivors = [result[0] for result in results]
-    elapsed = [result[1] for result in results]
+        results = executor.map([task.payload for task in tasks])
+        survivors = [
+            [task.candidates[index] for index in result.survivor_indices]
+            for task, result in zip(tasks, results, strict=True)
+        ]
+        elapsed = [result.elapsed_seconds for result in results]
     return survivors, elapsed
 
 
@@ -1159,40 +1102,10 @@ def _baseline_aware_candidate_ranks(
     baseline_points: Sequence[ObjectivePoint],
     candidate_points: Sequence[ObjectivePoint],
 ) -> list[int]:
-    ranks = [-1 for _candidate in candidate_points]
-    baseline_dominated = {
-        index
-        for index, candidate in enumerate(candidate_points)
-        if any(dominates(baseline, candidate) for baseline in baseline_points)
-    }
-    remaining = [
-        index
-        for index in range(len(candidate_points))
-        if index not in baseline_dominated
-    ]
-    rank = 0
-    while remaining:
-        layer_points = [
-            *baseline_points,
-            *[candidate_points[index] for index in remaining],
-        ]
-        nd = non_dominated_indices(layer_points)
-        selected = [
-            remaining[index - len(baseline_points)]
-            for index in nd
-            if index >= len(baseline_points)
-        ]
-        if not selected:
-            break
-        for index in selected:
-            ranks[index] = rank
-        remaining = [index for index in remaining if index not in set(selected)]
-        rank += 1
-    worst_rank = rank + len(candidate_points) + 1
-    for index in range(len(candidate_points)):
-        if ranks[index] < 0:
-            ranks[index] = worst_rank
-    return ranks
+    return _selection_candidate_ranks(
+        baseline_points=_selection_points(baseline_points),
+        candidate_points=_selection_points(candidate_points),
+    )
 
 
 def _frontier_candidate_count(
