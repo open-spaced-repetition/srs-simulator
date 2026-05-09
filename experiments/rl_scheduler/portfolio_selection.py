@@ -10,7 +10,46 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Generic, Protocol, TypeVar
+
+
+SELECTION_PROCESS_POOL_ENV = "FSRS6_PORTFOLIO_SELECTION_PROCESS_POOL"
+SELECTION_PROCESS_POOL_WORKERS_ENV = "FSRS6_PORTFOLIO_SELECTION_WORKERS"
+LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_ENV = (
+    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL"
+)
+LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_WORKERS_ENV = (
+    "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS"
+)
+DEFAULT_SELECTION_PROCESS_POOL_WORKERS = 32
+DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS = 8
+
+_DEFAULT_SELECTION_PROCESS_POOL_ENV_VARS = (
+    SELECTION_PROCESS_POOL_ENV,
+    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_ENV,
+)
+_DEFAULT_SELECTION_PROCESS_POOL_WORKER_ENV_VARS = (
+    SELECTION_PROCESS_POOL_WORKERS_ENV,
+    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_WORKERS_ENV,
+)
+
+CandidateT = TypeVar("CandidateT")
+
+
+class CandidateMetricValues(Protocol):
+    @property
+    def memorized_average(self) -> float: ...
+
+    @property
+    def time_average(self) -> float: ...
+
+
+class SelectionCandidate(Protocol):
+    @property
+    def candidate_id(self) -> int: ...
+
+    @property
+    def metrics(self) -> CandidateMetricValues: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +74,12 @@ class SelectionPayload:
 class SelectionResult:
     survivor_indices: tuple[int, ...]
     elapsed_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionTask(Generic[CandidateT]):
+    candidates: tuple[CandidateT, ...]
+    payload: SelectionPayload
 
 
 class LightweightSelectionPool:
@@ -105,6 +150,29 @@ class LightweightSelectionPool:
 def assert_selection_worker_is_lightweight() -> None:
     if "torch" in sys.modules:
         raise RuntimeError("selection worker imported torch unexpectedly")
+
+
+def selection_payload_from_candidate_metrics(
+    *,
+    baseline_points: Sequence[SelectionPoint],
+    candidates: Sequence[SelectionCandidate],
+    population_size: int,
+    reference: SelectionPoint,
+) -> SelectionPayload:
+    return SelectionPayload(
+        baseline_memorized=tuple(point.memorized_average for point in baseline_points),
+        baseline_negative_time=tuple(
+            point.negative_time_average for point in baseline_points
+        ),
+        candidate_ids=tuple(candidate.candidate_id for candidate in candidates),
+        memorized=tuple(
+            candidate.metrics.memorized_average for candidate in candidates
+        ),
+        time_average=tuple(candidate.metrics.time_average for candidate in candidates),
+        reference_memorized=reference.memorized_average,
+        reference_negative_time=reference.negative_time_average,
+        population_size=population_size,
+    )
 
 
 def dominates(lhs: SelectionPoint, rhs: SelectionPoint) -> bool:
@@ -327,6 +395,88 @@ def select_sms_emoa_payload_timed(payload: SelectionPayload) -> SelectionResult:
     )
 
 
+def selection_process_pool_worker_count(
+    job_count: int,
+    *,
+    worker_env_vars: Sequence[str] = _DEFAULT_SELECTION_PROCESS_POOL_WORKER_ENV_VARS,
+    default_workers: int = DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
+) -> int:
+    if job_count <= 1:
+        return 0
+    cpu_count = os.cpu_count() or 1
+    env_name, raw_worker_count = _first_env_value(worker_env_vars)
+    if raw_worker_count:
+        try:
+            worker_count = int(raw_worker_count)
+        except ValueError as exc:
+            raise ValueError(f"{env_name} must be a positive integer.") from exc
+        if worker_count < 1:
+            raise ValueError(f"{env_name} must be a positive integer.")
+    else:
+        worker_count = default_workers
+    return min(job_count, cpu_count, worker_count)
+
+
+def selection_process_pool_enabled(
+    job_count: int,
+    *,
+    enabled_env_vars: Sequence[str] = _DEFAULT_SELECTION_PROCESS_POOL_ENV_VARS,
+    default_min_jobs: int = DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
+) -> bool:
+    if job_count <= 1:
+        return False
+    env_name, raw_enabled = _first_env_value(enabled_env_vars)
+    raw_enabled = raw_enabled.lower()
+    if raw_enabled in {"1", "true", "yes", "on"}:
+        return True
+    if raw_enabled in {"0", "false", "no", "off"}:
+        return False
+    if raw_enabled:
+        raise ValueError(f"{env_name} must be 1/true/on or 0/false/off.")
+    return job_count >= default_min_jobs
+
+
+def selection_executor(
+    job_count: int,
+    *,
+    enabled_env_vars: Sequence[str] = _DEFAULT_SELECTION_PROCESS_POOL_ENV_VARS,
+    worker_env_vars: Sequence[str] = _DEFAULT_SELECTION_PROCESS_POOL_WORKER_ENV_VARS,
+    default_min_jobs: int = DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
+    default_workers: int = DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
+) -> LightweightSelectionPool | None:
+    if not selection_process_pool_enabled(
+        job_count,
+        enabled_env_vars=enabled_env_vars,
+        default_min_jobs=default_min_jobs,
+    ):
+        return None
+    max_workers = selection_process_pool_worker_count(
+        job_count,
+        worker_env_vars=worker_env_vars,
+        default_workers=default_workers,
+    )
+    if max_workers <= 1:
+        return None
+    return LightweightSelectionPool(max_workers=max_workers)
+
+
+def select_survivors_for_generation(
+    *,
+    tasks: Sequence[SelectionTask[CandidateT]],
+    executor: LightweightSelectionPool | None,
+) -> tuple[list[list[CandidateT]], list[float]]:
+    if executor is None:
+        results = [select_sms_emoa_payload_timed(task.payload) for task in tasks]
+    else:
+        results = executor.map([task.payload for task in tasks])
+    survivors = [
+        [task.candidates[index] for index in result.survivor_indices]
+        for task, result in zip(tasks, results, strict=True)
+    ]
+    elapsed = [result.elapsed_seconds for result in results]
+    return survivors, elapsed
+
+
 def worker_main() -> int:
     assert_selection_worker_is_lightweight()
     while True:
@@ -490,3 +640,13 @@ def _validate_payload(payload: SelectionPayload) -> None:
         raise ValueError("candidate memorized array length mismatch.")
     if len(payload.time_average) != candidate_count:
         raise ValueError("candidate time_average array length mismatch.")
+
+
+def _first_env_value(env_vars: Sequence[str]) -> tuple[str, str]:
+    if not env_vars:
+        raise ValueError("At least one environment variable name is required.")
+    for env_name in env_vars:
+        raw = os.environ.get(env_name, "").strip()
+        if raw:
+            return env_name, raw
+    return env_vars[0], ""

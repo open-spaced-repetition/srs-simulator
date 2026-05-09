@@ -25,7 +25,12 @@ from experiments.rl_scheduler.train_fsrs6_adp_portfolio import (
     SelectedADPPortfolioChild,
     UserADPPortfolioResult,
     _mutate_genome,
+    _selection_payload,
     _write_portfolio_artifacts,
+)
+from experiments.rl_scheduler.portfolio_selection import (
+    SelectionTask,
+    select_survivors_for_generation,
 )
 from simulator.experiment_infra import ExperimentConfig
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
@@ -110,6 +115,54 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
         self.assertEqual(desired_retention, 0.6)
         self.assertEqual(len(search_vector), 21)
         self.assertTrue(any(value != 0.0 for value in search_vector))
+
+    def test_selection_helper_returns_timed_adp_survivors(self) -> None:
+        base_weights = clip_fsrs6_adp_weights(DEFAULT_FSRS6_WEIGHTS)
+        baseline_points = [ObjectivePoint(0.0, -10.0)]
+        reference = ObjectivePoint(-1.0, -11.0)
+        candidates = [
+            ADPPortfolioCandidate(
+                candidate_id=1,
+                desired_retention=0.70,
+                search_vector=(0.0,) * 21,
+                weights=base_weights,
+                metrics=_metrics(4.0, 4.0),
+            ),
+            ADPPortfolioCandidate(
+                candidate_id=2,
+                desired_retention=0.80,
+                search_vector=(0.0,) * 21,
+                weights=base_weights,
+                metrics=_metrics(8.0, 8.0),
+            ),
+            ADPPortfolioCandidate(
+                candidate_id=3,
+                desired_retention=0.90,
+                search_vector=(0.0,) * 21,
+                weights=base_weights,
+                metrics=_metrics(5.0, 2.0),
+            ),
+        ]
+
+        survivors, worker_seconds = select_survivors_for_generation(
+            tasks=[
+                SelectionTask(
+                    candidates=tuple(candidates),
+                    payload=_selection_payload(
+                        baseline_points=baseline_points,
+                        candidates=candidates,
+                        population_size=2,
+                        reference=reference,
+                    ),
+                )
+            ],
+            executor=None,
+        )
+
+        self.assertEqual(len(survivors), 1)
+        self.assertEqual(len(survivors[0]), 2)
+        self.assertEqual(len(worker_seconds), 1)
+        self.assertGreaterEqual(worker_seconds[0], 0.0)
 
     def test_artifacts_record_exported_subset_hypervolume_for_children(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

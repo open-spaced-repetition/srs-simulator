@@ -521,7 +521,7 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
 
         with (
             patch(
-                "experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio.os.cpu_count",
+                "experiments.rl_scheduler.portfolio_selection.os.cpu_count",
                 return_value=2,
             ),
             patch.dict(
@@ -583,7 +583,7 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
     def test_selection_process_pool_worker_count_defaults_to_thirty_two(self) -> None:
         with (
             patch(
-                "experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio.os.cpu_count",
+                "experiments.rl_scheduler.portfolio_selection.os.cpu_count",
                 return_value=64,
             ),
             patch.dict(
@@ -597,7 +597,7 @@ class FSRS6ADRDirectPortfolioMathTests(unittest.TestCase):
     def test_selection_process_pool_worker_count_respects_cap(self) -> None:
         with (
             patch(
-                "experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio.os.cpu_count",
+                "experiments.rl_scheduler.portfolio_selection.os.cpu_count",
                 return_value=32,
             ),
             patch.dict(

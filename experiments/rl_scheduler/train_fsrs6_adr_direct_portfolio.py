@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 from collections.abc import Mapping, Sequence
@@ -34,13 +33,22 @@ from experiments.rl_scheduler.portfolio_selection import (
     LightweightSelectionPool,
     SelectionPayload,
     SelectionPoint,
+    SelectionTask,
+    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_ENV,
+    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_WORKERS_ENV,
+    DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
+    DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
     baseline_aware_candidate_ranks as _selection_candidate_ranks,
     dominates as _selection_dominates,
     exclusive_hypervolume_contributions as _selection_contributions,
     hypervolume_2d as _selection_hypervolume_2d,
     non_dominated_indices as _selection_non_dominated_indices,
-    select_sms_emoa_payload_timed,
+    selection_executor as _common_selection_executor,
+    selection_payload_from_candidate_metrics,
+    selection_process_pool_enabled as _common_selection_process_pool_enabled,
+    selection_process_pool_worker_count as _common_selection_process_pool_worker_count,
     select_sms_emoa_survivor_indices,
+    select_survivors_for_generation as _common_select_survivors_for_generation,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
@@ -53,10 +61,18 @@ from simulator.short_term_config import resolve_short_term_config
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 
 
-_SELECTION_PROCESS_POOL_ENV = "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_PROCESS_POOL"
-_SELECTION_PROCESS_POOL_WORKERS_ENV = "FSRS6_ADR_DIRECT_PORTFOLIO_SELECTION_WORKERS"
-_DEFAULT_SELECTION_PROCESS_POOL_WORKERS = 32
-_DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS = 8
+_SELECTION_PROCESS_POOL_ENV = LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_ENV
+_SELECTION_PROCESS_POOL_WORKERS_ENV = (
+    LEGACY_ADR_DIRECT_SELECTION_PROCESS_POOL_WORKERS_ENV
+)
+_SELECTION_ENV_VARS = (
+    _SELECTION_PROCESS_POOL_ENV,
+    "FSRS6_PORTFOLIO_SELECTION_PROCESS_POOL",
+)
+_SELECTION_WORKER_ENV_VARS = (
+    _SELECTION_PROCESS_POOL_WORKERS_ENV,
+    "FSRS6_PORTFOLIO_SELECTION_WORKERS",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,10 +209,7 @@ class SelectedPortfolioChild:
     pareto_rank: int
 
 
-@dataclass(frozen=True, slots=True)
-class _SelectionTask:
-    candidates: tuple[PortfolioCandidate, ...]
-    payload: SelectionPayload
+_SelectionTask = SelectionTask
 
 
 @dataclass(frozen=True, slots=True)
@@ -486,7 +499,7 @@ def run_portfolio_train_jobs(
             )
             offspring_evaluation_seconds = time.perf_counter() - evaluation_started
 
-            selection_tasks: list[_SelectionTask] = []
+            selection_tasks: list[SelectionTask[PortfolioCandidate]] = []
             for job_index in range(len(jobs)):
                 offspring = [
                     PortfolioCandidate(
@@ -686,19 +699,11 @@ def _selection_payload(
     population_size: int,
     reference: ObjectivePoint,
 ) -> SelectionPayload:
-    return SelectionPayload(
-        baseline_memorized=tuple(point.memorized_average for point in baseline_points),
-        baseline_negative_time=tuple(
-            point.negative_time_average for point in baseline_points
-        ),
-        candidate_ids=tuple(candidate.candidate_id for candidate in candidates),
-        memorized=tuple(
-            candidate.metrics.memorized_average for candidate in candidates
-        ),
-        time_average=tuple(candidate.metrics.time_average for candidate in candidates),
-        reference_memorized=reference.memorized_average,
-        reference_negative_time=reference.negative_time_average,
+    return selection_payload_from_candidate_metrics(
+        baseline_points=_selection_points(baseline_points),
+        candidates=candidates,
         population_size=population_size,
+        reference=_selection_point(reference),
     )
 
 
@@ -751,76 +756,38 @@ def select_sms_emoa_survivors(
     return [candidates[index] for index in survivor_indices]
 
 
-def _select_sms_emoa_survivors_timed(
-    task: _SelectionTask,
-) -> tuple[list[PortfolioCandidate], float]:
-    result = select_sms_emoa_payload_timed(task.payload)
-    survivors = [task.candidates[index] for index in result.survivor_indices]
-    return survivors, result.elapsed_seconds
-
-
 def _selection_process_pool_worker_count(job_count: int) -> int:
-    if job_count <= 1:
-        return 0
-    cpu_count = os.cpu_count() or 1
-    raw_worker_count = os.environ.get(_SELECTION_PROCESS_POOL_WORKERS_ENV, "").strip()
-    if raw_worker_count:
-        try:
-            worker_count = int(raw_worker_count)
-        except ValueError as exc:
-            raise ValueError(
-                f"{_SELECTION_PROCESS_POOL_WORKERS_ENV} must be a positive integer."
-            ) from exc
-        if worker_count < 1:
-            raise ValueError(
-                f"{_SELECTION_PROCESS_POOL_WORKERS_ENV} must be a positive integer."
-            )
-    else:
-        worker_count = _DEFAULT_SELECTION_PROCESS_POOL_WORKERS
-    return min(job_count, cpu_count, worker_count)
+    return _common_selection_process_pool_worker_count(
+        job_count,
+        worker_env_vars=_SELECTION_WORKER_ENV_VARS,
+        default_workers=DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
+    )
 
 
 def _selection_process_pool_enabled(job_count: int) -> bool:
-    if job_count <= 1:
-        return False
-    raw_enabled = os.environ.get(_SELECTION_PROCESS_POOL_ENV, "").strip().lower()
-    if raw_enabled in {"1", "true", "yes", "on"}:
-        return True
-    if raw_enabled in {"0", "false", "no", "off"}:
-        return False
-    if raw_enabled:
-        raise ValueError(
-            f"{_SELECTION_PROCESS_POOL_ENV} must be 1/true/on or 0/false/off."
-        )
-    return job_count >= _DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS
+    return _common_selection_process_pool_enabled(
+        job_count,
+        enabled_env_vars=_SELECTION_ENV_VARS,
+        default_min_jobs=DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
+    )
 
 
 def _selection_executor(job_count: int) -> LightweightSelectionPool | None:
-    if not _selection_process_pool_enabled(job_count):
-        return None
-    max_workers = _selection_process_pool_worker_count(job_count)
-    if max_workers <= 1:
-        return None
-    return LightweightSelectionPool(max_workers=max_workers)
+    return _common_selection_executor(
+        job_count,
+        enabled_env_vars=_SELECTION_ENV_VARS,
+        worker_env_vars=_SELECTION_WORKER_ENV_VARS,
+        default_min_jobs=DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
+        default_workers=DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
+    )
 
 
 def _select_survivors_for_generation(
     *,
-    tasks: Sequence[_SelectionTask],
+    tasks: Sequence[SelectionTask[PortfolioCandidate]],
     executor: LightweightSelectionPool | None,
 ) -> tuple[list[list[PortfolioCandidate]], list[float]]:
-    if executor is None:
-        results = [_select_sms_emoa_survivors_timed(task) for task in tasks]
-        survivors = [result[0] for result in results]
-        elapsed = [result[1] for result in results]
-    else:
-        results = executor.map([task.payload for task in tasks])
-        survivors = [
-            [task.candidates[index] for index in result.survivor_indices]
-            for task, result in zip(tasks, results, strict=True)
-        ]
-        elapsed = [result.elapsed_seconds for result in results]
-    return survivors, elapsed
+    return _common_select_survivors_for_generation(tasks=tasks, executor=executor)
 
 
 def _baseline_dr_values(
