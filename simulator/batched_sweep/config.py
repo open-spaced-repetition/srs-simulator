@@ -285,7 +285,7 @@ def _adapt_experiment_config(
     simulation = _table(raw, "simulation", required=False)
     performance = _table(raw, "performance", required=False)
     training = _table(raw, "training", required=False)
-    training_sa = _nested_table(training, "sa", required=False)
+    training_policy_search = _nested_table(training, "policy_search", required=False)
 
     adapted_simulation = dict(simulation)
     adapted_simulation["seed"] = raw.get(
@@ -313,10 +313,10 @@ def _adapt_experiment_config(
 
     short_term = {
         "source": adapted_simulation.get("short_term_source"),
-        "learning_steps": training_sa.get("learning_steps"),
-        "relearning_steps": training_sa.get("relearning_steps"),
-        "threshold": training_sa.get("short_term_threshold", 0.5),
-        "loops_limit": training_sa.get("short_term_loops_limit"),
+        "learning_steps": training_policy_search.get("learning_steps"),
+        "relearning_steps": training_policy_search.get("relearning_steps"),
+        "threshold": training_policy_search.get("short_term_threshold", 0.5),
+        "loops_limit": training_policy_search.get("short_term_loops_limit"),
     }
     short_term = {key: value for key, value in short_term.items() if value is not None}
 

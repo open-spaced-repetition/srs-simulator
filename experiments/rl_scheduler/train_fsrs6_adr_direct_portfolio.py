@@ -14,9 +14,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_fsrs6_adr_direct import (
+from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
-    SASettings,
+    PolicySearchSettings,
     TrainingProgress,
     _build_bundle,
     _float,
@@ -25,7 +25,7 @@ from experiments.rl_scheduler.train_fsrs6_adr_direct import (
     _int,
     _metrics_from_stats,
     _policy_feature_version,
-    _read_training_sa,
+    _read_training_policy_search,
     _write_json,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
@@ -56,7 +56,7 @@ class PortfolioSettings:
         cls,
         raw: Mapping[str, Any],
         *,
-        settings: SASettings,
+        settings: PolicySearchSettings,
         default_seed_retention_values: Sequence[float],
     ) -> PortfolioSettings:
         defaults = cls()
@@ -72,7 +72,7 @@ class PortfolioSettings:
             if not (settings.retention_min <= value <= settings.retention_max):
                 raise ValueError(
                     "training.portfolio.seed_retention_values must be inside "
-                    "training.sa retention bounds."
+                    "training.policy_search retention bounds."
                 )
         algorithm = raw.get("algorithm", defaults.algorithm)
         if not isinstance(algorithm, str) or not algorithm.strip():
@@ -250,10 +250,10 @@ def run_portfolio_train_jobs(
 ) -> list[PortfolioTrainOutcome]:
     if not jobs:
         return []
-    settings = SASettings.from_mapping(config.training_sa)
-    raw_training_sa = dict(_read_training_sa(config_path))
-    feature_version = _policy_feature_version(raw_training_sa)
-    baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
+    settings = PolicySearchSettings.from_mapping(config.training_policy_search)
+    raw_training_policy_search = dict(_read_training_policy_search(config_path))
+    feature_version = _policy_feature_version(raw_training_policy_search)
+    baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
     portfolio = PortfolioSettings.from_mapping(
         config.training_portfolio,
         settings=settings,
@@ -264,8 +264,8 @@ def run_portfolio_train_jobs(
     overrides = parse_result_overrides(benchmark_result)
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
-        learning_steps=raw_training_sa.get("learning_steps"),
-        relearning_steps=raw_training_sa.get("relearning_steps"),
+        learning_steps=raw_training_policy_search.get("learning_steps"),
+        relearning_steps=raw_training_policy_search.get("relearning_steps"),
     )
     short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         short_term_args
@@ -737,22 +737,22 @@ def select_sms_emoa_survivors(
 
 
 def _baseline_dr_values(
-    raw_training_sa: Mapping[str, Any],
-    settings: SASettings,
+    raw_training_policy_search: Mapping[str, Any],
+    settings: PolicySearchSettings,
 ) -> tuple[float, ...]:
-    raw_values = raw_training_sa.get("baseline_desired_retention_values")
+    raw_values = raw_training_policy_search.get("baseline_desired_retention_values")
     if raw_values is None:
         values = (settings.baseline_desired_retention,)
     else:
         values = _float_tuple(
             raw_values,
-            "training.sa.baseline_desired_retention_values",
+            "training.policy_search.baseline_desired_retention_values",
         )
     for value in values:
         if not (settings.retention_min <= value <= settings.retention_max):
             raise ValueError(
-                "training.sa.baseline_desired_retention_values must be inside "
-                "training.sa retention bounds."
+                "training.policy_search.baseline_desired_retention_values must be inside "
+                "training.policy_search retention bounds."
             )
     return values
 
@@ -760,7 +760,7 @@ def _baseline_dr_values(
 def _evaluate_fsrs6_baseline_grid(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     bundle: Any,
     baseline_dr_values: tuple[float, ...],
     job_count: int,
@@ -807,7 +807,7 @@ def _evaluate_fsrs6_baseline_grid(
 def _evaluate_direct_coefficients(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     bundle: Any,
     coefficients_by_job: Sequence[Sequence[tuple[float, ...]]],
     feature_version: str,
@@ -871,7 +871,7 @@ def _evaluate_direct_coefficients(
 def _initial_populations(
     *,
     jobs: Sequence[PortfolioTrainJob],
-    settings: SASettings,
+    settings: PolicySearchSettings,
     portfolio: PortfolioSettings,
     feature_version: str,
     device: torch.device,
@@ -1066,7 +1066,7 @@ def _write_portfolio_artifacts(
     result: UserPortfolioResult,
     config: ExperimentConfig,
     config_path: Path,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     portfolio: PortfolioSettings,
     feature_version: str,
 ) -> list[Path]:
@@ -1234,7 +1234,7 @@ def _progress_for_jobs(
 def _constant_retention_coefficients(
     *,
     desired_retention: float,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     feature_version: str,
 ) -> tuple[float, ...]:
     policy = FSRS6ADRDirectPolicy.baseline(

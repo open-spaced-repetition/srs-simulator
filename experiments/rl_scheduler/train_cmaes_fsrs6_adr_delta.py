@@ -15,19 +15,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_fsrs6_adr_direct import (
-    SASettings,
+from experiments.rl_scheduler.policy_search_common import (
+    PolicySearchSettings,
     TrainingProgress,
     _build_bundle,
-    _read_training_sa,
+    _read_training_policy_search,
 )
-from experiments.rl_scheduler.train_fsrs6_adr_delta import (
+from experiments.rl_scheduler.adr_delta_common import (
     DRConditionedTrainingResult,
     _baseline_dr_values,
     _clear_cuda_cache,
     _dr_batch_size,
     _evaluate_fsrs6_baselines,
-    _evaluate_sa_dr_chains,
+    _evaluate_dr_conditioned_candidates,
     _policy_feature_version,
     _write_artifact,
 )
@@ -143,9 +143,9 @@ def main() -> int:
     )
 
     config = ExperimentConfig.from_toml(args.config)
-    settings = SASettings.from_mapping(config.training_sa)
-    raw_training_sa = _read_training_sa(args.config)
-    policy_feature_version = _policy_feature_version(raw_training_sa)
+    settings = PolicySearchSettings.from_mapping(config.training_policy_search)
+    raw_training_policy_search = _read_training_policy_search(args.config)
+    policy_feature_version = _policy_feature_version(raw_training_policy_search)
     coefficient_count = feature_count(policy_feature_version)
     optimizer_settings = CMAESSettings.from_mapping(
         config.training_optimizer,
@@ -159,8 +159,8 @@ def main() -> int:
         user_id=args.user_id,
         lambda_value=args.lambda_value,
     )
-    baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
-    dr_batch_size = _dr_batch_size(raw_training_sa, len(baseline_dr_values))
+    baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
+    dr_batch_size = _dr_batch_size(raw_training_policy_search, len(baseline_dr_values))
     progress.write(
         "config_loaded",
         settings=asdict(settings),
@@ -179,8 +179,8 @@ def main() -> int:
     overrides = parse_result_overrides(args.benchmark_result)
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
-        learning_steps=raw_training_sa.get("learning_steps"),
-        relearning_steps=raw_training_sa.get("relearning_steps"),
+        learning_steps=raw_training_policy_search.get("learning_steps"),
+        relearning_steps=raw_training_policy_search.get("relearning_steps"),
     )
     short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         short_term_args
@@ -300,7 +300,7 @@ def main() -> int:
 def _run_cmaes_dr_conditioned(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     optimizer_settings: CMAESSettings,
     optimizer_seed: int,
     bundle: Any,
@@ -346,7 +346,7 @@ def _run_cmaes_dr_conditioned(
             device=bundle.device,
             dtype=torch.float32,
         )
-        evaluations = _evaluate_sa_dr_chains(
+        evaluations = _evaluate_dr_conditioned_candidates(
             config=config,
             settings=settings,
             bundle=bundle,

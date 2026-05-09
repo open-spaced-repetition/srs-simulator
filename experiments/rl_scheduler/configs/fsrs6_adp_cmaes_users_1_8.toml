@@ -112,12 +112,7 @@ trainer = "auto"
 batch_size = 8
 max_lanes_per_batch = 6400
 
-[training.sa]
-chains = 32
-iterations = 10
-initial_temp = 0.05
-final_temp = 0.005
-proposal_scale = 0.35
+[training.policy_search]
 coefficient_min = -12.0
 coefficient_max = 12.0
 retention_min = 0.50

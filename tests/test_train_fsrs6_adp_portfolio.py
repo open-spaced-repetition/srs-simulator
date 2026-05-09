@@ -13,7 +13,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.rl_scheduler.train_cmaes_fsrs6_adp import ADPSettings
-from experiments.rl_scheduler.train_fsrs6_adr_direct import CandidateMetrics, SASettings
+from experiments.rl_scheduler.policy_search_common import (
+    CandidateMetrics,
+    PolicySearchSettings,
+)
 from experiments.rl_scheduler.train_fsrs6_adp_portfolio import (
     ADPPortfolioCandidate,
     ADPPortfolioSettings,
@@ -72,7 +75,7 @@ def _config(output_root: Path) -> ExperimentConfig:
             "performance": {"device": "cpu", "write_performance_summary": True},
             "training": {
                 "lambda_grid": [0.0],
-                "sa": {
+                "policy_search": {
                     "retention_min": 0.5,
                     "retention_max": 0.98,
                     "baseline_desired_retention": 0.9,
@@ -114,7 +117,7 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
             config = _config(root)
             config_path = root / "config.toml"
             config_path.write_text("", encoding="utf-8")
-            settings = SASettings.from_mapping(config.training_sa)
+            settings = PolicySearchSettings.from_mapping(config.training_policy_search)
             portfolio = ADPPortfolioSettings(portfolio_size=1)
             adp_settings = ADPSettings(dr_batch_size=1, weight_delta_scale=0.5)
             base_weights = clip_fsrs6_adp_weights(DEFAULT_FSRS6_WEIGHTS)

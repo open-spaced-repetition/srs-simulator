@@ -12,8 +12,8 @@ from experiments.rl_scheduler.train_cmaes_fsrs6_adr_direct import (
     baseline_coefficients,
     optimizer_settings_from_mapping,
 )
-from experiments.rl_scheduler.train_fsrs6_adr_direct import (
-    SASettings,
+from experiments.rl_scheduler.policy_search_common import (
+    PolicySearchSettings,
     _policy_feature_version,
     _relative_gain_fraction_gate_metrics,
     _required_relative_gain_pass_count,
@@ -40,7 +40,7 @@ class TrainFSRS6ADRDirectConfigTests(unittest.TestCase):
             _policy_feature_version({"feature_version": "unknown"})
 
     def test_cmaes_default_initial_mean_uses_baseline_policy(self) -> None:
-        settings = SASettings(
+        settings = PolicySearchSettings(
             baseline_desired_retention=0.9,
             retention_min=0.5,
             retention_max=0.98,
@@ -70,7 +70,7 @@ class TrainFSRS6ADRDirectConfigTests(unittest.TestCase):
         )
 
     def test_cmaes_default_initial_mean_is_clamped_to_bounds(self) -> None:
-        settings = SASettings(
+        settings = PolicySearchSettings(
             baseline_desired_retention=0.5,
             retention_min=0.5,
             retention_max=0.98,

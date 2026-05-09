@@ -9,13 +9,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_fsrs6_adr_delta import (
-    _chain_evaluation,
+from experiments.rl_scheduler.adr_delta_common import (
+    _candidate_evaluation,
     _dr_grid_passed_relative_gains,
     _score_dr_grid_relative_gains,
 )
-from experiments.rl_scheduler.train_fsrs6_adr_delta import _policy_feature_version
-from experiments.rl_scheduler.train_fsrs6_adr_direct import CandidateMetrics
+from experiments.rl_scheduler.adr_delta_common import _policy_feature_version
+from experiments.rl_scheduler.policy_search_common import CandidateMetrics
 
 
 class TrainFSRS6ADRDeltaConfigTests(unittest.TestCase):
@@ -103,10 +103,10 @@ class TrainFSRS6ADRDeltaConfigTests(unittest.TestCase):
 
         source = inspect.getsource(_evaluate_dr_conditioned_batch)
 
-        self.assertIn("_chain_evaluation", source)
+        self.assertIn("_candidate_evaluation", source)
         self.assertNotIn("_score_from_relative_gains", source)
 
-    def test_chain_evaluation_reports_all_dr_gate_fields(self) -> None:
+    def test_candidate_evaluation_reports_all_dr_gate_fields(self) -> None:
         baselines = [
             CandidateMetrics(100.0, 10.0, 10.0, 10, 0, 10.0),
             CandidateMetrics(100.0, 10.0, 10.0, 10, 0, 10.0),
@@ -116,7 +116,7 @@ class TrainFSRS6ADRDeltaConfigTests(unittest.TestCase):
             CandidateMetrics(99.0, 10.0, 12.0, 10, 0, 10.0),
         ]
 
-        evaluation = _chain_evaluation(metrics, baselines, 0.5)
+        evaluation = _candidate_evaluation(metrics, baselines, 0.5)
 
         self.assertFalse(evaluation.passed_overfit_gate)
         self.assertLess(evaluation.min_relative_memorized_gain, 0.0)

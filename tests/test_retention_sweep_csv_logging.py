@@ -665,7 +665,7 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                 None,
                 "batched",
             )
-            sa_results = _build_results(
+            adr_results = _build_results(
                 user_log_dir,
                 "lstm",
                 {"fsrs6_adr_direct"},
@@ -680,7 +680,7 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
 
         self.assertEqual([entry["scheduler"] for entry in fsrs_results], ["fsrs6"])
         self.assertEqual(
-            [entry["scheduler"] for entry in sa_results], ["fsrs6_adr_direct"]
+            [entry["scheduler"] for entry in adr_results], ["fsrs6_adr_direct"]
         )
 
     def test_build_pareto_filters_root_log_dir_to_requested_user(self) -> None:

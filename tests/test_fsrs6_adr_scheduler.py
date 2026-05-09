@@ -61,12 +61,12 @@ class FSRS6ADRDirectSchedulerTests(unittest.TestCase):
             FSRS6ADRDirectPolicy.baseline(desired_retention=0.9).write_json(policy_path)
 
             fsrs = FSRS6Scheduler(weights=None, desired_retention=0.9)
-            sa = FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None)
+            adr = FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None)
 
             fsrs_interval, fsrs_state = fsrs.init_card(_view(None), 3, 0.0)
-            sa_interval, sa_state = sa.init_card(_view(None), 3, 0.0)
-            self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
-            self.assertEqual(set(sa_state), {"s", "d"})
+            adr_interval, adr_state = adr.init_card(_view(None), 3, 0.0)
+            self.assertAlmostEqual(adr_interval, fsrs_interval, places=9)
+            self.assertEqual(set(adr_state), {"s", "d"})
 
             elapsed_values = [1.0, 4.0, 12.0, 2.0]
             ratings = [3, 4, 1, 2]
@@ -74,12 +74,12 @@ class FSRS6ADRDirectSchedulerTests(unittest.TestCase):
                 fsrs_interval, fsrs_state = fsrs.schedule(
                     _view(fsrs_state), rating, elapsed, elapsed
                 )
-                sa_interval, sa_state = sa.schedule(
-                    _view(sa_state), rating, elapsed, elapsed
+                adr_interval, adr_state = adr.schedule(
+                    _view(adr_state), rating, elapsed, elapsed
                 )
-                self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
-                self.assertAlmostEqual(sa_state["s"], fsrs_state["s"], places=9)
-                self.assertAlmostEqual(sa_state["d"], fsrs_state["d"], places=9)
+                self.assertAlmostEqual(adr_interval, fsrs_interval, places=9)
+                self.assertAlmostEqual(adr_state["s"], fsrs_state["s"], places=9)
+                self.assertAlmostEqual(adr_state["d"], fsrs_state["d"], places=9)
 
     def test_scheduler_does_not_reference_env_memory_state(self) -> None:
         source = inspect.getsource(FSRS6ADRDirectScheduler)
@@ -135,12 +135,12 @@ class FSRS6ADRDirectSchedulerTests(unittest.TestCase):
             ).write_json(policy_path)
 
             fsrs = FSRS6Scheduler(weights=None, desired_retention=0.9)
-            sa = FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None)
+            adr = FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None)
 
             fsrs_interval, _fsrs_state = fsrs.init_card(_view(None), 3, 0.0)
-            sa_interval, _sa_state = sa.init_card(_view(None), 3, 0.0)
+            adr_interval, _adr_state = adr.init_card(_view(None), 3, 0.0)
 
-        self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
+        self.assertAlmostEqual(adr_interval, fsrs_interval, places=9)
 
     def test_linear_vectorized_baseline_policy_matches_fsrs6_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,7 +157,7 @@ class FSRS6ADRDirectSchedulerTests(unittest.TestCase):
                 device=torch.device("cpu"),
                 dtype=torch.float32,
             )
-            sa = FSRS6ADRDirectVectorizedSchedulerOps(
+            adr = FSRS6ADRDirectVectorizedSchedulerOps(
                 FSRS6ADRDirectScheduler(policy_json=policy_path, fsrs_weights=None),
                 device=torch.device("cpu"),
                 dtype=torch.float32,
@@ -166,11 +166,11 @@ class FSRS6ADRDirectSchedulerTests(unittest.TestCase):
             idx = torch.tensor([0])
             rating = torch.tensor([3])
             fsrs_state = fsrs.init_state(deck_size=1)
-            sa_state = sa.init_state(deck_size=1)
+            adr_state = adr.init_state(deck_size=1)
             fsrs_interval = fsrs.update_learn(fsrs_state, idx, rating)
-            sa_interval = sa.update_learn(sa_state, idx, rating)
+            adr_interval = adr.update_learn(adr_state, idx, rating)
 
-        self.assertTrue(torch.allclose(sa_interval, fsrs_interval))
+        self.assertTrue(torch.allclose(adr_interval, fsrs_interval))
 
     def test_batch_ops_accept_per_user_coefficients(self) -> None:
         policy = FSRS6ADRDirectPolicy.baseline(desired_retention=0.9)
@@ -360,16 +360,16 @@ class FSRS6ADRDeltaSchedulerTests(unittest.TestCase):
                     weights=None,
                     desired_retention=desired_retention,
                 )
-                sa = FSRS6ADRDeltaScheduler(
+                adr = FSRS6ADRDeltaScheduler(
                     policy_json=policy_path,
                     desired_retention=desired_retention,
                     fsrs_weights=None,
                 )
 
                 fsrs_interval, fsrs_state = fsrs.init_card(_view(None), 3, 0.0)
-                sa_interval, sa_state = sa.init_card(_view(None), 3, 0.0)
-                self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
-                self.assertEqual(set(sa_state), {"s", "d"})
+                adr_interval, adr_state = adr.init_card(_view(None), 3, 0.0)
+                self.assertAlmostEqual(adr_interval, fsrs_interval, places=9)
+                self.assertEqual(set(adr_state), {"s", "d"})
 
                 elapsed_values = [1.0, 4.0, 12.0, 2.0]
                 ratings = [3, 4, 1, 2]
@@ -377,12 +377,12 @@ class FSRS6ADRDeltaSchedulerTests(unittest.TestCase):
                     fsrs_interval, fsrs_state = fsrs.schedule(
                         _view(fsrs_state), rating, elapsed, elapsed
                     )
-                    sa_interval, sa_state = sa.schedule(
-                        _view(sa_state), rating, elapsed, elapsed
+                    adr_interval, adr_state = adr.schedule(
+                        _view(adr_state), rating, elapsed, elapsed
                     )
-                    self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
-                    self.assertAlmostEqual(sa_state["s"], fsrs_state["s"], places=9)
-                    self.assertAlmostEqual(sa_state["d"], fsrs_state["d"], places=9)
+                    self.assertAlmostEqual(adr_interval, fsrs_interval, places=9)
+                    self.assertAlmostEqual(adr_state["s"], fsrs_state["s"], places=9)
+                    self.assertAlmostEqual(adr_state["d"], fsrs_state["d"], places=9)
 
     def test_linear_zero_policy_matches_fsrs6_scheduler_for_same_dr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -392,17 +392,17 @@ class FSRS6ADRDeltaSchedulerTests(unittest.TestCase):
             ).write_json(policy_path)
 
             fsrs = FSRS6Scheduler(weights=None, desired_retention=0.90)
-            sa = FSRS6ADRDeltaScheduler(
+            adr = FSRS6ADRDeltaScheduler(
                 policy_json=policy_path,
                 desired_retention=0.90,
                 fsrs_weights=None,
             )
 
             fsrs_interval, _ = fsrs.init_card(_view(None), 3, 0.0)
-            sa_interval, sa_state = sa.init_card(_view(None), 3, 0.0)
+            adr_interval, adr_state = adr.init_card(_view(None), 3, 0.0)
 
-        self.assertAlmostEqual(sa_interval, fsrs_interval, places=9)
-        self.assertEqual(set(sa_state), {"s", "d"})
+        self.assertAlmostEqual(adr_interval, fsrs_interval, places=9)
+        self.assertEqual(set(adr_state), {"s", "d"})
 
     def test_linear_vectorized_zero_policy_matches_fsrs6_for_same_dr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -416,7 +416,7 @@ class FSRS6ADRDeltaSchedulerTests(unittest.TestCase):
                 device=torch.device("cpu"),
                 dtype=torch.float32,
             )
-            sa = FSRS6ADRDeltaVectorizedSchedulerOps(
+            adr = FSRS6ADRDeltaVectorizedSchedulerOps(
                 FSRS6ADRDeltaScheduler(
                     policy_json=policy_path,
                     desired_retention=0.90,
@@ -426,16 +426,16 @@ class FSRS6ADRDeltaSchedulerTests(unittest.TestCase):
                 dtype=torch.float32,
             )
             fsrs_state = fsrs.init_state(deck_size=2)
-            sa_state = sa.init_state(deck_size=2)
+            adr_state = adr.init_state(deck_size=2)
             idx = torch.tensor([0, 1])
             rating = torch.tensor([3, 4])
 
             fsrs_intervals = fsrs.update_learn(fsrs_state, idx, rating)
-            sa_intervals = sa.update_learn(sa_state, idx, rating)
+            adr_intervals = adr.update_learn(adr_state, idx, rating)
 
-        self.assertTrue(torch.allclose(sa_intervals, fsrs_intervals))
-        self.assertTrue(torch.allclose(sa_state.s, fsrs_state.s))
-        self.assertTrue(torch.allclose(sa_state.d, fsrs_state.d))
+        self.assertTrue(torch.allclose(adr_intervals, fsrs_intervals))
+        self.assertTrue(torch.allclose(adr_state.s, fsrs_state.s))
+        self.assertTrue(torch.allclose(adr_state.d, fsrs_state.d))
 
     def test_scheduler_does_not_reference_env_memory_state(self) -> None:
         source = inspect.getsource(FSRS6ADRDeltaScheduler)

@@ -98,9 +98,7 @@ diagnostic_csv_logs = false
 [training]
 lambda_grid = [0.5]
 
-[training.sa]
-chains = 1
-iterations = 1
+[training.policy_search]
 baseline_desired_retention_values = [0.5, 0.52]
 
 [sweep]
@@ -150,18 +148,19 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 
 class UnifiedWorkflowConfigTests(unittest.TestCase):
-    def test_checked_in_linear_dr_config_uses_unified_workflow(self) -> None:
+    def test_checked_in_delta_linear_cmaes_config_uses_unified_workflow(self) -> None:
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adr_delta_linear_sa_users_1_8.toml"
+            / "fsrs6_adr_delta_linear_cmaes_users_1_8.toml"
         )
 
-        self.assertEqual(config.name, "fsrs6_adr_delta_linear_sa_users_1_8")
+        self.assertEqual(config.name, "fsrs6_adr_delta_linear_cmaes_users_1_8")
         self.assertEqual(
-            config.training_sa["feature_version"],
+            config.training_policy_search["feature_version"],
             "fsrs6_adr_delta_log_linear_v1",
         )
+        self.assertEqual(config.training_optimizer["name"], "cma_es")
         self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr_delta",))
         self.assertEqual(
             config.stages,
@@ -176,7 +175,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             ),
         )
 
-    def test_checked_in_cmaes_sa_linear_config_uses_unified_workflow(self) -> None:
+    def test_checked_in_cmaes_linear_config_uses_unified_workflow(self) -> None:
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
@@ -185,11 +184,11 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
 
         self.assertEqual(config.name, "fsrs6_adr_direct_linear_cmaes_users_1_8")
         self.assertEqual(
-            config.training_sa["feature_version"],
+            config.training_policy_search["feature_version"],
             "fsrs6_adr_direct_log_linear_v1",
         )
         self.assertEqual(
-            len(config.training_sa["baseline_desired_retention_values"]),
+            len(config.training_policy_search["baseline_desired_retention_values"]),
             23,
         )
         self.assertEqual(config.training_optimizer["population_size"], 32)
@@ -230,11 +229,11 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertTrue(config.training_batch.enabled)
         self.assertEqual(config.training_batch.trainer, "auto")
         self.assertEqual(
-            config.training_sa["feature_version"],
+            config.training_policy_search["feature_version"],
             "fsrs6_adr_direct_log_linear_v1",
         )
         self.assertEqual(
-            len(config.training_sa["baseline_desired_retention_values"]),
+            len(config.training_policy_search["baseline_desired_retention_values"]),
             23,
         )
         self.assertEqual(config.training_portfolio["population_size"], 64)
@@ -303,11 +302,11 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
 
         self.assertEqual(config.name, "fsrs6_adr_direct_cmaes_users_1_8")
         self.assertEqual(
-            config.training_sa["feature_version"],
+            config.training_policy_search["feature_version"],
             "fsrs6_adr_direct_log_poly_v1",
         )
         self.assertEqual(
-            len(config.training_sa["baseline_desired_retention_values"]),
+            len(config.training_policy_search["baseline_desired_retention_values"]),
             23,
         )
         self.assertEqual(config.training_optimizer["population_size"], 32)

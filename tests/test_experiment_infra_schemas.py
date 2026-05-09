@@ -61,9 +61,9 @@ diagnostic_csv_logs = false
 [training]
 lambda_grid = [0.0, 0.25, 0.5]
 
-[training.sa]
-chains = 4
-iterations = 8
+[training.policy_search]
+coefficient_min = -8.0
+coefficient_max = 8.0
 """
 
 
@@ -83,7 +83,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         )
         self.assertEqual(config.lambda_grid, (0.0, 0.25, 0.5))
         self.assertEqual(config.simulation.environment, "lstm")
-        self.assertEqual(config.training_sa["chains"], 4)
+        self.assertEqual(config.training_policy_search["coefficient_min"], -8.0)
         self.assertEqual(config.baseline.desired_retention_values, (0.9,))
         self.assertEqual(config.to_dict()["baseline"]["scheduler"], "fsrs6")
         self.assertEqual(config.performance.device, "cpu")

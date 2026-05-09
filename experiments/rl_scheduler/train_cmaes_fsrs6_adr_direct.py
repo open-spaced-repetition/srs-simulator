@@ -19,18 +19,18 @@ from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import (
     CMAESSettings,
     _optimizer_seed,
 )
-from experiments.rl_scheduler.train_fsrs6_adr_direct import (
+from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
-    SASettings,
+    PolicySearchSettings,
     TrainingProgress,
     _artifact_id,
     _build_bundle,
     _evaluate_fsrs6_baseline,
-    _evaluate_sa_candidates,
+    _evaluate_direct_candidates,
     _git_commit,
     _passes_overfit_gate,
     _policy_feature_version,
-    _read_training_sa,
+    _read_training_policy_search,
     _relative_gain,
     _relative_gain_gate_metrics,
     _score,
@@ -65,7 +65,7 @@ def parse_args() -> argparse.Namespace:
         "--baseline-desired-retention",
         type=float,
         default=None,
-        help="Override training.sa.baseline_desired_retention for DR-grid runs.",
+        help="Override training.policy_search.baseline_desired_retention for DR-grid runs.",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
@@ -94,15 +94,15 @@ def main() -> int:
     )
 
     config = ExperimentConfig.from_toml(args.config)
-    settings = SASettings.from_mapping(config.training_sa)
+    settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     if args.baseline_desired_retention is not None:
         settings = replace(
             settings,
             baseline_desired_retention=args.baseline_desired_retention,
         )
         settings.__post_init__()
-    raw_training_sa = _read_training_sa(args.config)
-    feature_version = _policy_feature_version(raw_training_sa)
+    raw_training_policy_search = _read_training_policy_search(args.config)
+    feature_version = _policy_feature_version(raw_training_policy_search)
     optimizer_settings = optimizer_settings_from_mapping(
         config.training_optimizer,
         settings=settings,
@@ -130,8 +130,8 @@ def main() -> int:
     overrides = parse_result_overrides(args.benchmark_result)
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
-        learning_steps=raw_training_sa.get("learning_steps"),
-        relearning_steps=raw_training_sa.get("relearning_steps"),
+        learning_steps=raw_training_policy_search.get("learning_steps"),
+        relearning_steps=raw_training_policy_search.get("relearning_steps"),
     )
     short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         short_term_args
@@ -241,7 +241,7 @@ def main() -> int:
 def optimizer_settings_from_mapping(
     raw: Mapping[str, Any],
     *,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     feature_version: str,
 ) -> CMAESSettings:
     optimizer_raw = dict(raw)
@@ -262,7 +262,7 @@ def optimizer_settings_from_mapping(
 
 def baseline_coefficients(
     *,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     feature_version: str,
 ) -> tuple[float, ...]:
     return FSRS6ADRDirectPolicy.baseline(
@@ -276,7 +276,7 @@ def baseline_coefficients(
 def _run_cmaes(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     optimizer_settings: CMAESSettings,
     optimizer_seed: int,
     bundle: Any,
@@ -320,7 +320,7 @@ def _run_cmaes(
             device=bundle.device,
             dtype=torch.float32,
         )
-        metrics = _evaluate_sa_candidates(
+        metrics = _evaluate_direct_candidates(
             config=config,
             settings=settings,
             bundle=bundle,
@@ -385,7 +385,7 @@ def write_artifact(
     output_dir: Path,
     config: ExperimentConfig,
     config_path: Path,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     user_id: int,
     lambda_value: float,
     training_command_path: Path | None,

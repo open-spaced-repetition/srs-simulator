@@ -440,7 +440,7 @@ def _split_lanes(
     return chunks
 
 
-def _same_sa_policy_bounds(
+def _same_adr_policy_bounds(
     lhs: FSRS6ADRDirectPolicy, rhs: FSRS6ADRDirectPolicy
 ) -> bool:
     return (
@@ -455,7 +455,7 @@ def _same_sa_policy_bounds(
     )
 
 
-def _same_sa_dr_policy_bounds(
+def _same_adr_delta_policy_bounds(
     lhs: FSRS6ADRDeltaPolicy, rhs: FSRS6ADRDeltaPolicy
 ) -> bool:
     return (
@@ -681,7 +681,7 @@ def _build_mixed_scheduler_ops(
             ]
             policy = policies[0]
             for policy_path, candidate in zip(policy_paths, policies, strict=True):
-                if not _same_sa_policy_bounds(candidate, policy):
+                if not _same_adr_policy_bounds(candidate, policy):
                     raise ValueError(
                         "Batched fsrs6_adr_direct sweep requires identical policy retention "
                         f"and FSRS bounds. Mismatch at {policy_path}."
@@ -726,7 +726,7 @@ def _build_mixed_scheduler_ops(
             ]
             policy = policies[0]
             for policy_path, candidate in zip(policy_paths, policies, strict=True):
-                if not _same_sa_dr_policy_bounds(candidate, policy):
+                if not _same_adr_delta_policy_bounds(candidate, policy):
                     raise ValueError(
                         "Batched fsrs6_adr_delta sweep requires identical policy "
                         "feature versions, retention bounds, and FSRS bounds. "

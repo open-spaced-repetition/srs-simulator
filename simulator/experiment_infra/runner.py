@@ -437,7 +437,7 @@ def run_train_overfit(
     elif not baseline_dr_values:
         failures.append(FailureClass.INVALID_CONFIG)
         notes.append(
-            "training.sa.baseline_desired_retention_values must contain numbers "
+            "training.policy_search.baseline_desired_retention_values must contain numbers "
             "without duplicates."
         )
     else:
@@ -3388,7 +3388,7 @@ def _resolve_performance_device(config: ExperimentConfig) -> str:
         return config.performance.device
     if config.gpu_guard.device:
         return config.gpu_guard.device
-    torch_device = config.training_sa.get("torch_device")
+    torch_device = config.training_policy_search.get("torch_device")
     if isinstance(torch_device, str) and torch_device.strip():
         return torch_device.strip()
     return "cuda" if config.gpu_guard.required else "cpu"
@@ -3411,15 +3411,15 @@ def _performance_workload_shape(
         ),
         "baseline_retention_values": len(config.baseline.desired_retention_values),
     }
-    chains = _training_chains(config)
-    if chains is not None:
-        shape["chains"] = chains
-    if stage == StageName.TRAIN_OVERFIT and chains is not None:
+    candidate_lanes = _training_candidate_lanes(config)
+    if candidate_lanes is not None:
+        shape["candidate_lanes"] = candidate_lanes
+    if stage == StageName.TRAIN_OVERFIT and candidate_lanes is not None:
         shape["effective_lanes"] = (
             len(config.users.train)
             * len(config.lambda_grid)
             * len(_training_baseline_desired_retention_values(config))
-            * chains
+            * candidate_lanes
         )
     elif stage == StageName.SWEEP:
         shape["effective_lanes"] = (
@@ -3430,25 +3430,31 @@ def _performance_workload_shape(
     return shape
 
 
-def _training_chains(config: ExperimentConfig) -> int | None:
-    value = config.training_sa.get("chains")
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+def _training_candidate_lanes(config: ExperimentConfig) -> int | None:
+    values = []
+    for raw in (config.training_optimizer, config.training_portfolio):
+        for key in ("population_size", "offspring_size"):
+            value = raw.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                continue
+            values.append(value)
+    if not values:
         return None
-    return value
+    return max(values)
 
 
 def _candidate_days(*, config: ExperimentConfig, stage: StageName) -> int | None:
     if stage != StageName.TRAIN_OVERFIT:
         return None
-    chains = _training_chains(config)
-    if chains is None:
+    candidate_lanes = _training_candidate_lanes(config)
+    if candidate_lanes is None:
         return None
     return (
         config.simulation.days
         * len(config.users.train)
         * len(config.lambda_grid)
         * len(_training_baseline_desired_retention_values(config))
-        * chains
+        * candidate_lanes
     )
 
 
@@ -4565,15 +4571,15 @@ def _run_batched_sweep_jobs(
     from simulator.vectorized.multiuser_engine import simulate_multiuser
 
     device_name = _resolve_performance_device(config)
-    torch_device = config.training_sa.get("torch_device")
+    torch_device = config.training_policy_search.get("torch_device")
     if isinstance(torch_device, str) and torch_device.strip():
         device_name = torch_device.strip()
     device = torch.device(device_name)
 
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
-        learning_steps=config.training_sa.get("learning_steps"),
-        relearning_steps=config.training_sa.get("relearning_steps"),
+        learning_steps=config.training_policy_search.get("learning_steps"),
+        relearning_steps=config.training_policy_search.get("relearning_steps"),
     )
     short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         short_term_args
@@ -4662,15 +4668,15 @@ def _run_batched_sweep_jobs(
             device=device,
             dtype=torch.int64,
         )
-        sa_policy_paths: list[Path] = []
+        adr_policy_paths: list[Path] = []
         for index in fsrs6_adr_direct_indices:
             policy_path = jobs[index].fsrs6_adr_direct_policy_path
             if policy_path is None:
                 raise ValueError(
                     "Batched fsrs6_adr_direct sweep lanes require a policy path."
                 )
-            sa_policy_paths.append(policy_path)
-        policies = [FSRS6ADRDirectPolicy.from_json(path) for path in sa_policy_paths]
+            adr_policy_paths.append(policy_path)
+        policies = [FSRS6ADRDirectPolicy.from_json(path) for path in adr_policy_paths]
         template = policies[0]
         for policy in policies[1:]:
             if not math.isclose(
@@ -4756,12 +4762,12 @@ def _run_batched_sweep_jobs(
         short_term=bool(short_term_source),
     )
 
-    short_term_threshold = _training_sa_float(
+    short_term_threshold = _training_policy_search_float(
         config,
         "short_term_threshold",
         0.5,
     )
-    short_term_loops_limit = _training_sa_int(
+    short_term_loops_limit = _training_policy_search_int(
         config,
         "short_term_loops_limit",
         DEFAULT_SHORT_TERM_LOOPS_LIMIT,
@@ -4904,14 +4910,14 @@ def _run_configured_batched_retention_sweep(
         diagnostic_csv_logs=config.performance.diagnostic_csv_logs,
         fuzz=config.simulation.fuzz,
         short_term_source=config.simulation.short_term_source,
-        learning_steps=config.training_sa.get("learning_steps"),
-        relearning_steps=config.training_sa.get("relearning_steps"),
-        short_term_threshold=_training_sa_float(
+        learning_steps=config.training_policy_search.get("learning_steps"),
+        relearning_steps=config.training_policy_search.get("relearning_steps"),
+        short_term_threshold=_training_policy_search_float(
             config,
             "short_term_threshold",
             0.5,
         ),
-        short_term_loops_limit=_training_sa_int(
+        short_term_loops_limit=_training_policy_search_int(
             config,
             "short_term_loops_limit",
             DEFAULT_SHORT_TERM_LOOPS_LIMIT,
@@ -5188,25 +5194,25 @@ def _validate_batched_retention_lane_logs(
     return None
 
 
-def _training_sa_float(
+def _training_policy_search_float(
     config: ExperimentConfig,
     key: str,
     default: float,
 ) -> float:
-    value = config.training_sa.get(key, default)
+    value = config.training_policy_search.get(key, default)
     if isinstance(value, bool) or not isinstance(value, (float, int)):
-        raise ValueError(f"training.sa.{key} must be a number.")
+        raise ValueError(f"training.policy_search.{key} must be a number.")
     return float(value)
 
 
-def _training_sa_int(
+def _training_policy_search_int(
     config: ExperimentConfig,
     key: str,
     default: int,
 ) -> int:
-    value = config.training_sa.get(key, default)
+    value = config.training_policy_search.get(key, default)
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"training.sa.{key} must be an integer.")
+        raise ValueError(f"training.policy_search.{key} must be an integer.")
     return value
 
 
@@ -5573,9 +5579,11 @@ def _format_retention_token(value: float) -> str:
 def _training_baseline_desired_retention_values(
     config: ExperimentConfig,
 ) -> tuple[float, ...]:
-    raw_values = config.training_sa.get("baseline_desired_retention_values")
+    raw_values = config.training_policy_search.get("baseline_desired_retention_values")
     if raw_values is None:
-        raw_single = config.training_sa.get("baseline_desired_retention", 0.90)
+        raw_single = config.training_policy_search.get(
+            "baseline_desired_retention", 0.90
+        )
         if isinstance(raw_single, bool) or not isinstance(raw_single, (float, int)):
             return (0.90,)
         return (float(raw_single),)
@@ -5592,7 +5600,7 @@ def _training_baseline_desired_retention_values(
 
 
 def _training_uses_baseline_dr_grid(config: ExperimentConfig) -> bool:
-    return "baseline_desired_retention_values" in config.training_sa
+    return "baseline_desired_retention_values" in config.training_policy_search
 
 
 def _training_batches_baseline_dr_grid(config: ExperimentConfig) -> bool:
@@ -5606,7 +5614,7 @@ def _training_primary_baseline_desired_retention(
     config: ExperimentConfig,
     baseline_dr_values: tuple[float, ...],
 ) -> float:
-    raw_single = config.training_sa.get("baseline_desired_retention")
+    raw_single = config.training_policy_search.get("baseline_desired_retention")
     if isinstance(raw_single, bool) or not isinstance(raw_single, (float, int)):
         return baseline_dr_values[0]
     return float(raw_single)
@@ -5614,8 +5622,8 @@ def _training_primary_baseline_desired_retention(
 
 def _training_metadata_requires_baseline_dr(config: ExperimentConfig) -> bool:
     return (
-        "baseline_desired_retention" in config.training_sa
-        or "baseline_desired_retention_values" in config.training_sa
+        "baseline_desired_retention" in config.training_policy_search
+        or "baseline_desired_retention_values" in config.training_policy_search
     )
 
 

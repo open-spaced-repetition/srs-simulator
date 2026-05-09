@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_fsrs6_adr_direct import CandidateMetrics
+from experiments.rl_scheduler.policy_search_common import CandidateMetrics
 from experiments.rl_scheduler.train_fsrs6_adr_direct_portfolio import (
     ObjectivePoint,
     PortfolioCandidate,

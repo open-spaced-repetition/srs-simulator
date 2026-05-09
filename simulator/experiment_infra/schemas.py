@@ -796,7 +796,7 @@ class ExperimentConfig:
     gpu_guard: GpuGuardConfig
     performance: PerformanceConfig
     lambda_grid: tuple[float, ...]
-    training_sa: Mapping[str, Any] = field(default_factory=dict)
+    training_policy_search: Mapping[str, Any] = field(default_factory=dict)
     training_portfolio: Mapping[str, Any] = field(default_factory=dict)
     training_adp: Mapping[str, Any] = field(default_factory=dict)
     training_optimizer: Mapping[str, Any] = field(default_factory=dict)
@@ -868,7 +868,12 @@ class ExperimentConfig:
             lambda_grid=_float_tuple(
                 training.get("lambda_grid"), "training.lambda_grid"
             ),
-            training_sa=dict(_require_mapping(training.get("sa", {}), "training.sa")),
+            training_policy_search=dict(
+                _require_mapping(
+                    training.get("policy_search", {}),
+                    "training.policy_search",
+                )
+            ),
             training_portfolio=dict(
                 _require_mapping(training.get("portfolio", {}), "training.portfolio")
             ),
@@ -960,7 +965,7 @@ class ExperimentConfig:
             "performance": self.performance.to_dict(),
             "training": {
                 "lambda_grid": list(self.lambda_grid),
-                "sa": dict(self.training_sa),
+                "policy_search": dict(self.training_policy_search),
                 "portfolio": dict(self.training_portfolio),
                 "adp": dict(self.training_adp),
                 "optimizer": dict(self.training_optimizer),

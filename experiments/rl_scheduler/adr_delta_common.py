@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
@@ -14,27 +13,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_fsrs6_adr_direct import (
+from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
     RELATIVE_GAIN_GATE_FLOOR,
-    SASettings,
+    PolicySearchSettings,
     SimulationBundle,
-    TrainingProgress,
-    _build_bundle,
-    _clamp_coefficients,
     _float_token,
     _git_commit,
     _metrics_from_stats,
     _passes_relative_gain_fraction_gate,
-    _read_training_sa,
     _relative_gain,
     _relative_gain_fraction_gate_metrics,
     _relative_gain_point_passes,
-    _temperature,
     _write_json,
 )
-from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
-from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.math.fsrs import Bounds
 from simulator.fsrs6_adr_delta_policy import (
@@ -49,7 +41,7 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 
 
 @dataclass(frozen=True, slots=True)
-class ChainEvaluation:
+class CandidateEvaluation:
     metrics_by_dr: list[CandidateMetrics]
     relative_memorized_gains: list[float]
     relative_efficiency_gains: list[float]
@@ -66,225 +58,56 @@ class DRConditionedTrainingResult:
     baseline_desired_retention_values: tuple[float, ...]
     baselines: list[CandidateMetrics]
     best_coefficients: torch.Tensor
-    best: ChainEvaluation
+    best: CandidateEvaluation
     history: list[dict[str, float]]
     passed: bool
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Train one DR-conditioned FSRS6 ADR Delta scheduler policy over a desired "
-            "retention grid."
-        ),
-        allow_abbrev=False,
-    )
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--user-id", type=int, required=True)
-    parser.add_argument("--lambda", dest="lambda_value", type=float, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--button-usage",
-        type=Path,
-        default=DEFAULT_BUTTON_USAGE_PATH,
-        help="Path to Anki button usage JSONL.",
-    )
-    parser.add_argument("--srs-benchmark-root", type=Path, default=None)
-    parser.add_argument("--benchmark-result", default=None)
-    parser.add_argument("--benchmark-partition", default=None)
-    parser.add_argument("--training-command-path", type=Path, default=None)
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    output_dir = args.output_dir
-    output_dir.mkdir(parents=True, exist_ok=True)
-    progress = TrainingProgress(output_dir / "training_progress.jsonl")
-    progress.write(
-        "started",
-        config_path=str(args.config),
-        user_id=args.user_id,
-        lambda_value=args.lambda_value,
-    )
-
-    config = ExperimentConfig.from_toml(args.config)
-    settings = SASettings.from_mapping(config.training_sa)
-    raw_training_sa = _read_training_sa(args.config)
-    policy_feature_version = _policy_feature_version(raw_training_sa)
-    baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
-    dr_batch_size = _dr_batch_size(raw_training_sa, len(baseline_dr_values))
-    progress.write(
-        "config_loaded",
-        settings=asdict(settings),
-        feature_version=policy_feature_version,
-        simulation=config.simulation.to_dict(),
-        seed=config.seed,
-        baseline_desired_retention_values=list(baseline_dr_values),
-        dr_batch_size=dr_batch_size,
-    )
-
-    benchmark_root = resolve_benchmark_root(
-        REPO_ROOT, args.srs_benchmark_root
-    ).resolve()
-    overrides = parse_result_overrides(args.benchmark_result)
-    short_term_args = argparse.Namespace(
-        short_term_source=config.simulation.short_term_source,
-        learning_steps=raw_training_sa.get("learning_steps"),
-        relearning_steps=raw_training_sa.get("relearning_steps"),
-    )
-    short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
-        short_term_args
-    )
-    device = torch.device(settings.torch_device)
-    progress.write("device_resolved", device=device, torch_device=str(device))
-
-    baseline_bundle = _build_bundle(
-        config=config,
-        settings=settings,
-        user_id=args.user_id,
-        lanes=len(baseline_dr_values),
-        benchmark_root=benchmark_root,
-        overrides=overrides,
-        benchmark_partition=args.benchmark_partition,
-        button_usage=args.button_usage,
-        device=device,
-        short_term_source=short_term_source,
-        learning_steps=learning_steps,
-        relearning_steps=relearning_steps,
-    )
-    baselines = _evaluate_fsrs6_baselines(
-        config=config,
-        settings=settings,
-        bundle=baseline_bundle,
-        baseline_dr_values=baseline_dr_values,
-        seed=config.seed,
-    )
-    progress.write(
-        "baselines_evaluated",
-        device=baseline_bundle.device,
-        effective_lanes=len(baseline_dr_values),
-        metrics=[
-            {
-                "baseline_desired_retention": dr,
-                **asdict(metrics),
-            }
-            for dr, metrics in zip(baseline_dr_values, baselines, strict=True)
-        ],
-    )
-    del baseline_bundle
-    _clear_cuda_cache(device)
-
-    train_bundle = _build_bundle(
-        config=config,
-        settings=settings,
-        user_id=args.user_id,
-        lanes=dr_batch_size * settings.chains,
-        benchmark_root=benchmark_root,
-        overrides=overrides,
-        benchmark_partition=args.benchmark_partition,
-        button_usage=args.button_usage,
-        device=device,
-        short_term_source=short_term_source,
-        learning_steps=learning_steps,
-        relearning_steps=relearning_steps,
-    )
-    progress.write(
-        "train_bundle_built",
-        device=train_bundle.device,
-        effective_lanes=dr_batch_size * settings.chains,
-        grid_lanes=len(baseline_dr_values) * settings.chains,
-    )
-    result = _anneal_dr_conditioned(
-        config=config,
-        settings=settings,
-        bundle=train_bundle,
-        baseline_dr_values=baseline_dr_values,
-        dr_batch_size=dr_batch_size,
-        baselines=baselines,
-        lambda_value=args.lambda_value,
-        feature_version=policy_feature_version,
-        progress=progress,
-    )
-    progress.write(
-        "annealing_completed",
-        device=train_bundle.device,
-        best_score=result.best.score,
-        mean_relative_memorized_gain=result.best.mean_relative_memorized_gain,
-        mean_relative_efficiency_gain=result.best.mean_relative_efficiency_gain,
-        min_relative_memorized_gain=result.best.min_relative_memorized_gain,
-        min_relative_efficiency_gain=result.best.min_relative_efficiency_gain,
-        passed_overfit_gate=result.best.passed_overfit_gate,
-        iterations=len(result.history),
-    )
-
-    policy_path, metrics_path, metadata_path = _write_artifact(
-        output_dir=output_dir,
-        config=config,
-        config_path=args.config,
-        settings=settings,
-        user_id=args.user_id,
-        lambda_value=args.lambda_value,
-        training_command_path=args.training_command_path,
-        feature_version=policy_feature_version,
-        result=result,
-    )
-    progress.write(
-        "artifacts_written",
-        device=train_bundle.device,
-        passed=result.passed,
-        policy_path=str(policy_path),
-        metrics_path=str(metrics_path),
-        metadata_path=str(metadata_path),
-    )
-    return 0 if result.passed else 1
-
-
 def _baseline_dr_values(
-    raw_training_sa: Mapping[str, Any],
-    settings: SASettings,
+    raw_training_policy: Mapping[str, Any],
+    settings: PolicySearchSettings,
 ) -> tuple[float, ...]:
-    raw_values = raw_training_sa.get("baseline_desired_retention_values")
+    raw_values = raw_training_policy.get("baseline_desired_retention_values")
     if raw_values is None:
         values = (settings.baseline_desired_retention,)
     else:
         if isinstance(raw_values, str) or not isinstance(raw_values, Sequence):
             raise ValueError(
-                "training.sa.baseline_desired_retention_values must be an array."
+                "training.policy_search.baseline_desired_retention_values must be an array."
             )
         values = tuple(
-            _float(item, "training.sa.baseline_desired_retention_values")
+            _float(item, "training.policy_search.baseline_desired_retention_values")
             for item in raw_values
         )
     if len(set(values)) != len(values):
         raise ValueError(
-            "training.sa.baseline_desired_retention_values must not contain duplicates."
+            "training.policy_search.baseline_desired_retention_values must not contain duplicates."
         )
     for value in values:
         if not (settings.retention_min <= value <= settings.retention_max):
             raise ValueError(
-                "training.sa.baseline_desired_retention_values must be inside "
+                "training.policy_search.baseline_desired_retention_values must be inside "
                 "the retention bounds."
             )
     return values
 
 
-def _dr_batch_size(raw_training_sa: Mapping[str, Any], value_count: int) -> int:
+def _dr_batch_size(raw_training_policy: Mapping[str, Any], value_count: int) -> int:
     default = min(max(value_count, 1), 4)
     return min(
         _int_like(
-            raw_training_sa.get("dr_batch_size", default),
-            "training.sa.dr_batch_size",
+            raw_training_policy.get("dr_batch_size", default),
+            "training.policy_search.dr_batch_size",
             1,
         ),
         value_count,
     )
 
 
-def _policy_feature_version(raw_training_sa: Mapping[str, Any]) -> str:
-    raw_value = raw_training_sa.get("feature_version", FEATURE_VERSION)
+def _policy_feature_version(raw_training_policy: Mapping[str, Any]) -> str:
+    raw_value = raw_training_policy.get("feature_version", FEATURE_VERSION)
     if not isinstance(raw_value, str):
-        raise ValueError("training.sa.feature_version must be a string.")
+        raise ValueError("training.policy_search.feature_version must be a string.")
     feature_count(raw_value)
     return raw_value
 
@@ -314,7 +137,7 @@ def _pad_tuple(values: tuple[float, ...], size: int) -> tuple[float, ...]:
 def _evaluate_fsrs6_baselines(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     bundle: SimulationBundle,
     baseline_dr_values: tuple[float, ...],
     seed: int,
@@ -353,176 +176,10 @@ def _evaluate_fsrs6_baselines(
     return [_metrics_from_stats(item) for item in stats]
 
 
-def _anneal_dr_conditioned(
+def _evaluate_dr_conditioned_candidates(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
-    bundle: SimulationBundle,
-    baseline_dr_values: tuple[float, ...],
-    dr_batch_size: int,
-    baselines: list[CandidateMetrics],
-    lambda_value: float,
-    feature_version: str,
-    progress: TrainingProgress,
-) -> DRConditionedTrainingResult:
-    device = bundle.device
-    generator = torch.Generator(device=device)
-    generator.manual_seed(config.seed)
-    coefficient_count = feature_count(feature_version)
-    current = _initial_coefficients(
-        settings=settings,
-        coefficient_count=coefficient_count,
-        device=device,
-        generator=generator,
-    )
-    current_evaluations = _evaluate_sa_dr_chains(
-        config=config,
-        settings=settings,
-        bundle=bundle,
-        baseline_dr_values=baseline_dr_values,
-        dr_batch_size=dr_batch_size,
-        baselines=baselines,
-        coefficients=current,
-        lambda_value=lambda_value,
-        feature_version=feature_version,
-        seed=config.seed,
-    )
-    current_scores = torch.tensor(
-        [evaluation.score for evaluation in current_evaluations],
-        device=device,
-        dtype=torch.float32,
-    )
-    best_idx = int(torch.argmax(current_scores).item())
-    best_coefficients = current[best_idx].detach().clone()
-    best_evaluation = current_evaluations[best_idx]
-    best_score = float(current_scores[best_idx].item())
-    history: list[dict[str, float]] = []
-    progress.write(
-        "initial_candidates_evaluated",
-        device=device,
-        effective_lanes=len(baseline_dr_values) * settings.chains,
-        max_batch_lanes=dr_batch_size * settings.chains,
-        best_score=best_score,
-        best_mean_relative_memorized_gain=(
-            best_evaluation.mean_relative_memorized_gain
-        ),
-        best_mean_relative_efficiency_gain=(
-            best_evaluation.mean_relative_efficiency_gain
-        ),
-        best_min_relative_memorized_gain=best_evaluation.min_relative_memorized_gain,
-        best_min_relative_efficiency_gain=best_evaluation.min_relative_efficiency_gain,
-    )
-
-    for iteration in range(settings.iterations):
-        temp = _temperature(settings, iteration)
-        proposal = _clamp_coefficients(
-            current
-            + torch.randn(current.shape, device=device, generator=generator)
-            * settings.proposal_scale,
-            settings,
-        )
-        proposal_evaluations = _evaluate_sa_dr_chains(
-            config=config,
-            settings=settings,
-            bundle=bundle,
-            baseline_dr_values=baseline_dr_values,
-            dr_batch_size=dr_batch_size,
-            baselines=baselines,
-            coefficients=proposal,
-            lambda_value=lambda_value,
-            feature_version=feature_version,
-            seed=config.seed,
-        )
-        proposal_scores = torch.tensor(
-            [evaluation.score for evaluation in proposal_evaluations],
-            device=device,
-            dtype=torch.float32,
-        )
-        delta = proposal_scores - current_scores
-        accept_prob = torch.exp(delta / max(temp, 1e-9))
-        accept = (delta >= 0) | (
-            torch.rand(delta.shape, device=device, generator=generator) < accept_prob
-        )
-        accepted_count = int(accept.sum().item())
-        if accept.any():
-            current[accept] = proposal[accept]
-            current_scores[accept] = proposal_scores[accept]
-            for idx in torch.nonzero(accept, as_tuple=False).flatten().tolist():
-                current_evaluations[int(idx)] = proposal_evaluations[int(idx)]
-
-        iteration_best_idx = int(torch.argmax(current_scores).item())
-        iteration_best_score = float(current_scores[iteration_best_idx].item())
-        if iteration_best_score > best_score:
-            best_score = iteration_best_score
-            best_coefficients = current[iteration_best_idx].detach().clone()
-            best_evaluation = current_evaluations[iteration_best_idx]
-
-        history_entry = {
-            "iteration": float(iteration),
-            "temperature": float(temp),
-            "best_score": best_score,
-            "best_mean_relative_memorized_gain": (
-                best_evaluation.mean_relative_memorized_gain
-            ),
-            "best_mean_relative_efficiency_gain": (
-                best_evaluation.mean_relative_efficiency_gain
-            ),
-            "best_min_relative_memorized_gain": (
-                best_evaluation.min_relative_memorized_gain
-            ),
-            "best_min_relative_efficiency_gain": (
-                best_evaluation.min_relative_efficiency_gain
-            ),
-        }
-        history.append(history_entry)
-        progress.write(
-            "annealing_iteration",
-            device=device,
-            accepted_count=accepted_count,
-            effective_lanes=len(baseline_dr_values) * settings.chains,
-            max_batch_lanes=dr_batch_size * settings.chains,
-            **history_entry,
-        )
-
-    return DRConditionedTrainingResult(
-        baseline_desired_retention_values=baseline_dr_values,
-        baselines=baselines,
-        best_coefficients=best_coefficients.detach().cpu(),
-        best=best_evaluation,
-        history=history,
-        passed=best_evaluation.passed_overfit_gate,
-    )
-
-
-def _initial_coefficients(
-    *,
-    settings: SASettings,
-    coefficient_count: int,
-    device: torch.device,
-    generator: torch.Generator,
-) -> torch.Tensor:
-    current = torch.zeros(
-        (settings.chains, coefficient_count),
-        dtype=torch.float32,
-        device=device,
-    )
-    if settings.chains > 1:
-        current[1:] = _clamp_coefficients(
-            torch.randn(
-                current[1:].shape,
-                device=device,
-                generator=generator,
-            )
-            * settings.proposal_scale,
-            settings,
-        )
-    return current
-
-
-def _evaluate_sa_dr_chains(
-    *,
-    config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     bundle: SimulationBundle,
     baseline_dr_values: tuple[float, ...],
     dr_batch_size: int,
@@ -531,9 +188,9 @@ def _evaluate_sa_dr_chains(
     lambda_value: float,
     feature_version: str,
     seed: int,
-) -> list[ChainEvaluation]:
+) -> list[CandidateEvaluation]:
     dr_count = len(baseline_dr_values)
-    chains = int(coefficients.shape[0])
+    candidate_count = int(coefficients.shape[0])
     template = FSRS6ADRDeltaPolicy.baseline(
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
@@ -543,9 +200,11 @@ def _evaluate_sa_dr_chains(
     if int(coefficients.shape[1]) != coefficient_count:
         raise ValueError(
             "DR-conditioned coefficients must have shape "
-            f"(chains, {coefficient_count})."
+            f"(candidates, {coefficient_count})."
         )
-    metrics_by_chain: list[list[CandidateMetrics]] = [[] for _ in range(chains)]
+    metrics_by_candidate: list[list[CandidateMetrics]] = [
+        [] for _ in range(candidate_count)
+    ]
     for chunk_dr_values, chunk_baselines in _iter_dr_chunks(
         baseline_dr_values,
         baselines,
@@ -554,14 +213,14 @@ def _evaluate_sa_dr_chains(
         actual_count = len(chunk_dr_values)
         padded_dr_values = _pad_tuple(chunk_dr_values, dr_batch_size)
         desired_retention = torch.tensor(
-            [dr for _chain in range(chains) for dr in padded_dr_values],
+            [dr for _candidate in range(candidate_count) for dr in padded_dr_values],
             device=bundle.device,
             dtype=torch.float32,
         )
         lane_coefficients = (
             coefficients[:, None, :]
-            .expand(chains, dr_batch_size, coefficient_count)
-            .reshape(chains * dr_batch_size, coefficient_count)
+            .expand(candidate_count, dr_batch_size, coefficient_count)
+            .reshape(candidate_count * dr_batch_size, coefficient_count)
         )
         sched_ops = FSRS6ADRDeltaBatchSchedulerOps(
             weights=bundle.scheduler_weights,
@@ -593,24 +252,26 @@ def _evaluate_sa_dr_chains(
             short_term_loops_limit=settings.short_term_loops_limit,
         )
         metrics = [_metrics_from_stats(item) for item in stats]
-        for chain in range(chains):
-            start = chain * dr_batch_size
-            chain_metrics = metrics[start : start + actual_count]
-            metrics_by_chain[chain].extend(chain_metrics)
-    evaluations: list[ChainEvaluation] = []
-    for chain in range(chains):
-        chain_metrics = metrics_by_chain[chain]
-        if len(chain_metrics) != dr_count:
+        for candidate_index in range(candidate_count):
+            start = candidate_index * dr_batch_size
+            candidate_metrics = metrics[start : start + actual_count]
+            metrics_by_candidate[candidate_index].extend(candidate_metrics)
+    evaluations: list[CandidateEvaluation] = []
+    for candidate_index in range(candidate_count):
+        candidate_metrics = metrics_by_candidate[candidate_index]
+        if len(candidate_metrics) != dr_count:
             raise AssertionError("DR-conditioned evaluation produced missing metrics.")
-        evaluations.append(_chain_evaluation(chain_metrics, baselines, lambda_value))
+        evaluations.append(
+            _candidate_evaluation(candidate_metrics, baselines, lambda_value)
+        )
     return evaluations
 
 
-def _chain_evaluation(
+def _candidate_evaluation(
     metrics_by_dr: list[CandidateMetrics],
     baselines: Sequence[CandidateMetrics],
     lambda_value: float,
-) -> ChainEvaluation:
+) -> CandidateEvaluation:
     if len(metrics_by_dr) != len(baselines):
         raise ValueError("metrics_by_dr and baselines must have the same length.")
     if not metrics_by_dr:
@@ -629,7 +290,7 @@ def _chain_evaluation(
     mean_relative_efficiency_gain = sum(relative_efficiency_gains) / len(
         relative_efficiency_gains
     )
-    return ChainEvaluation(
+    return CandidateEvaluation(
         metrics_by_dr=list(metrics_by_dr),
         relative_memorized_gains=relative_memorized_gains,
         relative_efficiency_gains=relative_efficiency_gains,
@@ -708,7 +369,7 @@ def _write_artifact(
     output_dir: Path,
     config: ExperimentConfig,
     config_path: Path,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     user_id: int,
     lambda_value: float,
     training_command_path: Path | None,
@@ -842,7 +503,3 @@ def _int_like(value: Any, field_name: str, minimum: int) -> int:
 def _clear_cuda_cache(device: torch.device) -> None:
     if device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

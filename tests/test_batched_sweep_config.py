@@ -173,7 +173,7 @@ class BatchedSweepConfigTests(unittest.TestCase):
             / "experiments"
             / "rl_scheduler"
             / "configs"
-            / "fsrs6_adr_delta_linear_sa_users_1_8.toml",
+            / "fsrs6_adr_delta_linear_cmaes_users_1_8.toml",
             repo_root=REPO_ROOT,
         )
 
@@ -768,7 +768,7 @@ path = "policy.json"
         self.assertEqual(tuple(interval_factor.shape), (2,))
         self.assertGreater(float(interval_factor[0]), float(interval_factor[1]))
 
-    def test_multiple_sa_policies_share_one_scheduler_group(self) -> None:
+    def test_multiple_adr_policies_share_one_scheduler_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = root / "p1.json"
@@ -884,7 +884,7 @@ class FSRS6ADRDeltaPolicyExpansionTests(unittest.TestCase):
             ],
         )
 
-    def test_multiple_sa_dr_policies_share_one_scheduler_group(self) -> None:
+    def test_multiple_adr_delta_policies_share_one_scheduler_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = root / "p1.json"

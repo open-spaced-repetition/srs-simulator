@@ -14,11 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_fsrs6_adr_direct import (
-    SASettings,
+from experiments.rl_scheduler.policy_search_common import (
+    PolicySearchSettings,
     _build_bundle,
-    _evaluate_sa_candidates,
-    _read_training_sa,
+    _evaluate_direct_candidates,
+    _read_training_policy_search,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--torch-device",
         default=None,
-        help="Override training.sa.torch_device for the tuning run.",
+        help="Override training.policy_search.torch_device for the tuning run.",
     )
     parser.add_argument("--button-usage", type=Path, default=DEFAULT_BUTTON_USAGE_PATH)
     parser.add_argument("--srs-benchmark-root", type=Path, default=None)
@@ -76,7 +76,7 @@ def main() -> int:
     config = ExperimentConfig.from_toml(args.config)
     lanes = _parse_lane_values(args.candidate_lanes)
     user_id = args.user_id if args.user_id is not None else config.users.train[0]
-    settings = SASettings.from_mapping(config.training_sa)
+    settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     if args.torch_device is not None:
         settings = replace(settings, torch_device=args.torch_device)
     output_dir = args.output_dir or (
@@ -103,15 +103,15 @@ def main() -> int:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return 0
 
-    raw_training_sa = _read_training_sa(args.config)
+    raw_training_policy_search = _read_training_policy_search(args.config)
     benchmark_root = resolve_benchmark_root(
         REPO_ROOT, args.srs_benchmark_root
     ).resolve()
     overrides = parse_result_overrides(args.benchmark_result)
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
-        learning_steps=raw_training_sa.get("learning_steps"),
-        relearning_steps=raw_training_sa.get("relearning_steps"),
+        learning_steps=raw_training_policy_search.get("learning_steps"),
+        relearning_steps=raw_training_policy_search.get("relearning_steps"),
     )
     short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         short_term_args
@@ -120,7 +120,7 @@ def main() -> int:
     for lanes_value in lanes:
         record = _run_lane_probe(
             config=config,
-            settings=replace(settings, chains=lanes_value),
+            settings=settings,
             user_id=user_id,
             lanes=lanes_value,
             benchmark_root=benchmark_root,
@@ -145,7 +145,7 @@ def main() -> int:
 def _run_lane_probe(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     user_id: int,
     lanes: int,
     benchmark_root: Path,
@@ -177,7 +177,7 @@ def _run_lane_probe(
             torch.cuda.reset_peak_memory_stats(bundle.device)
             torch.cuda.synchronize(bundle.device)
         started = time.monotonic()
-        metrics = _evaluate_sa_candidates(
+        metrics = _evaluate_direct_candidates(
             config=config,
             settings=settings,
             bundle=bundle,
@@ -213,7 +213,7 @@ def _run_lane_probe(
 
 
 def _baseline_coefficients(
-    settings: SASettings,
+    settings: PolicySearchSettings,
     lanes: int,
     device: torch.device,
 ) -> torch.Tensor:

@@ -21,25 +21,25 @@ from experiments.rl_scheduler.train_cmaes_fsrs6_adr_delta import (
     CMAESSettings,
     _optimizer_seed,
 )
-from experiments.rl_scheduler.train_fsrs6_adr_direct import (
+from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
-    SASettings,
+    PolicySearchSettings,
     TrainingProgress,
     _artifact_id as _adr_artifact_id,
     _build_bundle,
+    _float_token,
     _git_commit,
+    _iter_chunks,
     _metrics_from_stats,
     _passes_overfit_gate,
-    _read_training_sa,
+    _read_training_policy_search,
     _relative_gain,
     _relative_gain_gate_metrics,
     _score,
     _write_json,
 )
-from experiments.rl_scheduler.train_fsrs6_adr_direct_dr_grid import (
+from experiments.rl_scheduler.adr_delta_common import (
     _baseline_dr_values,
-    _float_token,
-    _iter_chunks,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
@@ -68,12 +68,12 @@ class ADPSettings:
         cls,
         config: ExperimentConfig,
         *,
-        raw_training_sa: Mapping[str, Any],
+        raw_training_policy_search: Mapping[str, Any],
         dr_count: int,
     ) -> ADPSettings:
         raw = dict(config.training_adp)
         raw_dr_batch_size = raw.get(
-            "dr_batch_size", raw_training_sa.get("dr_batch_size")
+            "dr_batch_size", raw_training_policy_search.get("dr_batch_size")
         )
         if raw_dr_batch_size is None:
             dr_batch_size = dr_count
@@ -130,7 +130,7 @@ class ADPTrainJobResult:
 
 @dataclass(frozen=True, slots=True)
 class _CommonContext:
-    raw_training_sa: dict[str, Any]
+    raw_training_policy_search: dict[str, Any]
     short_term_source: str | None
     learning_steps: list[float]
     relearning_steps: list[float]
@@ -164,12 +164,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     config = ExperimentConfig.from_toml(args.config)
-    settings = SASettings.from_mapping(config.training_sa)
-    raw_training_sa = dict(_read_training_sa(args.config))
-    baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
+    settings = PolicySearchSettings.from_mapping(config.training_policy_search)
+    raw_training_policy_search = dict(_read_training_policy_search(args.config))
+    baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
     adp_settings = ADPSettings.from_config(
         config,
-        raw_training_sa=raw_training_sa,
+        raw_training_policy_search=raw_training_policy_search,
         dr_count=len(baseline_dr_values),
     )
     optimizer_settings = optimizer_settings_from_mapping(config.training_optimizer)
@@ -219,12 +219,12 @@ def run_training_batch_jobs(
     config_path: Path,
     repo_root: Path,
 ) -> list[ADPTrainJobResult]:
-    settings = SASettings.from_mapping(config.training_sa)
-    raw_training_sa = dict(_read_training_sa(config_path))
-    baseline_dr_values = _baseline_dr_values(raw_training_sa, settings)
+    settings = PolicySearchSettings.from_mapping(config.training_policy_search)
+    raw_training_policy_search = dict(_read_training_policy_search(config_path))
+    baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
     adp_settings = ADPSettings.from_config(
         config,
-        raw_training_sa=raw_training_sa,
+        raw_training_policy_search=raw_training_policy_search,
         dr_count=len(baseline_dr_values),
     )
     optimizer_settings = optimizer_settings_from_mapping(config.training_optimizer)
@@ -257,7 +257,7 @@ def run_training_jobs(
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     adp_settings: ADPSettings,
     optimizer_settings: CMAESSettings,
     ctx: _CommonContext,
@@ -588,21 +588,21 @@ def _common_context(
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     srs_benchmark_root: Path | None,
     benchmark_result: str | None,
 ) -> _CommonContext:
-    raw_training_sa = dict(_read_training_sa(config_path))
+    raw_training_policy_search = dict(_read_training_policy_search(config_path))
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
-        learning_steps=raw_training_sa.get("learning_steps"),
-        relearning_steps=raw_training_sa.get("relearning_steps"),
+        learning_steps=raw_training_policy_search.get("learning_steps"),
+        relearning_steps=raw_training_policy_search.get("relearning_steps"),
     )
     short_term_source, learning_steps, relearning_steps = resolve_short_term_config(
         short_term_args
     )
     return _CommonContext(
-        raw_training_sa=raw_training_sa,
+        raw_training_policy_search=raw_training_policy_search,
         short_term_source=short_term_source,
         learning_steps=learning_steps,
         relearning_steps=relearning_steps,
@@ -634,7 +634,7 @@ def _progress_for_jobs(
 def _evaluate_baseline_grid(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     jobs: Sequence[ADPTrainJob],
     baseline_dr_values: tuple[float, ...],
     ctx: _CommonContext,
@@ -698,7 +698,7 @@ def _evaluate_baseline_grid(
 def _evaluate_adp_candidates(
     *,
     config: ExperimentConfig,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     adp_settings: ADPSettings,
     bundle: Any,
     jobs: Sequence[ADPTrainJob],
@@ -845,7 +845,7 @@ def _write_grid_artifacts(
     output_dir: Path,
     config: ExperimentConfig,
     config_path: Path,
-    settings: SASettings,
+    settings: PolicySearchSettings,
     adp_settings: ADPSettings,
     optimizer_settings: CMAESSettings,
     user_id: int,

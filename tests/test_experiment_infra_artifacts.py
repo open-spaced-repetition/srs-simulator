@@ -87,18 +87,20 @@ class ExperimentInfraArtifactTests(unittest.TestCase):
                 scheduler="fsrs6_adr_direct", engine="batched", environment="lstm"
             )
         )
-        sa_capability = get_scheduler_capability("fsrs6_adr_direct")
-        self.assertFalse(sa_capability.supports_desired_retention)
+        adr_capability = get_scheduler_capability("fsrs6_adr_direct")
+        self.assertFalse(adr_capability.supports_desired_retention)
         self.assertTrue(
             supports_scheduler(
                 scheduler="fsrs6_adr_delta", engine="batched", environment="lstm"
             )
         )
-        sa_dr_capability = get_scheduler_capability("fsrs6_adr_delta")
-        self.assertTrue(sa_dr_capability.supports_desired_retention)
-        self.assertTrue(sa_dr_capability.supports(engine="event", environment="fsrs6"))
+        adr_delta_capability = get_scheduler_capability("fsrs6_adr_delta")
+        self.assertTrue(adr_delta_capability.supports_desired_retention)
         self.assertTrue(
-            sa_dr_capability.supports(engine="vectorized", environment="fsrs6")
+            adr_delta_capability.supports(engine="event", environment="fsrs6")
+        )
+        self.assertTrue(
+            adr_delta_capability.supports(engine="vectorized", environment="fsrs6")
         )
         capability = get_scheduler_capability("dash")
         self.assertTrue(capability.supports(engine="event", environment="fsrs6"))

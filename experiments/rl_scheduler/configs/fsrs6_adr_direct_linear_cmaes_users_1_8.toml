@@ -112,13 +112,8 @@ enabled = true
 trainer = "auto"
 max_lanes_per_batch = 6400
 
-[training.sa]
+[training.policy_search]
 feature_version = "fsrs6_adr_direct_log_linear_v1"
-chains = 32
-iterations = 10
-initial_temp = 0.05
-final_temp = 0.005
-proposal_scale = 0.35
 coefficient_min = -12.0
 coefficient_max = 12.0
 retention_min = 0.50

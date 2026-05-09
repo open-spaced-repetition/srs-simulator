@@ -40,7 +40,7 @@ def _write_config(
     performance_timeout_seconds: float | None = None,
     stages: list[str] | None = None,
     training_extra: str = "",
-    training_sa_extra: str = "",
+    training_policy_search_extra: str = "",
     sweep_extra: str = "",
 ) -> Path:
     config_path = root / "experiment.toml"
@@ -134,7 +134,7 @@ diagnostic_csv_logs = false
 lambda_grid = [0.0, 0.5, 1.0]
 {command_template_line}
 {training_extra}
-{training_sa_extra}
+{training_policy_search_extra}
 [sweep]
 log_glob = "*.jsonl"
 {sweep_extra}
@@ -1218,8 +1218,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "batch_baseline_desired_retention_values = true\n"
                     'artifact_metadata_glob = "**/metadata.json"\n'
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     "baseline_desired_retention = 0.9\n"
                     "baseline_desired_retention_values = [0.8, 0.9]\n"
                 ),
@@ -1541,8 +1541,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     'artifact_metadata_glob = "**/metadata.json"\n'
                     "batch_baseline_desired_retention_values = true\n"
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     "baseline_desired_retention = 0.9\n"
                     "baseline_desired_retention_values = [0.8, 0.9]\n"
                 ),
@@ -1584,7 +1584,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_fsrs6_adr_direct.py",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr_direct.py",
                 ],
                 training_extra=(
                     'artifact_metadata_glob = "metadata.json"\n'
@@ -1593,13 +1593,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     'trainer = "auto"\n'
                     "batch_size = 1\n"
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
-                    "chains = 4\n"
-                    "iterations = 0\n"
-                    "initial_temp = 0.05\n"
-                    "final_temp = 0.005\n"
-                    "proposal_scale = 0.35\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     "coefficient_min = -8.0\n"
                     "coefficient_max = 8.0\n"
                     "retention_min = 0.5\n"
@@ -1713,7 +1708,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_fsrs6_adr_direct.py",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6_adr_direct.py",
                 ],
                 training_extra=(
                     'artifact_metadata_glob = "metadata.json"\n'
@@ -1721,8 +1716,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "enabled = true\n"
                     'trainer = "auto"\n'
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     "baseline_desired_retention = 0.9\n"
                     "baseline_desired_retention_values = [0.8, 0.9]\n"
                     'torch_device = "cpu"\n'
@@ -1876,8 +1871,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "generations = 10\n"
                     "sigma0 = 0.8\n"
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     'feature_version = "fsrs6_adr_direct_log_linear_v1"\n'
                     "retention_min = 0.5\n"
                     "retention_max = 0.98\n"
@@ -1930,8 +1925,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "portfolio_size = 2\n"
                     "mutation_scale = 0.2\n"
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     "retention_min = 0.5\n"
                     "retention_max = 0.98\n"
                     "baseline_desired_retention = 0.9\n"
@@ -1988,8 +1983,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "generations = 2\n"
                     "sigma0 = 0.8\n"
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     "retention_min = 0.5\n"
                     "retention_max = 0.98\n"
                     "baseline_desired_retention = 0.9\n"
@@ -2048,8 +2043,8 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "mutation_scale = 0.2\n"
                     "retention_mutation_scale = 0.02\n"
                 ),
-                training_sa_extra=(
-                    "[training.sa]\n"
+                training_policy_search_extra=(
+                    "[training.policy_search]\n"
                     "retention_min = 0.5\n"
                     "retention_max = 0.98\n"
                     "baseline_desired_retention = 0.9\n"

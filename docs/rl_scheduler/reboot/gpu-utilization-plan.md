@@ -20,7 +20,7 @@ scheduler families.
   engine. A lane can represent a user, a user plus retention value, a user plus
   candidate policy, or a repeated seed.
 - **Super-batch**: a flattened batch over multiple axes, such as
-  `(user, desired_retention)` or `(user, lambda, chain)`, executed by one
+  `(user, desired_retention)` or `(user, lambda, candidate)`, executed by one
   simulator call.
 - **Common random numbers**: using aligned random streams across candidate
   lanes so that policy differences are less confounded by simulation noise.
@@ -37,8 +37,9 @@ scheduler families.
   retention outside the engine.
 - `run_sweep_users_batched.py` supports one CUDA device through `--torch-device`
   and round-robin multi-device process assignment through `--cuda-devices`.
-- `fsrs6_adr_direct` training can evaluate multiple chains by duplicating a train user
-  into many lanes, but trainer progress is written only at the end.
+- `fsrs6_adr_direct` training can evaluate multiple optimizer candidates by
+  duplicating a train user into many lanes, but trainer progress is written only
+  at the end.
 - `FSRS6ADRDirectBatchSchedulerOps` already supports per-lane coefficients, so the
   scheduler side can evaluate multiple policy candidates without reading
   environment memory state. The scheduler must keep its own FSRS-6 `S` and `D`
@@ -48,8 +49,8 @@ scheduler families.
 
 Observed failure mode from the first GPU trial:
 
-- A full-size `fsrs6_adr_direct` overfit run with 32 chains, 1825 days, deck 10000, and
-  LSTM environment produced sustained CUDA activity but no intermediate
+- A full-size `fsrs6_adr_direct` overfit run with 32 candidate lanes, 1825 days,
+  deck 10000, and LSTM environment produced sustained CUDA activity but no intermediate
   training artifact for more than 12 minutes.
 - GPU utilization fluctuated instead of saturating, while CPU stayed mostly
   idle. This means the path is on CUDA, but the run shape is too coarse for
@@ -87,7 +88,7 @@ Use these axes in priority order.
 1. `user`: already supported; safest for sweeps and validation.
 2. `scheduler_param`: desired retention, fixed interval, or similar scalar
    parameters for homogeneous schedulers.
-3. `candidate`: SA chains, policy artifacts, checkpoints, or proposal batches.
+3. `candidate`: optimizer candidates, policy artifacts, checkpoints, or proposal batches.
 4. `lambda`: reward tradeoff values for training and selection.
 5. `seed`: only for sensitivity estimates or variance reduction.
 6. `scheduler`: only after families share a stable batched protocol.
@@ -102,18 +103,18 @@ retention sweep today:
 retention sweep target:
   simulate_multiuser_grid(lanes = users x desired_retentions)
 
-SA training today:
-  simulate_multiuser(lanes = chains for one user and one lambda)
+CMA-ES training today:
+  simulate_multiuser(lanes = population for one user, DR, and lambda)
 
-SA training target:
-  simulate_multiuser(lanes = users x lambdas x chains x repeats)
+CMA-ES training target:
+  simulate_multiuser(lanes = users x lambdas x desired_retentions x population)
 ```
 
 Output identity must remain explicit. Every result row or log must map back to:
 
 ```text
 user_id, environment, scheduler, desired_retention, policy_id,
-lambda_value, chain_id, seed, config_path, run_id
+lambda_value, candidate_id, seed, config_path, run_id
 ```
 
 ## Measurement Contract
@@ -127,7 +128,7 @@ Required fields:
   CUDA version, GPU name, and device index.
 - Stage name, config path, run id, command, and output root.
 - Workload shape: users, days, deck, env, schedulers, desired-retention count,
-  lambda count, chains, repeats, seeds, and effective lane count.
+  lambda count, candidate lanes, repeats, seeds, and effective lane count.
 - Execution shape: process count, devices, batch size, super-batch axes,
   chunking strategy, dtype, and whether `torch.compile` is enabled.
 - Runtime metrics: elapsed seconds, simulator calls/sec, user-days/sec,
@@ -172,197 +173,12 @@ memory_budget_fraction = 0.80
 utilization_probe_seconds = 60
 oom_backoff_factor = 0.50
 throughput_plateau_tolerance = 0.05
-minimum_formal_effective_lanes = 64 for SA probes when memory allows
+minimum_formal_effective_lanes = 64 for optimizer probes when memory allows
 ```
 
-For a single 24 GB GPU, avoid treating `chains = 32` as a saturation target.
+For a single 24 GB GPU, avoid treating 32 candidate lanes as a saturation target.
 It is a starting point. Increase lanes until user-days/sec or
 candidate-days/sec stops improving.
-
-## SA Training Plan
-
-### Goals
-
-- Quickly answer whether a scheduler family can beat FSRS-6 on one train user
-  under overfit conditions.
-- Keep enough GPU work in each evaluation to amortize Python orchestration and
-  kernel launch overhead.
-- Write progress artifacts often enough that long runs can be diagnosed and
-  resumed.
-
-### Required Trainer Changes
-
-1. Add progress checkpoints:
-   - after config load
-   - after baseline evaluation
-   - after initial candidate evaluation
-   - after each annealing iteration
-   - after writing policy and metrics
-2. Write `training_progress.jsonl` with iteration, elapsed seconds, current best
-   score, relative memorized gain, relative efficiency gain, accepted count,
-   effective lanes, GPU memory, and seed.
-3. Add a formal timeout with a clear `timeout` failure class.
-4. Add `candidate_batch_size` or `chains_per_eval` so a large SA population can
-   be evaluated in chunks without changing run identity.
-5. Add `repeats_per_candidate` when stochastic noise is high.
-6. Record whether candidate lanes used common random numbers or independent
-   lane draws.
-7. Avoid duplicating static LSTM/FSRS weight tensors per chain when possible.
-   Keep unique user weights once and index them by `lane_user_idx`; duplicate
-   only per-lane dynamic card state.
-
-### Probe Profiles
-
-Use three training profiles rather than one full profile.
-
-```text
-smoke:
-  purpose: code path and CUDA guard
-  days: 30-90
-  deck: 1000-3000
-  chains: 8-16
-  iterations: 1-2
-
-overfit-probe:
-  purpose: determine whether the idea can beat baseline on one train user
-  days: 365-730
-  deck: 5000-10000
-  chains: autotuned, usually 64+
-  iterations: 4-16
-
-formal-overfit:
-  purpose: full train-user gate before validation
-  days: target experiment horizon
-  deck: target experiment deck
-  chains: autotuned
-  iterations: configured by research budget
-```
-
-The stop rule is strict: if the family cannot beat FSRS-6 under train-user
-overfit after reasonable probe iterations and implementation checks, stop broad
-validation for that family.
-
-### Candidate Batching
-
-For `fsrs6_adr_direct`, one effective lane should represent:
-
-```text
-(train_user_id, lambda_value, chain_id, repeat_id)
-```
-
-The scheduler lane receives its own coefficient vector. The environment lane
-receives the same user model but independent dynamic memory state. The scheduler
-must maintain internal FSRS-6 `S` and `D`; it must not read the environment
-memory state.
-
-Acceptance tests:
-
-- A one-candidate, one-user lane agrees with the existing trainer path within
-  deterministic tolerance.
-- Multiple candidate lanes produce the same number of metric records as the
-  lane metadata table.
-- Changing lane order does not change artifact identity.
-- If common random numbers are implemented, two identical policies receive
-  identical metrics for the same seed and lane metadata.
-
-## Retention Sweep Plan
-
-### Desired-Retention Super-Batching
-
-Start with FSRS-6 because desired retention is a homogeneous scalar parameter.
-Flatten `(user, desired_retention)` into the lane dimension:
-
-```text
-lane_user_ids = repeat(users, each = len(drs))
-lane_desired_retention = tile(drs, len(users))
-```
-
-Then run one `simulate_multiuser` call for the super-batch and split outputs
-back to per-user JSONL logs.
-
-Implementation notes:
-
-- Load each unique user's weights once.
-- Expand or index weights to lanes only when scheduler/env ops require a
-  per-lane tensor.
-- Keep output filenames and metadata exact, including desired retention.
-- Keep daily CSV sidecars disabled unless `--diagnostic-csv-logs` is enabled.
-- Preserve `LogFilenameFilter` compatibility for downstream staging and Pareto
-  scans.
-
-### Scheduler Families
-
-Initial candidates for parameter super-batching:
-
-- `fsrs6`, `fsrs6_default`: desired retention.
-- `fsrs3`, `fsrs3_default`: desired retention.
-- `fixed`: fixed interval.
-- `fsrs6_adr_direct`: candidate policy artifacts or checkpoints if feature versions
-  match.
-
-Do not super-batch heterogeneous schedulers until a typed protocol can express
-their state shapes and parameter metadata without special cases in the engine.
-
-## Multi-GPU And Process Scheduling
-
-Single GPU:
-
-- Prefer one process with a large effective lane count.
-- If the GPU still shows low throughput after lane autotuning, allow a small
-  number of concurrent independent processes on the same device.
-- Cap same-GPU fanout in TOML and record it. Start with 2, then measure.
-
-Multiple GPUs:
-
-- Keep the existing `--cuda-devices 0,1,...` round-robin assignment as the
-  baseline.
-- Record per-device work assignment, elapsed time, peak memory, utilization,
-  and failures.
-- Add duration estimates before work stealing. Work stealing is useful only
-  after batch sizes and per-batch duration are predictable.
-
-Avoid:
-
-- Launching many tiny Python processes that each load weights and run a small
-  GPU workload.
-- Mixing formal training, sweep, and plotting processes on the same GPU without
-  a run-level scheduler.
-- Relying on MPS before in-process batching has been exhausted.
-
-## Planned TOML Fields
-
-Add these fields to future experiment profiles once the runner supports them:
-
-```toml
-[performance]
-device = "cuda"
-memory_budget_fraction = 0.80
-nvml_sample_interval_seconds = 2.0
-timeout_seconds = 3600
-progress_interval_seconds = 30
-write_performance_summary = true
-diagnostic_csv_logs = false
-
-[performance.autotune]
-enabled = true
-axis = "effective_lanes"
-candidate_lanes = [8, 16, 32, 64, 128, 256]
-plateau_tolerance = 0.05
-
-[training.sa]
-chains = 128
-chains_per_eval = 128
-repeats_per_candidate = 1
-candidate_axis = "chain"
-common_random_numbers = false
-
-[sweep]
-superbatch_axes = ["user", "desired_retention"]
-max_effective_lanes = 256
-```
-
-Until these fields are implemented, encode the chosen values in the checked-in
-profile name and command template, and record them in the run report.
 
 ## Profiling SOP
 
@@ -381,7 +197,7 @@ Run profiling before and after any performance-related change.
 Useful commands:
 
 ```bash
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage preflight --run-id gpu-probe
+uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --stage preflight --run-id gpu-probe
 
 uv run python experiments/retention_sweep/run_sweep_users_batched.py \
   --start-user 1 --end-user 100 \
@@ -432,18 +248,18 @@ Exit criteria:
 - A maintainer can reproduce the selected lane count from TOML and artifacts.
 - Probe turnaround is short enough for repeated research iteration.
 
-### Phase 2: SA Candidate Super-Batching
+### Phase 2: Candidate Super-Batching
 
-- Represent `(user, lambda, chain, repeat)` as lane metadata.
-- Evaluate multiple SA proposals per simulator call.
-- Chunk large populations with `chains_per_eval`.
+- Represent `(user, lambda, candidate, repeat)` as lane metadata.
+- Evaluate multiple optimizer candidates per simulator call.
+- Chunk large populations with a per-evaluation lane cap.
 - Keep scheduler-side FSRS-6 `S`/`D` independent of environment state.
 - Add equivalence and lane-metadata tests.
 
 Exit criteria:
 
-- Train-user overfit runs write progress every iteration.
-- Increasing chains improves candidate-days/sec until a measured plateau.
+- Train-user overfit runs write progress every optimizer generation.
+- Increasing candidate lanes improves candidate-days/sec until a measured plateau.
 
 ### Phase 3: Retention Parameter Super-Batching
 
@@ -493,7 +309,7 @@ Probe context:
 
 - Date: 2026-04-30
 - GPU: NVIDIA GeForce RTX 4090 D, 24 GB
-- Config: superseded by `experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml`
+- Config: superseded by `experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml`
 - Workload: LSTM environment, user 1, 365 days, deck 5000, short-term steps
 - Command family: `experiments/rl_scheduler/tune_fsrs6_adr_direct_lanes.py`
 
@@ -515,11 +331,11 @@ Results:
 
 Decision:
 
-- Use `chains = 2048` for the first overfit-probe profile. It has strong
+- Use 2048 candidate lanes for the first overfit-probe profile. It has strong
   throughput while staying comfortably below the 80% memory-budget target by
   PyTorch reserved memory.
-- Treat `chains = 4096` as a diagnostic upper bound for this workload. It was
+- Treat 4096 candidate lanes as a diagnostic upper bound for this workload. It was
   fastest, but PyTorch reserved memory exceeded the configured 80% budget on a
   24 GB GPU.
 - Do not extrapolate these values to the 1825-day, deck-10000 formal profile;
-  rerun lane tuning for that workload before increasing its chains.
+  rerun lane tuning for that workload before increasing its candidate lanes.

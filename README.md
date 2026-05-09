@@ -70,14 +70,11 @@ The rebooted RL scheduler experiment infrastructure starts from checked-in TOML
 profiles and machine-readable stage records:
 
 ```bash
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage dry-run --run-id fsrs6_adr_direct_sa_users_1_8_v1
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --stage all --run-id fsrs6_adr_direct_sa_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_direct_linear_cmaes_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_portfolio_users_1_8.toml --stage all --run-id fsrs6_adr_direct_linear_portfolio_users_1_8_v1
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_sa_users_1_8.toml --stage all --run-id fsrs6_adr_delta_linear_sa_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_delta_linear_cmaes_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adp_cmaes_users_1_8.toml --stage all --run-id fsrs6_adp_cmaes_users_1_8_v1
-uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/fsrs6_adr_direct_sa_users_1_8/fsrs6_adr_direct_sa_users_1_8_v1
+uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/fsrs6_adr_direct_linear_cmaes_users_1_8/fsrs6_adr_direct_linear_cmaes_users_1_8_v1
 uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact_metadata.json> --require-files
 uv run python experiments/rl_scheduler/plot_fsrs6_adr_direct_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
 uv run python experiments/rl_scheduler/plot_fsrs6_adr_delta_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
@@ -103,10 +100,6 @@ missing. `all` runs the configured stages in order and stops at the first
 non-zero stage result. Scheduler policy artifacts must validate against the
 metadata contract before they can be used by formal stages.
 
-`fsrs6_adr_direct_sa_users_1_8.toml` trains and evaluates `fsrs6_adr_direct`.
-`fsrs6_adr_delta_linear_sa_users_1_8.toml` uses the same workflow and
-training budget with the simplified 4-parameter
-`fsrs6_adr_delta_log_linear_v1` feature version.
 `fsrs6_adr_direct_linear_cmaes_users_1_8.toml` trains one simplified
 3-parameter `fsrs6_adr_direct_log_linear_v1` policy per user and baseline desired
 retention with CMA-ES, then evaluates the resulting ordinary `fsrs6_adr_direct`
@@ -116,8 +109,7 @@ schedulers.
 SMS-EMOA hypervolume optimization, then evaluates them as ordinary
 `fsrs6_adr_direct` schedulers.
 `fsrs6_adr_delta_linear_cmaes_users_1_8.toml` uses the same scheduler artifact
-and sweep path, but trains the 4-parameter DR-conditioned policy with CMA-ES
-instead of simulated annealing.
+and sweep path, but trains the 4-parameter DR-conditioned policy with CMA-ES.
 `fsrs6_adp_cmaes_users_1_8.toml` trains `fsrs6_adp`, which searches 21
 bounded FSRS-6 scheduler parameters as standardized deltas from each user's
 fitted FSRS-6 weights. It batches users and baseline DR values in one process
@@ -202,9 +194,8 @@ uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --e
 uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 10 --env lstm --sched fsrs6_adr_direct --fsrs6-adr-direct-policy <policy.json>
 uv run python experiments/retention_sweep/run_sweep_users_batched.py --config <edited-batched-sweep.toml> --dry-run
 uv run python experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 8 --env lstm --sched fsrs6,fsrs6_adr_direct --fsrs6-adr-direct-policy-root <train-overfit/train_outputs> --fsrs6-adr-direct-lambda-values 0.5
-uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_delta_linear_sa_users_1_8.toml --stage dry-run --run-id fsrs6_adr_delta_linear_sa_users_1_8_v1
 uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 8 --env lstm --sched fsrs6,fsrs6_adr_direct --engine batched
-uv run experiments/retention_sweep/build_pareto_users.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_sa_users_1_8.toml --dry-run
+uv run experiments/retention_sweep/build_pareto_users.py --config experiments/rl_scheduler/configs/fsrs6_adr_direct_linear_cmaes_users_1_8.toml --dry-run
 uv run experiments/retention_sweep/build_pareto_users.py --start-user 1 --end-user 10 --env fsrs6,lstm --sched fsrs6,sspmmc
 uv run experiments/retention_sweep/aggregate_users.py --env lstm --sched fsrs6,anki_sm2,memrise
 uv run experiments/retention_sweep/dominance.py --env lstm

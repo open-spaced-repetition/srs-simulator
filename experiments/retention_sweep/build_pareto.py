@@ -337,7 +337,7 @@ def _resolve_fsrs6_adr_direct_label(
     )
     if retention is not None:
         return _format_retention_title(retention), retention
-    return f"SA {title or path.stem}", None
+    return f"ADR {title or path.stem}", None
 
 
 def _resolve_fsrs6_adr_direct_title(

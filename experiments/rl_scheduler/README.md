@@ -3,8 +3,9 @@
 This directory contains the training entry points, TOML profiles, and run
 inspection tools for scheduler-learning experiments. The `rl_scheduler` family
 name is broad by design: it covers PPO/DQN-style reinforcement learning, FQI,
-CEM, simulated annealing, and other policy-search methods as long as the output
-is a scheduler artifact that can enter the same external evaluation pipeline.
+CEM, CMA-ES, portfolio search, and other policy-search methods as long as the
+output is a scheduler artifact that can enter the same external evaluation
+pipeline.
 
 The current implemented research lines are `fsrs6_adr_direct`,
 `fsrs6_adr_delta`, and `fsrs6_adp`: black-box optimizers learn scheduler-side
@@ -19,12 +20,6 @@ FSRS-6 state update to obtain `S` and `D`.
 ## Directory Layout
 
 - `run_experiment.py`: TOML-driven stage runner.
-- `train_fsrs6_adr_direct.py`: FSRS6 ADR Direct overfit trainer for one baseline desired
-  retention value.
-- `train_fsrs6_adr_direct_dr_grid.py`: FSRS6 ADR Direct trainer that batches a desired
-  retention grid inside one process.
-- `train_fsrs6_adr_delta.py`: DR-conditioned FSRS6 ADR Delta trainer that learns one
-  `(S,D,DR)` logit-adjustment policy per user/lambda.
 - `train_cmaes_fsrs6_adr_direct.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr_direct`
   policies over `S,D`.
 - `train_cmaes_fsrs6_adr_delta.py`: DR-conditioned CMA-ES FSRS-6 trainer that uses
@@ -34,13 +29,15 @@ FSRS-6 state update to obtain `S` and `D`.
 - `train_fsrs6_adp_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
   ordinary `fsrs6_adp` child policies, optimizing hypervolume against the FSRS-6
   DR-grid baseline.
+- `policy_search_common.py` and `adr_delta_common.py`: shared policy-search
+  settings, metric, artifact, and evaluation helpers used by the active trainers.
 - `train-overfit` can run these trainers through `[training.batch]` so users are
   batched in one process rather than launched as parallel training subprocesses.
 - `plot_fsrs6_adr_direct_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
 - `plot_fsrs6_adr_delta_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D, DR) -> desired_retention` slices across input DR values.
-- `tune_fsrs6_adr_direct_lanes.py`: GPU lane/chains tuning and throughput probe.
+- `tune_fsrs6_adr_direct_lanes.py`: GPU lane tuning and throughput probe.
 - `inspect_run.py`: reads machine-readable evidence under a run root.
 - `validate_artifact.py`: validates scheduler artifact metadata and referenced
   files.
@@ -171,12 +168,6 @@ translucent surface per input DR slice from `metrics.json` or `--dr-values`.
 
 Representative profiles:
 
-- `configs/fsrs6_adr_direct_sa_users_1_8.toml`: first 8 users, FSRS-6
-  training environment, short-term off, 1825 days, deck size 10000, learn limit
-  10, review limit 9999, 256 chains, DR batch size 25, and batch sweeps in
-  both FSRS6 and LSTM environments.
-- `configs/fsrs6_adr_delta_linear_sa_users_1_8.toml`: the same workflow
-  using the simplified 4-parameter `fsrs6_adr_delta_log_linear_v1` feature version.
 - `configs/fsrs6_adr_direct_cmaes_users_1_8.toml`: the ordinary
   `fsrs6_adr_direct` scheduler trained with CMA-ES using the 6-parameter
   `fsrs6_adr_direct_log_poly_v1` policy per user and baseline desired retention.
@@ -188,8 +179,7 @@ Representative profiles:
   `fsrs6_adr_direct_log_linear_v1` portfolio children per user with SMS-EMOA
   hypervolume optimization.
 - `configs/fsrs6_adr_delta_linear_cmaes_users_1_8.toml`: the same
-  DR-conditioned scheduler artifact and evaluation workflow, trained with
-  CMA-ES instead of simulated annealing.
+  DR-conditioned scheduler artifact and evaluation workflow, trained with CMA-ES.
 - `configs/fsrs6_adp_cmaes_users_1_8.toml`: the adaptive-parameter family that
   trains 21 bounded FSRS-6 scheduler weights as deltas from each user's fitted
   baseline, batches both users and DR values, and still emits one artifact per
@@ -225,15 +215,15 @@ Training target:
   its 80% positive-gain DR-grid gate.
 
 For ordinary `fsrs6_adr_direct`, the default policy uses 6 log-polynomial features over
-normalized `S,D`; set `training.sa.feature_version = "fsrs6_adr_direct_log_linear_v1"`
+normalized `S,D`; set `training.policy_search.feature_version = "fsrs6_adr_direct_log_linear_v1"`
 to train the simplified 3-parameter linear variant.
 For `fsrs6_adr_delta`, the action is a logit-space adjustment around the input DR.
 The overfit gate requires at least 80% of DR points to pass the positive-gain
 constraint; mean relative gains are reported and used only to rank candidates
 that are already feasible. The default
-DR-conditioned policy uses 10 log polynomial features; set `training.sa.feature_version =
+DR-conditioned policy uses 10 log polynomial features; set `training.policy_search.feature_version =
 "fsrs6_adr_delta_log_linear_v1"` to train the 4-parameter linear variant.
-CMA-ES profiles keep the same `[training.sa]` policy/evaluation settings and put
+CMA-ES profiles keep the same `[training.policy_search]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,
 initial mean, and coefficient bounds in `[training.optimizer]`. ADP profiles add
 `[training.adp].dr_batch_size` and `weight_delta_scale`, plus
@@ -244,8 +234,8 @@ Batching model:
 
 - `training.batch_baseline_desired_retention_values = true` batches the DR grid
   inside one training command.
-- `training.sa.dr_batch_size` controls how many DR values enter one GPU chunk.
-- Effective lanes are approximately `dr_batch_size * chains`.
+- `training.policy_search.dr_batch_size` controls how many DR values enter one GPU chunk.
+- CMA-ES effective lanes are approximately `dr_batch_size * population_size`.
 - ADP uses the same idea, but batches `dr_batch_size * population_size` lanes
   per job and writes one policy artifact per user/DR/lambda.
 - `[sweep]` contains the batch sweep envs, scheduler list, retention grid, log
@@ -274,8 +264,8 @@ Formal experiments must satisfy these rules:
 
 Prefer batch-level parallelism before same-GPU multiprocessing:
 
-- In training, increase `chains`, `dr_batch_size`, or candidate lanes until GPU
-  utilization and throughput approach the platform limit.
+- In training, increase optimizer population size, `dr_batch_size`, or candidate
+  lanes until GPU utilization and throughput approach the platform limit.
 - In sweep, batch `(user, scheduler, scheduler parameter)` lanes together.
 - Tune `--max-lanes-per-batch` by trial runs for each sweep profile and GPU.
   LSTM environments usually need smaller lane chunks because model state and
@@ -319,7 +309,7 @@ Stop conditions:
 
 ## Trainer Integration Contract
 
-New PPO/FQI/CEM/CMA-ES/SA variants should emit the same scheduler artifact shape:
+New PPO/FQI/CEM/CMA-ES/portfolio variants should emit the same scheduler artifact shape:
 
 - `metadata.json`
 - a policy file, such as `policy.json`, or a checkpoint
