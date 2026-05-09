@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent import futures
+from dataclasses import dataclass
 from multiprocessing import get_context
 import queue as queue_mod
 
@@ -9,6 +10,12 @@ import torch
 from tqdm import tqdm
 
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
+
+
+@dataclass(frozen=True)
+class _BatchTask:
+    batch: list[int]
+    envs: list[str] | None
 
 
 class LocalProgressQueue:
@@ -70,6 +77,7 @@ def _run_batch_worker(
     args: argparse.Namespace,
     ctx: BatchedSweepContext,
     batch: list[int],
+    envs: list[str] | None,
     device_str: str,
     progress_queue,
 ) -> None:
@@ -84,7 +92,24 @@ def _run_batch_worker(
         progress=False,
         progress_queue=progress_queue,
         device_label=device_str,
+        envs=envs,
     )
+
+
+def _batch_tasks(
+    *,
+    ctx: BatchedSweepContext,
+    batches: list[list[int]],
+    batches_by_env: dict[str, list[list[int]]] | None,
+) -> list[_BatchTask]:
+    if batches_by_env is None:
+        return [_BatchTask(batch=batch, envs=None) for batch in batches]
+
+    tasks: list[_BatchTask] = []
+    for environment in ctx.envs:
+        for batch in batches_by_env.get(environment, []):
+            tasks.append(_BatchTask(batch=batch, envs=[environment]))
+    return tasks
 
 
 def run_batches(
@@ -92,10 +117,12 @@ def run_batches(
     args: argparse.Namespace,
     ctx: BatchedSweepContext,
     batches: list[list[int]],
+    batches_by_env: dict[str, list[list[int]]] | None = None,
     devices: list[str],
     device: torch.device | None,
     overall: tqdm | None,
 ) -> None:
+    tasks = _batch_tasks(ctx=ctx, batches=batches, batches_by_env=batches_by_env)
     # Multi-GPU: one batch per process, one process per device, progress is queued back
     # to the parent for both Overall and per-GPU status bars.
     if devices and len(devices) > 1:
@@ -119,14 +146,15 @@ def run_batches(
                 max_workers=len(devices),
                 mp_context=mp_ctx,
             ) as executor:
-                for batch_idx, batch in enumerate(batches):
+                for batch_idx, task in enumerate(tasks):
                     device_str = f"cuda:{devices[batch_idx % len(devices)]}"
                     pending.add(
                         executor.submit(
                             _run_batch_worker,
                             args=args,
                             ctx=ctx,
-                            batch=batch,
+                            batch=task.batch,
+                            envs=task.envs,
                             device_str=device_str,
                             progress_queue=progress_queue,
                         )
@@ -158,14 +186,15 @@ def run_batches(
 
     # Single device: run in-process with an optional local queue for Overall updates.
     batch_device = torch.device(f"cuda:{devices[0]}") if devices else device
-    for batch in batches:
+    for task in tasks:
         progress_queue = LocalProgressQueue(overall) if overall is not None else None
         run_batch_core(
             args=args,
             ctx=ctx,
-            batch=batch,
+            batch=task.batch,
             device=batch_device,
             progress=overall is not None,
             progress_queue=progress_queue,
             device_label=str(batch_device or "device"),
+            envs=task.envs,
         )

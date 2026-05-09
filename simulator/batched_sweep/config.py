@@ -77,6 +77,11 @@ class BatchedSweepConfig:
 
         simulation = _table(raw, "simulation", required=False)
         execution = _table(raw, "execution", required=False)
+        raw_env_batch_overrides = execution.get("env_overrides")
+        env_batch_overrides_field_name = "execution.env_overrides"
+        if raw_env_batch_overrides is None:
+            raw_env_batch_overrides = sweep.get("env_overrides")
+            env_batch_overrides_field_name = "sweep.env_overrides"
         paths = _table(raw, "paths", required=False)
         logging_config = _table(raw, "logging", required=False)
         short_term = _table(raw, "short_term", required=False)
@@ -95,6 +100,10 @@ class BatchedSweepConfig:
             max_lanes_per_batch=_optional_int(
                 execution.get("max_lanes_per_batch", DEFAULT_MAX_LANES_PER_BATCH),
                 "execution.max_lanes_per_batch",
+            ),
+            env_batch_overrides=_env_batch_overrides(
+                raw_env_batch_overrides,
+                env_batch_overrides_field_name,
             ),
             env=",".join(envs),
             sched=",".join(schedulers),
@@ -305,6 +314,7 @@ def _adapt_experiment_config(
     execution = {
         "batch_size": sweep.get("batch_size"),
         "max_lanes_per_batch": sweep.get("max_lanes_per_batch"),
+        "env_overrides": sweep.get("env_overrides"),
         "torch_device": sweep.get("torch_device", performance.get("device")),
         "cuda_devices": sweep.get("cuda_devices"),
         "dry_run": sweep.get("dry_run", False),
@@ -562,6 +572,42 @@ def _optional_int(value: Any, field_name: str) -> int | None:
     if value is None:
         return None
     return _int(value, field_name)
+
+
+def _positive_optional_int(value: Any, field_name: str) -> int | None:
+    result = _optional_int(value, field_name)
+    if result is not None and result < 1:
+        raise ValueError(f"{field_name} must be >= 1.")
+    return result
+
+
+def _env_batch_overrides(
+    value: Any,
+    field_name: str,
+) -> dict[str, dict[str, int | None]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a table.")
+    overrides: dict[str, dict[str, int | None]] = {}
+    for environment, raw in value.items():
+        if not isinstance(environment, str) or not environment.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings.")
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"{field_name}.{environment} must be a table.")
+        config: dict[str, int | None] = {}
+        for key, item in raw.items():
+            if key not in {"batch_size", "max_lanes_per_batch"}:
+                raise ValueError(
+                    f"{field_name}.{environment} may contain only batch_size and "
+                    "max_lanes_per_batch."
+                )
+            config[key] = _positive_optional_int(
+                item,
+                f"{field_name}.{environment}.{key}",
+            )
+        overrides[environment] = config
+    return overrides
 
 
 def _float(value: Any, field_name: str) -> float:

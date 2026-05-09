@@ -240,6 +240,25 @@ def _str_tuple(value: Any, field_name: str) -> tuple[str, ...]:
     )
 
 
+def _sweep_environment_batch_configs(
+    value: Any,
+    field_name: str,
+) -> dict[str, SweepEnvironmentBatchConfig]:
+    if value is None:
+        return {}
+    raw = _require_mapping(value, field_name)
+    configs: dict[str, SweepEnvironmentBatchConfig] = {}
+    for environment, item in raw.items():
+        if not isinstance(environment, str) or not environment.strip():
+            raise ValueError(f"{field_name} keys must be non-empty strings.")
+        path = f"{field_name}.{environment}"
+        configs[environment] = SweepEnvironmentBatchConfig.from_mapping(
+            _require_mapping(item, path),
+            path=path,
+        )
+    return configs
+
+
 def _stage_tuple(value: Any, field_name: str) -> tuple[StageName, ...]:
     stages: list[StageName] = []
     for index, item in enumerate(_require_sequence(value, field_name)):
@@ -444,6 +463,36 @@ class SimulationScope:
 
 
 @dataclass(frozen=True, slots=True)
+class SweepEnvironmentBatchConfig:
+    batch_size: int | None = None
+    max_lanes_per_batch: int | None = None
+
+    @classmethod
+    def from_mapping(
+        cls,
+        raw: Mapping[str, Any],
+        *,
+        path: str,
+    ) -> SweepEnvironmentBatchConfig:
+        return cls(
+            batch_size=_optional_int(
+                raw.get("batch_size"), f"{path}.batch_size", minimum=1
+            ),
+            max_lanes_per_batch=_optional_int(
+                raw.get("max_lanes_per_batch"),
+                f"{path}.max_lanes_per_batch",
+                minimum=1,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "batch_size": self.batch_size,
+            "max_lanes_per_batch": self.max_lanes_per_batch,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class BatchedSweepStageConfig:
     envs: tuple[str, ...] = ()
     schedulers: tuple[str, ...] = ()
@@ -451,6 +500,9 @@ class BatchedSweepStageConfig:
     log_layout: str = "user"
     batch_size: int | None = None
     max_lanes_per_batch: int | None = None
+    env_overrides: Mapping[str, SweepEnvironmentBatchConfig] = field(
+        default_factory=dict
+    )
     torch_device: str | None = None
     cuda_devices: str | None = None
     benchmark_partition: str = "0"
@@ -465,6 +517,10 @@ class BatchedSweepStageConfig:
         log_dir = raw.get("log_dir")
         torch_device = raw.get("torch_device")
         cuda_devices = raw.get("cuda_devices")
+        env_overrides = _sweep_environment_batch_configs(
+            raw.get("env_overrides"),
+            "sweep.env_overrides",
+        )
         return cls(
             envs=_str_tuple(raw.get("envs", []), "sweep.envs"),
             schedulers=_str_tuple(raw.get("schedulers", []), "sweep.schedulers"),
@@ -478,6 +534,7 @@ class BatchedSweepStageConfig:
             max_lanes_per_batch=_optional_int(
                 raw.get("max_lanes_per_batch"), "sweep.max_lanes_per_batch", minimum=1
             ),
+            env_overrides=env_overrides,
             torch_device=_require_str(torch_device, "sweep.torch_device")
             if torch_device is not None
             else None,
@@ -508,6 +565,15 @@ class BatchedSweepStageConfig:
         for environment in self.envs:
             if environment not in {"lstm", "fsrs6", "fsrs6_default"}:
                 raise ValueError("sweep.envs contains an invalid batched environment.")
+        for environment in self.env_overrides:
+            if environment not in {"lstm", "fsrs6", "fsrs6_default"}:
+                raise ValueError(
+                    "sweep.env_overrides contains an invalid batched environment."
+                )
+            if self.envs and environment not in self.envs:
+                raise ValueError(
+                    "sweep.env_overrides contains an environment not listed in sweep.envs."
+                )
         if self.log_layout not in {"user", "sweep"}:
             raise ValueError("sweep.log_layout must be user or sweep.")
         if self.start_retention <= 0.0 or self.end_retention >= 1.0:
@@ -529,6 +595,10 @@ class BatchedSweepStageConfig:
             "log_layout": self.log_layout,
             "batch_size": self.batch_size,
             "max_lanes_per_batch": self.max_lanes_per_batch,
+            "env_overrides": {
+                environment: config.to_dict()
+                for environment, config in self.env_overrides.items()
+            },
             "torch_device": self.torch_device,
             "cuda_devices": self.cuda_devices,
             "benchmark_partition": self.benchmark_partition,

@@ -4879,6 +4879,7 @@ def _run_configured_batched_retention_sweep(
         end_user=max(config.users.train),
         batch_size=sweep_config.batch_size,
         max_lanes_per_batch=sweep_config.max_lanes_per_batch,
+        env_batch_overrides=sweep_config.env_overrides,
         torch_device=sweep_config.torch_device,
         cuda_devices=sweep_config.cuda_devices,
         srs_benchmark_root=None,
@@ -4972,6 +4973,7 @@ def _run_configured_batched_retention_sweep(
             args=args,
             ctx=plan.ctx,
             batches=plan.batches,
+            batches_by_env=plan.batches_by_env,
             devices=plan.devices,
             device=plan.device,
             overall=overall,
@@ -4982,8 +4984,8 @@ def _run_configured_batched_retention_sweep(
 
     lanes = [
         lane
-        for batch in plan.batches
         for environment in plan.ctx.envs
+        for batch in plan.batches_by_env.get(environment, plan.batches)
         for lane in _build_sweep_lanes(
             batch=batch,
             ctx=plan.ctx,
@@ -5063,6 +5065,7 @@ def _run_configured_batched_retention_sweep(
             "total_lanes": plan.total_lanes,
             "total_user_days": plan.total_user_days,
             "batches": plan.batches,
+            "batches_by_env": plan.batches_by_env,
             "envs": list(plan.ctx.envs),
             "schedulers": list(plan.ctx.schedulers),
             "log_root": str(plan.ctx.log_root),

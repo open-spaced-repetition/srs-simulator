@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
@@ -440,6 +441,34 @@ def _split_lanes(
     return chunks
 
 
+def _max_lanes_per_batch_for_environment(
+    args: argparse.Namespace,
+    environment: str,
+) -> int | None:
+    default = getattr(args, "max_lanes_per_batch", None)
+    overrides = getattr(args, "env_batch_overrides", None) or {}
+    if not isinstance(overrides, Mapping):
+        return default
+    override = overrides.get(environment)
+    if override is None:
+        return default
+    if isinstance(override, Mapping):
+        value = override.get("max_lanes_per_batch")
+    else:
+        value = getattr(override, "max_lanes_per_batch", None)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"env_batch_overrides.{environment}.max_lanes_per_batch must be an integer."
+        )
+    if value < 1:
+        raise ValueError(
+            f"env_batch_overrides.{environment}.max_lanes_per_batch must be >= 1."
+        )
+    return int(value)
+
+
 def _same_adr_policy_bounds(
     lhs: FSRS6ADRDirectPolicy, rhs: FSRS6ADRDirectPolicy
 ) -> bool:
@@ -835,6 +864,7 @@ def run_batch_core(
     progress: bool,
     progress_queue,
     device_label: str,
+    envs: list[str] | None = None,
 ) -> None:
     # Import lazily so this module stays self-contained under `simulator/`.
     import simulate as simulate_cli
@@ -855,7 +885,7 @@ def run_batch_core(
     )
 
     schedulers = ctx.schedulers
-    envs = ctx.envs
+    envs_to_run = list(envs) if envs is not None else ctx.envs
 
     if short_term_source == "sched":
         for raw in schedulers:
@@ -868,7 +898,7 @@ def run_batch_core(
     base_device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     scheduler_names = [parse_scheduler_spec(raw)[0] for raw in schedulers]
 
-    for environment in envs:
+    for environment in envs_to_run:
         active_batch = list(batch)
         lstm_packed: PackedLSTMWeights | None = None
         lstm_paths: list[Path] | None = None
@@ -989,7 +1019,7 @@ def run_batch_core(
         scheduler_label = ",".join(scheduler_names)
         lane_chunks = _split_lanes(
             lanes,
-            getattr(args, "max_lanes_per_batch", None),
+            _max_lanes_per_batch_for_environment(args, environment),
         )
         for chunk_index, lane_chunk in enumerate(lane_chunks, start=1):
             env_ops = _build_env_ops_for_lanes(

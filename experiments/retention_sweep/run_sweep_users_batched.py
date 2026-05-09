@@ -298,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         args=args,
         ctx=plan.ctx,
         batches=plan.batches,
+        batches_by_env=plan.batches_by_env,
         devices=plan.devices,
         device=plan.device,
         overall=overall,
@@ -377,12 +378,20 @@ def _merge_config_args(
     for attr, flags in flag_map.items():
         if not any(has_flag(argv, flag) for flag in flags):
             setattr(cli_args, attr, getattr(config_args, attr))
+    cli_args.env_batch_overrides = getattr(config_args, "env_batch_overrides", {})
     return cli_args
 
 
 def _print_dry_run(plan) -> None:
     print("Batched sweep dry run")
     print(f"user batches: {len(plan.batches)}")
+    for environment in plan.ctx.envs:
+        batches = plan.batches_by_env.get(environment, plan.batches)
+        max_lanes = plan.max_lanes_per_batch_by_env.get(environment)
+        print(
+            f"{environment} user batches: {len(batches)} "
+            f"(max lanes: {max_lanes if max_lanes is not None else 'unlimited'})"
+        )
     print(f"expanded lanes: {plan.total_lanes}")
     print(f"user-days: {plan.total_user_days}")
     print(f"envs: {','.join(plan.ctx.envs)}")

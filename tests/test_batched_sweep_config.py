@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -18,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.retention_sweep.run_sweep_users_batched import main as batched_main
 from simulator.batched_sweep.config import load_batched_sweep_config
+from simulator.batched_sweep.execution import run_batches
 from simulator.batched_sweep.logging import BatchedSweepLogLane
 from simulator.batched_sweep.plan import build_batched_sweep_plan
 from simulator.batched_sweep.runner import (
@@ -346,6 +348,86 @@ lambda_values = [0.5]
         self.assertIsNone(config.args.batch_size)
         self.assertEqual(plan.batches, [[1, 2], [3, 4], [5]])
         self.assertEqual(plan.total_lanes, 15)
+
+    def test_environment_overrides_build_separate_user_batches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sweep.toml"
+            log_dir = Path(tmp) / "logs"
+            raw = (
+                _valid_config(log_dir)
+                .replace("end = 2", "end = 5")
+                .replace('envs = ["lstm"]', 'envs = ["fsrs6", "lstm"]')
+                .replace(
+                    "batch_size = 2\n",
+                    (
+                        "max_lanes_per_batch = 100\n\n"
+                        "[execution.env_overrides.fsrs6]\n"
+                        "max_lanes_per_batch = 12\n\n"
+                        "[execution.env_overrides.lstm]\n"
+                        "max_lanes_per_batch = 6\n\n"
+                    ),
+                )
+            )
+            path.write_text(raw, encoding="utf-8")
+
+            config = load_batched_sweep_config(path)
+            plan = build_batched_sweep_plan(
+                repo_root=REPO_ROOT,
+                args=config.args,
+                envs=list(config.envs),
+                schedulers=list(config.schedulers),
+            )
+
+        self.assertEqual(
+            config.args.env_batch_overrides["fsrs6"]["max_lanes_per_batch"],
+            12,
+        )
+        self.assertEqual(plan.batches_by_env["fsrs6"], [[1, 2, 3, 4], [5]])
+        self.assertEqual(plan.batches_by_env["lstm"], [[1, 2], [3, 4], [5]])
+        self.assertEqual(plan.max_lanes_per_batch_by_env["fsrs6"], 12)
+        self.assertEqual(plan.max_lanes_per_batch_by_env["lstm"], 6)
+        self.assertEqual(plan.total_lanes, 30)
+
+    def test_run_batches_dispatches_environment_specific_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["fsrs6", "lstm"],
+                schedulers=["fsrs6"],
+                dr_values=[0.50],
+            )
+
+            with patch(
+                "simulator.batched_sweep.execution.run_batch_core"
+            ) as run_batch_core:
+                run_batches(
+                    args=_args(Path(tmp) / "logs"),
+                    ctx=ctx,
+                    batches=[[1, 2]],
+                    batches_by_env={
+                        "fsrs6": [[1, 2, 3]],
+                        "lstm": [[1], [2]],
+                    },
+                    devices=[],
+                    device=torch.device("cpu"),
+                    overall=None,
+                )
+
+        self.assertEqual(
+            [
+                (call.kwargs["batch"], call.kwargs["envs"])
+                for call in run_batch_core.call_args_list
+            ],
+            [
+                ([1, 2, 3], ["fsrs6"]),
+                ([1], ["lstm"]),
+                ([2], ["lstm"]),
+            ],
+        )
 
     def test_rejects_invalid_log_layout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -10,7 +10,8 @@ Project rules:
 6. For performance-related changes, run a baseline performance test first and report results by engine (event vs vectorized) affected by the change.
 7. Use `uv run pyright` for static type checking.
 8. For GPU experiments, monitor shared GPU memory usage when judging out-of-memory or VRAM spill behavior. Do not rely only on `nvidia-smi` FB/dedicated memory; shared GPU memory above 1 GiB likely means VRAM spill and severe simulator slowdown.
-9. The sandbox does not have GPU access. Commands or code paths that need CUDA/GPU execution must be run outside the sandbox.
+9. For batched retention sweep experiments, use environment-specific lane caps when possible: `fsrs6` is typically safe at `max_lanes_per_batch = 8192`, while `lstm` should use `max_lanes_per_batch = 1024` to avoid shared GPU memory spill.
+10. The sandbox does not have GPU access. Commands or code paths that need CUDA/GPU execution must be run outside the sandbox.
 
 ## Conventional Commits
 

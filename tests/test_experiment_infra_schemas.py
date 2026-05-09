@@ -202,6 +202,38 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertTrue(config.sweep_batch_scheduler_artifacts)
         self.assertTrue(config.to_dict()["sweep"]["batch_scheduler_artifacts"])
 
+    def test_loads_batched_sweep_environment_overrides(self) -> None:
+        raw = (
+            VALID_CONFIG
+            + """
+[sweep]
+envs = ["fsrs6", "lstm"]
+max_lanes_per_batch = 1024
+
+[sweep.env_overrides.fsrs6]
+max_lanes_per_batch = 8192
+
+[sweep.env_overrides.lstm]
+batch_size = 8
+max_lanes_per_batch = 512
+"""
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertEqual(
+            config.sweep_batched.env_overrides["fsrs6"].max_lanes_per_batch,
+            8192,
+        )
+        self.assertEqual(config.sweep_batched.env_overrides["lstm"].batch_size, 8)
+        self.assertEqual(
+            config.to_dict()["sweep"]["env_overrides"]["lstm"]["max_lanes_per_batch"],
+            512,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

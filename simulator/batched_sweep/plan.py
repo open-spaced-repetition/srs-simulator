@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 
@@ -41,6 +43,9 @@ SUPPORTED_SCHEDS = {
 class BatchedSweepPlan:
     ctx: BatchedSweepContext
     batches: list[list[int]]
+    batches_by_env: dict[str, list[list[int]]]
+    batch_size_by_env: dict[str, int | None]
+    max_lanes_per_batch_by_env: dict[str, int | None]
     devices: list[str]
     device: torch.device | None
     total_user_days: int
@@ -98,6 +103,7 @@ def build_batched_sweep_plan(
     max_lanes_per_batch = getattr(args, "max_lanes_per_batch", None)
     if max_lanes_per_batch is not None and max_lanes_per_batch < 1:
         raise ValueError("--max-lanes-per-batch must be >= 1.")
+    _validate_env_batch_overrides(args=args, envs=envs)
     if args.torch_device and args.cuda_devices:
         raise ValueError("--torch-device cannot be combined with --cuda-devices.")
     log_layout = getattr(args, "log_layout", "user")
@@ -183,16 +189,35 @@ def build_batched_sweep_plan(
         fsrs6_adp_policy=getattr(args, "fsrs6_adp_policy", None),
         fsrs6_adp_policy_specs=fsrs6_adp_policy_specs,
     )
-    batches = _build_user_batches(
-        user_ids=user_ids,
-        batch_size=batch_size,
-        max_lanes_per_batch=max_lanes_per_batch,
-        ctx=ctx,
-    )
+    batches_by_env: dict[str, list[list[int]]] = {}
+    batch_size_by_env: dict[str, int | None] = {}
+    max_lanes_per_batch_by_env: dict[str, int | None] = {}
+    for environment in envs:
+        env_batch_size = _env_batch_override_value(
+            args=args,
+            environment=environment,
+            field_name="batch_size",
+            default=batch_size,
+        )
+        env_max_lanes_per_batch = _env_batch_override_value(
+            args=args,
+            environment=environment,
+            field_name="max_lanes_per_batch",
+            default=max_lanes_per_batch,
+        )
+        batch_size_by_env[environment] = env_batch_size
+        max_lanes_per_batch_by_env[environment] = env_max_lanes_per_batch
+        batches_by_env[environment] = _build_user_batches(
+            user_ids=user_ids,
+            batch_size=env_batch_size,
+            max_lanes_per_batch=env_max_lanes_per_batch,
+            ctx=ctx,
+        )
+    batches = batches_by_env[envs[0]]
     total_lanes = 0
     example_log_dir: Path | None = None
-    for batch in batches:
-        for environment in envs:
+    for environment in envs:
+        for batch in batches_by_env[environment]:
             lanes = _build_sweep_lanes(batch=batch, ctx=ctx, environment=environment)
             total_lanes += len(lanes)
             if example_log_dir is None and lanes:
@@ -202,12 +227,88 @@ def build_batched_sweep_plan(
     return BatchedSweepPlan(
         ctx=ctx,
         batches=batches,
+        batches_by_env=batches_by_env,
+        batch_size_by_env=batch_size_by_env,
+        max_lanes_per_batch_by_env=max_lanes_per_batch_by_env,
         devices=devices,
         device=device,
         total_user_days=int(total_user_days),
         total_lanes=int(total_lanes),
         example_log_dir=example_log_dir,
     )
+
+
+def _validate_env_batch_overrides(
+    *,
+    args: argparse.Namespace,
+    envs: list[str],
+) -> None:
+    overrides = getattr(args, "env_batch_overrides", None) or {}
+    if not isinstance(overrides, Mapping):
+        raise ValueError("Environment batch overrides must be a mapping.")
+    for environment, override in overrides.items():
+        if environment not in SUPPORTED_ENVS:
+            raise ValueError(
+                "Environment batch overrides support only lstm, fsrs6, or "
+                "fsrs6_default environments."
+            )
+        if environment not in envs:
+            raise ValueError(
+                "Environment batch overrides must target environments listed in the sweep."
+            )
+        if override is None:
+            continue
+        if not isinstance(override, Mapping):
+            for field_name in ("batch_size", "max_lanes_per_batch"):
+                value = getattr(override, field_name, None)
+                _validate_optional_positive_int(
+                    value,
+                    f"env_batch_overrides.{environment}.{field_name}",
+                )
+            continue
+        for field_name, value in override.items():
+            if field_name not in {"batch_size", "max_lanes_per_batch"}:
+                raise ValueError(
+                    "Environment batch overrides may contain only batch_size and "
+                    "max_lanes_per_batch."
+                )
+            _validate_optional_positive_int(
+                value,
+                f"env_batch_overrides.{environment}.{field_name}",
+            )
+
+
+def _env_batch_override_value(
+    *,
+    args: argparse.Namespace,
+    environment: str,
+    field_name: str,
+    default: int | None,
+) -> int | None:
+    overrides = getattr(args, "env_batch_overrides", None) or {}
+    override = overrides.get(environment) if isinstance(overrides, Mapping) else None
+    if override is None:
+        return default
+    if isinstance(override, Mapping):
+        value = override.get(field_name)
+    else:
+        value = getattr(override, field_name, None)
+    if value is None:
+        return default
+    return _validate_optional_positive_int(
+        value,
+        f"env_batch_overrides.{environment}.{field_name}",
+    )
+
+
+def _validate_optional_positive_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field_name} must be an integer.")
+    if value < 1:
+        raise ValueError(f"{field_name} must be >= 1.")
+    return int(value)
 
 
 def _build_user_batches(
