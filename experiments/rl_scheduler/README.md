@@ -170,7 +170,7 @@ Representative profiles:
   trains 21 bounded FSRS-6 scheduler weights as deltas from each user's fitted
   baseline, batches both users and DR values, and still emits one artifact per
   `(user, DR, lambda)` policy.
-- `configs/fsrs6_adp_portfolio_users_1_8.toml`: the adaptive-parameter portfolio
+- `configs/fsrs6_adp_portfolio_users_1_8_v2.toml`: the adaptive-parameter portfolio
   family that jointly mutates runtime desired retention and the 21 ADP weight
   deltas, then exports 23 no-DR `fsrs6_adp` child artifacts per user.
 

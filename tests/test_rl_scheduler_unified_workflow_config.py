@@ -247,16 +247,16 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adp_portfolio_users_1_8.toml"
+            / "fsrs6_adp_portfolio_users_1_8_v2.toml"
         )
 
-        self.assertEqual(config.name, "fsrs6_adp_portfolio_users_1_8")
+        self.assertEqual(config.name, "fsrs6_adp_portfolio_users_1_8_v2")
         self.assertEqual(config.lambda_grid, (0.0,))
         self.assertEqual(config.train_artifact_glob, "policies/**/metadata.json")
         self.assertTrue(config.training_batch.enabled)
         self.assertEqual(config.training_batch.trainer, "auto")
         self.assertEqual(config.training_portfolio["population_size"], 64)
-        self.assertEqual(config.training_portfolio["offspring_size"], 32)
+        self.assertEqual(config.training_portfolio["offspring_size"], 64)
         self.assertEqual(config.training_portfolio["portfolio_size"], 23)
         self.assertEqual(config.training_portfolio["retention_mutation_scale"], 0.02)
         self.assertEqual(config.training_adp["weight_delta_scale"], 0.5)
