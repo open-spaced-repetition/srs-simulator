@@ -153,7 +153,9 @@ uv run python experiments/rl_scheduler/plot_fsrs6_adr_policy_surfaces.py \
 The visualizer writes one interactive Plotly HTML per user/lambda under
 `experiments/rl_scheduler/plots/fsrs6_adr_policy_surfaces/`. Each figure uses
 stability `S` and difficulty `D` as the horizontal axes, policy output retention
-as the vertical axis, and one translucent surface per baseline DR.
+as the vertical axis. Ordinary ADR artifacts use one translucent surface per
+baseline DR. ADR portfolio child artifacts have no baseline DR, so the
+visualizer orders and colors their surfaces by `memorized_average / deck`.
 
 ## Current Main Experiments
 

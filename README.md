@@ -75,6 +75,9 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 uv run python experiments/rl_scheduler/plot_fsrs6_adr_policy_surfaces.py --train-run-root artifacts/rl_scheduler/<profile>/<run-id> --users 1,2 --lambda-values 0.5
 ```
 
+The FSRS6 ADR surface plotter supports ordinary ADR artifacts by baseline DR and
+ADR portfolio child artifacts by `memorized_average / deck`.
+
 `dry-run` validates the TOML and prints resolved commands without writing formal
 outputs. `preflight` writes a config snapshot, resolved config, command record,
 run record, GPU summary, gate summary, manifest, and preflight summary under the
