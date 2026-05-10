@@ -181,6 +181,23 @@ Representative profiles:
   family that jointly mutates runtime desired retention and the 21 ADP weight
   deltas, then exports 23 no-DR `fsrs6_adp` child artifacts per user.
 
+Abandoned directions:
+
+- qNEHVI/MOBO for ADR portfolio search was prototyped and abandoned because the
+  BoTorch acquisition step was too slow at safe settings and exceeded the
+  available 24 GB RTX 4090 D VRAM at useful batch settings.
+- Evidence from the first 8 users: `proposal_batch_size = 1` was memory-safe but
+  spent about 168 seconds per proposal iteration, while simulator evaluation
+  took about 16.5 seconds. `proposal_batch_size = 16`, `mc_samples = 128`,
+  `num_restarts = 8`, and `raw_samples = 128` failed before the first useful
+  iteration with roughly 49.8 GB PyTorch allocated memory / 52.8 GB reserved and
+  an additional 11 GB allocation attempt. Reducing the optimizer batch limit to
+  2 still reached about 24.06 GB before the process was killed.
+- Decision: do not keep the BoTorch dependency, qNEHVI trainer, qNEHVI configs,
+  experiment runner/schema integration, or memory sweep script. Prefer the
+  existing SMS-EMOA portfolio path or lower-overhead optimizers for this
+  experiment family.
+
 Training target:
 
 - Baseline scheduler: FSRS-6.
