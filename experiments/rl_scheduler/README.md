@@ -33,7 +33,6 @@ FSRS-6 state update to obtain `S` and `D`.
   batched in one process rather than launched as parallel training subprocesses.
 - `plot_fsrs6_adr_policy_surfaces.py`: Plotly HTML visualizer for learned
   `f(S, D) -> desired_retention` surfaces across DR values.
-- `tune_fsrs6_adr_lanes.py`: GPU lane tuning and throughput probe.
 - `inspect_run.py`: reads machine-readable evidence under a run root.
 - `validate_artifact.py`: validates scheduler artifact metadata and referenced
   files.
