@@ -636,16 +636,14 @@ class TrainingBatchConfig:
     def __post_init__(self) -> None:
         if self.trainer not in {
             "auto",
-            "fsrs6_adr",
             "fsrs6_adr_portfolio",
             "fsrs6_adr_cmaes",
-            "fsrs6_adr_dr_grid",
             "fsrs6_adp_cmaes",
             "fsrs6_adp_portfolio",
         }:
             raise ValueError(
-                "training.batch.trainer must be auto, fsrs6_adr, fsrs6_adr_cmaes, "
-                "fsrs6_adr_portfolio, fsrs6_adr_dr_grid, fsrs6_adp_cmaes, "
+                "training.batch.trainer must be auto, fsrs6_adr_cmaes, "
+                "fsrs6_adr_portfolio, fsrs6_adp_cmaes, "
                 "or fsrs6_adp_portfolio."
             )
 

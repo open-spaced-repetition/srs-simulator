@@ -393,6 +393,53 @@ def _evaluate_fsrs6_baseline(
     return _metrics_from_stats(stats[0])
 
 
+def _evaluate_fsrs6_baseline_grid(
+    *,
+    config: ExperimentConfig,
+    settings: PolicySearchSettings,
+    bundle: SimulationBundle,
+    baseline_dr_values: tuple[float, ...],
+    job_count: int,
+    seed: int,
+) -> list[list[CandidateMetrics]]:
+    sched_ops = FSRS6BatchSchedulerOps(
+        weights=bundle.scheduler_weights,
+        desired_retention=torch.tensor(
+            [dr for _job in range(job_count) for dr in baseline_dr_values],
+            device=bundle.device,
+            dtype=torch.float32,
+        ),
+        bounds=Bounds(),
+        priority_mode=config.simulation.scheduler_priority,
+        device=bundle.device,
+        dtype=torch.float32,
+    )
+    stats = simulate_multiuser(
+        days=config.simulation.days,
+        deck_size=config.simulation.deck,
+        env_ops=bundle.env_ops,
+        sched_ops=sched_ops,
+        behavior=bundle.behavior,
+        cost_model=bundle.cost_model,
+        seed=seed,
+        device=bundle.device,
+        dtype=torch.float32,
+        fuzz=config.simulation.fuzz,
+        priority_mode=config.simulation.priority,
+        progress=False,
+        short_term_source=bundle.short_term_source,
+        learning_steps=bundle.learning_steps,
+        relearning_steps=bundle.relearning_steps,
+        short_term_threshold=settings.short_term_threshold,
+        short_term_loops_limit=settings.short_term_loops_limit,
+    )
+    metrics = [_metrics_from_stats(item) for item in stats]
+    dr_count = len(baseline_dr_values)
+    return [
+        metrics[index * dr_count : (index + 1) * dr_count] for index in range(job_count)
+    ]
+
+
 def _evaluate_adr_candidates(
     *,
     config: ExperimentConfig,

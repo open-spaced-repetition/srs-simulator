@@ -24,7 +24,9 @@ from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
     PolicySearchSettings,
     TrainingProgress,
+    _baseline_dr_values,
     _build_bundle,
+    _evaluate_fsrs6_baseline_grid,
     _float,
     _float_token,
     _git_commit,
@@ -35,22 +37,22 @@ from experiments.rl_scheduler.policy_search_common import (
 )
 from experiments.rl_scheduler.portfolio_selection import (
     LightweightSelectionPool,
-    SelectionPayload,
-    SelectionPoint,
-    SelectionTask,
-    select_sms_emoa_survivor_indices,
-    select_survivors_for_generation,
-    selection_executor,
-    selection_payload_from_candidate_metrics,
-)
-from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     ObjectivePoint,
-    dominates,
-    exclusive_hypervolume_contributions,
-    hypervolume_2d,
-    non_dominated_indices,
+    SelectionPayload,
+    SelectionTask,
+    frontier_candidate_count as _frontier_candidate_count,
+    objective_baseline_aware_candidate_ranks as _baseline_aware_candidate_ranks,
+    objective_dominates as dominates,
+    objective_exclusive_hypervolume_contributions as exclusive_hypervolume_contributions,
+    objective_hypervolume_2d as hypervolume_2d,
+    objective_non_dominated_indices as non_dominated_indices,
     point_from_metrics,
     reference_point,
+    select_portfolio_child_indices,
+    select_sms_emoa_survivors,
+    select_survivors_for_generation,
+    selection_executor,
+    selection_payload_from_objective_candidates,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
@@ -664,34 +666,6 @@ def run_portfolio_train_jobs(
     return outcomes
 
 
-def select_sms_emoa_survivors(
-    *,
-    baseline_points: Sequence[ObjectivePoint],
-    candidates: Sequence[ADPPortfolioCandidate],
-    population_size: int,
-    reference: ObjectivePoint,
-) -> list[ADPPortfolioCandidate]:
-    payload = _selection_payload(
-        baseline_points=baseline_points,
-        candidates=candidates,
-        population_size=population_size,
-        reference=reference,
-    )
-    survivor_indices = select_sms_emoa_survivor_indices(payload)
-    return [candidates[index] for index in survivor_indices]
-
-
-def _selection_point(point: ObjectivePoint) -> SelectionPoint:
-    return SelectionPoint(
-        memorized_average=point.memorized_average,
-        negative_time_average=point.negative_time_average,
-    )
-
-
-def _selection_points(points: Sequence[ObjectivePoint]) -> list[SelectionPoint]:
-    return [_selection_point(point) for point in points]
-
-
 def _selection_payload(
     *,
     baseline_points: Sequence[ObjectivePoint],
@@ -699,11 +673,11 @@ def _selection_payload(
     population_size: int,
     reference: ObjectivePoint,
 ) -> SelectionPayload:
-    return selection_payload_from_candidate_metrics(
-        baseline_points=_selection_points(baseline_points),
+    return selection_payload_from_objective_candidates(
+        baseline_points=baseline_points,
         candidates=candidates,
         population_size=population_size,
-        reference=_selection_point(reference),
+        reference=reference,
     )
 
 
@@ -714,169 +688,20 @@ def _select_portfolio_children(
     portfolio_size: int,
     reference: ObjectivePoint,
 ) -> list[SelectedADPPortfolioChild]:
-    candidate_points = [candidate.point for candidate in candidates]
-    ranks = _baseline_aware_candidate_ranks(
+    selections = select_portfolio_child_indices(
         baseline_points=baseline_points,
-        candidate_points=candidate_points,
+        candidates=candidates,
+        portfolio_size=portfolio_size,
+        reference=reference,
     )
-    remaining = set(range(len(candidates)))
-    selected_indices: list[int] = []
-    current_points = list(baseline_points)
-    current_hv = hypervolume_2d(current_points, reference=reference)
-    children: list[SelectedADPPortfolioChild] = []
-    while remaining and len(children) < portfolio_size:
-        best_index = max(
-            remaining,
-            key=lambda index: (
-                hypervolume_2d(
-                    [*current_points, candidate_points[index]],
-                    reference=reference,
-                )
-                - current_hv,
-                -ranks[index],
-                candidates[index].metrics.memorized_average,
-                -candidates[index].metrics.time_average,
-                -candidates[index].candidate_id,
-            ),
-        )
-        next_hv = hypervolume_2d(
-            [*current_points, candidate_points[best_index]],
-            reference=reference,
-        )
-        contribution = max(0.0, next_hv - current_hv)
-        current_hv = next_hv
-        current_points.append(candidate_points[best_index])
-        selected_indices.append(best_index)
-        remaining.remove(best_index)
-        candidate = candidates[best_index]
-        children.append(
-            SelectedADPPortfolioChild(
-                portfolio_index=len(selected_indices) - 1,
-                candidate=candidate,
-                hypervolume_contribution=contribution,
-                pareto_rank=ranks[best_index],
-            )
-        )
-    return children
-
-
-def _baseline_aware_candidate_ranks(
-    *,
-    baseline_points: Sequence[ObjectivePoint],
-    candidate_points: Sequence[ObjectivePoint],
-) -> list[int]:
-    ranks = [-1 for _candidate in candidate_points]
-    baseline_dominated = {
-        index
-        for index, candidate in enumerate(candidate_points)
-        if any(dominates(baseline, candidate) for baseline in baseline_points)
-    }
-    remaining = [
-        index
-        for index in range(len(candidate_points))
-        if index not in baseline_dominated
-    ]
-    rank = 0
-    while remaining:
-        layer_points = [
-            *baseline_points,
-            *[candidate_points[index] for index in remaining],
-        ]
-        nd = non_dominated_indices(layer_points)
-        selected = [
-            remaining[index - len(baseline_points)]
-            for index in nd
-            if index >= len(baseline_points)
-        ]
-        if not selected:
-            break
-        selected_set = set(selected)
-        for index in selected:
-            ranks[index] = rank
-        remaining = [index for index in remaining if index not in selected_set]
-        rank += 1
-    worst_rank = rank + len(candidate_points) + 1
-    for index in range(len(candidate_points)):
-        if ranks[index] < 0:
-            ranks[index] = worst_rank
-    return ranks
-
-
-def _frontier_candidate_count(
-    *,
-    baseline_points: Sequence[ObjectivePoint],
-    candidate_points: Sequence[ObjectivePoint],
-) -> int:
-    points = [*baseline_points, *candidate_points]
-    nd = non_dominated_indices(points)
-    return sum(1 for index in nd if index >= len(baseline_points))
-
-
-def _baseline_dr_values(
-    raw_training_policy_search: Mapping[str, Any],
-    settings: PolicySearchSettings,
-) -> tuple[float, ...]:
-    raw_values = raw_training_policy_search.get("baseline_desired_retention_values")
-    if raw_values is None:
-        values = (settings.baseline_desired_retention,)
-    else:
-        values = _float_tuple(
-            raw_values,
-            "training.policy_search.baseline_desired_retention_values",
-        )
-    for value in values:
-        if not (settings.retention_min <= value <= settings.retention_max):
-            raise ValueError(
-                "training.policy_search.baseline_desired_retention_values must be inside "
-                "training.policy_search retention bounds."
-            )
-    return values
-
-
-def _evaluate_fsrs6_baseline_grid(
-    *,
-    config: ExperimentConfig,
-    settings: PolicySearchSettings,
-    bundle: Any,
-    baseline_dr_values: tuple[float, ...],
-    job_count: int,
-    seed: int,
-) -> list[list[CandidateMetrics]]:
-    sched_ops = FSRS6BatchSchedulerOps(
-        weights=bundle.scheduler_weights,
-        desired_retention=torch.tensor(
-            [dr for _job in range(job_count) for dr in baseline_dr_values],
-            device=bundle.device,
-            dtype=torch.float32,
-        ),
-        bounds=Bounds(),
-        priority_mode=config.simulation.scheduler_priority,
-        device=bundle.device,
-        dtype=torch.float32,
-    )
-    stats = simulate_multiuser(
-        days=config.simulation.days,
-        deck_size=config.simulation.deck,
-        env_ops=bundle.env_ops,
-        sched_ops=sched_ops,
-        behavior=bundle.behavior,
-        cost_model=bundle.cost_model,
-        seed=seed,
-        device=bundle.device,
-        dtype=torch.float32,
-        fuzz=config.simulation.fuzz,
-        priority_mode=config.simulation.priority,
-        progress=False,
-        short_term_source=bundle.short_term_source,
-        learning_steps=bundle.learning_steps,
-        relearning_steps=bundle.relearning_steps,
-        short_term_threshold=settings.short_term_threshold,
-        short_term_loops_limit=settings.short_term_loops_limit,
-    )
-    metrics = [_metrics_from_stats(item) for item in stats]
-    dr_count = len(baseline_dr_values)
     return [
-        metrics[index * dr_count : (index + 1) * dr_count] for index in range(job_count)
+        SelectedADPPortfolioChild(
+            portfolio_index=selection.portfolio_index,
+            candidate=candidates[selection.candidate_index],
+            hypervolume_contribution=selection.hypervolume_contribution,
+            pareto_rank=selection.pareto_rank,
+        )
+        for selection in selections
     ]
 
 

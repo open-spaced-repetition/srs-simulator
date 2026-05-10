@@ -21,8 +21,6 @@ DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS = 8
 _DEFAULT_SELECTION_PROCESS_POOL_ENV_VARS = (SELECTION_PROCESS_POOL_ENV,)
 _DEFAULT_SELECTION_PROCESS_POOL_WORKER_ENV_VARS = (SELECTION_PROCESS_POOL_WORKERS_ENV,)
 
-CandidateT = TypeVar("CandidateT")
-
 
 class CandidateMetricValues(Protocol):
     @property
@@ -40,8 +38,17 @@ class SelectionCandidate(Protocol):
     def metrics(self) -> CandidateMetricValues: ...
 
 
+CandidateT = TypeVar("CandidateT", bound=SelectionCandidate)
+
+
 @dataclass(frozen=True, slots=True)
 class SelectionPoint:
+    memorized_average: float
+    negative_time_average: float
+
+
+@dataclass(frozen=True, slots=True)
+class ObjectivePoint:
     memorized_average: float
     negative_time_average: float
 
@@ -68,6 +75,14 @@ class SelectionResult:
 class SelectionTask(Generic[CandidateT]):
     candidates: tuple[CandidateT, ...]
     payload: SelectionPayload
+
+
+@dataclass(frozen=True, slots=True)
+class PortfolioChildSelection:
+    portfolio_index: int
+    candidate_index: int
+    hypervolume_contribution: float
+    pareto_rank: int
 
 
 class LightweightSelectionPool:
@@ -140,6 +155,45 @@ def assert_selection_worker_is_lightweight() -> None:
         raise RuntimeError("selection worker imported torch unexpectedly")
 
 
+def point_from_metrics(metrics: CandidateMetricValues) -> ObjectivePoint:
+    return ObjectivePoint(
+        memorized_average=float(metrics.memorized_average),
+        negative_time_average=-float(metrics.time_average),
+    )
+
+
+def selection_point_from_objective(point: ObjectivePoint) -> SelectionPoint:
+    return SelectionPoint(
+        memorized_average=point.memorized_average,
+        negative_time_average=point.negative_time_average,
+    )
+
+
+def selection_points_from_objectives(
+    points: Sequence[ObjectivePoint],
+) -> list[SelectionPoint]:
+    return [selection_point_from_objective(point) for point in points]
+
+
+def reference_point(
+    points: Sequence[ObjectivePoint],
+    *,
+    margin_fraction: float = 0.05,
+) -> ObjectivePoint:
+    if not points:
+        raise ValueError("Cannot build a hypervolume reference point without points.")
+    min_x = min(point.memorized_average for point in points)
+    max_x = max(point.memorized_average for point in points)
+    min_y = min(point.negative_time_average for point in points)
+    max_y = max(point.negative_time_average for point in points)
+    x_span = max(max_x - min_x, abs(min_x), 1.0)
+    y_span = max(max_y - min_y, abs(min_y), 1.0)
+    return ObjectivePoint(
+        memorized_average=min_x - x_span * margin_fraction,
+        negative_time_average=min_y - y_span * margin_fraction,
+    )
+
+
 def selection_payload_from_candidate_metrics(
     *,
     baseline_points: Sequence[SelectionPoint],
@@ -163,6 +217,21 @@ def selection_payload_from_candidate_metrics(
     )
 
 
+def selection_payload_from_objective_candidates(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidates: Sequence[SelectionCandidate],
+    population_size: int,
+    reference: ObjectivePoint,
+) -> SelectionPayload:
+    return selection_payload_from_candidate_metrics(
+        baseline_points=selection_points_from_objectives(baseline_points),
+        candidates=candidates,
+        population_size=population_size,
+        reference=selection_point_from_objective(reference),
+    )
+
+
 def dominates(lhs: SelectionPoint, rhs: SelectionPoint) -> bool:
     no_worse = (
         lhs.memorized_average >= rhs.memorized_average
@@ -173,6 +242,13 @@ def dominates(lhs: SelectionPoint, rhs: SelectionPoint) -> bool:
         or lhs.negative_time_average > rhs.negative_time_average
     )
     return no_worse and strictly_better
+
+
+def objective_dominates(lhs: ObjectivePoint, rhs: ObjectivePoint) -> bool:
+    return dominates(
+        selection_point_from_objective(lhs),
+        selection_point_from_objective(rhs),
+    )
 
 
 def non_dominated_indices(points: Sequence[SelectionPoint]) -> list[int]:
@@ -211,6 +287,10 @@ def non_dominated_indices(points: Sequence[SelectionPoint]) -> list[int]:
     return indices
 
 
+def objective_non_dominated_indices(points: Sequence[ObjectivePoint]) -> list[int]:
+    return non_dominated_indices(selection_points_from_objectives(points))
+
+
 def hypervolume_2d(
     points: Sequence[SelectionPoint],
     *,
@@ -227,6 +307,17 @@ def hypervolume_2d(
         hv += width * height
         previous_x = max(previous_x, point.memorized_average)
     return float(hv)
+
+
+def objective_hypervolume_2d(
+    points: Sequence[ObjectivePoint],
+    *,
+    reference: ObjectivePoint,
+) -> float:
+    return hypervolume_2d(
+        selection_points_from_objectives(points),
+        reference=selection_point_from_objective(reference),
+    )
 
 
 def exclusive_hypervolume_contributions(
@@ -294,6 +385,19 @@ def exclusive_hypervolume_contributions(
     return contributions
 
 
+def objective_exclusive_hypervolume_contributions(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidate_points: Sequence[ObjectivePoint],
+    reference: ObjectivePoint,
+) -> list[float]:
+    return exclusive_hypervolume_contributions(
+        baseline_points=selection_points_from_objectives(baseline_points),
+        candidate_points=selection_points_from_objectives(candidate_points),
+        reference=selection_point_from_objective(reference),
+    )
+
+
 def baseline_aware_candidate_ranks(
     *,
     baseline_points: Sequence[SelectionPoint],
@@ -331,6 +435,27 @@ def baseline_aware_candidate_ranks(
         rank += 1
     worst_rank = rank + len(candidate_points) + 1
     return [rank if rank >= 0 else worst_rank for rank in ranks]
+
+
+def objective_baseline_aware_candidate_ranks(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidate_points: Sequence[ObjectivePoint],
+) -> list[int]:
+    return baseline_aware_candidate_ranks(
+        baseline_points=selection_points_from_objectives(baseline_points),
+        candidate_points=selection_points_from_objectives(candidate_points),
+    )
+
+
+def frontier_candidate_count(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidate_points: Sequence[ObjectivePoint],
+) -> int:
+    points = [*baseline_points, *candidate_points]
+    nd = objective_non_dominated_indices(points)
+    return sum(1 for index in nd if index >= len(baseline_points))
 
 
 def select_sms_emoa_survivor_indices(payload: SelectionPayload) -> tuple[int, ...]:
@@ -372,6 +497,75 @@ def select_sms_emoa_survivor_indices(payload: SelectionPayload) -> tuple[int, ..
         )
         del alive[remove_local_index]
     return tuple(alive)
+
+
+def select_sms_emoa_survivors(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidates: Sequence[CandidateT],
+    population_size: int,
+    reference: ObjectivePoint,
+) -> list[CandidateT]:
+    payload = selection_payload_from_objective_candidates(
+        baseline_points=baseline_points,
+        candidates=candidates,
+        population_size=population_size,
+        reference=reference,
+    )
+    survivor_indices = select_sms_emoa_survivor_indices(payload)
+    return [candidates[index] for index in survivor_indices]
+
+
+def select_portfolio_child_indices(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidates: Sequence[SelectionCandidate],
+    portfolio_size: int,
+    reference: ObjectivePoint,
+) -> list[PortfolioChildSelection]:
+    candidate_points = [
+        point_from_metrics(candidate.metrics) for candidate in candidates
+    ]
+    ranks = objective_baseline_aware_candidate_ranks(
+        baseline_points=baseline_points,
+        candidate_points=candidate_points,
+    )
+    remaining = set(range(len(candidates)))
+    current_points = list(baseline_points)
+    current_hv = objective_hypervolume_2d(current_points, reference=reference)
+    children: list[PortfolioChildSelection] = []
+    while remaining and len(children) < portfolio_size:
+        best_index = max(
+            remaining,
+            key=lambda index: (
+                objective_hypervolume_2d(
+                    [*current_points, candidate_points[index]],
+                    reference=reference,
+                )
+                - current_hv,
+                -ranks[index],
+                candidates[index].metrics.memorized_average,
+                -candidates[index].metrics.time_average,
+                -candidates[index].candidate_id,
+            ),
+        )
+        next_hv = objective_hypervolume_2d(
+            [*current_points, candidate_points[best_index]],
+            reference=reference,
+        )
+        contribution = max(0.0, next_hv - current_hv)
+        current_hv = next_hv
+        current_points.append(candidate_points[best_index])
+        remaining.remove(best_index)
+        children.append(
+            PortfolioChildSelection(
+                portfolio_index=len(children),
+                candidate_index=best_index,
+                hypervolume_contribution=contribution,
+                pareto_rank=ranks[best_index],
+            )
+        )
+    return children
 
 
 def select_sms_emoa_payload_timed(payload: SelectionPayload) -> SelectionResult:

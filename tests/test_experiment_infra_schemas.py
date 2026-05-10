@@ -191,6 +191,25 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "training.batch.trainer"):
                 ExperimentConfig.from_toml(path)
 
+    def test_rejects_retired_training_batch_trainers(self) -> None:
+        for trainer in ("fsrs6_adr", "fsrs6_adr_dr_grid"):
+            with self.subTest(trainer=trainer):
+                raw = VALID_CONFIG.replace(
+                    "lambda_grid = [0.0, 0.25, 0.5]",
+                    (
+                        "lambda_grid = [0.0, 0.25, 0.5]\n\n"
+                        "[training.batch]\n"
+                        "enabled = true\n"
+                        f'trainer = "{trainer}"'
+                    ),
+                )
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "experiment.toml"
+                    path.write_text(raw, encoding="utf-8")
+
+                    with self.assertRaisesRegex(ValueError, "training.batch.trainer"):
+                        ExperimentConfig.from_toml(path)
+
     def test_loads_batched_sweep_scheduler_artifacts_flag(self) -> None:
         raw = VALID_CONFIG + "\n[sweep]\nbatch_scheduler_artifacts = true\n"
         with tempfile.TemporaryDirectory() as tmp:
