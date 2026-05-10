@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -132,6 +133,100 @@ hide_labels = true
 envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6", "fsrs6_adr"]
 comparisons = ["fsrs6_adr:fsrs6"]
+start_retention = 0.50
+end_retention = 0.52
+short_term = "off"
+engine = "batched"
+fuzz = "off"
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+
+def _write_native_fsrs3_eval_config(path: Path) -> None:
+    path.write_text(
+        f"""
+schema_version = 1
+name = "native-fsrs3-eval-test"
+family = "rl_scheduler"
+seed = 42
+output_root = "{(path.parent / "out").as_posix()}"
+stages = [
+  "dry-run",
+  "preflight",
+  "stage-baseline",
+  "sweep",
+  "build-pareto",
+  "analyze-pareto",
+]
+
+[users]
+train = [1, 2]
+validation = []
+reserved_test = []
+
+[baseline]
+scheduler = "fsrs6"
+log_root = "{(path.parent / "logs").as_posix()}"
+expected_engine = "batched"
+stage_mode = "copy"
+environments = ["fsrs6", "lstm"]
+desired_retention_values = [0.5, 0.52]
+
+[simulation]
+engine = "batched"
+environment = "fsrs6"
+days = 2
+deck = 10
+learn_limit = 1
+review_limit = 10
+cost_limit_minutes = 60.0
+priority = "new-first"
+scheduler_priority = "low_retrievability"
+fuzz = false
+
+[gpu_guard]
+required = false
+device = "cpu"
+smoke = false
+
+[performance]
+device = "cpu"
+timeout_seconds = 60.0
+write_performance_summary = true
+diagnostic_csv_logs = false
+
+[training]
+lambda_grid = [0.0]
+
+[sweep]
+log_glob = "**/*.jsonl"
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs3"]
+log_dir = "{(path.parent / "logs").as_posix()}"
+log_layout = "user"
+max_lanes_per_batch = 1024
+torch_device = "cpu"
+start_retention = 0.50
+end_retention = 0.52
+step = 0.02
+no_progress = true
+no_log = false
+
+[build_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "fsrs3"]
+start_retention = 0.50
+end_retention = 0.52
+short_term = "off"
+engine = "batched"
+max_parallel = 2
+hide_labels = true
+
+[analyze_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "fsrs3"]
+comparisons = ["fsrs3:fsrs6"]
 start_retention = 0.50
 end_retention = 0.52
 short_term = "off"
@@ -290,6 +385,24 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
         self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
 
+    def test_checked_in_fsrs3_scheduler_eval_config_uses_native_sweep(
+        self,
+    ) -> None:
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs3_scheduler_users_1_8.toml"
+        )
+
+        self.assertEqual(config.name, "fsrs3_scheduler_users_1_8")
+        self.assertNotIn(StageName.TRAIN_OVERFIT, config.stages)
+        self.assertEqual(config.baseline.scheduler, "fsrs6")
+        self.assertEqual(config.baseline.environments, ("fsrs6", "lstm"))
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs3",))
+        self.assertEqual(config.sweep_batched.max_lanes_per_batch, 8192)
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs3"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs3:fsrs6",))
+
     def test_experiment_config_loads_new_workflow_stages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -334,6 +447,40 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             )
         )
         self.assertIn("--hide-labels", command)
+
+    def test_native_scheduler_sweep_does_not_require_train_overfit_summary(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "native_fsrs3.toml"
+            _write_native_fsrs3_eval_config(config_path)
+
+            with patch(
+                "simulator.experiment_infra.runner._run_configured_batched_retention_sweep",
+                return_value={
+                    "batch_lane_count": 4,
+                    "log_paths": [],
+                    "lane_results": [
+                        {
+                            "source": "configured-batched-retention",
+                            "scheduler": "fsrs3",
+                            "exit_code": 0,
+                        }
+                    ],
+                },
+            ) as run_batched:
+                result = run_stage(
+                    config_path=config_path,
+                    stage=StageName.SWEEP,
+                    repo_root=REPO_ROOT,
+                    run_id="native-fsrs3",
+                )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.summary["batch_runs_succeeded"], 1)
+        self.assertEqual(result.summary["input_artifact_paths"], [])
+        run_batched.assert_called_once()
 
     def test_analyze_scheduler_comparison_reads_config_and_writes_report_source(
         self,

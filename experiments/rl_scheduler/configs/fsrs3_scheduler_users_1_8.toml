@@ -1,0 +1,133 @@
+schema_version = 1
+name = "fsrs3_scheduler_users_1_8"
+family = "rl_scheduler"
+seed = 42
+output_root = "artifacts/rl_scheduler/fsrs3_scheduler_users_1_8"
+stages = [
+  "dry-run",
+  "preflight",
+  "stage-baseline",
+  "sweep",
+  "build-pareto",
+  "analyze-pareto",
+]
+
+[users]
+train = [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+]
+validation = []
+reserved_test = []
+
+[baseline]
+scheduler = "fsrs6"
+log_root = "logs/retention_sweep"
+expected_engine = "batched"
+stage_mode = "copy"
+environments = ["fsrs6", "lstm"]
+desired_retention_values = [
+  0.52,
+  0.54,
+  0.56,
+  0.58,
+  0.60,
+  0.62,
+  0.64,
+  0.66,
+  0.68,
+  0.70,
+  0.72,
+  0.74,
+  0.76,
+  0.78,
+  0.80,
+  0.82,
+  0.84,
+  0.86,
+  0.88,
+  0.90,
+  0.92,
+  0.94,
+  0.96,
+]
+
+[simulation]
+engine = "batched"
+environment = "fsrs6"
+days = 1825
+deck = 10000
+learn_limit = 10
+review_limit = 9999
+cost_limit_minutes = 720.0
+priority = "new-first"
+scheduler_priority = "low_retrievability"
+fuzz = false
+
+[gpu_guard]
+required = true
+device = "cuda"
+smoke = true
+
+[performance]
+device = "cuda"
+memory_budget_fraction = 0.80
+timeout_seconds = 5400.0
+progress_interval_seconds = 30.0
+write_performance_summary = true
+diagnostic_csv_logs = false
+
+[training]
+lambda_grid = [0.0]
+
+[sweep]
+log_glob = "**/*.jsonl"
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs3"]
+run_id = "fsrs3_scheduler_users_1_8_v1"
+log_dir = "logs/retention_sweep"
+log_layout = "user"
+max_lanes_per_batch = 8192
+torch_device = "cuda"
+benchmark_partition = "0"
+start_retention = 0.52
+end_retention = 0.96
+step = 0.02
+no_progress = true
+no_log = false
+
+[build_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "fsrs3"]
+log_dir = "logs/retention_sweep"
+result_glob = "simulation_results_retention_sweep_user_*.json"
+plot_glob = "*.png"
+start_retention = 0.52
+end_retention = 0.96
+short_term = "off"
+short_term_source = "any"
+engine = "batched"
+max_parallel = 8
+compare_short_term = false
+compare_engine = false
+no_plot = false
+hide_labels = true
+
+[analyze_pareto]
+envs = ["fsrs6", "lstm"]
+schedulers = ["fsrs6", "fsrs3"]
+comparisons = ["fsrs3:fsrs6"]
+result_glob = "analysis.md"
+start_retention = 0.52
+end_retention = 0.96
+short_term = "off"
+engine = "batched"
+fuzz = "off"
+metric = "avg_accum_memorized_per_hour"
+no_dedupe = false

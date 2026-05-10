@@ -63,7 +63,8 @@ experiment should continue.
 - **train-overfit**: train a separate policy on the training user and compare it
   against the training-user baseline. If a policy family cannot beat baseline
   even when overfitting is allowed, stop that family before generalization
-  checks.
+  checks. Native scheduler evaluation profiles, such as FSRS-3-vs-FSRS-6
+  sweeps, may omit this stage because they do not produce scheduler artifacts.
 - **scheduler artifact**: the trained policy package. It contains at least
   `metadata.json` and a policy/checkpoint file. Metadata records scheduler name,
   training users, seed, lambda, baseline DR, config snapshot, and policy path.
@@ -85,6 +86,9 @@ experiment should continue.
 ## Standard Stage Flow
 
 Prefer explicit stages over jumping straight to `all`:
+
+Native scheduler evaluation profiles that omit `train-overfit` should skip that
+command and run the stages listed in their TOML profile.
 
 ```bash
 uv run python experiments/rl_scheduler/run_experiment.py \

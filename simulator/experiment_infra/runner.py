@@ -769,7 +769,11 @@ def run_sweep(
         notes.append("sweep.command_template is required for sweep.")
 
     train_artifact_paths: list[Path] = []
-    if not failures:
+    requires_train_artifacts = _sweep_requires_train_artifacts(
+        config=config,
+        batched_retention_sweep=batched_retention_sweep,
+    )
+    if not failures and requires_train_artifacts:
         train_artifact_paths, artifact_notes = _read_train_artifact_paths(
             train_summary_path
         )
@@ -5736,6 +5740,27 @@ def _read_train_artifact_paths(summary_path: Path) -> tuple[list[Path], list[str
             continue
         paths.append(Path(raw_path))
     return paths, notes
+
+
+def _sweep_requires_train_artifacts(
+    *,
+    config: ExperimentConfig,
+    batched_retention_sweep: bool,
+) -> bool:
+    if config.sweep_batch_scheduler_artifacts or not batched_retention_sweep:
+        return True
+    return _configured_batched_sweep_uses_trained_schedulers(config)
+
+
+def _configured_batched_sweep_uses_trained_schedulers(
+    config: ExperimentConfig,
+) -> bool:
+    from simulator.scheduler_spec import parse_scheduler_spec
+
+    return any(
+        parse_scheduler_spec(raw)[0] in RUN_ID_SCOPED_SWEEP_SCHEDULERS
+        for raw in config.sweep_batched.schedulers
+    )
 
 
 def _validate_sweep_artifact_metadata(
