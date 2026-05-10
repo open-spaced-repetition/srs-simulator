@@ -205,7 +205,6 @@ write_performance_summary = true
 diagnostic_csv_logs = false
 
 [training]
-lambda_grid = [0.0]
 artifact_metadata_glob = "policies/**/metadata.json"
 max_parallel_commands = 1
 batch_baseline_desired_retention_values = true
@@ -218,8 +217,6 @@ command_template = [
   "{config_path}",
   "--user-id",
   "{user_id}",
-  "--lambda",
-  "{lambda_value}",
   "--output-dir",
   "{output_dir}",
   "--training-command-path",

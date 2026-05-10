@@ -625,6 +625,62 @@ class FSRS6ADRPolicyExpansionTests(unittest.TestCase):
             ],
         )
 
+    def test_policy_root_expands_lambda_less_portfolio_children(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            for index in range(2):
+                policy_dir = root / "user_1" / "policies" / f"policy_{index}"
+                policy_dir.mkdir(parents=True)
+                FSRS6ADRPolicy(
+                    coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                    baseline_desired_retention=None,
+                ).write_json(policy_dir / "policy.json")
+                (policy_dir / "metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "scheduler_name": "fsrs6_adr",
+                            "training_user_ids": [1],
+                            "policy_path": "policy.json",
+                            "baseline_desired_retention": None,
+                            "portfolio_index": index,
+                            "action_space": "sd_retention_function_portfolio_child",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            specs = resolve_fsrs6_adr_policy_specs(
+                user_ids=[1],
+                dr_values=[0.50, 0.52],
+                policy_root=root,
+            )
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6_adr"],
+                dr_values=[0.50, 0.52],
+                fsrs6_adr_policy_specs=specs,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="fsrs6")
+
+        self.assertEqual(len(specs), 2)
+        self.assertEqual([spec.lambda_value for spec in specs], [None, None])
+        self.assertEqual(
+            [
+                lane.final_log_dir.relative_to(Path(tmp) / "logs").as_posix()
+                for lane in lanes
+            ],
+            [
+                "user_1/sched_fsrs6_adr/policy_0",
+                "user_1/sched_fsrs6_adr/policy_1",
+            ],
+        )
+
     def test_policy_manifest_resolves_relative_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -879,6 +935,60 @@ path = "policy.json"
 
 
 class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
+    def test_policy_root_expands_lambda_less_portfolio_children(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            for index, desired_retention in enumerate((0.83, 0.87)):
+                policy_dir = root / "user_1" / "policies" / f"policy_{index}"
+                policy_dir.mkdir(parents=True)
+                _write_adp_policy(policy_dir / "policy.json", dr=desired_retention)
+                (policy_dir / "metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "scheduler_name": "fsrs6_adp",
+                            "training_user_ids": [1],
+                            "policy_path": "policy.json",
+                            "baseline_desired_retention": None,
+                            "scheduler_desired_retention": desired_retention,
+                            "portfolio_index": index,
+                            "action_space": "fsrs6_adp_weight_delta_portfolio_child",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            specs = resolve_fsrs6_adp_policy_specs(
+                user_ids=[1],
+                dr_values=[0.50, 0.52],
+                policy_root=root,
+            )
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6_adp"],
+                dr_values=[0.50, 0.52],
+                fsrs6_adp_policy_specs=specs,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="fsrs6")
+
+        self.assertEqual(len(specs), 2)
+        self.assertEqual([spec.lambda_value for spec in specs], [None, None])
+        self.assertEqual(
+            [
+                lane.final_log_dir.relative_to(Path(tmp) / "logs").as_posix()
+                for lane in lanes
+            ],
+            [
+                "user_1/sched_fsrs6_adp/policy_0",
+                "user_1/sched_fsrs6_adp/policy_1",
+            ],
+        )
+
     def test_policy_root_expands_portfolio_children_without_dr_grid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "train_outputs"

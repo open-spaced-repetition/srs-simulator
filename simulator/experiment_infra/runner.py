@@ -77,8 +77,8 @@ class TrainCommandJob:
     user_id: int
     baseline_desired_retention: float
     baseline_desired_retention_token: str
-    lambda_value: float
-    lambda_token: str
+    lambda_value: float | None
+    lambda_token: str | None
     output_dir: Path
     command_record_path: Path
     stdout_path: Path
@@ -545,7 +545,7 @@ def run_train_overfit(
         failures=unique_failures,
         metrics={
             "training_users": float(len(config.users.train)),
-            "lambda_values": float(len(config.lambda_grid)),
+            "lambda_values": float(_training_reported_lambda_count(config)),
             "baseline_desired_retention_values": float(len(baseline_dr_values)),
             "commands_attempted": float(commands_attempted),
             "commands_succeeded": float(commands_succeeded),
@@ -918,7 +918,8 @@ def run_sweep(
                 break
 
             user_id = metadata.training_user_ids[0]
-            if metadata.lambda_value is None:
+            is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
+            if metadata.lambda_value is None and not is_portfolio_child:
                 failures.append(FailureClass.INVALID_ARTIFACT)
                 notes.append(
                     f"Invalid scheduler artifact metadata {metadata_path}: "
@@ -926,9 +927,12 @@ def run_sweep(
                 )
                 break
             lambda_value = metadata.lambda_value
-            lambda_token = _format_lambda_token(lambda_value)
+            lambda_token = (
+                _format_lambda_token(lambda_value) if lambda_value is not None else None
+            )
             baseline_dr = metadata.baseline_desired_retention
             if baseline_dr is not None:
+                assert lambda_token is not None
                 baseline_dr_token = _format_retention_token(baseline_dr)
                 output_dir = (
                     outputs_root
@@ -941,18 +945,12 @@ def run_sweep(
                 )
             else:
                 baseline_dr_token = None
-                if metadata.action_space == "sd_retention_function_portfolio_child":
+                if is_portfolio_child:
                     policy_token = metadata.policy_path.parent.name
-                    output_dir = (
-                        outputs_root
-                        / f"user_{user_id}"
-                        / f"lambda_{lambda_token}"
-                        / policy_token
-                    )
-                    command_stem = (
-                        f"user_{user_id}_lambda_{lambda_token}_{policy_token}"
-                    )
+                    output_dir = outputs_root / f"user_{user_id}" / policy_token
+                    command_stem = f"user_{user_id}_{policy_token}"
                 else:
+                    assert lambda_token is not None
                     output_dir = (
                         outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
                     )
@@ -3332,7 +3330,7 @@ def _build_gpu_summary(config: ExperimentConfig) -> GpuGuardSummary:
             "days": config.simulation.days,
             "deck": config.simulation.deck,
             "train_users": len(config.users.train),
-            "lambda_values": len(config.lambda_grid),
+            "lambda_values": _training_reported_lambda_count(config),
         },
         fallback_used=fallback_used,
         notes=tuple(notes),
@@ -3408,7 +3406,7 @@ def _performance_workload_shape(
         "train_users": len(config.users.train),
         "validation_users": len(config.users.validation),
         "reserved_test_users": len(config.users.reserved_test),
-        "lambda_values": len(config.lambda_grid),
+        "lambda_values": _training_reported_lambda_count(config),
         "training_baseline_desired_retention_values": len(
             _training_baseline_desired_retention_values(config)
         ),
@@ -3420,14 +3418,14 @@ def _performance_workload_shape(
     if stage == StageName.TRAIN_OVERFIT and candidate_lanes is not None:
         shape["effective_lanes"] = (
             len(config.users.train)
-            * len(config.lambda_grid)
+            * _training_effective_lambda_count(config)
             * len(_training_baseline_desired_retention_values(config))
             * candidate_lanes
         )
     elif stage == StageName.SWEEP:
         shape["effective_lanes"] = (
             len(config.users.train)
-            * max(len(config.lambda_grid), 1)
+            * _training_effective_lambda_count(config)
             * len(_training_baseline_desired_retention_values(config))
         )
     return shape
@@ -3455,7 +3453,7 @@ def _candidate_days(*, config: ExperimentConfig, stage: StageName) -> int | None
     return (
         config.simulation.days
         * len(config.users.train)
-        * len(config.lambda_grid)
+        * _training_effective_lambda_count(config)
         * len(_training_baseline_desired_retention_values(config))
         * candidate_lanes
     )
@@ -3466,14 +3464,14 @@ def _user_days(*, config: ExperimentConfig, stage: StageName) -> int | None:
         return (
             config.simulation.days
             * len(config.users.train)
-            * len(config.lambda_grid)
+            * _training_effective_lambda_count(config)
             * len(_training_baseline_desired_retention_values(config))
         )
     if stage == StageName.SWEEP:
         return (
             config.simulation.days
             * len(config.users.train)
-            * max(len(config.lambda_grid), 1)
+            * _training_effective_lambda_count(config)
             * len(_training_baseline_desired_retention_values(config))
         )
     return None
@@ -3829,17 +3827,19 @@ def _format_train_command(
     stage_root: Path,
     output_dir: Path,
     user_id: int,
-    lambda_value: float,
+    lambda_value: float | None,
     baseline_desired_retention: float,
     command_record_path: Path,
     stdout_path: Path,
     stderr_path: Path,
 ) -> list[str]:
-    lambda_token = _format_lambda_token(lambda_value)
+    lambda_token = (
+        _format_lambda_token(lambda_value) if lambda_value is not None else ""
+    )
     baseline_dr_token = _format_retention_token(baseline_desired_retention)
     values: dict[str, Any] = {
         "user_id": user_id,
-        "lambda_value": lambda_value,
+        "lambda_value": lambda_value if lambda_value is not None else "",
         "lambda_token": lambda_token,
         "baseline_desired_retention": baseline_desired_retention,
         "baseline_desired_retention_token": baseline_dr_token,
@@ -3879,21 +3879,34 @@ def _build_train_command_jobs(
 ) -> tuple[list[TrainCommandJob], list[str]]:
     jobs: list[TrainCommandJob] = []
     notes: list[str] = []
-    batch_baseline_dr = _training_batches_baseline_dr_grid(config)
+    portfolio_trainer = _training_uses_portfolio_trainer(config)
+    batch_baseline_dr = (
+        _training_batches_baseline_dr_grid(config) and not portfolio_trainer
+    )
     include_baseline_dr_in_path = (
-        _training_uses_baseline_dr_grid(config) and not batch_baseline_dr
+        _training_uses_baseline_dr_grid(config)
+        and not batch_baseline_dr
+        and not portfolio_trainer
     )
     job_baseline_dr_values = (
         (_training_primary_baseline_desired_retention(config, baseline_dr_values),)
-        if batch_baseline_dr
+        if batch_baseline_dr or portfolio_trainer
         else baseline_dr_values
     )
     for user_id in config.users.train:
         for baseline_dr in job_baseline_dr_values:
             baseline_dr_token = _format_retention_token(baseline_dr)
-            for lambda_value in config.lambda_grid:
-                lambda_token = _format_lambda_token(lambda_value)
-                if include_baseline_dr_in_path:
+            for lambda_value in _training_lambda_values_for_jobs(config):
+                lambda_token = (
+                    _format_lambda_token(lambda_value)
+                    if lambda_value is not None
+                    else None
+                )
+                if portfolio_trainer:
+                    output_dir = outputs_root / f"user_{user_id}"
+                    command_stem = f"user_{user_id}"
+                elif include_baseline_dr_in_path:
+                    assert lambda_token is not None
                     output_dir = (
                         outputs_root
                         / f"user_{user_id}"
@@ -3904,6 +3917,7 @@ def _build_train_command_jobs(
                         f"user_{user_id}_dr_{baseline_dr_token}_lambda_{lambda_token}"
                     )
                 else:
+                    assert lambda_token is not None
                     output_dir = (
                         outputs_root / f"user_{user_id}" / f"lambda_{lambda_token}"
                     )
@@ -3982,6 +3996,22 @@ def _run_train_command_job(
     )
 
 
+def _train_failure_note(
+    *,
+    failure_verb: str,
+    timed_out: bool,
+    job: TrainCommandJob,
+) -> str:
+    status = "timed out" if timed_out else "failed"
+    parts = [
+        f"{failure_verb} {status} for user={job.user_id}",
+        f"baseline_dr={job.baseline_desired_retention}",
+    ]
+    if job.lambda_value is not None:
+        parts.append(f"lambda={job.lambda_value}")
+    return ", ".join(parts) + "."
+
+
 def _finalize_train_job_result(
     *,
     job: TrainCommandJob,
@@ -4000,8 +4030,6 @@ def _finalize_train_job_result(
         "user_id": job.user_id,
         "baseline_desired_retention": job.baseline_desired_retention,
         "baseline_desired_retention_token": job.baseline_desired_retention_token,
-        "lambda_value": job.lambda_value,
-        "lambda_token": job.lambda_token,
         "output_dir": str(job.output_dir),
         "command_record_path": str(command_record_path),
         "stdout_path": str(stdout_path) if stdout_path is not None else None,
@@ -4011,6 +4039,9 @@ def _finalize_train_job_result(
         "timed_out": timed_out,
         **command_result_extra,
     }
+    if job.lambda_value is not None:
+        command_result["lambda_value"] = job.lambda_value
+        command_result["lambda_token"] = job.lambda_token
     result: dict[str, Any] = {
         "job": job,
         "command_record_path": command_record_path,
@@ -4028,18 +4059,16 @@ def _finalize_train_job_result(
             FailureClass.TIMEOUT if timed_out else FailureClass.RUNNER_FAILED
         )
         if timed_out:
-            result["note"] = (
-                f"{failure_verb} timed out for "
-                f"user={job.user_id}, "
-                f"baseline_dr={job.baseline_desired_retention}, "
-                f"lambda={job.lambda_value}."
+            result["note"] = _train_failure_note(
+                failure_verb=failure_verb,
+                timed_out=True,
+                job=job,
             )
         else:
-            result["note"] = (
-                f"{failure_verb} failed for "
-                f"user={job.user_id}, "
-                f"baseline_dr={job.baseline_desired_retention}, "
-                f"lambda={job.lambda_value}."
+            result["note"] = _train_failure_note(
+                failure_verb=failure_verb,
+                timed_out=False,
+                job=job,
             )
         return result
 
@@ -4190,22 +4219,7 @@ def _run_train_in_process_batches(
                 "effective_lanes_estimate": len(batch_jobs) * lanes_per_job,
                 "overfit_gate": outcome_gate,
                 "outcomes": [
-                    {
-                        "user_id": outcome.job.user_id,
-                        "lambda_value": outcome.job.lambda_value,
-                        "baseline_desired_retention": (
-                            outcome.job.baseline_desired_retention
-                        ),
-                        "passed": outcome.passed,
-                        "artifact_paths": [
-                            str(path) for path in outcome.artifact_paths
-                        ],
-                        "progress_path": str(outcome.progress_path)
-                        if outcome.progress_path is not None
-                        else None,
-                        "error": outcome.error,
-                    }
-                    for outcome in outcomes
+                    _in_process_outcome_record(outcome) for outcome in outcomes
                 ],
             },
         )
@@ -4223,28 +4237,17 @@ def _run_train_in_process_batches(
             )
             _write_json(
                 job.command_record_path,
-                {
-                    "type": "in-process-training-job",
-                    "execution_mode": "in_process_batch",
-                    "trainer": trainer,
-                    "batch_index": batch_index,
-                    "batch_record_path": str(batch_record_path),
-                    "started_at": started_at,
-                    "finished_at": finished_at,
-                    "exit_code": (
-                        0
-                        if outcome is not None and (outcome.passed or batch_gate_passed)
-                        else 1
-                    ),
-                    "user_id": job.user_id,
-                    "lambda_value": job.lambda_value,
-                    "baseline_desired_retention": job.baseline_desired_retention,
-                    "output_dir": str(job.output_dir),
-                    "overfit_gate_passed": outcome.passed
-                    if outcome is not None
-                    else False,
-                    "batch_overfit_gate": outcome_gate,
-                },
+                _in_process_job_record(
+                    job=job,
+                    outcome=outcome,
+                    batch_gate_passed=batch_gate_passed,
+                    outcome_gate=outcome_gate,
+                    trainer=trainer,
+                    batch_index=batch_index,
+                    batch_record_path=batch_record_path,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                ),
             )
 
         outcome_by_key = {
@@ -4343,6 +4346,56 @@ def _train_outcome_gate_summary(
     }
 
 
+def _in_process_outcome_record(outcome: Any) -> dict[str, Any]:
+    record = {
+        "user_id": outcome.job.user_id,
+        "baseline_desired_retention": outcome.job.baseline_desired_retention,
+        "passed": outcome.passed,
+        "artifact_paths": [str(path) for path in outcome.artifact_paths],
+        "progress_path": str(outcome.progress_path)
+        if outcome.progress_path is not None
+        else None,
+        "error": outcome.error,
+    }
+    if outcome.job.lambda_value is not None:
+        record["lambda_value"] = outcome.job.lambda_value
+    return record
+
+
+def _in_process_job_record(
+    *,
+    job: TrainCommandJob,
+    outcome: Any | None,
+    batch_gate_passed: bool,
+    outcome_gate: dict[str, Any],
+    trainer: str,
+    batch_index: int,
+    batch_record_path: Path,
+    started_at: str,
+    finished_at: str,
+) -> dict[str, Any]:
+    record = {
+        "type": "in-process-training-job",
+        "execution_mode": "in_process_batch",
+        "trainer": trainer,
+        "batch_index": batch_index,
+        "batch_record_path": str(batch_record_path),
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "exit_code": (
+            0 if outcome is not None and (outcome.passed or batch_gate_passed) else 1
+        ),
+        "user_id": job.user_id,
+        "baseline_desired_retention": job.baseline_desired_retention,
+        "output_dir": str(job.output_dir),
+        "overfit_gate_passed": outcome.passed if outcome is not None else False,
+        "batch_overfit_gate": outcome_gate,
+    }
+    if job.lambda_value is not None:
+        record["lambda_value"] = job.lambda_value
+    return record
+
+
 def _build_train_user_batches(
     *,
     jobs: list[TrainCommandJob],
@@ -4391,14 +4444,18 @@ def _build_sweep_artifact_lane(
     outputs_root: Path,
 ) -> SweepBatchLane:
     lambda_value = metadata.lambda_value
-    if lambda_value is None:
+    is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
+    if lambda_value is None and not is_portfolio_child:
         raise ValueError(
             f"Invalid scheduler artifact metadata {metadata_path}: "
             "lambda_value is required for sweep."
         )
-    lambda_token = _format_lambda_token(lambda_value)
+    lambda_token = (
+        _format_lambda_token(lambda_value) if lambda_value is not None else None
+    )
     baseline_dr = metadata.baseline_desired_retention
     if baseline_dr is not None:
+        assert lambda_token is not None
         baseline_dr_token = _format_retention_token(baseline_dr)
         output_dir = (
             outputs_root
@@ -4410,13 +4467,13 @@ def _build_sweep_artifact_lane(
     else:
         baseline_dr_token = None
         output_dir = (
-            outputs_root
-            / f"user_{user_id}"
-            / f"sched_{metadata.scheduler_name}"
-            / f"lambda_{lambda_token}"
+            outputs_root / f"user_{user_id}" / f"sched_{metadata.scheduler_name}"
         )
-        if metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES:
+        if is_portfolio_child:
             output_dir = output_dir / metadata.policy_path.parent.name
+        else:
+            assert lambda_token is not None
+            output_dir = output_dir / f"lambda_{lambda_token}"
     return SweepBatchLane(
         source="artifact",
         metadata_path=metadata_path,
@@ -4923,14 +4980,14 @@ def _run_configured_batched_retention_sweep(
         fsrs6_adr_policy_root=None,
         fsrs6_adr_train_run_root=run_root if "fsrs6_adr" in scheduler_names else None,
         fsrs6_adr_policy_manifest=None,
-        fsrs6_adr_lambda_values=config.lambda_grid
+        fsrs6_adr_lambda_values=_sweep_policy_lambda_values(config)
         if "fsrs6_adr" in scheduler_names
         else None,
         fsrs6_adp_policy=None,
         fsrs6_adp_policy_root=None,
         fsrs6_adp_train_run_root=run_root if "fsrs6_adp" in scheduler_names else None,
         fsrs6_adp_policy_manifest=None,
-        fsrs6_adp_lambda_values=config.lambda_grid
+        fsrs6_adp_lambda_values=_sweep_policy_lambda_values(config)
         if "fsrs6_adp" in scheduler_names
         else None,
     )
@@ -5215,9 +5272,10 @@ def _format_sweep_command(
     stderr_path: Path,
 ) -> list[str]:
     user_id = metadata.training_user_ids[0]
-    assert metadata.lambda_value is not None
     lambda_value = metadata.lambda_value
-    lambda_token = _format_lambda_token(lambda_value)
+    lambda_token = (
+        _format_lambda_token(lambda_value) if lambda_value is not None else ""
+    )
     baseline_dr = metadata.baseline_desired_retention
     values: dict[str, Any] = {
         "artifact_id": metadata.artifact_id,
@@ -5225,7 +5283,7 @@ def _format_sweep_command(
         "policy_path": str(metadata.policy_path),
         "scheduler_name": metadata.scheduler_name,
         "user_id": user_id,
-        "lambda_value": lambda_value,
+        "lambda_value": lambda_value if lambda_value is not None else "",
         "lambda_token": lambda_token,
         "baseline_desired_retention": baseline_dr if baseline_dr is not None else "",
         "baseline_desired_retention_token": _format_retention_token(baseline_dr)
@@ -5594,6 +5652,46 @@ def _training_batches_baseline_dr_grid(config: ExperimentConfig) -> bool:
     )
 
 
+def _training_uses_portfolio_trainer(config: ExperimentConfig) -> bool:
+    if config.training_portfolio and not config.training_optimizer:
+        return True
+    if config.training_batch.trainer in {
+        "fsrs6_adr_portfolio",
+        "fsrs6_adp_portfolio",
+    }:
+        return True
+    script_names = {Path(item).name for item in config.train_command_template}
+    return bool(
+        {
+            "train_fsrs6_adr_portfolio.py",
+            "train_fsrs6_adp_portfolio.py",
+        }
+        & script_names
+    )
+
+
+def _training_lambda_values_for_jobs(
+    config: ExperimentConfig,
+) -> tuple[float | None, ...]:
+    if _training_uses_portfolio_trainer(config):
+        return (None,)
+    return tuple(config.lambda_grid)
+
+
+def _training_effective_lambda_count(config: ExperimentConfig) -> int:
+    return len(_training_lambda_values_for_jobs(config))
+
+
+def _training_reported_lambda_count(config: ExperimentConfig) -> int:
+    return 0 if _training_uses_portfolio_trainer(config) else len(config.lambda_grid)
+
+
+def _sweep_policy_lambda_values(config: ExperimentConfig) -> tuple[float, ...] | None:
+    if _training_uses_portfolio_trainer(config):
+        return None
+    return config.lambda_grid
+
+
 def _training_primary_baseline_desired_retention(
     config: ExperimentConfig,
     baseline_dr_values: tuple[float, ...],
@@ -5616,7 +5714,7 @@ def _validate_train_artifacts(
     artifact_paths: list[Path],
     config: ExperimentConfig,
     user_id: int,
-    lambda_value: float,
+    lambda_value: float | None,
     baseline_desired_retention: float | None = None,
     allowed_baseline_desired_retentions: tuple[float, ...] | None = None,
 ) -> str | None:
@@ -5651,17 +5749,38 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: training_user_ids "
                 f"expected [{user_id}], got {list(metadata.training_user_ids)}."
             )
-        if metadata.lambda_value is None or not math.isclose(
-            metadata.lambda_value,
-            lambda_value,
-            rel_tol=0.0,
-            abs_tol=1e-9,
+        is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
+        if not is_portfolio_child:
+            if lambda_value is None:
+                return (
+                    f"Invalid scheduler artifact metadata {path}: lambda_value is "
+                    "required for non-portfolio trainers."
+                )
+            if metadata.lambda_value is None or not math.isclose(
+                metadata.lambda_value,
+                lambda_value,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                return (
+                    f"Invalid scheduler artifact metadata {path}: "
+                    f"lambda_value expected {lambda_value}, "
+                    f"got {metadata.lambda_value}."
+                )
+        elif (
+            lambda_value is not None
+            and metadata.lambda_value is not None
+            and not math.isclose(
+                metadata.lambda_value,
+                lambda_value,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
         ):
             return (
                 f"Invalid scheduler artifact metadata {path}: lambda_value expected "
                 f"{lambda_value}, got {metadata.lambda_value}."
             )
-        is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
         if baseline_desired_retention is not None and not is_portfolio_child:
             if metadata.baseline_desired_retention is None or not math.isclose(
                 metadata.baseline_desired_retention,
@@ -5794,16 +5913,14 @@ def _validate_sweep_artifact_metadata(
             f"Invalid scheduler artifact metadata {metadata_path}: sweep requires "
             "exactly one training_user_id."
         )
-    if metadata.lambda_value is None:
+    is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
+    if metadata.lambda_value is None and not is_portfolio_child:
         return (
             f"Invalid scheduler artifact metadata {metadata_path}: lambda_value is "
             "required for sweep."
         )
     baseline_dr_values = _training_baseline_desired_retention_values(config)
-    if (
-        _training_metadata_requires_baseline_dr(config)
-        and metadata.action_space not in PORTFOLIO_CHILD_ACTION_SPACES
-    ):
+    if _training_metadata_requires_baseline_dr(config) and not is_portfolio_child:
         actual_dr = metadata.baseline_desired_retention
         if actual_dr is None or not any(
             math.isclose(actual_dr, expected, rel_tol=0.0, abs_tol=1e-9)

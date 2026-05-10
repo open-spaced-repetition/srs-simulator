@@ -240,6 +240,34 @@ def _str_tuple(value: Any, field_name: str) -> tuple[str, ...]:
     )
 
 
+def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
+    if "portfolio" in training and "optimizer" not in training:
+        return True
+    batch = training.get("batch")
+    if isinstance(batch, Mapping):
+        trainer = batch.get("trainer")
+        if trainer in {"fsrs6_adr_portfolio", "fsrs6_adp_portfolio"}:
+            return True
+    command_template = training.get("command_template", [])
+    if isinstance(command_template, str) or not isinstance(command_template, Sequence):
+        return False
+    script_names = {Path(str(item)).name for item in command_template}
+    return bool(
+        {
+            "train_fsrs6_adr_portfolio.py",
+            "train_fsrs6_adp_portfolio.py",
+        }
+        & script_names
+    )
+
+
+def _training_lambda_grid(training: Mapping[str, Any]) -> tuple[float, ...]:
+    raw = training.get("lambda_grid")
+    if raw is None and _training_uses_portfolio_trainer(training):
+        return ()
+    return _float_tuple(raw, "training.lambda_grid")
+
+
 def _sweep_environment_batch_configs(
     value: Any,
     field_name: str,
@@ -931,9 +959,7 @@ class ExperimentConfig:
             ),
             gpu_guard=GpuGuardConfig.from_mapping(raw.get("gpu_guard")),
             performance=PerformanceConfig.from_mapping(raw.get("performance")),
-            lambda_grid=_float_tuple(
-                training.get("lambda_grid"), "training.lambda_grid"
-            ),
+            lambda_grid=_training_lambda_grid(training),
             training_policy_search=dict(
                 _require_mapping(
                     training.get("policy_search", {}),

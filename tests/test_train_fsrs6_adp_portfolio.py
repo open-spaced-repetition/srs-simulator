@@ -79,7 +79,6 @@ def _config(output_root: Path) -> ExperimentConfig:
             "gpu_guard": {"required": False, "device": "cpu", "smoke": False},
             "performance": {"device": "cpu", "write_performance_summary": True},
             "training": {
-                "lambda_grid": [0.0],
                 "policy_search": {
                     "retention_min": 0.5,
                     "retention_max": 0.98,
@@ -184,7 +183,6 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
             result = UserADPPortfolioResult(
                 job=ADPPortfolioTrainJob(
                     user_id=1,
-                    lambda_value=0.0,
                     output_dir=root / "out",
                 ),
                 baseline_desired_retention_values=(0.52, 0.54),
@@ -232,6 +230,7 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
         self.assertEqual(metrics["portfolio_hypervolume"], 3.0)
         self.assertEqual(metrics["final_population_hypervolume"], 10.0)
         self.assertIsNone(metadata["baseline_desired_retention"])
+        self.assertNotIn("lambda_value", metadata)
         self.assertEqual(metadata["scheduler_desired_retention"], 0.83)
         self.assertEqual(
             metadata["action_space"], "fsrs6_adp_weight_delta_portfolio_child"

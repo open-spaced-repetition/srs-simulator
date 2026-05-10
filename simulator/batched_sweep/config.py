@@ -308,6 +308,8 @@ def _adapt_experiment_config(
     schedulers = _str_list(sweep.get("schedulers", ["fsrs6"]), "sweep.schedulers")
     scheduler_names = {item.split("@", 1)[0] for item in schedulers}
     lambda_grid = training.get("lambda_grid")
+    if _training_uses_portfolio_trainer(training):
+        lambda_grid = None
     default_train_run_root = _infer_experiment_train_run_root(
         raw,
         sweep=sweep,
@@ -389,6 +391,27 @@ def _adapt_experiment_policy_source(
     if "lambda_values" not in adapted and lambda_grid is not None:
         adapted["lambda_values"] = lambda_grid
     return adapted
+
+
+def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
+    if "portfolio" in training and "optimizer" not in training:
+        return True
+    batch = training.get("batch")
+    if isinstance(batch, Mapping):
+        trainer = batch.get("trainer")
+        if trainer in {"fsrs6_adr_portfolio", "fsrs6_adp_portfolio"}:
+            return True
+    command_template = training.get("command_template", [])
+    if isinstance(command_template, str) or not isinstance(command_template, Sequence):
+        return False
+    script_names = {Path(str(item)).name for item in command_template}
+    return bool(
+        {
+            "train_fsrs6_adr_portfolio.py",
+            "train_fsrs6_adp_portfolio.py",
+        }
+        & script_names
+    )
 
 
 def _experiment_run_id(

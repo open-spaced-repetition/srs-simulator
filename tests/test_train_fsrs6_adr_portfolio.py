@@ -16,9 +16,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.rl_scheduler.policy_search_common import CandidateMetrics
+from experiments.rl_scheduler.policy_search_common import PolicySearchSettings
 from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     ObjectivePoint,
     PortfolioCandidate,
+    PortfolioSettings,
+    PortfolioTrainJob,
+    SelectedPortfolioChild,
+    UserPortfolioResult,
     _SelectionTask,
     _selection_payload,
     _selection_executor,
@@ -26,6 +31,7 @@ from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     _selection_process_pool_worker_count,
     _select_survivors_for_generation,
     _select_portfolio_children,
+    _write_portfolio_artifacts,
     exclusive_hypervolume_contributions,
     hypervolume_2d,
     non_dominated_indices,
@@ -40,6 +46,7 @@ from experiments.rl_scheduler.portfolio_selection import (
 from simulator.batched_sweep.fsrs6_adr_policy import (
     resolve_fsrs6_adr_policy_specs,
 )
+from simulator.experiment_infra import ExperimentConfig
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 
@@ -61,6 +68,50 @@ def _candidate(
         candidate_id=candidate_id,
         coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
         metrics=_metrics(memorized, time_average),
+    )
+
+
+def _config(output_root: Path) -> ExperimentConfig:
+    return ExperimentConfig.from_mapping(
+        {
+            "schema_version": 1,
+            "name": "adr-portfolio-test",
+            "family": "rl_scheduler",
+            "seed": 42,
+            "output_root": str(output_root),
+            "stages": ["train-overfit"],
+            "users": {"train": [1], "validation": [], "reserved_test": []},
+            "baseline": {
+                "scheduler": "fsrs6",
+                "log_root": str(output_root / "logs"),
+                "expected_engine": "batched",
+                "stage_mode": "copy",
+            },
+            "simulation": {
+                "engine": "batched",
+                "environment": "fsrs6",
+                "days": 2,
+                "deck": 10,
+                "learn_limit": 1,
+                "review_limit": 10,
+                "cost_limit_minutes": 60.0,
+                "priority": "new-first",
+                "scheduler_priority": "low_retrievability",
+                "fuzz": False,
+            },
+            "gpu_guard": {"required": False, "device": "cpu", "smoke": False},
+            "performance": {"device": "cpu", "write_performance_summary": True},
+            "training": {
+                "policy_search": {
+                    "retention_min": 0.5,
+                    "retention_max": 0.98,
+                    "baseline_desired_retention": 0.9,
+                    "torch_device": "cpu",
+                },
+                "portfolio": {"portfolio_size": 1},
+            },
+        },
+        config_path=output_root / "config.toml",
     )
 
 
@@ -662,14 +713,69 @@ class FSRS6ADRPortfolioMathTests(unittest.TestCase):
         )
 
 
+class FSRS6ADRPortfolioArtifactTests(unittest.TestCase):
+    def test_artifacts_omit_lambda_metadata_for_children(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _config(root)
+            config_path = root / "config.toml"
+            config_path.write_text("", encoding="utf-8")
+            settings = PolicySearchSettings.from_mapping(config.training_policy_search)
+            portfolio = PortfolioSettings(portfolio_size=1)
+            candidate = PortfolioCandidate(
+                candidate_id=7,
+                coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                metrics=_metrics(20.0, 2.0),
+            )
+            result = UserPortfolioResult(
+                job=PortfolioTrainJob(user_id=1, output_dir=root / "out"),
+                baseline_desired_retention_values=(0.52, 0.54),
+                baseline_metrics=[_metrics(10.0, 4.0), _metrics(11.0, 5.0)],
+                baseline_hypervolume=1.0,
+                portfolio_hypervolume=3.0,
+                hypervolume_improvement=2.0,
+                final_population_hypervolume=10.0,
+                final_population_hypervolume_improvement=9.0,
+                reference_point=ObjectivePoint(0.0, -10.0),
+                selected_children=[
+                    SelectedPortfolioChild(
+                        portfolio_index=0,
+                        candidate=candidate,
+                        hypervolume_contribution=2.0,
+                        pareto_rank=0,
+                    )
+                ],
+                final_population=[candidate],
+                history=[],
+                passed=True,
+            )
+
+            artifact_paths = _write_portfolio_artifacts(
+                result=result,
+                config=config,
+                config_path=config_path,
+                settings=settings,
+                portfolio=portfolio,
+                feature_version="fsrs6_adr_log_poly_v1",
+            )
+            metadata = json.loads(artifact_paths[0].read_text(encoding="utf-8"))
+            portfolio_payload = json.loads(
+                (root / "out" / "portfolio.json").read_text(encoding="utf-8")
+            )
+
+        self.assertIsNone(metadata["baseline_desired_retention"])
+        self.assertNotIn("lambda_value", metadata)
+        self.assertNotIn("lambda_value", portfolio_payload)
+        self.assertNotIn("lambda", metadata["artifact_id"])
+        self.assertNotIn("lambda", portfolio_payload["portfolio_id"])
+
+
 class FSRS6ADRPortfolioResolverTests(unittest.TestCase):
     def test_policy_resolver_discovers_portfolio_children_without_dr_grid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index in range(2):
-                policy_dir = (
-                    root / "user_1" / "lambda_0" / "policies" / f"policy_{index}"
-                )
+                policy_dir = root / "user_1" / "policies" / f"policy_{index}"
                 policy_dir.mkdir(parents=True)
                 FSRS6ADRPolicy(
                     coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
@@ -682,7 +788,6 @@ class FSRS6ADRPortfolioResolverTests(unittest.TestCase):
                             "training_user_ids": [1],
                             "policy_path": "policy.json",
                             "baseline_desired_retention": None,
-                            "lambda_value": 0.0,
                             "portfolio_index": index,
                         }
                     ),
@@ -693,7 +798,6 @@ class FSRS6ADRPortfolioResolverTests(unittest.TestCase):
                 user_ids=[1],
                 dr_values=[0.50, 0.52],
                 policy_root=root,
-                lambda_values=[0.0],
             )
 
         self.assertEqual(len(specs), 2)
@@ -701,17 +805,16 @@ class FSRS6ADRPortfolioResolverTests(unittest.TestCase):
         self.assertEqual(
             [spec.baseline_desired_retention for spec in specs], [None, None]
         )
+        self.assertEqual([spec.lambda_value for spec in specs], [None, None])
 
-    def test_policy_resolver_rejects_null_metadata_with_numeric_policy_dr(
-        self,
-    ) -> None:
+    def test_policy_resolver_accepts_legacy_lambda_portfolio_children(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             policy_dir = root / "user_1" / "lambda_0" / "policies" / "policy_0"
             policy_dir.mkdir(parents=True)
             FSRS6ADRPolicy(
                 coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-                baseline_desired_retention=0.9,
+                baseline_desired_retention=None,
             ).write_json(policy_dir / "policy.json")
             (policy_dir / "metadata.json").write_text(
                 json.dumps(
@@ -727,12 +830,45 @@ class FSRS6ADRPortfolioResolverTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            specs = resolve_fsrs6_adr_policy_specs(
+                user_ids=[1],
+                dr_values=[0.50, 0.52],
+                policy_root=root,
+                lambda_values=[0.0],
+            )
+
+        self.assertEqual(len(specs), 1)
+        self.assertEqual(specs[0].lambda_value, 0.0)
+
+    def test_policy_resolver_rejects_null_metadata_with_numeric_policy_dr(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy_dir = root / "user_1" / "policies" / "policy_0"
+            policy_dir.mkdir(parents=True)
+            FSRS6ADRPolicy(
+                coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                baseline_desired_retention=0.9,
+            ).write_json(policy_dir / "policy.json")
+            (policy_dir / "metadata.json").write_text(
+                json.dumps(
+                    {
+                        "scheduler_name": "fsrs6_adr",
+                        "training_user_ids": [1],
+                        "policy_path": "policy.json",
+                        "baseline_desired_retention": None,
+                        "portfolio_index": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
             with self.assertRaisesRegex(ValueError, "metadata has null"):
                 resolve_fsrs6_adr_policy_specs(
                     user_ids=[1],
                     dr_values=[0.90],
                     policy_root=root,
-                    lambda_values=[0.0],
                 )
 
 

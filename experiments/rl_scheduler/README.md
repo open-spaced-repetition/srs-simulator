@@ -156,6 +156,8 @@ stability `S` and difficulty `D` as the horizontal axes, policy output retention
 as the vertical axis. Ordinary ADR artifacts use one translucent surface per
 baseline DR. ADR portfolio child artifacts have no baseline DR, so the
 visualizer orders and colors their surfaces by `memorized_average / deck`.
+Lambda-less ADR portfolio runs are grouped as `lambda_none`; omit
+`--lambda-values` when plotting only new portfolio child artifacts.
 
 ## Current Main Experiments
 
@@ -309,9 +311,12 @@ should support at least:
 
 - `{config_path}`
 - `{user_id}`
-- `{lambda_value}`
 - `{output_dir}`
 - `{command_record_path}`
+
+CMA-ES and other scalar-score trainers should also support `{lambda_value}`.
+ADR/ADP portfolio trainers do not use `training.lambda_grid` and should not
+include `{lambda_value}` or `--lambda` in their command templates.
 
 If the policy depends on scheduler state, implement that state update in the
 scheduler. Do not read hidden memory state from the environment.
@@ -321,8 +326,9 @@ scheduler. Do not read hidden memory state from the environment.
 - Before running: `dry-run` and `preflight` pass.
 - Baseline: `stage-baseline` matches exact engine, environment, scheduler, user,
   and DR metadata.
-- Training: every user, lambda, and baseline DR has an artifact or an explicit
-  failure.
+- Training: every required user, lambda, and baseline DR combination has an
+  artifact or an explicit failure. Portfolio trainers are per-user and
+  lambda-less.
 - Sweep: `batch_lanes` matches the expected `(user, scheduler, parameter)` count.
 - Build Pareto: `build_pareto_summary.json` contains both `result_paths` and `plot_paths`;
   generated Pareto plots are per-user, not user-aggregated.

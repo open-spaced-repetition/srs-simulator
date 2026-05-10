@@ -291,7 +291,9 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(config.name, "fsrs6_adr_linear_portfolio_users_1_8")
-        self.assertEqual(config.lambda_grid, (0.0,))
+        self.assertEqual(config.lambda_grid, ())
+        self.assertNotIn("{lambda_value}", config.train_command_template)
+        self.assertNotIn("--lambda", config.train_command_template)
         self.assertEqual(config.train_artifact_glob, "policies/**/metadata.json")
         self.assertTrue(config.train_batch_baseline_desired_retention_values)
         self.assertTrue(config.training_batch.enabled)
@@ -346,7 +348,9 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(config.name, "fsrs6_adp_portfolio_users_1_8_v2")
-        self.assertEqual(config.lambda_grid, (0.0,))
+        self.assertEqual(config.lambda_grid, ())
+        self.assertNotIn("{lambda_value}", config.train_command_template)
+        self.assertNotIn("--lambda", config.train_command_template)
         self.assertEqual(config.train_artifact_glob, "policies/**/metadata.json")
         self.assertTrue(config.training_batch.enabled)
         self.assertEqual(config.training_batch.trainer, "auto")

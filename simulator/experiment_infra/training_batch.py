@@ -30,8 +30,8 @@ class InProcessTrainJob:
     user_id: int
     baseline_desired_retention: float
     baseline_desired_retention_token: str
-    lambda_value: float
-    lambda_token: str
+    lambda_value: float | None
+    lambda_token: str | None
     output_dir: Path
     command_record_path: Path
     stdout_path: Path
@@ -218,6 +218,12 @@ def _common_context(
     )
 
 
+def _require_lambda_value(job: InProcessTrainJob) -> float:
+    if job.lambda_value is None:
+        raise ValueError("lambda_value is required for CMA-ES trainers.")
+    return float(job.lambda_value)
+
+
 def _progress_for_jobs(
     *, jobs: list[InProcessTrainJob], config_path: Path
 ) -> list[Any]:
@@ -318,7 +324,6 @@ def _run_fsrs6_adr_portfolio_jobs(
         jobs=[
             PortfolioTrainJob(
                 user_id=job.user_id,
-                lambda_value=job.lambda_value,
                 output_dir=job.output_dir,
                 command_record_path=job.command_record_path,
             )
@@ -330,25 +335,32 @@ def _run_fsrs6_adr_portfolio_jobs(
         execution_mode="in_process_batch",
     )
     outcome_by_key = {
-        (outcome.job.user_id, outcome.job.lambda_value, outcome.job.output_dir): outcome
-        for outcome in outcomes
+        (outcome.job.user_id, outcome.job.output_dir): outcome for outcome in outcomes
     }
-    return [
-        InProcessTrainOutcome(
-            job=job,
-            passed=outcome.passed,
-            artifact_paths=outcome.artifact_paths,
-            progress_path=outcome.progress_path,
-            error=outcome.error,
-        )
-        for job in jobs
-        if (
-            outcome := outcome_by_key.get(
-                (job.user_id, job.lambda_value, job.output_dir)
+    results: list[InProcessTrainOutcome] = []
+    for job in jobs:
+        outcome = outcome_by_key.get((job.user_id, job.output_dir))
+        if outcome is None:
+            results.append(
+                InProcessTrainOutcome(
+                    job=job,
+                    passed=False,
+                    artifact_paths=(),
+                    progress_path=None,
+                    error="ADR portfolio trainer did not return an outcome for this job.",
+                )
+            )
+            continue
+        results.append(
+            InProcessTrainOutcome(
+                job=job,
+                passed=outcome.passed,
+                artifact_paths=outcome.artifact_paths,
+                progress_path=outcome.progress_path,
+                error=outcome.error,
             )
         )
-        is not None
-    ]
+    return results
 
 
 def _run_fsrs6_adr_cmaes_jobs(
@@ -400,7 +412,7 @@ def _run_fsrs6_adr_cmaes_jobs(
             config=config,
             settings=optimizer_settings_by_job[job_index],
             user_id=job.user_id,
-            lambda_value=job.lambda_value,
+            lambda_value=_require_lambda_value(job),
         )
         for job_index, job in enumerate(jobs)
     ]
@@ -569,7 +581,11 @@ def _run_fsrs6_adr_cmaes_jobs(
         metrics_by_job = evaluate(coefficients)
         for job_index, strategy in enumerate(strategies):
             scores = [
-                _score(metric, baselines[job_index], jobs[job_index].lambda_value)
+                _score(
+                    metric,
+                    baselines[job_index],
+                    _require_lambda_value(jobs[job_index]),
+                )
                 for metric in metrics_by_job[job_index]
             ]
             strategy.tell(solutions_by_job[job_index], [-score for score in scores])
@@ -643,7 +659,7 @@ def _run_fsrs6_adr_cmaes_jobs(
             config_path=config_path,
             settings=effective_settings_by_job[job_index],
             user_id=job.user_id,
-            lambda_value=job.lambda_value,
+            lambda_value=_require_lambda_value(job),
             training_command_path=job.command_record_path,
             feature_version=feature_version,
             result=result,
@@ -685,7 +701,7 @@ def _run_fsrs6_adp_cmaes_jobs(
         jobs=[
             ADPTrainJob(
                 user_id=job.user_id,
-                lambda_value=job.lambda_value,
+                lambda_value=_require_lambda_value(job),
                 output_dir=job.output_dir,
                 command_record_path=job.command_record_path,
             )
@@ -701,7 +717,9 @@ def _run_fsrs6_adp_cmaes_jobs(
     }
     outcomes: list[InProcessTrainOutcome] = []
     for job in jobs:
-        result = result_by_key.get((job.user_id, job.lambda_value, job.output_dir))
+        result = result_by_key.get(
+            (job.user_id, _require_lambda_value(job), job.output_dir)
+        )
         if result is None:
             outcomes.append(
                 InProcessTrainOutcome(
@@ -740,7 +758,6 @@ def _run_fsrs6_adp_portfolio_jobs(
         jobs=[
             ADPPortfolioTrainJob(
                 user_id=job.user_id,
-                lambda_value=job.lambda_value,
                 output_dir=job.output_dir,
                 command_record_path=job.command_record_path,
             )
@@ -752,12 +769,11 @@ def _run_fsrs6_adp_portfolio_jobs(
         execution_mode="in_process_batch",
     )
     result_by_key = {
-        (result.job.user_id, result.job.lambda_value, result.job.output_dir): result
-        for result in results
+        (result.job.user_id, result.job.output_dir): result for result in results
     }
     outcomes: list[InProcessTrainOutcome] = []
     for job in jobs:
-        result = result_by_key.get((job.user_id, job.lambda_value, job.output_dir))
+        result = result_by_key.get((job.user_id, job.output_dir))
         if result is None:
             outcomes.append(
                 InProcessTrainOutcome(
