@@ -181,6 +181,23 @@ Representative profiles:
   family that jointly mutates runtime desired retention and the 21 ADP weight
   deltas, then exports 23 no-DR `fsrs6_adp` child artifacts per user.
 
+Portfolio budget comparison:
+
+- On 2026-05-10, `fsrs6_adr_linear_portfolio_users_1_8` was rerun with the
+  same SMS-EMOA sampling budget as `fsrs6_adr_portfolio_users_1_8_v3`: population
+  size 64, 20 generations, and offspring size 64. This only changed the linear
+  profile's offspring size from 32 to 64. The run id was
+  `fsrs6_adr_linear_portfolio_users_1_8_matched_budget_20260510`.
+- Compared with the original linear run, the matched-budget linear run improved
+  average hypervolume delta from 8127.81 to 9234.15 in the FSRS-6 environment,
+  and from 4479.35 to 4763.19 in the LSTM environment. FSRS-6 best-efficiency
+  wins improved from 3/8 to 4/8 users; LSTM stayed at 2/8 users.
+- The matched-budget linear run still trailed the 6-feature polynomial ADR
+  portfolio reference, which reached average hypervolume deltas of 10355.94
+  under FSRS-6 and 5107.58 under LSTM. Training time stayed close to the
+  original linear run, 359.43 seconds versus 350.20 seconds, with train-overfit
+  peak PyTorch reserved memory near 720 MiB.
+
 Abandoned directions:
 
 - qNEHVI/MOBO for ADR portfolio search was prototyped and abandoned because the
