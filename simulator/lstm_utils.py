@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 
 
+DEFAULT_LSTM_MAX_BATCH_SIZE = 65536
+
+
 def resolve_lstm_max_batch_size(value: int | None) -> int | None:
     if value is not None:
         if value < 1:
@@ -10,7 +13,7 @@ def resolve_lstm_max_batch_size(value: int | None) -> int | None:
         return value
     raw = os.getenv("SRS_LSTM_MAX_BATCH", "").strip().lower()
     if not raw:
-        return 20000
+        return DEFAULT_LSTM_MAX_BATCH_SIZE
     if raw in {"0", "none", "off"}:
         return None
     parsed = int(raw)

@@ -328,18 +328,20 @@ review throughput for a much longer generation and about double the memory.
 8192 lanes is the throughput ceiling region, not the default: it reaches
 70.89M reviews/s but takes 153.21s and saturates memory bandwidth.
 
-LSTM: the better routine default on this 24 GiB GPU is
+LSTM: the better conservative cap on this 24 GiB GPU is
 `SRS_LSTM_MAX_BATCH=20000`, not 8192. The initial 32-lane-only comparison
 understated this because both caps were invoked relatively few times. At 256,
 512, and 1024 lanes, cap 20000 is 1.59x, 1.60x, and 1.70x faster than cap 8192.
 It also stayed below physical VRAM in both PyTorch reserved memory and
-dedicated-memory samples. For a dedicated throughput run at 1024 lanes, cap
-`98304` is better: the three-repeat confirmation finished in 273.14s at
-7.60M reviews/s, 1.27x the cap 20000 review throughput and 1.08x the cap 32768
-confirmation throughput. Keep cap 8192 as a conservative fallback when the GPU
-is shared, when other processes are resident, or when external shared-GPU-memory
-monitoring shows spill. `off` is not viable: it reserved 40.79 GiB in PyTorch,
-hit 24089 MiB dedicated memory, and was slower than every capped run.
+dedicated-memory samples. The code default is now `65536`, which is a stronger
+throughput compromise than 20000 while staying well below the 98304 memory
+profile in this sweep. For a dedicated throughput run at 1024 lanes, cap `98304`
+is better: the three-repeat confirmation finished in 273.14s at 7.60M reviews/s,
+1.27x the cap 20000 review throughput and 1.08x the cap 32768 confirmation
+throughput. Keep cap 8192 as a conservative fallback when the GPU is shared,
+when other processes are resident, or when external shared-GPU-memory monitoring
+shows spill. `off` is not viable: it reserved 40.79 GiB in PyTorch, hit
+24089 MiB dedicated memory, and was slower than every capped run.
 
 User-parallel shape matters for FSRS6, but less than total lanes once the GPU is
 saturated. At 512-1024 lanes, shapes differ by several seconds and by roughly
@@ -360,8 +362,9 @@ Safe lane caps from these runs:
 - FSRS6 throughput experiment: 4096 lanes.
 - FSRS6 upper bound on this 24 GiB GPU: 8192 lanes, only when long generations
   and memory-bandwidth saturation are acceptable.
-- LSTM routine default: 256 lanes at cap 20000.
-- LSTM throughput experiment: 512 lanes at cap 20000.
+- LSTM conservative run: 256 lanes at cap 20000.
+- LSTM default throughput run: 1024 lanes at cap 65536, with shared-memory
+  monitoring enabled.
 - LSTM upper bound for this fixed DR 0.98 workload: 1024 lanes at cap 98304,
   only when 4-5 minute cells and high dedicated memory are acceptable.
 - Use cap 8192 as a conservative memory fallback; avoid cap 1024 for

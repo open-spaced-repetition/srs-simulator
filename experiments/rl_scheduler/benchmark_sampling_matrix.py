@@ -24,6 +24,7 @@ from experiments.rl_scheduler.benchmark_sampling import (
     _parse_ints,
 )
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
+from simulator.lstm_utils import DEFAULT_LSTM_MAX_BATCH_SIZE
 
 
 BENCHMARK_SCRIPT = Path("experiments/rl_scheduler/benchmark_sampling.py")
@@ -111,7 +112,7 @@ class SamplingMatrixCell:
             return None
         if isinstance(self.lstm_max_batch, int):
             return self.lstm_max_batch
-        return 20000
+        return DEFAULT_LSTM_MAX_BATCH_SIZE
 
     @property
     def lane_shape(self) -> str:

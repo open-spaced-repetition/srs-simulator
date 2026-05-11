@@ -38,7 +38,10 @@ from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig
-from simulator.lstm_utils import resolve_lstm_max_batch_size
+from simulator.lstm_utils import (
+    DEFAULT_LSTM_MAX_BATCH_SIZE,
+    resolve_lstm_max_batch_size,
+)
 from simulator.short_term_config import resolve_short_term_config
 
 
@@ -200,7 +203,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Override SRS_LSTM_MAX_BATCH for --environment lstm. Use an integer "
-            "or 'off' to disable LSTM chunking."
+            f"or 'off' to disable LSTM chunking. Defaults to "
+            f"{DEFAULT_LSTM_MAX_BATCH_SIZE} when unset."
         ),
     )
     parser.add_argument("--button-usage", type=Path, default=DEFAULT_BUTTON_USAGE_PATH)

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import unittest
 from argparse import ArgumentTypeError
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 import torch
 
@@ -23,6 +25,7 @@ from experiments.rl_scheduler.benchmark_sampling import (
 )
 from experiments.rl_scheduler.benchmark_sampling_matrix import generate_matrix_cells
 from experiments.rl_scheduler.policy_search_common import PolicySearchSettings
+from simulator.lstm_utils import DEFAULT_LSTM_MAX_BATCH_SIZE
 
 
 class BenchmarkSamplingTests(unittest.TestCase):
@@ -140,6 +143,12 @@ class BenchmarkSamplingTests(unittest.TestCase):
             override=None,
             environ=environ,
         )
+        with patch.dict(os.environ, {}, clear=True):
+            lstm_default = _apply_lstm_max_batch_override(
+                environment="lstm",
+                override=None,
+                environ=environ,
+            )
         lstm_value = _apply_lstm_max_batch_override(
             environment="lstm",
             override=1024,
@@ -152,6 +161,7 @@ class BenchmarkSamplingTests(unittest.TestCase):
         )
 
         self.assertIsNone(fsrs6_value)
+        self.assertEqual(lstm_default, DEFAULT_LSTM_MAX_BATCH_SIZE)
         self.assertEqual(lstm_value, 1024)
         self.assertIsNone(lstm_off)
         self.assertEqual(environ["SRS_LSTM_MAX_BATCH"], "off")
