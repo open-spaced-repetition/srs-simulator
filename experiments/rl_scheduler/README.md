@@ -257,7 +257,9 @@ Portfolio baseline selection:
   per-user FSRS-6 DR values selected under the `fsrs6` environment by
   `select_fsrs6_baseline_drs.py`. The selector writes a JSONL progress log next
   to the manifest by default, with one `generation_evaluated` record per user
-  and CMA-ES generation containing the current hypervolume statistics.
+  and CMA-ES generation containing the current hypervolume statistics. It
+  evaluates multiple users in the same GPU batch up to `--max-lanes-per-batch`
+  lanes, defaulting to 8192.
 - Generate the manifest before `stage-baseline`, then run a manifest-driven
   FSRS6 baseline sweep across `fsrs6,lstm`, for example:
 

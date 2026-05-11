@@ -130,7 +130,8 @@ candidate `(memorized_average, -time_average)` points over the user's FSRS-6 DR
 baseline set. Portfolio profiles use `[baseline_dr_selection]` to point at a
 generated per-user manifest of 16 FSRS-6 desired-retention values, selected in
 the FSRS6 environment before formal staging/training. The selector writes
-per-generation hypervolume progress to `<manifest>.progress.jsonl` by default.
+per-generation hypervolume progress to `<manifest>.progress.jsonl` by default
+and batches multiple users together up to `--max-lanes-per-batch` lanes.
 Portfolio artifacts are
 lambda-less and write children under
 `user_<id>/policies/policy_*/`; set

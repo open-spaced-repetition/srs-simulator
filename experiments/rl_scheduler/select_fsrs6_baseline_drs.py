@@ -6,8 +6,8 @@ import argparse
 import hashlib
 import json
 import sys
-from collections.abc import Sequence
-from dataclasses import asdict, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO
@@ -39,6 +39,9 @@ from simulator.experiment_infra.schemas import ExperimentConfig
 from simulator.short_term_config import resolve_short_term_config
 
 
+DEFAULT_MAX_LANES_PER_BATCH = 8192
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate per-user FSRS6 baseline DR selection manifests.",
@@ -58,6 +61,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--srs-benchmark-root", type=Path, default=None)
     parser.add_argument("--benchmark-result", default=None)
     parser.add_argument("--benchmark-partition", default=None)
+    parser.add_argument(
+        "--max-lanes-per-batch",
+        type=int,
+        default=DEFAULT_MAX_LANES_PER_BATCH,
+        help=(
+            "Maximum FSRS6 lanes per selector evaluation batch. The selector "
+            "batches multiple users together up to this cap."
+        ),
+    )
     parser.add_argument(
         "--progress-log",
         type=Path,
@@ -80,6 +92,8 @@ def main() -> int:
         raise SystemExit(
             "--output-manifest is required when baseline_dr_selection.manifest is absent."
         )
+    if args.max_lanes_per_batch < 1:
+        raise SystemExit("--max-lanes-per-batch must be >= 1.")
     if not output_manifest.is_absolute():
         output_manifest = (REPO_ROOT / output_manifest).resolve()
     progress_log_path = _resolve_progress_log_path(
@@ -120,27 +134,24 @@ def main() -> int:
             target_count=selection_config.target_count,
             population_size=selection_config.population_size,
             generations=selection_config.generations,
+            max_lanes_per_batch=args.max_lanes_per_batch,
         )
-        users = []
-        for user_id in config.users.train:
-            users.append(
-                _select_user_drs(
-                    config=selection_experiment,
-                    config_path=args.config,
-                    settings=settings,
-                    user_id=user_id,
-                    benchmark_root=benchmark_root,
-                    overrides=overrides,
-                    benchmark_partition=args.benchmark_partition,
-                    button_usage=args.button_usage,
-                    device=device,
-                    short_term_source=short_term_source,
-                    learning_steps=learning_steps,
-                    relearning_steps=relearning_steps,
-                    progress_logger=progress_logger,
-                )
-            )
-            _clear_cuda_cache(device)
+        users = _select_users_drs_batched(
+            config=selection_experiment,
+            config_path=args.config,
+            settings=settings,
+            user_ids=config.users.train,
+            benchmark_root=benchmark_root,
+            overrides=overrides,
+            benchmark_partition=args.benchmark_partition,
+            button_usage=args.button_usage,
+            device=device,
+            short_term_source=short_term_source,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+            max_lanes_per_batch=args.max_lanes_per_batch,
+            progress_logger=progress_logger,
+        )
 
         _write_json(
             output_manifest,
@@ -167,6 +178,7 @@ def main() -> int:
                     "name": "cma_es",
                     "population_size": selection_config.population_size,
                     "generations": selection_config.generations,
+                    "max_lanes_per_batch": args.max_lanes_per_batch,
                 },
                 "progress_log": str(progress_log_path)
                 if progress_log_path is not None
@@ -181,12 +193,31 @@ def main() -> int:
     return 0
 
 
-def _select_user_drs(
+@dataclass(slots=True)
+class _EvaluationJob:
+    user_id: int
+    candidate_index: int
+    desired_retention_values: tuple[float, ...]
+
+
+@dataclass(slots=True)
+class _UserSelectionState:
+    user_id: int
+    strategy: Any
+    sigma0: float
+    reference: Any
+    best_values: tuple[float, ...]
+    best_metrics: list[CandidateMetrics]
+    best_hv: float
+    history: list[dict[str, Any]]
+
+
+def _select_users_drs_batched(
     *,
     config: ExperimentConfig,
     config_path: Path,
     settings: PolicySearchSettings,
-    user_id: int,
+    user_ids: Sequence[int],
     benchmark_root: Path,
     overrides: dict[str, str],
     benchmark_partition: str | None,
@@ -195,8 +226,9 @@ def _select_user_drs(
     short_term_source: str | None,
     learning_steps: list[float],
     relearning_steps: list[float],
+    max_lanes_per_batch: int,
     progress_logger: _SelectionProgressLogger,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     selection = config.baseline_dr_selection
     target_count = selection.target_count
     anchor = _uniform_dr_values(
@@ -204,11 +236,10 @@ def _select_user_drs(
         settings.retention_max,
         target_count,
     )
-    anchor_metrics = _evaluate_candidate_sets(
+    anchor_metrics_by_user = _evaluate_multi_user_candidate_sets(
         config=config,
         settings=settings,
-        user_id=user_id,
-        candidate_sets=[anchor],
+        user_candidate_sets={int(user_id): (anchor,) for user_id in user_ids},
         benchmark_root=benchmark_root,
         overrides=overrides,
         benchmark_partition=benchmark_partition,
@@ -217,61 +248,79 @@ def _select_user_drs(
         short_term_source=short_term_source,
         learning_steps=learning_steps,
         relearning_steps=relearning_steps,
-    )[0]
-    anchor_points = [point_from_metrics(metrics) for metrics in anchor_metrics]
-    reference = reference_point(anchor_points)
-    best_values = anchor
-    best_metrics = anchor_metrics
-    best_hv = objective_hypervolume_2d(anchor_points, reference=reference)
-    history = [
-        {
-            "generation": -1,
-            "best_hypervolume": best_hv,
-            "mean_hypervolume": best_hv,
-        }
-    ]
-    progress_logger.write_generation(
-        user_id=user_id,
-        generation=-1,
-        candidate_count=1,
-        generation_best_hypervolume=best_hv,
-        generation_mean_hypervolume=best_hv,
-        generation_min_hypervolume=best_hv,
-        generation_max_hypervolume=best_hv,
-        incumbent_best_hypervolume=best_hv,
-        improved=True,
-        generation_best_desired_retention_values=anchor,
-        incumbent_desired_retention_values=best_values,
+        max_lanes_per_batch=max_lanes_per_batch,
     )
-
     sigma0 = max((settings.retention_max - settings.retention_min) / 6.0, 1e-3)
-    strategy = cma.CMAEvolutionStrategy(
-        list(anchor),
-        sigma0,
-        {
-            "bounds": [settings.retention_min, settings.retention_max],
-            "popsize": selection.population_size,
-            "seed": config.seed + 7919 * user_id,
-            "verbose": -9,
-        },
-    )
-    for generation in range(selection.generations):
-        asked = strategy.ask()
-        candidate_sets = [
-            _canonical_dr_values(
-                values,
-                retention_min=settings.retention_min,
-                retention_max=settings.retention_max,
-                target_count=target_count,
-                tolerance=selection.tolerance,
-            )
-            for values in asked
+    states: dict[int, _UserSelectionState] = {}
+    for user_id in user_ids:
+        user_id = int(user_id)
+        anchor_metrics = anchor_metrics_by_user[user_id][0]
+        anchor_points = [point_from_metrics(metrics) for metrics in anchor_metrics]
+        reference = reference_point(anchor_points)
+        best_hv = objective_hypervolume_2d(anchor_points, reference=reference)
+        history = [
+            {
+                "generation": -1,
+                "best_hypervolume": best_hv,
+                "mean_hypervolume": best_hv,
+            }
         ]
-        metrics_by_candidate = _evaluate_candidate_sets(
+        progress_logger.write_generation(
+            user_id=user_id,
+            generation=-1,
+            candidate_count=1,
+            generation_best_hypervolume=best_hv,
+            generation_mean_hypervolume=best_hv,
+            generation_min_hypervolume=best_hv,
+            generation_max_hypervolume=best_hv,
+            incumbent_best_hypervolume=best_hv,
+            improved=True,
+            generation_best_desired_retention_values=anchor,
+            incumbent_desired_retention_values=anchor,
+        )
+        states[user_id] = _UserSelectionState(
+            user_id=user_id,
+            strategy=cma.CMAEvolutionStrategy(
+                list(anchor),
+                sigma0,
+                {
+                    "bounds": [settings.retention_min, settings.retention_max],
+                    "popsize": selection.population_size,
+                    "seed": config.seed + 7919 * user_id,
+                    "verbose": -9,
+                },
+            ),
+            sigma0=sigma0,
+            reference=reference,
+            best_values=anchor,
+            best_metrics=anchor_metrics,
+            best_hv=best_hv,
+            history=history,
+        )
+    _clear_cuda_cache(device)
+
+    for generation in range(selection.generations):
+        asked_by_user: dict[int, Sequence[Any]] = {}
+        candidate_sets_by_user: dict[int, tuple[tuple[float, ...], ...]] = {}
+        for user_id in user_ids:
+            user_id = int(user_id)
+            state = states[user_id]
+            asked = state.strategy.ask()
+            asked_by_user[user_id] = asked
+            candidate_sets_by_user[user_id] = tuple(
+                _canonical_dr_values(
+                    values,
+                    retention_min=settings.retention_min,
+                    retention_max=settings.retention_max,
+                    target_count=target_count,
+                    tolerance=selection.tolerance,
+                )
+                for values in asked
+            )
+        metrics_by_user = _evaluate_multi_user_candidate_sets(
             config=config,
             settings=settings,
-            user_id=user_id,
-            candidate_sets=candidate_sets,
+            user_candidate_sets=candidate_sets_by_user,
             benchmark_root=benchmark_root,
             overrides=overrides,
             benchmark_partition=benchmark_partition,
@@ -280,69 +329,94 @@ def _select_user_drs(
             short_term_source=short_term_source,
             learning_steps=learning_steps,
             relearning_steps=relearning_steps,
+            max_lanes_per_batch=max_lanes_per_batch,
         )
-        hypervolumes = [
-            objective_hypervolume_2d(
-                [point_from_metrics(metrics) for metrics in candidate_metrics],
-                reference=reference,
+        _clear_cuda_cache(device)
+        for user_id in user_ids:
+            user_id = int(user_id)
+            state = states[user_id]
+            candidate_sets = candidate_sets_by_user[user_id]
+            metrics_by_candidate = metrics_by_user[user_id]
+            hypervolumes = [
+                objective_hypervolume_2d(
+                    [point_from_metrics(metrics) for metrics in candidate_metrics],
+                    reference=state.reference,
+                )
+                for candidate_metrics in metrics_by_candidate
+            ]
+            state.strategy.tell(
+                asked_by_user[user_id], [-value for value in hypervolumes]
             )
-            for candidate_metrics in metrics_by_candidate
-        ]
-        strategy.tell(asked, [-value for value in hypervolumes])
-        generation_best_index = max(
-            range(len(hypervolumes)),
-            key=lambda index: hypervolumes[index],
-        )
-        generation_best_hv = hypervolumes[generation_best_index]
-        mean_hv = float(sum(hypervolumes) / len(hypervolumes))
-        improved = generation_best_hv > best_hv
-        if improved:
-            best_hv = generation_best_hv
-            best_values = candidate_sets[generation_best_index]
-            best_metrics = metrics_by_candidate[generation_best_index]
-        history.append(
-            {
-                "generation": generation,
-                "best_hypervolume": best_hv,
-                "mean_hypervolume": mean_hv,
-                "generation_best_hypervolume": generation_best_hv,
-            }
-        )
-        progress_logger.write_generation(
-            user_id=user_id,
-            generation=generation,
-            candidate_count=len(candidate_sets),
-            generation_best_hypervolume=generation_best_hv,
-            generation_mean_hypervolume=mean_hv,
-            generation_min_hypervolume=float(min(hypervolumes)),
-            generation_max_hypervolume=float(max(hypervolumes)),
-            incumbent_best_hypervolume=best_hv,
-            improved=improved,
-            generation_best_desired_retention_values=candidate_sets[
-                generation_best_index
-            ],
-            incumbent_desired_retention_values=best_values,
-        )
+            generation_best_index = max(
+                range(len(hypervolumes)),
+                key=lambda index: hypervolumes[index],
+            )
+            generation_best_hv = hypervolumes[generation_best_index]
+            mean_hv = float(sum(hypervolumes) / len(hypervolumes))
+            improved = generation_best_hv > state.best_hv
+            if improved:
+                state.best_hv = generation_best_hv
+                state.best_values = candidate_sets[generation_best_index]
+                state.best_metrics = metrics_by_candidate[generation_best_index]
+            state.history.append(
+                {
+                    "generation": generation,
+                    "best_hypervolume": state.best_hv,
+                    "mean_hypervolume": mean_hv,
+                    "generation_best_hypervolume": generation_best_hv,
+                }
+            )
+            progress_logger.write_generation(
+                user_id=user_id,
+                generation=generation,
+                candidate_count=len(candidate_sets),
+                generation_best_hypervolume=generation_best_hv,
+                generation_mean_hypervolume=mean_hv,
+                generation_min_hypervolume=float(min(hypervolumes)),
+                generation_max_hypervolume=float(max(hypervolumes)),
+                incumbent_best_hypervolume=state.best_hv,
+                improved=improved,
+                generation_best_desired_retention_values=candidate_sets[
+                    generation_best_index
+                ],
+                incumbent_desired_retention_values=state.best_values,
+            )
 
+    return [
+        _manifest_entry_from_state(
+            state=states[int(user_id)],
+            config=config,
+            config_path=config_path,
+        )
+        for user_id in user_ids
+    ]
+
+
+def _manifest_entry_from_state(
+    *,
+    state: _UserSelectionState,
+    config: ExperimentConfig,
+    config_path: Path,
+) -> dict[str, Any]:
     return {
-        "user_id": user_id,
-        "desired_retention_values": list(best_values),
+        "user_id": state.user_id,
+        "desired_retention_values": list(state.best_values),
         "objective": {
             "name": "hypervolume_2d",
-            "hypervolume": best_hv,
-            "anchor_hypervolume": history[0]["best_hypervolume"],
-            "history": history,
+            "hypervolume": state.best_hv,
+            "anchor_hypervolume": state.history[0]["best_hypervolume"],
+            "history": state.history,
         },
-        "reference_point": asdict(reference),
+        "reference_point": asdict(state.reference),
         "selected_metrics": [
             {"desired_retention": dr, **asdict(metrics)}
-            for dr, metrics in zip(best_values, best_metrics, strict=True)
+            for dr, metrics in zip(state.best_values, state.best_metrics, strict=True)
         ],
         "optimizer": {
             "name": "cma_es",
             "population_size": config.baseline_dr_selection.population_size,
             "generations": config.baseline_dr_selection.generations,
-            "sigma0": sigma0,
+            "sigma0": state.sigma0,
         },
         "config_snapshot": {
             "config_path": str(config_path),
@@ -384,6 +458,7 @@ class _SelectionProgressLogger:
         target_count: int,
         population_size: int,
         generations: int,
+        max_lanes_per_batch: int,
     ) -> None:
         self._write(
             "run_started",
@@ -394,6 +469,7 @@ class _SelectionProgressLogger:
             target_count=target_count,
             population_size=population_size,
             generations=generations,
+            max_lanes_per_batch=max_lanes_per_batch,
         )
 
     def write_generation(
@@ -451,12 +527,11 @@ class _SelectionProgressLogger:
         self._handle.flush()
 
 
-def _evaluate_candidate_sets(
+def _evaluate_multi_user_candidate_sets(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
-    user_id: int,
-    candidate_sets: Sequence[tuple[float, ...]],
+    user_candidate_sets: Mapping[int, Sequence[tuple[float, ...]]],
     benchmark_root: Path,
     overrides: dict[str, str],
     benchmark_partition: str | None,
@@ -465,33 +540,96 @@ def _evaluate_candidate_sets(
     short_term_source: str | None,
     learning_steps: list[float],
     relearning_steps: list[float],
-) -> list[list[CandidateMetrics]]:
-    lane_user_ids = [user_id for candidate in candidate_sets for _dr in candidate]
-    bundle = _build_bundle(
-        config=config,
-        settings=settings,
-        lane_user_ids=lane_user_ids,
-        benchmark_root=benchmark_root,
-        overrides=overrides,
-        benchmark_partition=benchmark_partition,
-        button_usage=button_usage,
-        device=device,
-        short_term_source=short_term_source,
-        learning_steps=learning_steps,
-        relearning_steps=relearning_steps,
-    )
-    try:
-        return _evaluate_fsrs6_baseline_grid(
+    max_lanes_per_batch: int,
+) -> dict[int, list[list[CandidateMetrics]]]:
+    jobs: list[_EvaluationJob] = []
+    raw_results: dict[int, list[list[CandidateMetrics] | None]] = {}
+    for user_id, candidate_sets in user_candidate_sets.items():
+        user_id = int(user_id)
+        raw_results[user_id] = [None for _candidate in candidate_sets]
+        for candidate_index, desired_retention_values in enumerate(candidate_sets):
+            jobs.append(
+                _EvaluationJob(
+                    user_id=user_id,
+                    candidate_index=candidate_index,
+                    desired_retention_values=desired_retention_values,
+                )
+            )
+    if not jobs:
+        return {}
+
+    for chunk in _chunk_evaluation_jobs(
+        jobs,
+        max_lanes_per_batch=max_lanes_per_batch,
+    ):
+        lane_user_ids = [
+            job.user_id for job in chunk for _dr in job.desired_retention_values
+        ]
+        baseline_dr_values_by_job = [job.desired_retention_values for job in chunk]
+        bundle = _build_bundle(
             config=config,
             settings=settings,
-            bundle=bundle,
-            baseline_dr_values=candidate_sets[0],
-            baseline_dr_values_by_job=candidate_sets,
-            job_count=len(candidate_sets),
-            seed=config.seed,
+            lane_user_ids=lane_user_ids,
+            benchmark_root=benchmark_root,
+            overrides=overrides,
+            benchmark_partition=benchmark_partition,
+            button_usage=button_usage,
+            device=device,
+            short_term_source=short_term_source,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
         )
-    finally:
-        del bundle
+        try:
+            metrics_by_job = _evaluate_fsrs6_baseline_grid(
+                config=config,
+                settings=settings,
+                bundle=bundle,
+                baseline_dr_values=baseline_dr_values_by_job[0],
+                baseline_dr_values_by_job=baseline_dr_values_by_job,
+                job_count=len(chunk),
+                seed=config.seed,
+            )
+        finally:
+            del bundle
+        for job, metrics in zip(chunk, metrics_by_job, strict=True):
+            raw_results[job.user_id][job.candidate_index] = metrics
+
+    results: dict[int, list[list[CandidateMetrics]]] = {}
+    for user_id, user_results in raw_results.items():
+        completed: list[list[CandidateMetrics]] = []
+        for item in user_results:
+            if item is None:
+                raise RuntimeError(
+                    f"Missing baseline DR selection metrics for user {user_id}."
+                )
+            completed.append(item)
+        results[user_id] = completed
+    return results
+
+
+def _chunk_evaluation_jobs(
+    jobs: Sequence[_EvaluationJob],
+    *,
+    max_lanes_per_batch: int,
+) -> list[list[_EvaluationJob]]:
+    if max_lanes_per_batch < 1:
+        raise ValueError("max_lanes_per_batch must be >= 1.")
+    chunks: list[list[_EvaluationJob]] = []
+    current: list[_EvaluationJob] = []
+    current_lanes = 0
+    for job in jobs:
+        job_lanes = len(job.desired_retention_values)
+        if job_lanes < 1:
+            raise ValueError("candidate desired_retention_values must not be empty.")
+        if current and current_lanes + job_lanes > max_lanes_per_batch:
+            chunks.append(current)
+            current = []
+            current_lanes = 0
+        current.append(job)
+        current_lanes += job_lanes
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _uniform_dr_values(

@@ -12,7 +12,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.rl_scheduler.select_fsrs6_baseline_drs import (
+    _EvaluationJob,
     _SelectionProgressLogger,
+    _chunk_evaluation_jobs,
     _resolve_progress_log_path,
 )
 
@@ -30,6 +32,7 @@ class FSRS6BaselineDRSelectionProgressTests(unittest.TestCase):
                     target_count=16,
                     population_size=32,
                     generations=10,
+                    max_lanes_per_batch=8192,
                 )
                 logger.write_generation(
                     user_id=1,
@@ -63,6 +66,7 @@ class FSRS6BaselineDRSelectionProgressTests(unittest.TestCase):
             ],
         )
         generation_record = records[1]
+        self.assertEqual(records[0]["max_lanes_per_batch"], 8192)
         self.assertEqual(generation_record["user_id"], 1)
         self.assertEqual(generation_record["generation"], 3)
         self.assertEqual(generation_record["candidate_count"], 32)
@@ -88,6 +92,46 @@ class FSRS6BaselineDRSelectionProgressTests(unittest.TestCase):
         )
 
         self.assertIsNone(path)
+
+    def test_chunk_evaluation_jobs_respects_lane_cap(self) -> None:
+        jobs = [
+            _EvaluationJob(
+                user_id=1,
+                candidate_index=0,
+                desired_retention_values=(0.51, 0.61),
+            ),
+            _EvaluationJob(
+                user_id=1,
+                candidate_index=1,
+                desired_retention_values=(0.52, 0.62),
+            ),
+            _EvaluationJob(
+                user_id=2,
+                candidate_index=0,
+                desired_retention_values=(0.53, 0.63),
+            ),
+        ]
+
+        chunks = _chunk_evaluation_jobs(jobs, max_lanes_per_batch=4)
+
+        self.assertEqual(
+            [[job.user_id for job in chunk] for chunk in chunks],
+            [
+                [1, 1],
+                [2],
+            ],
+        )
+
+    def test_chunk_evaluation_jobs_keeps_oversized_single_job(self) -> None:
+        job = _EvaluationJob(
+            user_id=1,
+            candidate_index=0,
+            desired_retention_values=(0.51, 0.61, 0.71),
+        )
+
+        chunks = _chunk_evaluation_jobs([job], max_lanes_per_batch=2)
+
+        self.assertEqual(chunks, [[job]])
 
 
 if __name__ == "__main__":
