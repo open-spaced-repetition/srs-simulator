@@ -693,7 +693,8 @@ class FSRS6ADRPortfolioMathTests(unittest.TestCase):
             reference=reference,
         )
 
-        self.assertEqual([child.candidate.candidate_id for child in children], [4, 1])
+        self.assertEqual([child.candidate.candidate_id for child in children], [1, 4])
+        self.assertEqual([child.portfolio_index for child in children], [0, 1])
         selected_hv = hypervolume_2d(
             [*baseline_points, *[child.candidate.point for child in children]],
             reference=reference,
@@ -711,6 +712,29 @@ class FSRS6ADRPortfolioMathTests(unittest.TestCase):
             sum(child.hypervolume_contribution for child in children),
             selected_hv - baseline_hv,
         )
+
+    def test_portfolio_child_indexes_sort_by_study_time_then_memory_then_id(
+        self,
+    ) -> None:
+        baseline_points = [ObjectivePoint(0.1, -9.9)]
+        reference = ObjectivePoint(0.0, -10.0)
+        candidates = [
+            _candidate(3, 7.0, 2.0),
+            _candidate(1, 6.0, 2.0),
+            _candidate(2, 7.0, 2.0),
+        ]
+
+        children = _select_portfolio_children(
+            baseline_points=baseline_points,
+            candidates=candidates,
+            portfolio_size=3,
+            reference=reference,
+        )
+
+        self.assertEqual(
+            [child.candidate.candidate_id for child in children], [2, 3, 1]
+        )
+        self.assertEqual([child.portfolio_index for child in children], [0, 1, 2])
 
 
 class FSRS6ADRPortfolioArtifactTests(unittest.TestCase):

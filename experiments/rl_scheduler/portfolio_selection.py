@@ -85,6 +85,38 @@ class PortfolioChildSelection:
     pareto_rank: int
 
 
+def _portfolio_child_export_sort_key(
+    selection: PortfolioChildSelection,
+    candidates: Sequence[SelectionCandidate],
+) -> tuple[float, float, int, int]:
+    candidate = candidates[selection.candidate_index]
+    return (
+        candidate.metrics.time_average,
+        -candidate.metrics.memorized_average,
+        candidate.candidate_id,
+        selection.candidate_index,
+    )
+
+
+def _renumber_portfolio_children_for_export(
+    children: Sequence[PortfolioChildSelection],
+    candidates: Sequence[SelectionCandidate],
+) -> list[PortfolioChildSelection]:
+    ordered = sorted(
+        children,
+        key=lambda selection: _portfolio_child_export_sort_key(selection, candidates),
+    )
+    return [
+        PortfolioChildSelection(
+            portfolio_index=portfolio_index,
+            candidate_index=selection.candidate_index,
+            hypervolume_contribution=selection.hypervolume_contribution,
+            pareto_rank=selection.pareto_rank,
+        )
+        for portfolio_index, selection in enumerate(ordered)
+    ]
+
+
 class LightweightSelectionPool:
     def __init__(self, *, max_workers: int) -> None:
         if max_workers < 1:
@@ -565,7 +597,7 @@ def select_portfolio_child_indices(
                 pareto_rank=ranks[best_index],
             )
         )
-    return children
+    return _renumber_portfolio_children_for_export(children, candidates)
 
 
 def select_sms_emoa_payload_timed(payload: SelectionPayload) -> SelectionResult:

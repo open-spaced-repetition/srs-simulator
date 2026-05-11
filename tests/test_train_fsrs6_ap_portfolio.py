@@ -26,6 +26,7 @@ from experiments.rl_scheduler.train_fsrs6_ap_portfolio import (
     UserAPPortfolioResult,
     _mutate_genome,
     _selection_payload,
+    _select_portfolio_children,
     _write_portfolio_artifacts,
 )
 from experiments.rl_scheduler.portfolio_selection import (
@@ -45,6 +46,21 @@ def _metrics(memorized: float, time_average: float) -> CandidateMetrics:
         total_reviews=0,
         total_lapses=0,
         total_cost=0.0,
+    )
+
+
+def _ap_candidate(
+    candidate_id: int,
+    memorized: float,
+    time_average: float,
+) -> APPortfolioCandidate:
+    base_weights = clip_fsrs6_ap_weights(DEFAULT_FSRS6_WEIGHTS)
+    return APPortfolioCandidate(
+        candidate_id=candidate_id,
+        desired_retention=0.83,
+        search_vector=(0.0,) * 21,
+        weights=base_weights,
+        metrics=_metrics(memorized, time_average),
     )
 
 
@@ -162,6 +178,27 @@ class FSRS6APPortfolioTests(unittest.TestCase):
         self.assertEqual(len(survivors[0]), 2)
         self.assertEqual(len(worker_seconds), 1)
         self.assertGreaterEqual(worker_seconds[0], 0.0)
+
+    def test_portfolio_child_indexes_sort_by_study_time(self) -> None:
+        baseline_points = [ObjectivePoint(0.1, -9.9)]
+        reference = ObjectivePoint(0.0, -10.0)
+        candidates = [
+            _ap_candidate(1, 9.0, 4.0),
+            _ap_candidate(2, 6.0, 2.0),
+            _ap_candidate(3, 7.0, 2.0),
+        ]
+
+        children = _select_portfolio_children(
+            baseline_points=baseline_points,
+            candidates=candidates,
+            portfolio_size=3,
+            reference=reference,
+        )
+
+        self.assertEqual(
+            [child.candidate.candidate_id for child in children], [3, 2, 1]
+        )
+        self.assertEqual([child.portfolio_index for child in children], [0, 1, 2])
 
     def test_artifacts_record_exported_subset_hypervolume_for_children(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
