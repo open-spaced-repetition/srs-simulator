@@ -20,8 +20,8 @@ from simulator.batched_engine.multiuser_engine import simulate_multiuser
 SUPPORTED_TRAINERS = {
     "fsrs6_adr_portfolio",
     "fsrs6_adr_cmaes",
-    "fsrs6_adp_cmaes",
-    "fsrs6_adp_portfolio",
+    "fsrs6_ap_cmaes",
+    "fsrs6_ap_portfolio",
 }
 
 
@@ -68,10 +68,10 @@ def resolve_in_process_trainer(
     script_names = {Path(item).name for item in command_template}
     if "train_cmaes_fsrs6_adr.py" in script_names:
         return "fsrs6_adr_cmaes"
-    if "train_cmaes_fsrs6_adp.py" in script_names:
-        return "fsrs6_adp_cmaes"
-    if "train_fsrs6_adp_portfolio.py" in script_names:
-        return "fsrs6_adp_portfolio"
+    if "train_cmaes_fsrs6_ap.py" in script_names:
+        return "fsrs6_ap_cmaes"
+    if "train_fsrs6_ap_portfolio.py" in script_names:
+        return "fsrs6_ap_portfolio"
     if "train_fsrs6_adr_portfolio.py" in script_names:
         return "fsrs6_adr_portfolio"
     raise ValueError(
@@ -95,12 +95,12 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
     from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
         PortfolioSettings,
     )
-    from experiments.rl_scheduler.train_fsrs6_adp_portfolio import (
-        ADPPortfolioSettings,
+    from experiments.rl_scheduler.train_fsrs6_ap_portfolio import (
+        APPortfolioSettings,
     )
-    from experiments.rl_scheduler.train_cmaes_fsrs6_adp import (
-        ADPSettings,
-        optimizer_settings_from_mapping as adp_optimizer_settings_from_mapping,
+    from experiments.rl_scheduler.train_cmaes_fsrs6_ap import (
+        APSettings,
+        optimizer_settings_from_mapping as ap_optimizer_settings_from_mapping,
     )
 
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
@@ -133,19 +133,19 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             portfolio.offspring_size,
         )
     baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
-    if trainer == "fsrs6_adp_cmaes":
-        optimizer = adp_optimizer_settings_from_mapping(config.training_optimizer)
-        adp_settings = ADPSettings.from_config(
+    if trainer == "fsrs6_ap_cmaes":
+        optimizer = ap_optimizer_settings_from_mapping(config.training_optimizer)
+        ap_settings = APSettings.from_config(
             config,
             raw_training_policy_search=raw_training_policy_search,
             dr_count=len(baseline_dr_values),
         )
         return max(
             len(baseline_dr_values),
-            adp_settings.dr_batch_size * optimizer.population_size,
+            ap_settings.dr_batch_size * optimizer.population_size,
         )
-    if trainer == "fsrs6_adp_portfolio":
-        portfolio = ADPPortfolioSettings.from_mapping(
+    if trainer == "fsrs6_ap_portfolio":
+        portfolio = APPortfolioSettings.from_mapping(
             config.training_portfolio,
             settings=settings,
             default_seed_retention_values=baseline_dr_values,
@@ -176,12 +176,12 @@ def run_in_process_train_batch(
         return _run_fsrs6_adr_portfolio_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
-    if trainer == "fsrs6_adp_cmaes":
-        return _run_fsrs6_adp_cmaes_jobs(
+    if trainer == "fsrs6_ap_cmaes":
+        return _run_fsrs6_ap_cmaes_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
-    if trainer == "fsrs6_adp_portfolio":
-        return _run_fsrs6_adp_portfolio_jobs(
+    if trainer == "fsrs6_ap_portfolio":
+        return _run_fsrs6_ap_portfolio_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
@@ -685,21 +685,21 @@ def _run_fsrs6_adr_cmaes_jobs(
     return outcomes
 
 
-def _run_fsrs6_adp_cmaes_jobs(
+def _run_fsrs6_ap_cmaes_jobs(
     *,
     jobs: list[InProcessTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
 ) -> list[InProcessTrainOutcome]:
-    from experiments.rl_scheduler.train_cmaes_fsrs6_adp import (
-        ADPTrainJob,
+    from experiments.rl_scheduler.train_cmaes_fsrs6_ap import (
+        APTrainJob,
         run_training_batch_jobs,
     )
 
     results = run_training_batch_jobs(
         jobs=[
-            ADPTrainJob(
+            APTrainJob(
                 user_id=job.user_id,
                 lambda_value=_require_lambda_value(job),
                 output_dir=job.output_dir,
@@ -727,7 +727,7 @@ def _run_fsrs6_adp_cmaes_jobs(
                     passed=False,
                     artifact_paths=(),
                     progress_path=None,
-                    error="ADP trainer did not return an outcome for this job.",
+                    error="AP trainer did not return an outcome for this job.",
                 )
             )
             continue
@@ -742,21 +742,21 @@ def _run_fsrs6_adp_cmaes_jobs(
     return outcomes
 
 
-def _run_fsrs6_adp_portfolio_jobs(
+def _run_fsrs6_ap_portfolio_jobs(
     *,
     jobs: list[InProcessTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
 ) -> list[InProcessTrainOutcome]:
-    from experiments.rl_scheduler.train_fsrs6_adp_portfolio import (
-        ADPPortfolioTrainJob,
+    from experiments.rl_scheduler.train_fsrs6_ap_portfolio import (
+        APPortfolioTrainJob,
         run_portfolio_train_jobs,
     )
 
     results = run_portfolio_train_jobs(
         jobs=[
-            ADPPortfolioTrainJob(
+            APPortfolioTrainJob(
                 user_id=job.user_id,
                 output_dir=job.output_dir,
                 command_record_path=job.command_record_path,
@@ -781,7 +781,7 @@ def _run_fsrs6_adp_portfolio_jobs(
                     passed=False,
                     artifact_paths=(),
                     progress_path=None,
-                    error="ADP portfolio trainer did not return an outcome for this job.",
+                    error="AP portfolio trainer did not return an outcome for this job.",
                 )
             )
             continue

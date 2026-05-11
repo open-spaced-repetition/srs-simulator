@@ -29,7 +29,7 @@ from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
-DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr", "fsrs6_adp")
+DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr", "fsrs6_ap")
 DEFAULT_METRIC = "avg_accum_memorized_per_hour"
 USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$")
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
@@ -97,7 +97,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--comparisons",
-        default="fsrs6_adr:fsrs6,fsrs6_adp:fsrs6",
+        default="fsrs6_adr:fsrs6,fsrs6_ap:fsrs6",
         help="Comma-separated pairwise comparisons as left:right.",
     )
     parser.add_argument(
@@ -259,7 +259,7 @@ def parse_desired_retention(item: dict[str, Any]) -> float | None:
     for key in (
         "desired_retention",
         "fsrs6_adr_baseline_desired_retention",
-        "fsrs6_adp_baseline_desired_retention",
+        "fsrs6_ap_baseline_desired_retention",
         "retention",
     ):
         value = item.get(key)
@@ -304,7 +304,7 @@ def row_from_item(
     desired_retention = parse_desired_retention(item)
     if desired_retention is None and item.get("scheduler") not in {
         "fsrs6_adr",
-        "fsrs6_adp",
+        "fsrs6_ap",
     }:
         return None
     return SweepRow(
@@ -327,8 +327,8 @@ def _row_series_identity(item: dict[str, Any]) -> str | None:
         policy = item.get("fsrs6_adr_policy")
         if isinstance(policy, str) and policy.strip():
             return policy
-    if item.get("scheduler") == "fsrs6_adp":
-        policy = item.get("fsrs6_adp_policy")
+    if item.get("scheduler") == "fsrs6_ap":
+        policy = item.get("fsrs6_ap_policy")
         if isinstance(policy, str) and policy.strip():
             return policy
     title = item.get("title")

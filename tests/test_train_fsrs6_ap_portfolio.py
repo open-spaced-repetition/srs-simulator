@@ -12,18 +12,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.rl_scheduler.train_cmaes_fsrs6_adp import ADPSettings
+from experiments.rl_scheduler.train_cmaes_fsrs6_ap import APSettings
 from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
     PolicySearchSettings,
 )
-from experiments.rl_scheduler.train_fsrs6_adp_portfolio import (
-    ADPPortfolioCandidate,
-    ADPPortfolioSettings,
-    ADPPortfolioTrainJob,
+from experiments.rl_scheduler.train_fsrs6_ap_portfolio import (
+    APPortfolioCandidate,
+    APPortfolioSettings,
+    APPortfolioTrainJob,
     ObjectivePoint,
-    SelectedADPPortfolioChild,
-    UserADPPortfolioResult,
+    SelectedAPPortfolioChild,
+    UserAPPortfolioResult,
     _mutate_genome,
     _selection_payload,
     _write_portfolio_artifacts,
@@ -34,7 +34,7 @@ from experiments.rl_scheduler.portfolio_selection import (
 )
 from simulator.experiment_infra import ExperimentConfig
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
-from simulator.fsrs6_adp_policy import clip_fsrs6_adp_weights
+from simulator.fsrs6_ap_policy import clip_fsrs6_ap_weights
 
 
 def _metrics(memorized: float, time_average: float) -> CandidateMetrics:
@@ -52,7 +52,7 @@ def _config(output_root: Path) -> ExperimentConfig:
     return ExperimentConfig.from_mapping(
         {
             "schema_version": 1,
-            "name": "adp-portfolio-test",
+            "name": "ap-portfolio-test",
             "family": "rl_scheduler",
             "seed": 42,
             "output_root": str(output_root),
@@ -86,14 +86,14 @@ def _config(output_root: Path) -> ExperimentConfig:
                     "torch_device": "cpu",
                 },
                 "portfolio": {},
-                "adp": {"weight_delta_scale": 0.5},
+                "ap": {"weight_delta_scale": 0.5},
             },
         },
         config_path=output_root / "config.toml",
     )
 
 
-class FSRS6ADPPortfolioTests(unittest.TestCase):
+class FSRS6APPortfolioTests(unittest.TestCase):
     def test_mutation_clips_desired_retention_and_keeps_21d_search_vector(
         self,
     ) -> None:
@@ -115,26 +115,26 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
         self.assertEqual(len(search_vector), 21)
         self.assertTrue(any(value != 0.0 for value in search_vector))
 
-    def test_selection_helper_returns_timed_adp_survivors(self) -> None:
-        base_weights = clip_fsrs6_adp_weights(DEFAULT_FSRS6_WEIGHTS)
+    def test_selection_helper_returns_timed_ap_survivors(self) -> None:
+        base_weights = clip_fsrs6_ap_weights(DEFAULT_FSRS6_WEIGHTS)
         baseline_points = [ObjectivePoint(0.0, -10.0)]
         reference = ObjectivePoint(-1.0, -11.0)
         candidates = [
-            ADPPortfolioCandidate(
+            APPortfolioCandidate(
                 candidate_id=1,
                 desired_retention=0.70,
                 search_vector=(0.0,) * 21,
                 weights=base_weights,
                 metrics=_metrics(4.0, 4.0),
             ),
-            ADPPortfolioCandidate(
+            APPortfolioCandidate(
                 candidate_id=2,
                 desired_retention=0.80,
                 search_vector=(0.0,) * 21,
                 weights=base_weights,
                 metrics=_metrics(8.0, 8.0),
             ),
-            ADPPortfolioCandidate(
+            APPortfolioCandidate(
                 candidate_id=3,
                 desired_retention=0.90,
                 search_vector=(0.0,) * 21,
@@ -170,18 +170,18 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
             config_path = root / "config.toml"
             config_path.write_text("", encoding="utf-8")
             settings = PolicySearchSettings.from_mapping(config.training_policy_search)
-            portfolio = ADPPortfolioSettings(portfolio_size=1)
-            adp_settings = ADPSettings(dr_batch_size=1, weight_delta_scale=0.5)
-            base_weights = clip_fsrs6_adp_weights(DEFAULT_FSRS6_WEIGHTS)
-            candidate = ADPPortfolioCandidate(
+            portfolio = APPortfolioSettings(portfolio_size=1)
+            ap_settings = APSettings(dr_batch_size=1, weight_delta_scale=0.5)
+            base_weights = clip_fsrs6_ap_weights(DEFAULT_FSRS6_WEIGHTS)
+            candidate = APPortfolioCandidate(
                 candidate_id=7,
                 desired_retention=0.83,
                 search_vector=(0.0,) * 21,
                 weights=base_weights,
                 metrics=_metrics(20.0, 2.0),
             )
-            result = UserADPPortfolioResult(
-                job=ADPPortfolioTrainJob(
+            result = UserAPPortfolioResult(
+                job=APPortfolioTrainJob(
                     user_id=1,
                     output_dir=root / "out",
                 ),
@@ -194,7 +194,7 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
                 final_population_hypervolume_improvement=9.0,
                 reference_point=ObjectivePoint(0.0, -10.0),
                 selected_children=[
-                    SelectedADPPortfolioChild(
+                    SelectedAPPortfolioChild(
                         portfolio_index=0,
                         candidate=candidate,
                         hypervolume_contribution=2.0,
@@ -212,7 +212,7 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
                 config=config,
                 config_path=config_path,
                 settings=settings,
-                adp_settings=adp_settings,
+                ap_settings=ap_settings,
                 portfolio=portfolio,
             )
             metrics = json.loads(
@@ -233,7 +233,7 @@ class FSRS6ADPPortfolioTests(unittest.TestCase):
         self.assertNotIn("lambda_value", metadata)
         self.assertEqual(metadata["scheduler_desired_retention"], 0.83)
         self.assertEqual(
-            metadata["action_space"], "fsrs6_adp_weight_delta_portfolio_child"
+            metadata["action_space"], "fsrs6_ap_weight_delta_portfolio_child"
         )
         self.assertEqual(policy["baseline_desired_retention"], 0.83)
 

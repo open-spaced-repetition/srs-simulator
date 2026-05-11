@@ -51,9 +51,9 @@ class BatchedSweepLogLane:
     fsrs6_adr_policy: Path | None = None
     fsrs6_adr_baseline_desired_retention: float | None = None
     fsrs6_adr_lambda_value: float | None = None
-    fsrs6_adp_policy: Path | None = None
-    fsrs6_adp_baseline_desired_retention: float | None = None
-    fsrs6_adp_lambda_value: float | None = None
+    fsrs6_ap_policy: Path | None = None
+    fsrs6_ap_baseline_desired_retention: float | None = None
+    fsrs6_ap_lambda_value: float | None = None
     log_dir: Path | None = None
 
     @property
@@ -119,7 +119,7 @@ def _build_log_args(
     relearning_steps_arg: str | None,
     log_dir: Path,
     fsrs6_adr_policy: Path | None = None,
-    fsrs6_adp_policy: Path | None = None,
+    fsrs6_ap_policy: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         engine="batched",
@@ -141,9 +141,9 @@ def _build_log_args(
         fsrs6_adr_policy=fsrs6_adr_policy,
         fsrs6_adr_baseline_desired_retention=None,
         fsrs6_adr_lambda_value=None,
-        fsrs6_adp_policy=fsrs6_adp_policy,
-        fsrs6_adp_baseline_desired_retention=None,
-        fsrs6_adp_lambda_value=None,
+        fsrs6_ap_policy=fsrs6_ap_policy,
+        fsrs6_ap_baseline_desired_retention=None,
+        fsrs6_ap_lambda_value=None,
         fixed_interval=fixed_interval,
         seed=args.seed,
         fuzz=args.fuzz,
@@ -258,16 +258,16 @@ def simulate_and_log_lanes(
             relearning_steps_arg=relearning_steps_arg,
             log_dir=user_log_dir,
             fsrs6_adr_policy=lane.fsrs6_adr_policy,
-            fsrs6_adp_policy=lane.fsrs6_adp_policy,
+            fsrs6_ap_policy=lane.fsrs6_ap_policy,
         )
         log_args.fsrs6_adr_baseline_desired_retention = (
             lane.fsrs6_adr_baseline_desired_retention
         )
         log_args.fsrs6_adr_lambda_value = lane.fsrs6_adr_lambda_value
-        log_args.fsrs6_adp_baseline_desired_retention = (
-            lane.fsrs6_adp_baseline_desired_retention
+        log_args.fsrs6_ap_baseline_desired_retention = (
+            lane.fsrs6_ap_baseline_desired_retention
         )
-        log_args.fsrs6_adp_lambda_value = lane.fsrs6_adp_lambda_value
+        log_args.fsrs6_ap_lambda_value = lane.fsrs6_ap_lambda_value
         write_log(log_args, stats)
 
 
@@ -307,7 +307,7 @@ def simulate_and_log(
             desired_retention=desired_retention,
             fixed_interval=fixed_interval,
             fsrs6_adr_policy=getattr(args, "fsrs6_adr_policy", None),
-            fsrs6_adp_policy=getattr(args, "fsrs6_adp_policy", None),
+            fsrs6_ap_policy=getattr(args, "fsrs6_ap_policy", None),
         )
         for user_id in batch
     ]

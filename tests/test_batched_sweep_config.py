@@ -32,13 +32,13 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
     format_float_token,
     resolve_fsrs6_adr_policy_specs,
 )
-from simulator.batched_sweep.fsrs6_adp_policy import (
-    resolve_fsrs6_adp_policy_specs,
+from simulator.batched_sweep.fsrs6_ap_policy import (
+    resolve_fsrs6_ap_policy_specs,
 )
 from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH
 from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
-from simulator.fsrs6_adp_policy import FSRS6ADPPolicy
+from simulator.fsrs6_ap_policy import FSRS6APPolicy
 from tests.lstm_batch_helpers import dummy_lstm_weights
 
 
@@ -92,10 +92,10 @@ def _write_policy(path: Path, *, dr: float, offset: float = 0.0) -> None:
     policy.write_json(path)
 
 
-def _write_adp_policy(path: Path, *, dr: float, offset: float = 0.0) -> None:
+def _write_ap_policy(path: Path, *, dr: float, offset: float = 0.0) -> None:
     search_vector = [0.0] * 21
     search_vector[0] = offset
-    policy = FSRS6ADPPolicy.from_search_vector(
+    policy = FSRS6APPolicy.from_search_vector(
         base_weights=DEFAULT_FSRS6_WEIGHTS,
         search_vector=search_vector,
         baseline_desired_retention=dr,
@@ -127,11 +127,11 @@ def _args(log_dir: Path, policy_path: Path | None = None) -> argparse.Namespace:
         fsrs6_adr_train_run_root=None,
         fsrs6_adr_policy_manifest=None,
         fsrs6_adr_lambda_values=None,
-        fsrs6_adp_policy=None,
-        fsrs6_adp_policy_root=None,
-        fsrs6_adp_train_run_root=None,
-        fsrs6_adp_policy_manifest=None,
-        fsrs6_adp_lambda_values=None,
+        fsrs6_ap_policy=None,
+        fsrs6_ap_policy_root=None,
+        fsrs6_ap_train_run_root=None,
+        fsrs6_ap_policy_manifest=None,
+        fsrs6_ap_lambda_values=None,
     )
 
 
@@ -934,30 +934,30 @@ path = "policy.json"
         self.assertEqual(int(group.lane_indices.numel()), 2)
 
 
-class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
+class FSRS6APPolicyExpansionTests(unittest.TestCase):
     def test_policy_root_expands_lambda_less_portfolio_children(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "train_outputs"
             for index, desired_retention in enumerate((0.83, 0.87)):
                 policy_dir = root / "user_1" / "policies" / f"policy_{index}"
                 policy_dir.mkdir(parents=True)
-                _write_adp_policy(policy_dir / "policy.json", dr=desired_retention)
+                _write_ap_policy(policy_dir / "policy.json", dr=desired_retention)
                 (policy_dir / "metadata.json").write_text(
                     json.dumps(
                         {
-                            "scheduler_name": "fsrs6_adp",
+                            "scheduler_name": "fsrs6_ap",
                             "training_user_ids": [1],
                             "policy_path": "policy.json",
                             "baseline_desired_retention": None,
                             "scheduler_desired_retention": desired_retention,
                             "portfolio_index": index,
-                            "action_space": "fsrs6_adp_weight_delta_portfolio_child",
+                            "action_space": "fsrs6_ap_weight_delta_portfolio_child",
                         }
                     ),
                     encoding="utf-8",
                 )
 
-            specs = resolve_fsrs6_adp_policy_specs(
+            specs = resolve_fsrs6_ap_policy_specs(
                 user_ids=[1],
                 dr_values=[0.50, 0.52],
                 policy_root=root,
@@ -969,9 +969,9 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                 log_root=Path(tmp) / "logs",
                 batch_log_root=Path(tmp) / "logs" / "batch_logs",
                 envs=["fsrs6"],
-                schedulers=["fsrs6_adp"],
+                schedulers=["fsrs6_ap"],
                 dr_values=[0.50, 0.52],
-                fsrs6_adp_policy_specs=specs,
+                fsrs6_ap_policy_specs=specs,
             )
 
             lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="fsrs6")
@@ -984,8 +984,8 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                 for lane in lanes
             ],
             [
-                "user_1/sched_fsrs6_adp/policy_0",
-                "user_1/sched_fsrs6_adp/policy_1",
+                "user_1/sched_fsrs6_ap/policy_0",
+                "user_1/sched_fsrs6_ap/policy_1",
             ],
         )
 
@@ -997,24 +997,24 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                     root / "user_1" / "lambda_0" / "policies" / f"policy_{index}"
                 )
                 policy_dir.mkdir(parents=True)
-                _write_adp_policy(policy_dir / "policy.json", dr=desired_retention)
+                _write_ap_policy(policy_dir / "policy.json", dr=desired_retention)
                 (policy_dir / "metadata.json").write_text(
                     json.dumps(
                         {
-                            "scheduler_name": "fsrs6_adp",
+                            "scheduler_name": "fsrs6_ap",
                             "training_user_ids": [1],
                             "policy_path": "policy.json",
                             "baseline_desired_retention": None,
                             "scheduler_desired_retention": desired_retention,
                             "lambda_value": 0.0,
                             "portfolio_index": index,
-                            "action_space": "fsrs6_adp_weight_delta_portfolio_child",
+                            "action_space": "fsrs6_ap_weight_delta_portfolio_child",
                         }
                     ),
                     encoding="utf-8",
                 )
 
-            specs = resolve_fsrs6_adp_policy_specs(
+            specs = resolve_fsrs6_ap_policy_specs(
                 user_ids=[1],
                 dr_values=[0.50, 0.52],
                 policy_root=root,
@@ -1027,9 +1027,9 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                 log_root=Path(tmp) / "logs",
                 batch_log_root=Path(tmp) / "logs" / "batch_logs",
                 envs=["fsrs6"],
-                schedulers=["fsrs6_adp"],
+                schedulers=["fsrs6_ap"],
                 dr_values=[0.50, 0.52],
-                fsrs6_adp_policy_specs=specs,
+                fsrs6_ap_policy_specs=specs,
             )
 
             lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="fsrs6")
@@ -1045,12 +1045,12 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                 for lane in lanes
             ],
             [
-                "user_1/sched_fsrs6_adp/policy_0/lambda_0",
-                "user_1/sched_fsrs6_adp/policy_1/lambda_0",
+                "user_1/sched_fsrs6_ap/policy_0/lambda_0",
+                "user_1/sched_fsrs6_ap/policy_1/lambda_0",
             ],
         )
         self.assertEqual(
-            [lane.fsrs6_adp_baseline_desired_retention for lane in lanes],
+            [lane.fsrs6_ap_baseline_desired_retention for lane in lanes],
             [None, None],
         )
 
@@ -1061,11 +1061,11 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
             root = Path(tmp) / "train_outputs"
             policy_dir = root / "user_1" / "lambda_0" / "policies" / "policy_0"
             policy_dir.mkdir(parents=True)
-            _write_adp_policy(policy_dir / "policy.json", dr=0.83)
+            _write_ap_policy(policy_dir / "policy.json", dr=0.83)
             (policy_dir / "metadata.json").write_text(
                 json.dumps(
                     {
-                        "scheduler_name": "fsrs6_adp",
+                        "scheduler_name": "fsrs6_ap",
                         "training_user_ids": [1],
                         "policy_path": "policy.json",
                         "baseline_desired_retention": None,
@@ -1078,7 +1078,7 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "scheduler_desired_retention"):
-                resolve_fsrs6_adp_policy_specs(
+                resolve_fsrs6_ap_policy_specs(
                     user_ids=[1],
                     dr_values=[0.50, 0.52],
                     policy_root=root,
@@ -1097,9 +1097,9 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                         / f"dr_{format_float_token(dr)}"
                         / "policy.json"
                     )
-                    _write_adp_policy(policy_path, dr=dr)
+                    _write_ap_policy(policy_path, dr=dr)
 
-            specs = resolve_fsrs6_adp_policy_specs(
+            specs = resolve_fsrs6_ap_policy_specs(
                 user_ids=[1, 2],
                 dr_values=[0.50, 0.52],
                 policy_root=root,
@@ -1112,9 +1112,9 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                 log_root=Path(tmp) / "logs",
                 batch_log_root=Path(tmp) / "logs" / "batch_logs",
                 envs=["lstm"],
-                schedulers=["fsrs6_adp"],
+                schedulers=["fsrs6_ap"],
                 dr_values=[0.50, 0.52],
-                fsrs6_adp_policy_specs=specs,
+                fsrs6_ap_policy_specs=specs,
             )
 
             lanes = _build_sweep_lanes(batch=[1, 2], ctx=ctx, environment="lstm")
@@ -1124,8 +1124,8 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
             [
                 (
                     lane.user_id,
-                    lane.fsrs6_adp_baseline_desired_retention,
-                    lane.fsrs6_adp_lambda_value,
+                    lane.fsrs6_ap_baseline_desired_retention,
+                    lane.fsrs6_ap_lambda_value,
                 )
                 for lane in lanes
             ],
@@ -1142,44 +1142,44 @@ class FSRS6ADPPolicyExpansionTests(unittest.TestCase):
                 for lane in lanes
             ],
             [
-                "user_1/sched_fsrs6_adp/dr_0p5/lambda_0p5",
-                "user_1/sched_fsrs6_adp/dr_0p52/lambda_0p5",
-                "user_2/sched_fsrs6_adp/dr_0p5/lambda_0p5",
-                "user_2/sched_fsrs6_adp/dr_0p52/lambda_0p5",
+                "user_1/sched_fsrs6_ap/dr_0p5/lambda_0p5",
+                "user_1/sched_fsrs6_ap/dr_0p52/lambda_0p5",
+                "user_2/sched_fsrs6_ap/dr_0p5/lambda_0p5",
+                "user_2/sched_fsrs6_ap/dr_0p52/lambda_0p5",
             ],
         )
 
-    def test_multiple_adp_policies_share_one_scheduler_group(self) -> None:
+    def test_multiple_ap_policies_share_one_scheduler_group(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = root / "p1.json"
             second = root / "p2.json"
-            _write_adp_policy(first, dr=0.50)
-            _write_adp_policy(second, dr=0.52, offset=1.0)
+            _write_ap_policy(first, dr=0.50)
+            _write_ap_policy(second, dr=0.52, offset=1.0)
             lanes = [
                 BatchedSweepLogLane(
                     user_id=1,
                     log_root=root / "logs" / "a",
                     environment="lstm",
-                    scheduler_name="fsrs6_adp",
-                    scheduler_spec="fsrs6_adp",
+                    scheduler_name="fsrs6_ap",
+                    scheduler_spec="fsrs6_ap",
                     desired_retention=None,
                     fixed_interval=None,
-                    fsrs6_adp_policy=first,
-                    fsrs6_adp_baseline_desired_retention=0.50,
-                    fsrs6_adp_lambda_value=0.5,
+                    fsrs6_ap_policy=first,
+                    fsrs6_ap_baseline_desired_retention=0.50,
+                    fsrs6_ap_lambda_value=0.5,
                 ),
                 BatchedSweepLogLane(
                     user_id=2,
                     log_root=root / "logs" / "b",
                     environment="lstm",
-                    scheduler_name="fsrs6_adp",
-                    scheduler_spec="fsrs6_adp",
+                    scheduler_name="fsrs6_ap",
+                    scheduler_spec="fsrs6_ap",
                     desired_retention=None,
                     fixed_interval=None,
-                    fsrs6_adp_policy=second,
-                    fsrs6_adp_baseline_desired_retention=0.52,
-                    fsrs6_adp_lambda_value=0.5,
+                    fsrs6_ap_policy=second,
+                    fsrs6_ap_baseline_desired_retention=0.52,
+                    fsrs6_ap_lambda_value=0.5,
                 ),
             ]
 

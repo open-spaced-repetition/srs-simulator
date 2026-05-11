@@ -246,7 +246,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     batch = training.get("batch")
     if isinstance(batch, Mapping):
         trainer = batch.get("trainer")
-        if trainer in {"fsrs6_adr_portfolio", "fsrs6_adp_portfolio"}:
+        if trainer in {"fsrs6_adr_portfolio", "fsrs6_ap_portfolio"}:
             return True
     command_template = training.get("command_template", [])
     if isinstance(command_template, str) or not isinstance(command_template, Sequence):
@@ -255,7 +255,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     return bool(
         {
             "train_fsrs6_adr_portfolio.py",
-            "train_fsrs6_adp_portfolio.py",
+            "train_fsrs6_ap_portfolio.py",
         }
         & script_names
     )
@@ -666,13 +666,13 @@ class TrainingBatchConfig:
             "auto",
             "fsrs6_adr_portfolio",
             "fsrs6_adr_cmaes",
-            "fsrs6_adp_cmaes",
-            "fsrs6_adp_portfolio",
+            "fsrs6_ap_cmaes",
+            "fsrs6_ap_portfolio",
         }:
             raise ValueError(
                 "training.batch.trainer must be auto, fsrs6_adr_cmaes, "
-                "fsrs6_adr_portfolio, fsrs6_adp_cmaes, "
-                "or fsrs6_adp_portfolio."
+                "fsrs6_adr_portfolio, fsrs6_ap_cmaes, "
+                "or fsrs6_ap_portfolio."
             )
 
     def to_dict(self) -> dict[str, Any]:
@@ -892,7 +892,7 @@ class ExperimentConfig:
     lambda_grid: tuple[float, ...]
     training_policy_search: Mapping[str, Any] = field(default_factory=dict)
     training_portfolio: Mapping[str, Any] = field(default_factory=dict)
-    training_adp: Mapping[str, Any] = field(default_factory=dict)
+    training_ap: Mapping[str, Any] = field(default_factory=dict)
     training_optimizer: Mapping[str, Any] = field(default_factory=dict)
     training_batch: TrainingBatchConfig = field(default_factory=TrainingBatchConfig)
     train_command_template: tuple[str, ...] = ()
@@ -969,9 +969,7 @@ class ExperimentConfig:
             training_portfolio=dict(
                 _require_mapping(training.get("portfolio", {}), "training.portfolio")
             ),
-            training_adp=dict(
-                _require_mapping(training.get("adp", {}), "training.adp")
-            ),
+            training_ap=dict(_require_mapping(training.get("ap", {}), "training.ap")),
             training_optimizer=dict(
                 _require_mapping(training.get("optimizer", {}), "training.optimizer")
             ),
@@ -1059,7 +1057,7 @@ class ExperimentConfig:
                 "lambda_grid": list(self.lambda_grid),
                 "policy_search": dict(self.training_policy_search),
                 "portfolio": dict(self.training_portfolio),
-                "adp": dict(self.training_adp),
+                "ap": dict(self.training_ap),
                 "optimizer": dict(self.training_optimizer),
                 "batch": self.training_batch.to_dict(),
                 "command_template": list(self.train_command_template),

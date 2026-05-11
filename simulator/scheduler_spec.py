@@ -48,5 +48,5 @@ def scheduler_uses_desired_retention(scheduler: str) -> bool:
         "anki_sm2",
         "memrise",
         "fsrs6_adr",
-        "fsrs6_adp",
+        "fsrs6_ap",
     }

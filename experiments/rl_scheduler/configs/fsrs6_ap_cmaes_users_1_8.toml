@@ -1,8 +1,8 @@
 schema_version = 1
-name = "fsrs6_adp_portfolio_users_1_128_v1"
+name = "fsrs6_ap_cmaes_users_1_8"
 family = "rl_scheduler"
 seed = 42
-output_root = "artifacts/rl_scheduler/fsrs6_adp_portfolio_users_1_128"
+output_root = "artifacts/rl_scheduler/fsrs6_ap_cmaes_users_1_8"
 stages = [
   "dry-run",
   "preflight",
@@ -23,126 +23,6 @@ train = [
   6,
   7,
   8,
-  9,
-  10,
-  11,
-  12,
-  13,
-  14,
-  15,
-  16,
-  17,
-  18,
-  19,
-  20,
-  21,
-  22,
-  23,
-  24,
-  25,
-  26,
-  27,
-  28,
-  29,
-  30,
-  31,
-  32,
-  33,
-  34,
-  35,
-  36,
-  37,
-  38,
-  39,
-  40,
-  41,
-  42,
-  43,
-  44,
-  45,
-  46,
-  47,
-  48,
-  49,
-  50,
-  51,
-  52,
-  53,
-  54,
-  55,
-  56,
-  57,
-  58,
-  59,
-  60,
-  61,
-  62,
-  63,
-  64,
-  65,
-  66,
-  67,
-  68,
-  69,
-  70,
-  71,
-  72,
-  73,
-  74,
-  75,
-  76,
-  77,
-  78,
-  79,
-  80,
-  81,
-  82,
-  83,
-  84,
-  85,
-  86,
-  87,
-  88,
-  89,
-  90,
-  91,
-  92,
-  93,
-  94,
-  95,
-  96,
-  97,
-  98,
-  99,
-  100,
-  101,
-  102,
-  103,
-  104,
-  105,
-  106,
-  107,
-  108,
-  109,
-  110,
-  111,
-  112,
-  113,
-  114,
-  115,
-  116,
-  117,
-  118,
-  119,
-  120,
-  121,
-  122,
-  123,
-  124,
-  125,
-  126,
-  127,
-  128,
 ]
 validation = []
 reserved_test = []
@@ -205,18 +85,21 @@ write_performance_summary = true
 diagnostic_csv_logs = false
 
 [training]
-artifact_metadata_glob = "policies/**/metadata.json"
+lambda_grid = [0.5]
+artifact_metadata_glob = "**/metadata.json"
 max_parallel_commands = 1
 batch_baseline_desired_retention_values = true
 command_template = [
   "uv",
   "run",
   "python",
-  "experiments/rl_scheduler/train_fsrs6_adp_portfolio.py",
+  "experiments/rl_scheduler/train_cmaes_fsrs6_ap.py",
   "--config",
   "{config_path}",
   "--user-id",
   "{user_id}",
+  "--lambda",
+  "{lambda_value}",
   "--output-dir",
   "{output_dir}",
   "--training-command-path",
@@ -226,7 +109,8 @@ command_template = [
 [training.batch]
 enabled = true
 trainer = "auto"
-max_lanes_per_batch = 8192
+batch_size = 8
+max_lanes_per_batch = 6400
 
 [training.policy_search]
 coefficient_min = -12.0
@@ -263,29 +147,73 @@ torch_device = "cuda"
 short_term_threshold = 0.5
 short_term_loops_limit = 10
 
-[training.adp]
+[training.ap]
+dr_batch_size = 25
 weight_delta_scale = 0.5
 
-[training.portfolio]
-algorithm = "sms_emoa"
-population_size = 64
+[training.optimizer]
+name = "cma_es"
+population_size = 32
 generations = 20
-offspring_size = 64
-portfolio_size = 23
-mutation_scale = 0.35
-retention_mutation_scale = 0.02
-reference_margin_fraction = 0.05
-hv_epsilon = 0.0
+sigma0 = 0.8
+bounds = [
+  [
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+    -2.0,
+  ],
+  [
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+    2.0,
+  ],
+]
 
 [sweep]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6_adp"]
-run_id = "fsrs6_adp_portfolio_users_1_128_v1"
-fsrs6_adp_train_run_root = "artifacts/rl_scheduler/fsrs6_adp_portfolio_users_1_128/fsrs6_adp_portfolio_users_1_128_v1"
+schedulers = ["fsrs6_ap"]
+run_id = "fsrs6_ap_cmaes_users_1_8_v1"
+fsrs6_ap_train_run_root = "artifacts/rl_scheduler/fsrs6_ap_cmaes_users_1_8/fsrs6_ap_cmaes_users_1_8_v1"
 log_dir = "logs/retention_sweep"
 log_layout = "user"
-max_lanes_per_batch = 1024
+batch_size = 8
 torch_device = "cuda"
 benchmark_partition = "0"
 start_retention = 0.52
@@ -294,15 +222,9 @@ step = 0.02
 no_progress = true
 no_log = false
 
-[sweep.env_overrides.fsrs6]
-max_lanes_per_batch = 8192
-
-[sweep.env_overrides.lstm]
-max_lanes_per_batch = 1024
-
 [build_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adp"]
+schedulers = ["fsrs6", "fsrs6_ap"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
@@ -319,8 +241,8 @@ hide_labels = true
 
 [analyze_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adp"]
-comparisons = ["fsrs6_adp:fsrs6"]
+schedulers = ["fsrs6", "fsrs6_ap"]
+comparisons = ["fsrs6_ap:fsrs6"]
 result_glob = "analysis.md"
 start_retention = 0.52
 end_retention = 0.96

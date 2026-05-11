@@ -151,10 +151,10 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
                 "lambda_grid = [0.0, 0.25, 0.5]\n\n"
                 "[training.batch]\n"
                 "enabled = true\n"
-                'trainer = "fsrs6_adp_portfolio"\n'
+                'trainer = "fsrs6_ap_portfolio"\n'
                 "batch_size = 8\n"
                 "max_lanes_per_batch = 1024\n\n"
-                "[training.adp]\n"
+                "[training.ap]\n"
                 "dr_batch_size = 3\n"
                 "weight_delta_scale = 0.5"
             ),
@@ -166,13 +166,13 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
             config = ExperimentConfig.from_toml(path)
 
         self.assertTrue(config.training_batch.enabled)
-        self.assertEqual(config.training_batch.trainer, "fsrs6_adp_portfolio")
+        self.assertEqual(config.training_batch.trainer, "fsrs6_ap_portfolio")
         self.assertEqual(config.training_batch.batch_size, 8)
         self.assertEqual(config.training_batch.max_lanes_per_batch, 1024)
-        self.assertEqual(config.training_adp["dr_batch_size"], 3)
-        self.assertEqual(config.training_adp["weight_delta_scale"], 0.5)
+        self.assertEqual(config.training_ap["dr_batch_size"], 3)
+        self.assertEqual(config.training_ap["weight_delta_scale"], 0.5)
         self.assertTrue(config.to_dict()["training"]["batch"]["enabled"])
-        self.assertEqual(config.to_dict()["training"]["adp"]["dr_batch_size"], 3)
+        self.assertEqual(config.to_dict()["training"]["ap"]["dr_batch_size"], 3)
 
     def test_rejects_invalid_training_batch_trainer(self) -> None:
         raw = VALID_CONFIG.replace(

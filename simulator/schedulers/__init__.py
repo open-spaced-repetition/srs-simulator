@@ -5,7 +5,7 @@ from simulator.schedulers.fixed import FixedIntervalScheduler
 from simulator.schedulers.anki_sm2 import AnkiSM2Scheduler
 from simulator.schedulers.memrise import MemriseScheduler
 from simulator.schedulers.fsrs6_adr import FSRS6ADRScheduler
-from simulator.schedulers.fsrs6_adp import FSRS6ADPScheduler
+from simulator.schedulers.fsrs6_ap import FSRS6APScheduler
 from simulator.schedulers.sspmmc import SSPMMCScheduler
 from simulator.schedulers.lstm import LSTMScheduler
 
@@ -20,6 +20,6 @@ __all__ = [
     "AnkiSM2Scheduler",
     "MemriseScheduler",
     "FSRS6ADRScheduler",
-    "FSRS6ADPScheduler",
+    "FSRS6APScheduler",
     "SSPMMCScheduler",
 ]

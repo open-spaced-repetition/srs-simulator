@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
-from simulator.fsrs6_adp_policy import FSRS6ADPPolicy
+from simulator.fsrs6_ap_policy import FSRS6APPolicy
 
 
 @dataclass(frozen=True, slots=True)
-class FSRS6ADPPolicySpec:
+class FSRS6APPolicySpec:
     user_id: int
     baseline_desired_retention: float | None
     lambda_value: float | None
@@ -20,7 +20,7 @@ class FSRS6ADPPolicySpec:
     path: Path
 
 
-def resolve_fsrs6_adp_policy_specs(
+def resolve_fsrs6_ap_policy_specs(
     *,
     user_ids: Sequence[int],
     dr_values: Sequence[float],
@@ -28,7 +28,7 @@ def resolve_fsrs6_adp_policy_specs(
     train_run_root: Path | None = None,
     policy_manifest: Path | None = None,
     lambda_values: Sequence[float] | None = None,
-) -> tuple[FSRS6ADPPolicySpec, ...]:
+) -> tuple[FSRS6APPolicySpec, ...]:
     sources = [
         policy_root is not None,
         train_run_root is not None,
@@ -36,7 +36,7 @@ def resolve_fsrs6_adp_policy_specs(
     ]
     if sum(sources) != 1:
         raise ValueError(
-            "Configure exactly one FSRS6 ADP policy source: "
+            "Configure exactly one FSRS6 AP policy source: "
             "policy_root, train_run_root, or policy_manifest."
         )
     if train_run_root is not None:
@@ -64,13 +64,13 @@ def _discover_policy_root(
     user_ids: Sequence[int],
     dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
-) -> tuple[FSRS6ADPPolicySpec, ...]:
+) -> tuple[FSRS6APPolicySpec, ...]:
     root = policy_root.expanduser()
     if not root.exists():
-        raise FileNotFoundError(f"FSRS6 ADP policy root does not exist: {root}")
+        raise FileNotFoundError(f"FSRS6 AP policy root does not exist: {root}")
     user_set = set(user_ids)
     lambda_filter = _normalized_lambda_filter(lambda_values)
-    specs: list[FSRS6ADPPolicySpec] = []
+    specs: list[FSRS6APPolicySpec] = []
     for policy_path in sorted(root.rglob("policy.json")):
         path_user_id = _extract_path_int(policy_path, "user_")
         if path_user_id is not None and path_user_id not in user_set:
@@ -91,7 +91,7 @@ def _discover_policy_root(
         specs.append(spec)
     if not specs:
         raise FileNotFoundError(
-            f"No FSRS6 ADP policies under {root} matched users={list(user_ids)} "
+            f"No FSRS6 AP policies under {root} matched users={list(user_ids)} "
             f"and DR grid={list(dr_values)}."
         )
     _reject_duplicate_policy_specs(specs)
@@ -110,18 +110,18 @@ def _load_policy_manifest(
     user_ids: Sequence[int],
     dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
-) -> tuple[FSRS6ADPPolicySpec, ...]:
+) -> tuple[FSRS6APPolicySpec, ...]:
     manifest_path = policy_manifest.expanduser()
     if not manifest_path.exists():
         raise FileNotFoundError(
-            f"FSRS6 ADP policy manifest does not exist: {manifest_path}"
+            f"FSRS6 AP policy manifest does not exist: {manifest_path}"
         )
     with manifest_path.open("rb") as handle:
         raw = tomllib.load(handle)
     entries = _manifest_entries(raw)
     user_set = set(user_ids)
     lambda_filter = _normalized_lambda_filter(lambda_values)
-    specs: list[FSRS6ADPPolicySpec] = []
+    specs: list[FSRS6APPolicySpec] = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, Mapping):
             raise ValueError(f"policies[{index}] must be a TOML table.")
@@ -179,8 +179,8 @@ def _spec_from_policy_path(
     policy_path: Path,
     *,
     dr_values: Sequence[float],
-) -> FSRS6ADPPolicySpec:
-    policy = FSRS6ADPPolicy.from_json(policy_path)
+) -> FSRS6APPolicySpec:
+    policy = FSRS6APPolicy.from_json(policy_path)
     metadata = _load_sibling_metadata(policy_path)
     path_user_id = _extract_path_int(policy_path, "user_")
     path_lambda = _extract_path_float(policy_path, "lambda_")
@@ -201,7 +201,7 @@ def _spec_from_policy_path(
     user_id = metadata_user_id if metadata_user_id is not None else path_user_id
     if user_id is None:
         raise ValueError(
-            f"Could not infer user_id for FSRS6 ADP policy {policy_path}. "
+            f"Could not infer user_id for FSRS6 AP policy {policy_path}. "
             "Use a user_<id> path component or metadata.json."
         )
     if (
@@ -261,7 +261,7 @@ def _spec_from_policy_path(
             f"Policy {policy_path} lambda mismatch: path has {path_lambda}, "
             f"metadata has {metadata_lambda}."
         )
-    return FSRS6ADPPolicySpec(
+    return FSRS6APPolicySpec(
         user_id=user_id,
         baseline_desired_retention=matched_dr,
         lambda_value=lambda_value,
@@ -280,10 +280,10 @@ def _validate_policy_spec(
     lambda_value: float | None,
     policy_index: int | None,
     source: str,
-) -> FSRS6ADPPolicySpec:
+) -> FSRS6APPolicySpec:
     if not path.exists():
-        raise FileNotFoundError(f"Missing FSRS6 ADP policy for {source}: {path}")
-    policy = FSRS6ADPPolicy.from_json(path)
+        raise FileNotFoundError(f"Missing FSRS6 AP policy for {source}: {path}")
+    policy = FSRS6APPolicy.from_json(path)
     metadata = _load_sibling_metadata(path)
     metadata_user_id = _metadata_user_id(metadata, path)
     if metadata_user_id is not None and metadata_user_id != user_id:
@@ -348,7 +348,7 @@ def _validate_policy_spec(
             f"expected {lambda_value} from {source}."
         )
     metadata_policy_index = _metadata_int(metadata, "portfolio_index", path)
-    return FSRS6ADPPolicySpec(
+    return FSRS6APPolicySpec(
         user_id=user_id,
         baseline_desired_retention=baseline_desired_retention,
         lambda_value=effective_lambda,
@@ -374,7 +374,7 @@ def _manifest_entries(raw: Mapping[str, Any]) -> Sequence[Any]:
 
 def _require_complete_policy_root(
     *,
-    specs: Sequence[FSRS6ADPPolicySpec],
+    specs: Sequence[FSRS6APPolicySpec],
     user_ids: Sequence[int],
     dr_values: Sequence[float],
     lambda_values: Sequence[float] | None,
@@ -413,10 +413,10 @@ def _require_complete_policy_root(
             for user_id, baseline_dr, lambda_value in missing[:10]
         )
         suffix = "" if len(missing) <= 10 else f"\n... and {len(missing) - 10} more"
-        raise FileNotFoundError(f"Missing FSRS6 ADP policies:\n{preview}{suffix}")
+        raise FileNotFoundError(f"Missing FSRS6 AP policies:\n{preview}{suffix}")
 
 
-def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADPPolicySpec]) -> None:
+def _reject_duplicate_policy_specs(specs: Sequence[FSRS6APPolicySpec]) -> None:
     by_key: dict[tuple[int, int | None, int | None, int | None], Path] = {}
     for spec in specs:
         key = _policy_key(
@@ -428,7 +428,7 @@ def _reject_duplicate_policy_specs(specs: Sequence[FSRS6ADPPolicySpec]) -> None:
         previous = by_key.get(key)
         if previous is not None:
             raise ValueError(
-                "Duplicate FSRS6 ADP policy for "
+                "Duplicate FSRS6 AP policy for "
                 f"user={spec.user_id}, baseline_desired_retention="
                 f"{spec.baseline_desired_retention}, lambda={spec.lambda_value}, "
                 f"policy_index={spec.policy_index}: {previous} and {spec.path}"
@@ -506,10 +506,10 @@ def _load_sibling_metadata(path: Path) -> Mapping[str, Any] | None:
     if not isinstance(raw, Mapping):
         raise ValueError(f"Artifact metadata must be a JSON object: {metadata_path}")
     scheduler_name = raw.get("scheduler_name")
-    if scheduler_name is not None and scheduler_name != "fsrs6_adp":
+    if scheduler_name is not None and scheduler_name != "fsrs6_ap":
         raise ValueError(
             f"Artifact metadata {metadata_path} scheduler_name={scheduler_name!r}; "
-            "expected 'fsrs6_adp'."
+            "expected 'fsrs6_ap'."
         )
     policy_path_raw = raw.get("policy_path")
     if isinstance(policy_path_raw, str) and policy_path_raw.strip():
@@ -613,6 +613,6 @@ def _optional_int(value: Any, field_name: str) -> int | None:
 
 
 __all__ = [
-    "FSRS6ADPPolicySpec",
-    "resolve_fsrs6_adp_policy_specs",
+    "FSRS6APPolicySpec",
+    "resolve_fsrs6_ap_policy_specs",
 ]

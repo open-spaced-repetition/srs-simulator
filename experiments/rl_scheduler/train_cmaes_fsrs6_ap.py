@@ -40,12 +40,12 @@ from experiments.rl_scheduler.policy_search_common import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
-from simulator.fsrs6_adp_policy import (
+from simulator.fsrs6_ap_policy import (
     DEFAULT_WEIGHT_DELTA_SCALE,
     FEATURE_VERSION,
-    FSRS6_ADP_DEFAULT_STDDEV,
-    FSRS6_ADP_WEIGHT_BOUNDS,
-    FSRS6ADPPolicy,
+    FSRS6_AP_DEFAULT_STDDEV,
+    FSRS6_AP_WEIGHT_BOUNDS,
+    FSRS6APPolicy,
     WEIGHT_COUNT,
 )
 from simulator.math.fsrs import Bounds
@@ -55,7 +55,7 @@ from simulator.batched_engine.multiuser_engine import simulate_multiuser
 
 
 @dataclass(frozen=True, slots=True)
-class ADPSettings:
+class APSettings:
     dr_batch_size: int
     weight_delta_scale: float = DEFAULT_WEIGHT_DELTA_SCALE
 
@@ -66,21 +66,21 @@ class ADPSettings:
         *,
         raw_training_policy_search: Mapping[str, Any],
         dr_count: int,
-    ) -> ADPSettings:
-        raw = dict(config.training_adp)
+    ) -> APSettings:
+        raw = dict(config.training_ap)
         raw_dr_batch_size = raw.get(
             "dr_batch_size", raw_training_policy_search.get("dr_batch_size")
         )
         if raw_dr_batch_size is None:
             dr_batch_size = dr_count
         else:
-            dr_batch_size = _int(raw_dr_batch_size, "training.adp.dr_batch_size", 1)
+            dr_batch_size = _int(raw_dr_batch_size, "training.ap.dr_batch_size", 1)
             dr_batch_size = min(dr_batch_size, dr_count)
         return cls(
             dr_batch_size=max(1, dr_batch_size),
             weight_delta_scale=_float(
                 raw.get("weight_delta_scale", DEFAULT_WEIGHT_DELTA_SCALE),
-                "training.adp.weight_delta_scale",
+                "training.ap.weight_delta_scale",
                 0.0,
             ),
         )
@@ -93,7 +93,7 @@ class ADPSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class ADPTrainJob:
+class APTrainJob:
     user_id: int
     lambda_value: float
     output_dir: Path
@@ -101,7 +101,7 @@ class ADPTrainJob:
 
 
 @dataclass(frozen=True, slots=True)
-class ADPTrainingResult:
+class APTrainingResult:
     baseline_desired_retention: float
     baseline: CandidateMetrics
     best: CandidateMetrics
@@ -117,8 +117,8 @@ class ADPTrainingResult:
 
 
 @dataclass(frozen=True, slots=True)
-class ADPTrainJobResult:
-    job: ADPTrainJob
+class APTrainJobResult:
+    job: APTrainJob
     passed: bool
     artifact_paths: tuple[Path, ...]
     progress_path: Path | None
@@ -137,7 +137,7 @@ class _CommonContext:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train FSRS6 ADP adaptive-parameter scheduler policies with CMA-ES.",
+        description="Train FSRS6 AP adaptive-parameter scheduler policies with CMA-ES.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", type=Path, required=True)
@@ -163,7 +163,7 @@ def main() -> int:
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(args.config))
     baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
-    adp_settings = ADPSettings.from_config(
+    ap_settings = APSettings.from_config(
         config,
         raw_training_policy_search=raw_training_policy_search,
         dr_count=len(baseline_dr_values),
@@ -177,7 +177,7 @@ def main() -> int:
         srs_benchmark_root=args.srs_benchmark_root,
         benchmark_result=args.benchmark_result,
     )
-    job = ADPTrainJob(
+    job = APTrainJob(
         user_id=args.user_id,
         lambda_value=args.lambda_value,
         output_dir=args.output_dir,
@@ -189,7 +189,7 @@ def main() -> int:
         config_path=args.config,
         repo_root=REPO_ROOT,
         settings=settings,
-        adp_settings=adp_settings,
+        ap_settings=ap_settings,
         optimizer_settings=optimizer_settings,
         ctx=ctx,
         benchmark_partition=args.benchmark_partition,
@@ -210,15 +210,15 @@ def optimizer_settings_from_mapping(raw: Mapping[str, Any]) -> CMAESSettings:
 
 def run_training_batch_jobs(
     *,
-    jobs: Sequence[ADPTrainJob],
+    jobs: Sequence[APTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
-) -> list[ADPTrainJobResult]:
+) -> list[APTrainJobResult]:
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(config_path))
     baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
-    adp_settings = ADPSettings.from_config(
+    ap_settings = APSettings.from_config(
         config,
         raw_training_policy_search=raw_training_policy_search,
         dr_count=len(baseline_dr_values),
@@ -238,7 +238,7 @@ def run_training_batch_jobs(
         config_path=config_path,
         repo_root=repo_root,
         settings=settings,
-        adp_settings=adp_settings,
+        ap_settings=ap_settings,
         optimizer_settings=optimizer_settings,
         ctx=ctx,
         benchmark_partition=None,
@@ -249,18 +249,18 @@ def run_training_batch_jobs(
 
 def run_training_jobs(
     *,
-    jobs: Sequence[ADPTrainJob],
+    jobs: Sequence[APTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
     settings: PolicySearchSettings,
-    adp_settings: ADPSettings,
+    ap_settings: APSettings,
     optimizer_settings: CMAESSettings,
     ctx: _CommonContext,
     benchmark_partition: str | None,
     button_usage: Path | None,
     baseline_dr_values: tuple[float, ...],
-) -> list[ADPTrainJobResult]:
+) -> list[APTrainJobResult]:
     if not jobs:
         return []
     progresses = _progress_for_jobs(jobs=jobs, config_path=config_path)
@@ -274,7 +274,7 @@ def run_training_jobs(
         progress.write(
             "config_loaded",
             settings=asdict(settings),
-            adp=adp_settings.to_dict(),
+            ap=ap_settings.to_dict(),
             optimizer=optimizer_settings.to_dict(),
             optimizer_seed=optimizer_seed,
             feature_version=FEATURE_VERSION,
@@ -315,11 +315,11 @@ def run_training_jobs(
         dict(zip(baseline_dr_values, baselines, strict=True))
         for baselines in baselines_by_job
     ]
-    results_by_job: list[list[ADPTrainingResult]] = [[] for _job in jobs]
+    results_by_job: list[list[APTrainingResult]] = [[] for _job in jobs]
 
     for chunk_start, chunk_dr_values in _iter_chunks(
         baseline_dr_values,
-        adp_settings.dr_batch_size,
+        ap_settings.dr_batch_size,
     ):
         lane_user_ids = [
             job.user_id
@@ -416,10 +416,10 @@ def run_training_jobs(
                 device=train_bundle.device,
                 dtype=torch.float32,
             )
-            metrics_by_job_dr, weights_by_job_dr = _evaluate_adp_candidates(
+            metrics_by_job_dr, weights_by_job_dr = _evaluate_ap_candidates(
                 config=config,
                 settings=settings,
-                adp_settings=adp_settings,
+                ap_settings=ap_settings,
                 bundle=train_bundle,
                 jobs=jobs,
                 chunk_dr_values=chunk_dr_values,
@@ -505,7 +505,7 @@ def run_training_jobs(
                 weights = best_weights[job_index][dr_index]
                 metric = best_metrics[job_index][dr_index]
                 if vector is None or weights is None or metric is None:
-                    raise RuntimeError("CMA-ES did not evaluate any ADP candidates.")
+                    raise RuntimeError("CMA-ES did not evaluate any AP candidates.")
                 baseline = baselines_by_job_dr[job_index][baseline_dr]
                 base_weights = base_weights_by_job[job_index]
                 delta = tuple(
@@ -521,7 +521,7 @@ def run_training_jobs(
                     baseline.memorized_per_minute,
                 )
                 results_by_job[job_index].append(
-                    ADPTrainingResult(
+                    APTrainingResult(
                         baseline_desired_retention=baseline_dr,
                         baseline=baseline,
                         best=metric,
@@ -538,7 +538,7 @@ def run_training_jobs(
                                 float(value) for value in vector.detach().cpu().tolist()
                             ),
                             weights=weights,
-                            weight_delta_scale=adp_settings.weight_delta_scale,
+                            weight_delta_scale=ap_settings.weight_delta_scale,
                         ),
                         history=histories[job_index][dr_index],
                         passed=_passes_overfit_gate(rel_mem, rel_eff),
@@ -546,14 +546,14 @@ def run_training_jobs(
                     )
                 )
 
-    outcomes: list[ADPTrainJobResult] = []
+    outcomes: list[APTrainJobResult] = []
     for job_index, job in enumerate(jobs):
         artifact_paths = _write_grid_artifacts(
             output_dir=job.output_dir,
             config=config,
             config_path=config_path,
             settings=settings,
-            adp_settings=adp_settings,
+            ap_settings=ap_settings,
             optimizer_settings=optimizer_settings,
             user_id=job.user_id,
             lambda_value=job.lambda_value,
@@ -569,7 +569,7 @@ def run_training_jobs(
             artifact_paths=[str(path) for path in artifact_paths],
         )
         outcomes.append(
-            ADPTrainJobResult(
+            APTrainJobResult(
                 job=job,
                 passed=passed_count > 0,
                 artifact_paths=tuple(artifact_paths),
@@ -610,7 +610,7 @@ def _common_context(
 
 def _progress_for_jobs(
     *,
-    jobs: Sequence[ADPTrainJob],
+    jobs: Sequence[APTrainJob],
     config_path: Path,
 ) -> list[TrainingProgress]:
     progresses: list[TrainingProgress] = []
@@ -631,7 +631,7 @@ def _evaluate_baseline_grid(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
-    jobs: Sequence[ADPTrainJob],
+    jobs: Sequence[APTrainJob],
     baseline_dr_values: tuple[float, ...],
     ctx: _CommonContext,
     benchmark_partition: str | None,
@@ -691,13 +691,13 @@ def _evaluate_baseline_grid(
     return bundle, by_job
 
 
-def _evaluate_adp_candidates(
+def _evaluate_ap_candidates(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
-    adp_settings: ADPSettings,
+    ap_settings: APSettings,
     bundle: Any,
-    jobs: Sequence[ADPTrainJob],
+    jobs: Sequence[APTrainJob],
     chunk_dr_values: tuple[float, ...],
     search_vectors: torch.Tensor,
     seed: int,
@@ -709,7 +709,7 @@ def _evaluate_adp_candidates(
     scheduler_weights = _decode_weight_delta_tensor(
         base_weights=bundle.scheduler_weights,
         search_vectors=flat_vectors,
-        weight_delta_scale=adp_settings.weight_delta_scale,
+        weight_delta_scale=ap_settings.weight_delta_scale,
     )
     desired = torch.tensor(
         [
@@ -775,17 +775,17 @@ def _decode_weight_delta_tensor(
     weight_delta_scale: float,
 ) -> torch.Tensor:
     stddev = torch.tensor(
-        FSRS6_ADP_DEFAULT_STDDEV,
+        FSRS6_AP_DEFAULT_STDDEV,
         device=base_weights.device,
         dtype=base_weights.dtype,
     )
     lower = torch.tensor(
-        [item[0] for item in FSRS6_ADP_WEIGHT_BOUNDS],
+        [item[0] for item in FSRS6_AP_WEIGHT_BOUNDS],
         device=base_weights.device,
         dtype=base_weights.dtype,
     )
     upper = torch.tensor(
-        [item[1] for item in FSRS6_ADP_WEIGHT_BOUNDS],
+        [item[1] for item in FSRS6_AP_WEIGHT_BOUNDS],
         device=base_weights.device,
         dtype=base_weights.dtype,
     )
@@ -798,7 +798,7 @@ def _decode_weight_delta_tensor(
 def _base_weights_by_job(
     *,
     bundle: Any,
-    jobs: Sequence[ADPTrainJob],
+    jobs: Sequence[APTrainJob],
     chunk_dr_values: tuple[float, ...],
     population_size: int,
 ) -> list[tuple[float, ...]]:
@@ -842,12 +842,12 @@ def _write_grid_artifacts(
     config: ExperimentConfig,
     config_path: Path,
     settings: PolicySearchSettings,
-    adp_settings: ADPSettings,
+    ap_settings: APSettings,
     optimizer_settings: CMAESSettings,
     user_id: int,
     lambda_value: float,
     training_command_path: Path | None,
-    results: Sequence[ADPTrainingResult],
+    results: Sequence[APTrainingResult],
 ) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_paths: list[Path] = []
@@ -870,14 +870,14 @@ def _write_grid_artifacts(
             **optimizer_settings.to_dict(),
             "seed_resolved": result.optimizer_seed,
         }
-        policy = FSRS6ADPPolicy(
+        policy = FSRS6APPolicy(
             base_weights=result.base_weights,
             weights=result.best_weights,
             delta=result.best_delta,
             search_vector=result.best_search_vector,
             baseline_desired_retention=dr,
-            weight_delta_scale=adp_settings.weight_delta_scale,
-            title=f"fsrs6_adp_u{user_id}_dr_{dr:.2f}_lambda_{lambda_value:g}",
+            weight_delta_scale=ap_settings.weight_delta_scale,
+            title=f"fsrs6_ap_u{user_id}_dr_{dr:.2f}_lambda_{lambda_value:g}",
         )
         policy_path = result_dir / "policy.json"
         policy.write_json(policy_path)
@@ -902,7 +902,7 @@ def _write_grid_artifacts(
                 "feature_version": FEATURE_VERSION,
                 "optimizer": optimizer,
                 "settings": asdict(settings),
-                "adp": adp_settings.to_dict(),
+                "ap": ap_settings.to_dict(),
                 "base_weights": list(result.base_weights),
                 "best_weights": list(result.best_weights),
                 "best_delta": list(result.best_delta),
@@ -924,7 +924,7 @@ def _write_grid_artifacts(
                     config.seed,
                 ),
                 "family": config.family,
-                "scheduler_name": "fsrs6_adp",
+                "scheduler_name": "fsrs6_ap",
                 "environment": config.simulation.environment,
                 "engine": config.simulation.engine,
                 "training_user_ids": [user_id],
@@ -976,7 +976,7 @@ def _artifact_id(
         lambda_value,
         baseline_desired_retention,
         seed,
-    ).replace("fsrs6-adr", "fsrs6-adp")
+    ).replace("fsrs6-adr", "fsrs6-ap")
 
 
 def _clipped_dimension_count(
@@ -990,9 +990,9 @@ def _clipped_dimension_count(
     for base, offset, stddev, actual, (lower, upper) in zip(
         base_weights,
         search_vector,
-        FSRS6_ADP_DEFAULT_STDDEV,
+        FSRS6_AP_DEFAULT_STDDEV,
         weights,
-        FSRS6_ADP_WEIGHT_BOUNDS,
+        FSRS6_AP_WEIGHT_BOUNDS,
     ):
         raw = base + offset * stddev * weight_delta_scale
         if raw < lower or raw > upper or abs(raw - actual) > 1e-6:

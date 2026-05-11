@@ -86,7 +86,7 @@ class BatchedSweepConfig:
         logging_config = _table(raw, "logging", required=False)
         short_term = _table(raw, "short_term", required=False)
         fsrs6_adr = _table(raw, "fsrs6_adr", required=False)
-        fsrs6_adp = _table(raw, "fsrs6_adp", required=False)
+        fsrs6_ap = _table(raw, "fsrs6_ap", required=False)
 
         args = argparse.Namespace(
             config=config_path,
@@ -216,29 +216,29 @@ class BatchedSweepConfig:
                 fsrs6_adr.get("lambda_values"),
                 "fsrs6_adr.lambda_values",
             ),
-            fsrs6_adp_policy=_optional_path(
-                fsrs6_adp.get("policy"),
-                "fsrs6_adp.policy",
+            fsrs6_ap_policy=_optional_path(
+                fsrs6_ap.get("policy"),
+                "fsrs6_ap.policy",
                 base_path=base_path,
             ),
-            fsrs6_adp_policy_root=_optional_path(
-                fsrs6_adp.get("policy_root"),
-                "fsrs6_adp.policy_root",
+            fsrs6_ap_policy_root=_optional_path(
+                fsrs6_ap.get("policy_root"),
+                "fsrs6_ap.policy_root",
                 base_path=base_path,
             ),
-            fsrs6_adp_train_run_root=_optional_path(
-                fsrs6_adp.get("train_run_root"),
-                "fsrs6_adp.train_run_root",
+            fsrs6_ap_train_run_root=_optional_path(
+                fsrs6_ap.get("train_run_root"),
+                "fsrs6_ap.train_run_root",
                 base_path=base_path,
             ),
-            fsrs6_adp_policy_manifest=_optional_path(
-                fsrs6_adp.get("policy_manifest"),
-                "fsrs6_adp.policy_manifest",
+            fsrs6_ap_policy_manifest=_optional_path(
+                fsrs6_ap.get("policy_manifest"),
+                "fsrs6_ap.policy_manifest",
                 base_path=base_path,
             ),
-            fsrs6_adp_lambda_values=_optional_float_list(
-                fsrs6_adp.get("lambda_values"),
-                "fsrs6_adp.lambda_values",
+            fsrs6_ap_lambda_values=_optional_float_list(
+                fsrs6_ap.get("lambda_values"),
+                "fsrs6_ap.lambda_values",
             ),
         )
         return cls(path=config_path, args=args, envs=envs, schedulers=schedulers)
@@ -328,12 +328,12 @@ def _adapt_experiment_config(
         if "fsrs6_adr" in scheduler_names
         else None,
     )
-    fsrs6_adp = _adapt_experiment_policy_source(
+    fsrs6_ap = _adapt_experiment_policy_source(
         sweep,
-        prefix="fsrs6_adp",
+        prefix="fsrs6_ap",
         lambda_grid=lambda_grid,
         default_train_run_root=default_train_run_root
-        if "fsrs6_adp" in scheduler_names
+        if "fsrs6_ap" in scheduler_names
         else None,
     )
 
@@ -361,7 +361,7 @@ def _adapt_experiment_config(
         },
         "short_term": short_term,
         "fsrs6_adr": fsrs6_adr,
-        "fsrs6_adp": fsrs6_adp,
+        "fsrs6_ap": fsrs6_ap,
     }
 
 
@@ -399,7 +399,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     batch = training.get("batch")
     if isinstance(batch, Mapping):
         trainer = batch.get("trainer")
-        if trainer in {"fsrs6_adr_portfolio", "fsrs6_adp_portfolio"}:
+        if trainer in {"fsrs6_adr_portfolio", "fsrs6_ap_portfolio"}:
             return True
     command_template = training.get("command_template", [])
     if isinstance(command_template, str) or not isinstance(command_template, Sequence):
@@ -408,7 +408,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     return bool(
         {
             "train_fsrs6_adr_portfolio.py",
-            "train_fsrs6_adp_portfolio.py",
+            "train_fsrs6_ap_portfolio.py",
         }
         & script_names
     )

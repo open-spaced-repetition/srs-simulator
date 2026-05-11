@@ -1,8 +1,8 @@
 schema_version = 1
-name = "fsrs6_adp_portfolio_users_1_8_v2"
+name = "fsrs6_ap_portfolio_users_1_8_v2"
 family = "rl_scheduler"
 seed = 42
-output_root = "artifacts/rl_scheduler/fsrs6_adp_portfolio_users_1_8"
+output_root = "artifacts/rl_scheduler/fsrs6_ap_portfolio_users_1_8"
 stages = [
   "dry-run",
   "preflight",
@@ -92,7 +92,7 @@ command_template = [
   "uv",
   "run",
   "python",
-  "experiments/rl_scheduler/train_fsrs6_adp_portfolio.py",
+  "experiments/rl_scheduler/train_fsrs6_ap_portfolio.py",
   "--config",
   "{config_path}",
   "--user-id",
@@ -143,7 +143,7 @@ torch_device = "cuda"
 short_term_threshold = 0.5
 short_term_loops_limit = 10
 
-[training.adp]
+[training.ap]
 weight_delta_scale = 0.5
 
 [training.portfolio]
@@ -160,9 +160,9 @@ hv_epsilon = 0.0
 [sweep]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6_adp"]
-run_id = "fsrs6_adp_portfolio_users_1_8_v2"
-fsrs6_adp_train_run_root = "artifacts/rl_scheduler/fsrs6_adp_portfolio_users_1_8/fsrs6_adp_portfolio_users_1_8_v2"
+schedulers = ["fsrs6_ap"]
+run_id = "fsrs6_ap_portfolio_users_1_8_v2"
+fsrs6_ap_train_run_root = "artifacts/rl_scheduler/fsrs6_ap_portfolio_users_1_8/fsrs6_ap_portfolio_users_1_8_v2"
 log_dir = "logs/retention_sweep"
 log_layout = "user"
 batch_size = 8
@@ -176,7 +176,7 @@ no_log = false
 
 [build_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adp"]
+schedulers = ["fsrs6", "fsrs6_ap"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
@@ -193,8 +193,8 @@ hide_labels = true
 
 [analyze_pareto]
 envs = ["fsrs6", "lstm"]
-schedulers = ["fsrs6", "fsrs6_adp"]
-comparisons = ["fsrs6_adp:fsrs6"]
+schedulers = ["fsrs6", "fsrs6_ap"]
+comparisons = ["fsrs6_ap:fsrs6"]
 result_glob = "analysis.md"
 start_retention = 0.52
 end_retention = 0.96

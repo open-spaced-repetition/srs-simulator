@@ -7,10 +7,10 @@ CEM, CMA-ES, portfolio search, and other policy-search methods as long as the
 output is a scheduler artifact that can enter the same external evaluation
 pipeline.
 
-The current implemented research lines are `fsrs6_adr` and `fsrs6_adp`:
-black-box optimizers learn scheduler-side FSRS-6 retention policies, or directly
-search the 21 FSRS-6 scheduler weights, then use stability `S` and difficulty
-`D` to compute the next interval.
+The current implemented research lines are `fsrs6_adr` and `fsrs6_ap`
+(Adaptive Parameters): black-box optimizers learn scheduler-side FSRS-6
+retention policies, or directly search the 21 FSRS-6 scheduler weights, then
+use stability `S` and difficulty `D` to compute the next interval.
 A core rule is
 that training and evaluation must not read the environment's hidden memory
 state. A learned scheduler must maintain its own scheduler state. For these
@@ -22,10 +22,10 @@ FSRS-6 state update to obtain `S` and `D`.
 - `run_experiment.py`: TOML-driven stage runner.
 - `train_cmaes_fsrs6_adr.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr`
   policies over `S,D`.
-- `train_cmaes_fsrs6_adp.py`: CMA-ES FSRS-6 trainer that searches adaptive
+- `train_cmaes_fsrs6_ap.py`: CMA-ES FSRS-6 trainer that searches adaptive
   scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
-- `train_fsrs6_adp_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
-  ordinary `fsrs6_adp` child policies, optimizing hypervolume against the FSRS-6
+- `train_fsrs6_ap_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
+  ordinary `fsrs6_ap` child policies, optimizing hypervolume against the FSRS-6
   DR-grid baseline.
 - `policy_search_common.py`: shared policy-search settings, metric, artifact,
   and evaluation helpers used by the active trainers.
@@ -173,13 +173,13 @@ Representative profiles:
   `fsrs6_adr` scheduler trained as 23 simplified 3-parameter
   `fsrs6_adr_log_linear_v1` portfolio children per user with SMS-EMOA
   hypervolume optimization.
-- `configs/fsrs6_adp_cmaes_users_1_8.toml`: the adaptive-parameter family that
+- `configs/fsrs6_ap_cmaes_users_1_8.toml`: the adaptive-parameter family that
   trains 21 bounded FSRS-6 scheduler weights as deltas from each user's fitted
   baseline, batches both users and DR values, and still emits one artifact per
   `(user, DR, lambda)` policy.
-- `configs/fsrs6_adp_portfolio_users_1_8_v2.toml`: the adaptive-parameter portfolio
-  family that jointly mutates runtime desired retention and the 21 ADP weight
-  deltas, then exports 23 no-DR `fsrs6_adp` child artifacts per user.
+- `configs/fsrs6_ap_portfolio_users_1_8_v2.toml`: the adaptive-parameter portfolio
+  family that jointly mutates runtime desired retention and the 21 AP weight
+  deltas, then exports 23 no-DR `fsrs6_ap` child artifacts per user.
 
 Abandoned directions:
 
@@ -201,9 +201,9 @@ Abandoned directions:
 Training target:
 
 - Baseline scheduler: FSRS-6.
-- Candidate schedulers: FSRS6 ADR and FSRS6 ADP.
+- Candidate schedulers: FSRS6 ADR and FSRS6 AP (Adaptive Parameters).
 - ADR action: emit desired retention from scheduler-side FSRS-6 `S,D`.
-- ADP action: search the full 21 FSRS-6 scheduler weights as bounded
+- AP action: search the full 21 FSRS-6 scheduler weights as bounded
   standardized deltas from each user's fitted FSRS-6 weights, then evaluate the
   resulting ordinary FSRS-6 scheduler.
 - Main-profile DR grid: `0.52..0.96` in steps of `0.02`.
@@ -212,7 +212,7 @@ Training target:
   greater than `0.0` against the same-user same-DR baseline. Batched
   train-overfit runs accept the batch when at least 80% of artifact points pass
   that gate.
-- ADP overfit gate: each `(user, DR, lambda)` artifact is checked against the
+- AP overfit gate: each `(user, DR, lambda)` artifact is checked against the
   same-user same-DR FSRS-6 baseline with the same `0.0` floor on both
   memorized-average and memorized-per-minute gains.
 - Constraint handling: ADR candidates below the `0.0` relative-gain floor
@@ -223,8 +223,8 @@ normalized `S,D`; set `training.policy_search.feature_version = "fsrs6_adr_log_l
 to train the simplified 3-parameter linear variant.
 CMA-ES profiles keep the same `[training.policy_search]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,
-initial mean, and coefficient bounds in `[training.optimizer]`. ADP profiles add
-`[training.adp].dr_batch_size` and `weight_delta_scale`, plus
+initial mean, and coefficient bounds in `[training.optimizer]`. AP profiles add
+`[training.ap].dr_batch_size` and `weight_delta_scale`, plus
 `training.batch_baseline_desired_retention_values = true` when DR values should
 be batched inside each training job.
 
@@ -234,9 +234,9 @@ Batching model:
   inside one training command.
 - `training.policy_search.dr_batch_size` controls how many DR values enter one GPU chunk.
 - CMA-ES effective lanes are approximately `dr_batch_size * population_size`.
-- ADP uses the same idea, but batches `dr_batch_size * population_size` lanes
+- AP uses the same idea, but batches `dr_batch_size * population_size` lanes
   per job and writes one policy artifact per user/DR/lambda.
-- Portfolio SMS-EMOA selection for ADR and ADP uses a lightweight
+- Portfolio SMS-EMOA selection for ADR and AP uses a lightweight
   bounded process pool for batches with at least 8 users, capped at 32 workers
   by default, to avoid the old unbounded spawned-worker memory growth. Worker
   payloads contain only primitive metric tuples and do not import trainer/Torch
@@ -365,7 +365,7 @@ should support at least:
 - `{command_record_path}`
 
 CMA-ES and other scalar-score trainers should also support `{lambda_value}`.
-ADR/ADP portfolio trainers do not use `training.lambda_grid` and should not
+ADR/AP portfolio trainers do not use `training.lambda_grid` and should not
 include `{lambda_value}` or `--lambda` in their command templates.
 
 If the policy depends on scheduler state, implement that state update in the

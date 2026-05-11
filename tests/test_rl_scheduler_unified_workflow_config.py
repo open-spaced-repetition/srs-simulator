@@ -307,7 +307,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             23,
         )
         self.assertEqual(config.training_portfolio["population_size"], 64)
-        self.assertEqual(config.training_portfolio["offspring_size"], 32)
+        self.assertEqual(config.training_portfolio["offspring_size"], 64)
         self.assertEqual(config.training_portfolio["portfolio_size"], 23)
         self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
         self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
@@ -321,33 +321,33 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(trainer, "fsrs6_adr_portfolio")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 64)
 
-    def test_checked_in_adp_cmaes_config_uses_dr_and_user_batching(self) -> None:
+    def test_checked_in_ap_cmaes_config_uses_dr_and_user_batching(self) -> None:
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adp_cmaes_users_1_8.toml"
+            / "fsrs6_ap_cmaes_users_1_8.toml"
         )
 
-        self.assertEqual(config.name, "fsrs6_adp_cmaes_users_1_8")
+        self.assertEqual(config.name, "fsrs6_ap_cmaes_users_1_8")
         self.assertTrue(config.train_batch_baseline_desired_retention_values)
         self.assertEqual(config.train_artifact_glob, "**/metadata.json")
         self.assertEqual(config.training_batch.batch_size, 8)
-        self.assertEqual(config.training_adp["dr_batch_size"], 25)
-        self.assertEqual(config.training_adp["weight_delta_scale"], 0.5)
+        self.assertEqual(config.training_ap["dr_batch_size"], 25)
+        self.assertEqual(config.training_ap["weight_delta_scale"], 0.5)
         self.assertEqual(len(config.training_optimizer["bounds"][0]), 21)
         self.assertEqual(len(config.training_optimizer["bounds"][1]), 21)
-        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adp",))
-        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adp"))
-        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adp:fsrs6",))
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_ap",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_ap"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_ap:fsrs6",))
 
-    def test_checked_in_adp_portfolio_config_uses_portfolio_children(self) -> None:
+    def test_checked_in_ap_portfolio_config_uses_portfolio_children(self) -> None:
         config = ExperimentConfig.from_toml(
             REPO_ROOT
             / "experiments/rl_scheduler/configs/"
-            / "fsrs6_adp_portfolio_users_1_8_v2.toml"
+            / "fsrs6_ap_portfolio_users_1_8_v2.toml"
         )
 
-        self.assertEqual(config.name, "fsrs6_adp_portfolio_users_1_8_v2")
+        self.assertEqual(config.name, "fsrs6_ap_portfolio_users_1_8_v2")
         self.assertEqual(config.lambda_grid, ())
         self.assertNotIn("{lambda_value}", config.train_command_template)
         self.assertNotIn("--lambda", config.train_command_template)
@@ -358,10 +358,10 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.training_portfolio["offspring_size"], 64)
         self.assertEqual(config.training_portfolio["portfolio_size"], 23)
         self.assertEqual(config.training_portfolio["retention_mutation_scale"], 0.02)
-        self.assertEqual(config.training_adp["weight_delta_scale"], 0.5)
-        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adp",))
-        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adp"))
-        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adp:fsrs6",))
+        self.assertEqual(config.training_ap["weight_delta_scale"], 0.5)
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_ap",))
+        self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_ap"))
+        self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_ap:fsrs6",))
 
     def test_checked_in_cmaes_adr_poly_config_uses_six_parameter_policy(
         self,
@@ -539,7 +539,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertIn("| fsrs6_adr - fsrs6 | 1 | 1/1 | 0/1 | 0/1 | 0/1 | 0/1 |", report)
         self.assertIn("Loaded 2 records", report)
 
-    def test_analyze_scheduler_comparison_reports_no_dr_adp_hypervolume(
+    def test_analyze_scheduler_comparison_reports_no_dr_ap_hypervolume(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -563,12 +563,12 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
                         },
                         {
                             "environment": "fsrs6",
-                            "scheduler": "fsrs6_adp",
+                            "scheduler": "fsrs6_ap",
                             "user_id": 1,
                             "desired_retention": None,
-                            "fsrs6_adp_baseline_desired_retention": None,
-                            "fsrs6_adp_policy": "/tmp/policy_0/policy.json",
-                            "title": "ADP policy_0",
+                            "fsrs6_ap_baseline_desired_retention": None,
+                            "fsrs6_ap_policy": "/tmp/policy_0/policy.json",
+                            "title": "AP policy_0",
                             "memorized_average": 110.0,
                             "time_average": 1.0,
                             "reviews_average": 10.0,
@@ -589,9 +589,9 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
                     "--env",
                     "fsrs6",
                     "--sched",
-                    "fsrs6,fsrs6_adp",
+                    "fsrs6,fsrs6_ap",
                     "--comparisons",
-                    "fsrs6_adp:fsrs6",
+                    "fsrs6_ap:fsrs6",
                     "--start-user",
                     "1",
                     "--end-user",
@@ -605,7 +605,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             report = render_report(args)
 
         self.assertIn("### Hypervolume vs FSRS6 baseline", report)
-        self.assertIn("| user | baseline HV | fsrs6_adp HV | HV delta |", report)
+        self.assertIn("| user | baseline HV | fsrs6_ap HV | HV delta |", report)
         self.assertIn("| 1 | 0.25 | 0.75 | 0.50 | 1 |", report)
 
     def test_runner_executes_build_and_analyze_pareto_stages(self) -> None:

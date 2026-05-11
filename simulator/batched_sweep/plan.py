@@ -13,8 +13,8 @@ from simulator.batched_sweep.runner import BatchedSweepContext, _build_sweep_lan
 from simulator.batched_sweep.fsrs6_adr_policy import (
     resolve_fsrs6_adr_policy_specs,
 )
-from simulator.batched_sweep.fsrs6_adp_policy import (
-    resolve_fsrs6_adp_policy_specs,
+from simulator.batched_sweep.fsrs6_ap_policy import (
+    resolve_fsrs6_ap_policy_specs,
 )
 from simulator.batched_sweep.utils import chunked, dr_values, parse_cuda_devices
 from simulator.scheduler_spec import parse_scheduler_spec
@@ -31,7 +31,7 @@ SUPPORTED_SCHEDS = {
     "memrise",
     "fixed",
     "fsrs6_adr",
-    "fsrs6_adp",
+    "fsrs6_ap",
 }
 
 
@@ -79,11 +79,11 @@ def build_batched_sweep_plan(
                 "(--fsrs6-adr-policy, --fsrs6-adr-policy-root, "
                 "--fsrs6-adr-train-run-root, or --fsrs6-adr-policy-manifest)."
             )
-        if name == "fsrs6_adp" and not _has_fsrs6_adp_source(args):
+        if name == "fsrs6_ap" and not _has_fsrs6_ap_source(args):
             raise ValueError(
-                "--sched fsrs6_adp requires an FSRS6 ADP policy source "
-                "(--fsrs6-adp-policy, --fsrs6-adp-policy-root, "
-                "--fsrs6-adp-train-run-root, or --fsrs6-adp-policy-manifest)."
+                "--sched fsrs6_ap requires an FSRS6 AP policy source "
+                "(--fsrs6-ap-policy, --fsrs6-ap-policy-root, "
+                "--fsrs6-ap-train-run-root, or --fsrs6-ap-policy-manifest)."
             )
 
     batch_size = getattr(args, "batch_size", None)
@@ -139,16 +139,16 @@ def build_batched_sweep_plan(
                 policy_manifest=getattr(args, "fsrs6_adr_policy_manifest", None),
                 lambda_values=getattr(args, "fsrs6_adr_lambda_values", None),
             )
-    fsrs6_adp_policy_specs = ()
-    if any(parse_scheduler_spec(raw)[0] == "fsrs6_adp" for raw in schedulers):
-        if _uses_expanded_fsrs6_adp_source(args):
-            fsrs6_adp_policy_specs = resolve_fsrs6_adp_policy_specs(
+    fsrs6_ap_policy_specs = ()
+    if any(parse_scheduler_spec(raw)[0] == "fsrs6_ap" for raw in schedulers):
+        if _uses_expanded_fsrs6_ap_source(args):
+            fsrs6_ap_policy_specs = resolve_fsrs6_ap_policy_specs(
                 user_ids=user_ids,
                 dr_values=drs,
-                policy_root=getattr(args, "fsrs6_adp_policy_root", None),
-                train_run_root=getattr(args, "fsrs6_adp_train_run_root", None),
-                policy_manifest=getattr(args, "fsrs6_adp_policy_manifest", None),
-                lambda_values=getattr(args, "fsrs6_adp_lambda_values", None),
+                policy_root=getattr(args, "fsrs6_ap_policy_root", None),
+                train_run_root=getattr(args, "fsrs6_ap_train_run_root", None),
+                policy_manifest=getattr(args, "fsrs6_ap_policy_manifest", None),
+                lambda_values=getattr(args, "fsrs6_ap_lambda_values", None),
             )
 
     ctx = BatchedSweepContext(
@@ -163,8 +163,8 @@ def build_batched_sweep_plan(
         log_layout=log_layout,
         fsrs6_adr_policy=getattr(args, "fsrs6_adr_policy", None),
         fsrs6_adr_policy_specs=fsrs6_adr_policy_specs,
-        fsrs6_adp_policy=getattr(args, "fsrs6_adp_policy", None),
-        fsrs6_adp_policy_specs=fsrs6_adp_policy_specs,
+        fsrs6_ap_policy=getattr(args, "fsrs6_ap_policy", None),
+        fsrs6_ap_policy_specs=fsrs6_ap_policy_specs,
     )
     batches_by_env: dict[str, list[list[int]]] = {}
     batch_size_by_env: dict[str, int | None] = {}
@@ -333,8 +333,8 @@ def _lane_counts_by_user(
             for spec in ctx.fsrs6_adr_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
             continue
-        if name == "fsrs6_adp" and ctx.fsrs6_adp_policy_specs:
-            for spec in ctx.fsrs6_adp_policy_specs:
+        if name == "fsrs6_ap" and ctx.fsrs6_ap_policy_specs:
+            for spec in ctx.fsrs6_ap_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
             continue
         lanes_per_user += 1
@@ -374,32 +374,32 @@ def _uses_expanded_fsrs6_adr_source(args: argparse.Namespace) -> bool:
     return any(expanded)
 
 
-def _has_fsrs6_adp_source(args: argparse.Namespace) -> bool:
+def _has_fsrs6_ap_source(args: argparse.Namespace) -> bool:
     return any(
         getattr(args, attr, None) is not None
         for attr in (
-            "fsrs6_adp_policy",
-            "fsrs6_adp_policy_root",
-            "fsrs6_adp_train_run_root",
-            "fsrs6_adp_policy_manifest",
+            "fsrs6_ap_policy",
+            "fsrs6_ap_policy_root",
+            "fsrs6_ap_train_run_root",
+            "fsrs6_ap_policy_manifest",
         )
     )
 
 
-def _uses_expanded_fsrs6_adp_source(args: argparse.Namespace) -> bool:
+def _uses_expanded_fsrs6_ap_source(args: argparse.Namespace) -> bool:
     expanded = [
-        getattr(args, "fsrs6_adp_policy_root", None) is not None,
-        getattr(args, "fsrs6_adp_train_run_root", None) is not None,
-        getattr(args, "fsrs6_adp_policy_manifest", None) is not None,
+        getattr(args, "fsrs6_ap_policy_root", None) is not None,
+        getattr(args, "fsrs6_ap_train_run_root", None) is not None,
+        getattr(args, "fsrs6_ap_policy_manifest", None) is not None,
     ]
-    if getattr(args, "fsrs6_adp_policy", None) is not None and any(expanded):
+    if getattr(args, "fsrs6_ap_policy", None) is not None and any(expanded):
         raise ValueError(
-            "--fsrs6-adp-policy cannot be combined with expanded FSRS6 ADP policy sources."
+            "--fsrs6-ap-policy cannot be combined with expanded FSRS6 AP policy sources."
         )
     if sum(expanded) > 1:
         raise ValueError(
-            "Configure only one expanded FSRS6 ADP policy source: "
-            "--fsrs6-adp-policy-root, --fsrs6-adp-train-run-root, or "
-            "--fsrs6-adp-policy-manifest."
+            "Configure only one expanded FSRS6 AP policy source: "
+            "--fsrs6-ap-policy-root, --fsrs6-ap-train-run-root, or "
+            "--fsrs6-ap-policy-manifest."
         )
     return any(expanded)

@@ -26,7 +26,7 @@ from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 RUN_ID_SCOPED_SCHEDULERS = {
     "fsrs6_adr",
-    "fsrs6_adp",
+    "fsrs6_ap",
 }
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
@@ -369,39 +369,39 @@ def _load_policy_sibling_metadata(
     return loaded
 
 
-def _fsrs6_adp_portfolio_child_label(
+def _fsrs6_ap_portfolio_child_label(
     policy_path: Path,
     metadata: Dict[str, Any],
 ) -> str:
     policy_index = metadata.get("portfolio_index")
     if isinstance(policy_index, int):
-        return f"ADP policy_{policy_index}"
-    return f"ADP {policy_path.parent.name}"
+        return f"AP policy_{policy_index}"
+    return f"AP {policy_path.parent.name}"
 
 
-def _is_fsrs6_adp_portfolio_child(metadata: Optional[Dict[str, Any]]) -> bool:
+def _is_fsrs6_ap_portfolio_child(metadata: Optional[Dict[str, Any]]) -> bool:
     if metadata is None:
         return False
     return (
         "baseline_desired_retention" in metadata
         and metadata.get("baseline_desired_retention") is None
         and (
-            metadata.get("action_space") == "fsrs6_adp_weight_delta_portfolio_child"
+            metadata.get("action_space") == "fsrs6_ap_weight_delta_portfolio_child"
             or "portfolio_index" in metadata
         )
     )
 
 
-def _resolve_fsrs6_adp_label(
+def _resolve_fsrs6_ap_label(
     meta: Dict[str, Any], base_dirs: Sequence[Path]
 ) -> tuple[str, Optional[float]]:
-    retention = _retention_value(meta.get("fsrs6_adp_baseline_desired_retention"))
+    retention = _retention_value(meta.get("fsrs6_ap_baseline_desired_retention"))
     if retention is not None:
         return _format_retention_title(retention), retention
 
-    policy_path = meta.get("fsrs6_adp_policy")
+    policy_path = meta.get("fsrs6_ap_policy")
     if not policy_path:
-        return "FSRS6 ADP", None
+        return "FSRS6 AP", None
     path = Path(policy_path)
     if not path.is_absolute():
         for base_dir in base_dirs:
@@ -412,12 +412,12 @@ def _resolve_fsrs6_adp_label(
     title = None
     sibling_metadata = _load_policy_sibling_metadata(
         path,
-        scheduler_name="fsrs6_adp",
+        scheduler_name="fsrs6_ap",
     )
-    if _is_fsrs6_adp_portfolio_child(sibling_metadata):
+    if _is_fsrs6_ap_portfolio_child(sibling_metadata):
         if sibling_metadata is None:
             raise AssertionError("portfolio metadata unexpectedly missing")
-        return _fsrs6_adp_portfolio_child_label(path, sibling_metadata), None
+        return _fsrs6_ap_portfolio_child_label(path, sibling_metadata), None
     if path.exists():
         try:
             with path.open("r", encoding="utf-8") as fh:
@@ -438,7 +438,7 @@ def _resolve_fsrs6_adp_label(
     )
     if retention is not None:
         return _format_retention_title(retention), retention
-    return f"ADP {title or path.stem}", None
+    return f"AP {title or path.stem}", None
 
 
 def _format_scheduler_title(scheduler: str) -> str:
@@ -631,7 +631,7 @@ def _iter_log_entries(
             continue
 
         fsrs6_adr_baseline_dr = None
-        fsrs6_adp_baseline_dr = None
+        fsrs6_ap_baseline_dr = None
         if scheduler == "sspmmc":
             title = _resolve_policy_title(meta, base_dirs)
         elif scheduler == "fsrs6_adr":
@@ -641,11 +641,11 @@ def _iter_log_entries(
                 or fsrs6_adr_baseline_dr > max_retention
             ):
                 continue
-        elif scheduler == "fsrs6_adp":
-            title, fsrs6_adp_baseline_dr = _resolve_fsrs6_adp_label(meta, base_dirs)
-            if fsrs6_adp_baseline_dr is not None and (
-                fsrs6_adp_baseline_dr < min_retention
-                or fsrs6_adp_baseline_dr > max_retention
+        elif scheduler == "fsrs6_ap":
+            title, fsrs6_ap_baseline_dr = _resolve_fsrs6_ap_label(meta, base_dirs)
+            if fsrs6_ap_baseline_dr is not None and (
+                fsrs6_ap_baseline_dr < min_retention
+                or fsrs6_ap_baseline_dr > max_retention
             ):
                 continue
         elif scheduler == "fixed":
@@ -687,12 +687,12 @@ def _iter_log_entries(
             series_identity = _run_series_identity(entry)
             entry["series_key"] = series_identity
             entry["series_label"] = series_identity
-        elif scheduler == "fsrs6_adp":
+        elif scheduler == "fsrs6_ap":
             entry.update(
                 {
-                    "fsrs6_adp_policy": meta.get("fsrs6_adp_policy"),
-                    "fsrs6_adp_baseline_desired_retention": fsrs6_adp_baseline_dr,
-                    "fsrs6_adp_lambda_value": meta.get("fsrs6_adp_lambda_value"),
+                    "fsrs6_ap_policy": meta.get("fsrs6_ap_policy"),
+                    "fsrs6_ap_baseline_desired_retention": fsrs6_ap_baseline_dr,
+                    "fsrs6_ap_lambda_value": meta.get("fsrs6_ap_lambda_value"),
                 }
             )
         yield desired_value, entry
@@ -728,12 +728,12 @@ def _no_desired_dedupe_key(
         series_key = entry.get("series_key")
         if isinstance(series_key, str) and series_key:
             title_key = f"{title_key}|{series_key}"
-    if scheduler_name == "fsrs6_adp":
-        policy_path = entry.get("fsrs6_adp_policy")
+    if scheduler_name == "fsrs6_ap":
+        policy_path = entry.get("fsrs6_ap_policy")
         if isinstance(policy_path, str) and policy_path:
             title_key = policy_path
-            baseline_dr = entry.get("fsrs6_adp_baseline_desired_retention")
-            lambda_value = entry.get("fsrs6_adp_lambda_value")
+            baseline_dr = entry.get("fsrs6_ap_baseline_desired_retention")
+            lambda_value = entry.get("fsrs6_ap_lambda_value")
             if baseline_dr is not None:
                 title_key = f"{title_key}|dr={baseline_dr}"
             if lambda_value is not None:

@@ -1943,7 +1943,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
         self.assertEqual(trainer, "fsrs6_adr_portfolio")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 6)
 
-    def test_training_batch_resolves_fsrs6_adp_cmaes_and_estimates_grid_lanes(
+    def test_training_batch_resolves_fsrs6_ap_cmaes_and_estimates_grid_lanes(
         self,
     ) -> None:
         from simulator.experiment_infra.training_batch import (
@@ -1964,7 +1964,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_cmaes_fsrs6_adp.py",
+                    "experiments/rl_scheduler/train_cmaes_fsrs6_ap.py",
                 ],
                 training_extra=(
                     "batch_baseline_desired_retention_values = true\n"
@@ -1973,7 +1973,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "enabled = true\n"
                     'trainer = "auto"\n'
                     "\n"
-                    "[training.adp]\n"
+                    "[training.ap]\n"
                     "dr_batch_size = 2\n"
                     "weight_delta_scale = 0.5\n"
                     "\n"
@@ -1998,10 +1998,10 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             command_template=config.train_command_template,
         )
 
-        self.assertEqual(trainer, "fsrs6_adp_cmaes")
+        self.assertEqual(trainer, "fsrs6_ap_cmaes")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 10)
 
-    def test_training_batch_resolves_fsrs6_adp_portfolio_and_estimates_lanes(
+    def test_training_batch_resolves_fsrs6_ap_portfolio_and_estimates_lanes(
         self,
     ) -> None:
         from simulator.experiment_infra.training_batch import (
@@ -2022,7 +2022,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "uv",
                     "run",
                     "python",
-                    "experiments/rl_scheduler/train_fsrs6_adp_portfolio.py",
+                    "experiments/rl_scheduler/train_fsrs6_ap_portfolio.py",
                 ],
                 training_extra=(
                     "batch_baseline_desired_retention_values = true\n"
@@ -2031,7 +2031,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                     "enabled = true\n"
                     'trainer = "auto"\n'
                     "\n"
-                    "[training.adp]\n"
+                    "[training.ap]\n"
                     "weight_delta_scale = 0.5\n"
                     "\n"
                     "[training.portfolio]\n"
@@ -2058,7 +2058,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             command_template=config.train_command_template,
         )
 
-        self.assertEqual(trainer, "fsrs6_adp_portfolio")
+        self.assertEqual(trainer, "fsrs6_ap_portfolio")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 6)
 
     def test_train_user_batches_keep_user_jobs_together(self) -> None:

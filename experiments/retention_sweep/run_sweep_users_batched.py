@@ -79,7 +79,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         sched_help=(
             "Comma-separated schedulers to sweep "
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
-            "anki_sm2, memrise, fixed, fsrs6_adr, fsrs6_adp)."
+            "anki_sm2, memrise, fixed, fsrs6_adr, fsrs6_ap)."
         ),
     )
     add_retention_range_args(parser)
@@ -127,40 +127,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--fsrs6-adp-policy",
+        "--fsrs6-ap-policy",
         type=Path,
         default=None,
-        help="Path to an FSRS6 ADP policy JSON when using --sched fsrs6_adp.",
+        help="Path to an FSRS6 AP policy JSON when using --sched fsrs6_ap.",
     )
     parser.add_argument(
-        "--fsrs6-adp-policy-root",
+        "--fsrs6-ap-policy-root",
         type=Path,
         default=None,
         help=(
-            "Root containing trained FSRS6 ADP policy artifacts, usually "
+            "Root containing trained FSRS6 AP policy artifacts, usually "
             "train-overfit/train_outputs."
         ),
     )
     parser.add_argument(
-        "--fsrs6-adp-train-run-root",
+        "--fsrs6-ap-train-run-root",
         type=Path,
         default=None,
         help=(
             "Training run root; treated as "
-            "<root>/train-overfit/train_outputs for FSRS6 ADP policy discovery."
+            "<root>/train-overfit/train_outputs for FSRS6 AP policy discovery."
         ),
     )
     parser.add_argument(
-        "--fsrs6-adp-policy-manifest",
+        "--fsrs6-ap-policy-manifest",
         type=Path,
         default=None,
-        help="TOML manifest with [[policies]] FSRS6 ADP entries.",
+        help="TOML manifest with [[policies]] FSRS6 AP entries.",
     )
     parser.add_argument(
-        "--fsrs6-adp-lambda-values",
+        "--fsrs6-ap-lambda-values",
         default=None,
         help=(
-            "Optional comma-separated lambda values to select from an FSRS6 ADP "
+            "Optional comma-separated lambda values to select from an FSRS6 AP "
             "policy root or manifest."
         ),
     )
@@ -219,9 +219,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.fsrs6_adr_lambda_values = tuple(
             float(item) for item in parse_csv(args.fsrs6_adr_lambda_values)
         )
-    if isinstance(args.fsrs6_adp_lambda_values, str):
-        args.fsrs6_adp_lambda_values = tuple(
-            float(item) for item in parse_csv(args.fsrs6_adp_lambda_values)
+    if isinstance(args.fsrs6_ap_lambda_values, str):
+        args.fsrs6_ap_lambda_values = tuple(
+            float(item) for item in parse_csv(args.fsrs6_ap_lambda_values)
         )
     return args
 
@@ -304,11 +304,11 @@ def _merge_config_args(
         "fsrs6_adr_train_run_root": ("--fsrs6-adr-train-run-root",),
         "fsrs6_adr_policy_manifest": ("--fsrs6-adr-policy-manifest",),
         "fsrs6_adr_lambda_values": ("--fsrs6-adr-lambda-values",),
-        "fsrs6_adp_policy": ("--fsrs6-adp-policy",),
-        "fsrs6_adp_policy_root": ("--fsrs6-adp-policy-root",),
-        "fsrs6_adp_train_run_root": ("--fsrs6-adp-train-run-root",),
-        "fsrs6_adp_policy_manifest": ("--fsrs6-adp-policy-manifest",),
-        "fsrs6_adp_lambda_values": ("--fsrs6-adp-lambda-values",),
+        "fsrs6_ap_policy": ("--fsrs6-ap-policy",),
+        "fsrs6_ap_policy_root": ("--fsrs6-ap-policy-root",),
+        "fsrs6_ap_train_run_root": ("--fsrs6-ap-train-run-root",),
+        "fsrs6_ap_policy_manifest": ("--fsrs6-ap-policy-manifest",),
+        "fsrs6_ap_lambda_values": ("--fsrs6-ap-lambda-values",),
         "log_dir": ("--log-dir",),
         "log_layout": ("--log-layout",),
         "no_log": ("--no-log",),

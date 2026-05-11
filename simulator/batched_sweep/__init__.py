@@ -26,9 +26,9 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
     FSRS6ADRPolicySpec,
     resolve_fsrs6_adr_policy_specs,
 )
-from simulator.batched_sweep.fsrs6_adp_policy import (
-    FSRS6ADPPolicySpec,
-    resolve_fsrs6_adp_policy_specs,
+from simulator.batched_sweep.fsrs6_ap_policy import (
+    FSRS6APPolicySpec,
+    resolve_fsrs6_ap_policy_specs,
 )
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
 from simulator.batched_sweep.execution import LocalProgressQueue, run_batches
@@ -63,6 +63,6 @@ __all__ = [
     "build_batched_sweep_plan",
     "FSRS6ADRPolicySpec",
     "resolve_fsrs6_adr_policy_specs",
-    "FSRS6ADPPolicySpec",
-    "resolve_fsrs6_adp_policy_specs",
+    "FSRS6APPolicySpec",
+    "resolve_fsrs6_ap_policy_specs",
 ]

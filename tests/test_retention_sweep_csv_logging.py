@@ -34,7 +34,7 @@ from simulator.batched_sweep.runner import (
 from simulator.core import SimulationStats
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
-from simulator.fsrs6_adp_policy import FSRS6ADPPolicy
+from simulator.fsrs6_ap_policy import FSRS6APPolicy
 from experiments.retention_sweep.build_pareto import (
     _build_results,
     _plot_ordered_entries,
@@ -795,20 +795,20 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertIsNone(results[0]["fsrs6_adr_baseline_desired_retention"])
         self.assertEqual(results[0]["memorized_average"], 42.0)
 
-    def test_build_pareto_keeps_no_dr_fsrs6_adp_portfolio_points(self) -> None:
+    def test_build_pareto_keeps_no_dr_fsrs6_ap_portfolio_points(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             user_log_dir = (
                 Path(tmp)
                 / "logs"
                 / "retention_sweep"
                 / "user_1"
-                / "sched_fsrs6_adp"
+                / "sched_fsrs6_ap"
                 / "policy_0"
             )
             policy_dir = Path(tmp) / "policies" / "policy_0"
             policy_dir.mkdir(parents=True)
             policy_path = policy_dir / "policy.json"
-            FSRS6ADPPolicy.from_search_vector(
+            FSRS6APPolicy.from_search_vector(
                 base_weights=DEFAULT_FSRS6_WEIGHTS,
                 search_vector=[0.0] * 21,
                 baseline_desired_retention=0.83,
@@ -817,14 +817,14 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             (policy_dir / "metadata.json").write_text(
                 json.dumps(
                     {
-                        "scheduler_name": "fsrs6_adp",
+                        "scheduler_name": "fsrs6_ap",
                         "training_user_ids": [1],
                         "policy_path": "policy.json",
                         "baseline_desired_retention": None,
                         "scheduler_desired_retention": 0.83,
                         "lambda_value": 0.0,
                         "portfolio_index": 0,
-                        "action_space": "fsrs6_adp_weight_delta_portfolio_child",
+                        "action_space": "fsrs6_ap_weight_delta_portfolio_child",
                     }
                 ),
                 encoding="utf-8",
@@ -833,18 +833,18 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             args.engine = "batched"
             args.env = "fsrs6"
             args.environment = "fsrs6"
-            args.scheduler = "fsrs6_adp"
-            args.scheduler_spec = "fsrs6_adp"
+            args.scheduler = "fsrs6_ap"
+            args.scheduler_spec = "fsrs6_ap"
             args.desired_retention = None
-            args.fsrs6_adp_policy = policy_path
-            args.fsrs6_adp_baseline_desired_retention = None
-            args.fsrs6_adp_lambda_value = 0.0
+            args.fsrs6_ap_policy = policy_path
+            args.fsrs6_ap_baseline_desired_retention = None
+            args.fsrs6_ap_lambda_value = 0.0
             simulate_cli._write_log(args, _stats(memorized=43.0))
 
             results = _build_results(
                 user_log_dir.parents[2],
                 "fsrs6",
-                {"fsrs6_adp"},
+                {"fsrs6_ap"},
                 0.52,
                 0.96,
                 [REPO_ROOT, user_log_dir],
@@ -856,8 +856,8 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             )
 
         self.assertEqual(len(results), 1)
-        self.assertIsNone(results[0]["fsrs6_adp_baseline_desired_retention"])
-        self.assertEqual(results[0]["title"], "ADP policy_0")
+        self.assertIsNone(results[0]["fsrs6_ap_baseline_desired_retention"])
+        self.assertEqual(results[0]["title"], "AP policy_0")
         self.assertEqual(results[0]["memorized_average"], 43.0)
 
     def test_build_pareto_orders_no_dr_portfolio_plot_points_by_x_axis(self) -> None:

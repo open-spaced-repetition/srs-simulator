@@ -39,21 +39,21 @@ from experiments.rl_scheduler.portfolio_training_common import (
     select_portfolio_children as _common_select_portfolio_children,
     zero_metrics,
 )
-from experiments.rl_scheduler.train_cmaes_fsrs6_adp import (
-    ADPSettings,
+from experiments.rl_scheduler.train_cmaes_fsrs6_ap import (
+    APSettings,
     _clipped_dimension_count,
     _decode_weight_delta_tensor,
 )
 from simulator.batched_engine.multiuser_engine import simulate_multiuser
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
-from simulator.fsrs6_adp_policy import FEATURE_VERSION, FSRS6ADPPolicy, WEIGHT_COUNT
+from simulator.fsrs6_ap_policy import FEATURE_VERSION, FSRS6APPolicy, WEIGHT_COUNT
 from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 
 
 @dataclass(frozen=True, slots=True)
-class ADPPortfolioSettings:
+class APPortfolioSettings:
     algorithm: str = "sms_emoa"
     population_size: int = 16
     generations: int = 4
@@ -72,7 +72,7 @@ class ADPPortfolioSettings:
         *,
         settings: PolicySearchSettings,
         default_seed_retention_values: Sequence[float],
-    ) -> ADPPortfolioSettings:
+    ) -> APPortfolioSettings:
         defaults = cls()
         seed_retention_values = _optional_float_tuple(
             raw.get("seed_retention_values"),
@@ -154,15 +154,15 @@ class ADPPortfolioSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class ADPPortfolioTrainJob:
+class APPortfolioTrainJob:
     user_id: int
     output_dir: Path
     command_record_path: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class ADPPortfolioTrainOutcome:
-    job: ADPPortfolioTrainJob
+class APPortfolioTrainOutcome:
+    job: APPortfolioTrainJob
     passed: bool
     artifact_paths: tuple[Path, ...]
     progress_path: Path
@@ -170,7 +170,7 @@ class ADPPortfolioTrainOutcome:
 
 
 @dataclass(frozen=True, slots=True)
-class ADPPortfolioCandidate:
+class APPortfolioCandidate:
     candidate_id: int
     desired_retention: float
     search_vector: tuple[float, ...]
@@ -185,16 +185,16 @@ class ADPPortfolioCandidate:
 
 
 @dataclass(frozen=True, slots=True)
-class SelectedADPPortfolioChild:
+class SelectedAPPortfolioChild:
     portfolio_index: int
-    candidate: ADPPortfolioCandidate
+    candidate: APPortfolioCandidate
     hypervolume_contribution: float
     pareto_rank: int
 
 
 @dataclass(frozen=True, slots=True)
-class UserADPPortfolioResult:
-    job: ADPPortfolioTrainJob
+class UserAPPortfolioResult:
+    job: APPortfolioTrainJob
     baseline_desired_retention_values: tuple[float, ...]
     baseline_metrics: list[CandidateMetrics]
     baseline_hypervolume: float
@@ -203,21 +203,21 @@ class UserADPPortfolioResult:
     final_population_hypervolume: float
     final_population_hypervolume_improvement: float
     reference_point: ObjectivePoint
-    selected_children: list[SelectedADPPortfolioChild]
-    final_population: list[ADPPortfolioCandidate]
+    selected_children: list[SelectedAPPortfolioChild]
+    final_population: list[APPortfolioCandidate]
     base_weights: tuple[float, ...]
     history: list[dict[str, float]]
     passed: bool
 
 
 @dataclass(frozen=True, slots=True)
-class _ADPFamilyContext:
-    adp_settings: ADPSettings
+class _APFamilyContext:
+    ap_settings: APSettings
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an FSRS6 ADP policy portfolio with SMS-EMOA.",
+        description="Train an FSRS6 AP policy portfolio with SMS-EMOA.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", type=Path, required=True)
@@ -241,7 +241,7 @@ def main() -> int:
     config = ExperimentConfig.from_toml(args.config)
     outcomes = run_portfolio_train_jobs(
         jobs=[
-            ADPPortfolioTrainJob(
+            APPortfolioTrainJob(
                 user_id=args.user_id,
                 output_dir=args.output_dir,
                 command_record_path=args.training_command_path,
@@ -261,7 +261,7 @@ def main() -> int:
 
 def run_portfolio_train_jobs(
     *,
-    jobs: Sequence[ADPPortfolioTrainJob],
+    jobs: Sequence[APPortfolioTrainJob],
     config: ExperimentConfig,
     config_path: Path,
     repo_root: Path,
@@ -270,7 +270,7 @@ def run_portfolio_train_jobs(
     benchmark_result: str | None = None,
     benchmark_partition: str | None = None,
     execution_mode: str = "in_process_batch",
-) -> list[ADPPortfolioTrainOutcome]:
+) -> list[APPortfolioTrainOutcome]:
     return _run_common_portfolio_train_jobs(
         jobs=jobs,
         config=config,
@@ -290,9 +290,9 @@ def _build_family_context(
     config: ExperimentConfig,
     raw_training_policy_search: Mapping[str, Any],
     baseline_dr_values: Sequence[float],
-) -> _ADPFamilyContext:
-    return _ADPFamilyContext(
-        adp_settings=ADPSettings.from_config(
+) -> _APFamilyContext:
+    return _APFamilyContext(
+        ap_settings=APSettings.from_config(
             config,
             raw_training_policy_search=raw_training_policy_search,
             dr_count=len(baseline_dr_values),
@@ -300,9 +300,9 @@ def _build_family_context(
     )
 
 
-def _progress_payload(*, family_context: _ADPFamilyContext) -> Mapping[str, Any]:
+def _progress_payload(*, family_context: _APFamilyContext) -> Mapping[str, Any]:
     return {
-        "adp": family_context.adp_settings.to_dict(),
+        "ap": family_context.ap_settings.to_dict(),
         "feature_version": FEATURE_VERSION,
     }
 
@@ -310,9 +310,9 @@ def _progress_payload(*, family_context: _ADPFamilyContext) -> Mapping[str, Any]
 def _prepare_family_state(
     *,
     bundle: Any,
-    jobs: Sequence[ADPPortfolioTrainJob],
-    portfolio: ADPPortfolioSettings,
-    family_context: _ADPFamilyContext,
+    jobs: Sequence[APPortfolioTrainJob],
+    portfolio: APPortfolioSettings,
+    family_context: _APFamilyContext,
 ) -> list[tuple[float, ...]]:
     del family_context
     return _base_weights_by_job(
@@ -326,18 +326,18 @@ def _evaluate_candidates(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
-    portfolio: ADPPortfolioSettings,
-    family_context: _ADPFamilyContext,
+    portfolio: APPortfolioSettings,
+    family_context: _APFamilyContext,
     family_state: list[tuple[float, ...]],
     bundle: Any,
-    candidates_by_job: Sequence[Sequence[ADPPortfolioCandidate]],
+    candidates_by_job: Sequence[Sequence[APPortfolioCandidate]],
     seed: int,
-) -> list[list[ADPPortfolioCandidate]]:
+) -> list[list[APPortfolioCandidate]]:
     del portfolio, family_state
-    metrics_by_job, weights_by_job = _evaluate_adp_portfolio_candidates(
+    metrics_by_job, weights_by_job = _evaluate_ap_portfolio_candidates(
         config=config,
         settings=settings,
-        adp_settings=family_context.adp_settings,
+        ap_settings=family_context.ap_settings,
         bundle=bundle,
         desired_retentions_by_job=[
             [candidate.desired_retention for candidate in candidates]
@@ -351,7 +351,7 @@ def _evaluate_candidates(
     )
     return [
         [
-            ADPPortfolioCandidate(
+            APPortfolioCandidate(
                 candidate_id=candidates[index].candidate_id,
                 desired_retention=candidates[index].desired_retention,
                 search_vector=candidates[index].search_vector,
@@ -364,11 +364,11 @@ def _evaluate_candidates(
     ]
 
 
-def _evaluate_adp_portfolio_candidates(
+def _evaluate_ap_portfolio_candidates(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
-    adp_settings: ADPSettings,
+    ap_settings: APSettings,
     bundle: Any,
     desired_retentions_by_job: Sequence[Sequence[float]],
     search_vectors_by_job: Sequence[Sequence[tuple[float, ...]]],
@@ -389,7 +389,7 @@ def _evaluate_adp_portfolio_candidates(
     scheduler_weights = _decode_weight_delta_tensor(
         base_weights=bundle.scheduler_weights,
         search_vectors=flat_vectors,
-        weight_delta_scale=adp_settings.weight_delta_scale,
+        weight_delta_scale=ap_settings.weight_delta_scale,
     )
     desired = torch.tensor(
         [
@@ -446,23 +446,23 @@ def _evaluate_adp_portfolio_candidates(
 
 def _initial_populations(
     *,
-    jobs: Sequence[ADPPortfolioTrainJob],
+    jobs: Sequence[APPortfolioTrainJob],
     settings: PolicySearchSettings,
-    portfolio: ADPPortfolioSettings,
-    family_context: _ADPFamilyContext,
+    portfolio: APPortfolioSettings,
+    family_context: _APFamilyContext,
     device: torch.device,
     seed: int,
-) -> tuple[list[list[ADPPortfolioCandidate]], list[int]]:
+) -> tuple[list[list[APPortfolioCandidate]], list[int]]:
     del family_context
     seed_genomes = [
         (float(dr), _zero_search_vector())
         for dr in portfolio.seed_retention_values or ()
     ]
-    populations: list[list[ADPPortfolioCandidate]] = []
+    populations: list[list[APPortfolioCandidate]] = []
     next_ids: list[int] = []
     for job in jobs:
         generator = generator_for_job(device=device, seed=seed, user_id=job.user_id)
-        candidates: list[ADPPortfolioCandidate] = []
+        candidates: list[APPortfolioCandidate] = []
         for index in range(portfolio.population_size):
             if index < len(seed_genomes):
                 desired_retention, search_vector = seed_genomes[index]
@@ -479,7 +479,7 @@ def _initial_populations(
                     generator=generator,
                 )
             candidates.append(
-                ADPPortfolioCandidate(
+                APPortfolioCandidate(
                     candidate_id=index,
                     desired_retention=desired_retention,
                     search_vector=search_vector,
@@ -494,16 +494,16 @@ def _initial_populations(
 
 def _make_offspring(
     *,
-    population: Sequence[ADPPortfolioCandidate],
+    population: Sequence[APPortfolioCandidate],
     next_candidate_id: int,
     settings: PolicySearchSettings,
-    portfolio: ADPPortfolioSettings,
-    family_context: _ADPFamilyContext,
+    portfolio: APPortfolioSettings,
+    family_context: _APFamilyContext,
     device: torch.device,
     generator: torch.Generator,
-) -> tuple[list[ADPPortfolioCandidate], int]:
+) -> tuple[list[APPortfolioCandidate], int]:
     del family_context
-    candidates: list[ADPPortfolioCandidate] = []
+    candidates: list[APPortfolioCandidate] = []
     for _index in range(portfolio.offspring_size):
         parent_index = int(
             torch.randint(
@@ -524,7 +524,7 @@ def _make_offspring(
             generator=generator,
         )
         candidates.append(
-            ADPPortfolioCandidate(
+            APPortfolioCandidate(
                 candidate_id=next_candidate_id,
                 desired_retention=desired_retention,
                 search_vector=search_vector,
@@ -612,11 +612,11 @@ def _base_weights_by_job(
 def _selected_child_from_candidate(
     *,
     portfolio_index: int,
-    candidate: ADPPortfolioCandidate,
+    candidate: APPortfolioCandidate,
     hypervolume_contribution: float,
     pareto_rank: int,
-) -> SelectedADPPortfolioChild:
-    return SelectedADPPortfolioChild(
+) -> SelectedAPPortfolioChild:
+    return SelectedAPPortfolioChild(
         portfolio_index=portfolio_index,
         candidate=candidate,
         hypervolume_contribution=hypervolume_contribution,
@@ -627,10 +627,10 @@ def _selected_child_from_candidate(
 def _select_portfolio_children(
     *,
     baseline_points: Sequence[ObjectivePoint],
-    candidates: Sequence[ADPPortfolioCandidate],
+    candidates: Sequence[APPortfolioCandidate],
     portfolio_size: int,
     reference: ObjectivePoint,
-) -> list[SelectedADPPortfolioChild]:
+) -> list[SelectedAPPortfolioChild]:
     return _common_select_portfolio_children(
         baseline_points=baseline_points,
         candidates=candidates,
@@ -642,7 +642,7 @@ def _select_portfolio_children(
 
 def _build_result(
     *,
-    job: ADPPortfolioTrainJob,
+    job: APPortfolioTrainJob,
     job_index: int,
     baseline_desired_retention_values: tuple[float, ...],
     baseline_metrics: list[CandidateMetrics],
@@ -652,13 +652,13 @@ def _build_result(
     final_population_hypervolume: float,
     final_population_hypervolume_improvement: float,
     reference_point: ObjectivePoint,
-    selected_children: list[SelectedADPPortfolioChild],
-    final_population: list[ADPPortfolioCandidate],
+    selected_children: list[SelectedAPPortfolioChild],
+    final_population: list[APPortfolioCandidate],
     family_state: list[tuple[float, ...]],
     history: list[dict[str, float]],
     passed: bool,
-) -> UserADPPortfolioResult:
-    return UserADPPortfolioResult(
+) -> UserAPPortfolioResult:
+    return UserAPPortfolioResult(
         job=job,
         baseline_desired_retention_values=baseline_desired_retention_values,
         baseline_metrics=baseline_metrics,
@@ -680,31 +680,31 @@ def _build_result(
 
 def _write_portfolio_artifacts_adapter(
     *,
-    result: UserADPPortfolioResult,
+    result: UserAPPortfolioResult,
     config: ExperimentConfig,
     config_path: Path,
     settings: PolicySearchSettings,
-    family_context: _ADPFamilyContext,
-    portfolio: ADPPortfolioSettings,
+    family_context: _APFamilyContext,
+    portfolio: APPortfolioSettings,
 ) -> list[Path]:
     return _write_portfolio_artifacts(
         result=result,
         config=config,
         config_path=config_path,
         settings=settings,
-        adp_settings=family_context.adp_settings,
+        ap_settings=family_context.ap_settings,
         portfolio=portfolio,
     )
 
 
 def _write_portfolio_artifacts(
     *,
-    result: UserADPPortfolioResult,
+    result: UserAPPortfolioResult,
     config: ExperimentConfig,
     config_path: Path,
     settings: PolicySearchSettings,
-    adp_settings: ADPSettings,
-    portfolio: ADPPortfolioSettings,
+    ap_settings: APSettings,
+    portfolio: APPortfolioSettings,
 ) -> list[Path]:
     del settings
     output_dir = result.job.output_dir
@@ -719,15 +719,15 @@ def _write_portfolio_artifacts(
             weight - base_weight
             for weight, base_weight in zip(child.candidate.weights, result.base_weights)
         )
-        policy = FSRS6ADPPolicy(
+        policy = FSRS6APPolicy(
             base_weights=result.base_weights,
             weights=child.candidate.weights,
             delta=delta,
             search_vector=child.candidate.search_vector,
             baseline_desired_retention=child.candidate.desired_retention,
-            weight_delta_scale=adp_settings.weight_delta_scale,
+            weight_delta_scale=ap_settings.weight_delta_scale,
             title=(
-                f"fsrs6_adp_portfolio_u{result.job.user_id}_"
+                f"fsrs6_ap_portfolio_u{result.job.user_id}_"
                 f"policy_{child.portfolio_index}"
             ),
         )
@@ -738,7 +738,7 @@ def _write_portfolio_artifacts(
             base_weights=result.base_weights,
             search_vector=child.candidate.search_vector,
             weights=child.candidate.weights,
-            weight_delta_scale=adp_settings.weight_delta_scale,
+            weight_delta_scale=ap_settings.weight_delta_scale,
         )
         _write_json(
             metrics_path,
@@ -769,7 +769,7 @@ def _write_portfolio_artifacts(
                 "artifact_kind": "scheduler-policy",
                 "artifact_id": f"{portfolio_id}-policy-{child.portfolio_index}",
                 "family": config.family,
-                "scheduler_name": "fsrs6_adp",
+                "scheduler_name": "fsrs6_ap",
                 "environment": config.simulation.environment,
                 "engine": config.simulation.engine,
                 "training_user_ids": [result.job.user_id],
@@ -777,7 +777,7 @@ def _write_portfolio_artifacts(
                 "seed": config.seed,
                 "policy_path": "policy.json",
                 "feature_version": FEATURE_VERSION,
-                "action_space": "fsrs6_adp_weight_delta_portfolio_child",
+                "action_space": "fsrs6_ap_weight_delta_portfolio_child",
                 "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
                 "code_commit": _git_commit(),
                 "baseline_desired_retention": None,
@@ -815,7 +815,7 @@ def _write_portfolio_artifacts(
         {
             "schema_version": SCHEMA_VERSION,
             "portfolio_id": portfolio_id,
-            "scheduler_name": "fsrs6_adp",
+            "scheduler_name": "fsrs6_ap",
             "training_user_ids": [result.job.user_id],
             "baseline_desired_retention": None,
             "algorithm": portfolio.algorithm,
@@ -856,7 +856,7 @@ def _write_portfolio_artifacts(
             "selected_child_count": len(result.selected_children),
             "final_population_size": len(result.final_population),
             "selection_algorithm": "greedy_subset_hypervolume",
-            "adp_settings": adp_settings.to_dict(),
+            "ap_settings": ap_settings.to_dict(),
             "portfolio_settings": asdict(portfolio),
             "history": result.history,
         },
@@ -865,7 +865,7 @@ def _write_portfolio_artifacts(
 
 
 def _portfolio_id(*, user_id: int, seed: int) -> str:
-    return f"fsrs6-adp-portfolio-user-{user_id}-seed-{seed}"
+    return f"fsrs6-ap-portfolio-user-{user_id}-seed-{seed}"
 
 
 def _zero_metrics() -> CandidateMetrics:
@@ -887,7 +887,7 @@ def _optional_float_tuple(value: Any, field_name: str) -> tuple[float, ...] | No
 def _selection_payload(
     *,
     baseline_points: Sequence[ObjectivePoint],
-    candidates: Sequence[ADPPortfolioCandidate],
+    candidates: Sequence[APPortfolioCandidate],
     population_size: int,
     reference: ObjectivePoint,
 ) -> Any:
@@ -901,13 +901,13 @@ def _selection_payload(
 
 def _build_outcome(
     *,
-    job: ADPPortfolioTrainJob,
+    job: APPortfolioTrainJob,
     passed: bool,
     artifact_paths: tuple[Path, ...],
     progress_path: Path,
     error: str | None,
-) -> ADPPortfolioTrainOutcome:
-    return ADPPortfolioTrainOutcome(
+) -> APPortfolioTrainOutcome:
+    return APPortfolioTrainOutcome(
         job=job,
         passed=passed,
         artifact_paths=artifact_paths,
@@ -920,7 +920,7 @@ _progress_for_jobs = progress_for_jobs
 
 
 _ADAPTER = PortfolioFamilyAdapter(
-    settings_from_mapping=ADPPortfolioSettings.from_mapping,
+    settings_from_mapping=APPortfolioSettings.from_mapping,
     build_family_context=_build_family_context,
     progress_payload=_progress_payload,
     initial_populations=_initial_populations,
