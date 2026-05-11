@@ -256,15 +256,19 @@ Sampling benchmark:
   `train_fsrs6_adr_portfolio.py`. It times bundle setup separately from
   candidate evaluation, writes per-repeat JSONL plus CSV, and records PyTorch
   CUDA memory together with `nvidia-smi` dedicated memory/utilization samples.
+- Formal benchmark methodology, matrix definitions, output fields, and result
+  tables live in [`sampling_benchmark.md`](sampling_benchmark.md).
 - Example:
 
 ```bash
 uv run python experiments/rl_scheduler/benchmark_sampling.py \
   --config experiments/rl_scheduler/configs/fsrs6_adr_linear_portfolio_users_1_8.toml \
-  --run-id linear_sampling_20260510 \
-  --user-counts 1,2,4,8 \
-  --candidate-counts 16,32,64,128 \
-  --repeats 2 \
+  --environment fsrs6 \
+  --candidate-mode fixed-dr \
+  --fixed-desired-retention 0.98 \
+  --users 1,2,3,4,5,6,7,8 \
+  --lane-shapes 8x4 \
+  --repeats 1 \
   --warmup 0
 ```
 
@@ -274,27 +278,9 @@ uv run python experiments/rl_scheduler/benchmark_sampling.py \
   Windows shared-GPU-memory counter; use dedicated-memory and utilization
   samples as local evidence, and still check shared memory externally when
   diagnosing spill behavior.
-- On 2026-05-10, the 8-user FSRS6 ADR linear portfolio benchmark on RTX 4090 D
-  showed strong batching gains. The current 8-user `offspring_size = 64` shape
-  is 512 lanes and evaluates in about 18.87 seconds at 27.15 lanes/s. Larger
-  shapes improved throughput but with diminishing returns:
-
-| candidates/user | total lanes | mean eval seconds | lanes/s | PyTorch reserved | dedicated memory | GPU util peak | memory bandwidth util peak |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 64 | 512 | 18.87 | 27.15 | 0.70 GiB | 3.88 GiB | 53% | 33% |
-| 128 | 1024 | 23.10 | 44.35 | 1.39 GiB | 4.71 GiB | 76% | 55% |
-| 256 | 2048 | 37.56 | 54.54 | 2.86 GiB | 7.04 GiB | 84% | 77% |
-| 512 | 4096 | 63.63 | 64.38 | 5.66 GiB | 9.87 GiB | 92% | 91% |
-| 1024 | 8192 | 113.11 | 72.43 | 11.22 GiB | 15.63 GiB | 97% | 100% |
-
-- `memory bandwidth util peak` is `nvidia-smi utilization.memory`, which tracks
-  memory controller activity rather than the percentage of VRAM capacity used.
-- Practical interpretation: small candidate batches are dominated by fixed
-  simulator overhead. For 8-user FSRS6 ADR portfolio training, 1024-2048 total
-  lanes are a better throughput/latency region than 512 lanes. The 4096-8192
-  lane range increases absolute throughput but is much longer per generation
-  and starts to saturate GPU and memory utilization, so use it only for explicit
-  throughput experiments.
+- Use `benchmark_sampling_matrix.py` for the full fixed-DR FSRS6/LSTM matrix and
+  confirmation pass. `--lstm-max-batch` accepts a positive integer or `off` for
+  LSTM cells.
 
 ## Reproducibility Requirements
 

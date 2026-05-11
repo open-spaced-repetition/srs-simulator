@@ -3,16 +3,17 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import statistics
 import subprocess
 import sys
 import threading
 import time
-from collections.abc import Sequence
-from dataclasses import asdict
+from collections.abc import MutableMapping, Sequence
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import torch
 
@@ -37,26 +38,36 @@ from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig
+from simulator.lstm_utils import resolve_lstm_max_batch_size
 from simulator.short_term_config import resolve_short_term_config
 
 
 DEFAULT_USER_COUNTS = (1, 2, 4, 8)
 DEFAULT_CANDIDATE_COUNTS = (16, 32, 64, 128)
+LSTM_MAX_BATCH_OFF: Literal["off"] = "off"
+type LstmMaxBatchOverride = int | Literal["off"]
 CSV_FIELDS = (
     "phase",
     "user_count",
     "candidate_count",
     "total_lanes",
+    "effective_lstm_max_batch",
     "repeat_index",
     "seconds",
     "lanes_per_second",
     "lane_days_per_second",
     "seconds_per_lane",
+    "reviews_per_second",
+    "reviews_per_lane",
     "torch_peak_allocated_memory_bytes",
     "torch_peak_reserved_memory_bytes",
     "nvidia_smi_peak_memory_used_mib",
     "nvidia_smi_peak_utilization_gpu_percent",
+    "nvidia_smi_peak_utilization_memory_percent",
     "metric_checksum",
+    "metric_total_reviews",
+    "metric_total_lapses",
+    "metric_total_cost",
 )
 
 
@@ -147,10 +158,51 @@ def parse_args() -> argparse.Namespace:
         default=",".join(str(item) for item in DEFAULT_CANDIDATE_COUNTS),
         help="Comma-separated candidates per user for each simulated sample batch.",
     )
+    parser.add_argument(
+        "--lane-shapes",
+        default=None,
+        help=(
+            "Optional comma-separated user_count x candidate_count pairs, for "
+            "example '8x128,16x64'. When set, skips the user/candidate grid."
+        ),
+    )
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--torch-device", default=None)
+    parser.add_argument(
+        "--candidate-mode",
+        choices=("portfolio", "fixed-dr"),
+        default="portfolio",
+        help=(
+            "How to construct candidate policies. 'portfolio' uses seed DRs plus "
+            "mutations; 'fixed-dr' repeats one constant desired-retention policy."
+        ),
+    )
+    parser.add_argument(
+        "--fixed-desired-retention",
+        type=float,
+        default=None,
+        help=(
+            "Desired retention used by --candidate-mode fixed-dr. Defaults to the "
+            "largest configured portfolio seed retention value."
+        ),
+    )
+    parser.add_argument(
+        "--environment",
+        choices=("fsrs6", "lstm"),
+        default=None,
+        help="Override simulation.environment from the TOML config.",
+    )
+    parser.add_argument(
+        "--lstm-max-batch",
+        type=_parse_lstm_max_batch,
+        default=None,
+        help=(
+            "Override SRS_LSTM_MAX_BATCH for --environment lstm. Use an integer "
+            "or 'off' to disable LSTM chunking."
+        ),
+    )
     parser.add_argument("--button-usage", type=Path, default=DEFAULT_BUTTON_USAGE_PATH)
     parser.add_argument("--srs-benchmark-root", type=Path, default=None)
     parser.add_argument("--benchmark-result", default=None)
@@ -185,6 +237,15 @@ def main() -> int:
         raise SystemExit("--nvidia-smi-sample-interval must be >= 0.")
 
     config = ExperimentConfig.from_toml(args.config)
+    if args.environment is not None:
+        config = replace(
+            config,
+            simulation=replace(config.simulation, environment=args.environment),
+        )
+    effective_lstm_max_batch = _apply_lstm_max_batch_override(
+        environment=config.simulation.environment,
+        override=cast(LstmMaxBatchOverride | None, args.lstm_max_batch),
+    )
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     if args.torch_device is not None:
         settings = PolicySearchSettings(
@@ -209,15 +270,43 @@ def main() -> int:
         settings=settings,
         default_seed_retention_values=baseline_dr_values,
     )
+    fixed_desired_retention = None
+    if args.candidate_mode == "fixed-dr":
+        fixed_desired_retention = _resolve_fixed_desired_retention(
+            args.fixed_desired_retention,
+            portfolio=portfolio,
+            settings=settings,
+        )
     users = _parse_ints(args.users) if args.users else list(config.users.train)
-    user_counts = _parse_ints(args.user_counts)
-    candidate_counts = _parse_ints(args.candidate_counts)
+    if args.lane_shapes:
+        lane_shapes = _parse_lane_shapes(args.lane_shapes)
+        user_counts = sorted(
+            {user_count for user_count, _candidate_count in lane_shapes}
+        )
+        candidate_counts = sorted(
+            {candidate_count for _user_count, candidate_count in lane_shapes}
+        )
+    else:
+        user_counts = _parse_ints(args.user_counts)
+        candidate_counts = _parse_ints(args.candidate_counts)
+        lane_shapes = [
+            (user_count, candidate_count)
+            for user_count in user_counts
+            for candidate_count in candidate_counts
+        ]
     for user_count in user_counts:
         if user_count < 1 or user_count > len(users):
             raise SystemExit(
                 f"user_count {user_count} must be between 1 and {len(users)}."
             )
     for candidate_count in candidate_counts:
+        if candidate_count < 1:
+            raise SystemExit("candidate counts must be >= 1.")
+    for user_count, candidate_count in lane_shapes:
+        if user_count < 1 or user_count > len(users):
+            raise SystemExit(
+                f"user_count {user_count} must be between 1 and {len(users)}."
+            )
         if candidate_count < 1:
             raise SystemExit("candidate counts must be >= 1.")
 
@@ -250,138 +339,140 @@ def main() -> int:
     eval_records: list[dict[str, Any]] = []
 
     with samples_path.open("w", encoding="utf-8") as jsonl_handle:
-        for user_count in user_counts:
+        for user_count, candidate_count in lane_shapes:
             selected_users = users[:user_count]
-            for candidate_count in candidate_counts:
-                total_lanes = user_count * candidate_count
-                if (
-                    args.max_total_lanes is not None
-                    and total_lanes > args.max_total_lanes
-                ):
-                    continue
-                shape = {
-                    "user_count": user_count,
-                    "candidate_count": candidate_count,
-                    "total_lanes": total_lanes,
-                    "users": selected_users,
-                }
-                coefficients_started = time.perf_counter()
-                coefficients_by_job = _candidate_coefficients_by_job(
-                    user_ids=selected_users,
-                    candidate_count=candidate_count,
-                    settings=settings,
-                    portfolio=portfolio,
-                    feature_version=feature_version,
-                    device=device,
-                    seed=seed,
-                )
-                coefficient_generation_seconds = (
-                    time.perf_counter() - coefficients_started
-                )
+            total_lanes = user_count * candidate_count
+            if args.max_total_lanes is not None and total_lanes > args.max_total_lanes:
+                continue
+            shape = {
+                "user_count": user_count,
+                "candidate_count": candidate_count,
+                "total_lanes": total_lanes,
+                "effective_lstm_max_batch": effective_lstm_max_batch,
+                "users": selected_users,
+            }
+            coefficients_started = time.perf_counter()
+            coefficients_by_job = _candidate_coefficients_by_job(
+                user_ids=selected_users,
+                candidate_count=candidate_count,
+                settings=settings,
+                portfolio=portfolio,
+                feature_version=feature_version,
+                device=device,
+                seed=seed,
+                candidate_mode=args.candidate_mode,
+                fixed_desired_retention=fixed_desired_retention,
+            )
+            coefficient_generation_seconds = time.perf_counter() - coefficients_started
 
-                lane_user_ids = [
-                    user_id
-                    for user_id in selected_users
-                    for _candidate in range(candidate_count)
-                ]
-                _reset_cuda_peak(device)
+            lane_user_ids = [
+                user_id
+                for user_id in selected_users
+                for _candidate in range(candidate_count)
+            ]
+            _reset_cuda_peak(device)
+            _sync(device)
+            setup_started = time.perf_counter()
+            bundle = _build_bundle(
+                config=config,
+                settings=settings,
+                lane_user_ids=lane_user_ids,
+                benchmark_root=benchmark_root,
+                overrides=overrides,
+                benchmark_partition=args.benchmark_partition,
+                button_usage=args.button_usage,
+                device=device,
+                short_term_source=short_term_source,
+                learning_steps=learning_steps,
+                relearning_steps=relearning_steps,
+            )
+            _sync(device)
+            setup_seconds = time.perf_counter() - setup_started
+            setup_record = {
+                "phase": "setup",
+                **shape,
+                "repeat_index": None,
+                "seconds": setup_seconds,
+                "coefficient_generation_seconds": coefficient_generation_seconds,
+                **_throughput(
+                    seconds=setup_seconds,
+                    total_lanes=total_lanes,
+                    days=config.simulation.days,
+                ),
+                **_torch_memory(device),
+            }
+            _write_record(jsonl_handle, setup_record)
+            setup_records.append(setup_record)
+            all_records.append(setup_record)
+
+            for warmup_index in range(args.warmup):
                 _sync(device)
-                setup_started = time.perf_counter()
-                bundle = _build_bundle(
+                warmup_started = time.perf_counter()
+                _evaluate_adr_coefficients(
                     config=config,
                     settings=settings,
-                    lane_user_ids=lane_user_ids,
-                    benchmark_root=benchmark_root,
-                    overrides=overrides,
-                    benchmark_partition=args.benchmark_partition,
-                    button_usage=args.button_usage,
-                    device=device,
-                    short_term_source=short_term_source,
-                    learning_steps=learning_steps,
-                    relearning_steps=relearning_steps,
+                    bundle=bundle,
+                    coefficients_by_job=coefficients_by_job,
+                    feature_version=feature_version,
+                    seed=seed + warmup_index,
                 )
                 _sync(device)
-                setup_seconds = time.perf_counter() - setup_started
-                setup_record = {
-                    "phase": "setup",
+                warmup_record = {
+                    "phase": "warmup",
                     **shape,
-                    "repeat_index": None,
-                    "seconds": setup_seconds,
-                    "coefficient_generation_seconds": coefficient_generation_seconds,
-                    **_throughput(
-                        seconds=setup_seconds,
-                        total_lanes=total_lanes,
-                        days=config.simulation.days,
-                    ),
-                    **_torch_memory(device),
+                    "repeat_index": warmup_index,
+                    "seconds": time.perf_counter() - warmup_started,
                 }
-                _write_record(jsonl_handle, setup_record)
-                setup_records.append(setup_record)
-                all_records.append(setup_record)
+                _write_record(jsonl_handle, warmup_record)
+                all_records.append(warmup_record)
 
-                for warmup_index in range(args.warmup):
-                    _sync(device)
-                    warmup_started = time.perf_counter()
-                    _evaluate_adr_coefficients(
+            for repeat_index in range(args.repeats):
+                _reset_cuda_peak(device)
+                _sync(device)
+                sampler = NvidiaSmiSampler(
+                    enabled=(
+                        device.type == "cuda" and args.nvidia_smi_sample_interval > 0.0
+                    ),
+                    interval_seconds=max(args.nvidia_smi_sample_interval, 0.001),
+                )
+                with sampler:
+                    started = time.perf_counter()
+                    metrics_by_job = _evaluate_adr_coefficients(
                         config=config,
                         settings=settings,
                         bundle=bundle,
                         coefficients_by_job=coefficients_by_job,
                         feature_version=feature_version,
-                        seed=seed + warmup_index,
+                        seed=seed + 1000 + repeat_index,
                     )
                     _sync(device)
-                    warmup_record = {
-                        "phase": "warmup",
-                        **shape,
-                        "repeat_index": warmup_index,
-                        "seconds": time.perf_counter() - warmup_started,
-                    }
-                    _write_record(jsonl_handle, warmup_record)
-                    all_records.append(warmup_record)
+                    seconds = time.perf_counter() - started
+                metric_summary = _metric_summary(metrics_by_job)
+                record = {
+                    "phase": "evaluate",
+                    **shape,
+                    "repeat_index": repeat_index,
+                    "seconds": seconds,
+                    **metric_summary,
+                    **_workload_throughput(
+                        total_reviews=int(metric_summary["metric_total_reviews"]),
+                        seconds=seconds,
+                        total_lanes=total_lanes,
+                    ),
+                    **_throughput(
+                        seconds=seconds,
+                        total_lanes=total_lanes,
+                        days=config.simulation.days,
+                    ),
+                    **_torch_memory(device),
+                    **sampler.summary(),
+                }
+                _write_record(jsonl_handle, record)
+                eval_records.append(record)
+                all_records.append(record)
 
-                for repeat_index in range(args.repeats):
-                    _reset_cuda_peak(device)
-                    _sync(device)
-                    sampler = NvidiaSmiSampler(
-                        enabled=(
-                            device.type == "cuda"
-                            and args.nvidia_smi_sample_interval > 0.0
-                        ),
-                        interval_seconds=max(args.nvidia_smi_sample_interval, 0.001),
-                    )
-                    with sampler:
-                        started = time.perf_counter()
-                        metrics_by_job = _evaluate_adr_coefficients(
-                            config=config,
-                            settings=settings,
-                            bundle=bundle,
-                            coefficients_by_job=coefficients_by_job,
-                            feature_version=feature_version,
-                            seed=seed + 1000 + repeat_index,
-                        )
-                        _sync(device)
-                        seconds = time.perf_counter() - started
-                    record = {
-                        "phase": "evaluate",
-                        **shape,
-                        "repeat_index": repeat_index,
-                        "seconds": seconds,
-                        "metric_checksum": _metric_checksum(metrics_by_job),
-                        **_throughput(
-                            seconds=seconds,
-                            total_lanes=total_lanes,
-                            days=config.simulation.days,
-                        ),
-                        **_torch_memory(device),
-                        **sampler.summary(),
-                    }
-                    _write_record(jsonl_handle, record)
-                    eval_records.append(record)
-                    all_records.append(record)
-
-                del bundle
-                _clear_cuda_cache(device)
+            del bundle
+            _clear_cuda_cache(device)
 
     summary = {
         "schema_version": 1,
@@ -397,9 +488,19 @@ def main() -> int:
         "days": config.simulation.days,
         "deck": config.simulation.deck,
         "feature_version": feature_version,
+        "candidate_mode": args.candidate_mode,
+        "fixed_desired_retention": fixed_desired_retention,
+        "lstm_max_batch": _format_lstm_max_batch_override(
+            cast(LstmMaxBatchOverride | None, args.lstm_max_batch)
+        ),
+        "effective_lstm_max_batch": effective_lstm_max_batch,
         "users": users,
         "user_counts": user_counts,
         "candidate_counts": candidate_counts,
+        "lane_shapes": [
+            {"user_count": user_count, "candidate_count": candidate_count}
+            for user_count, candidate_count in lane_shapes
+        ],
         "repeats": args.repeats,
         "warmup": args.warmup,
         "portfolio": asdict(portfolio),
@@ -412,6 +513,8 @@ def main() -> int:
             "bundle construction for the lane shape.",
             "nvidia-smi does not expose shared GPU memory on this Linux host; "
             "dedicated FB memory is recorded as memory.used.",
+            "effective_lstm_max_batch is null for non-LSTM environments and for "
+            "LSTM runs where SRS_LSTM_MAX_BATCH is disabled.",
         ],
     }
     summary_path.write_text(
@@ -434,7 +537,25 @@ def _candidate_coefficients_by_job(
     feature_version: str,
     device: torch.device,
     seed: int,
+    candidate_mode: str = "portfolio",
+    fixed_desired_retention: float | None = None,
 ) -> list[list[tuple[float, ...]]]:
+    if candidate_mode == "fixed-dr":
+        if fixed_desired_retention is None:
+            raise ValueError(
+                "fixed_desired_retention is required for fixed-dr candidate mode."
+            )
+        coefficients = _constant_retention_coefficients(
+            desired_retention=fixed_desired_retention,
+            settings=settings,
+            feature_version=feature_version,
+        )
+        return [
+            [coefficients for _candidate in range(candidate_count)]
+            for _user_id in user_ids
+        ]
+    if candidate_mode != "portfolio":
+        raise ValueError(f"Unsupported candidate mode: {candidate_mode}")
     seed_coefficients = [
         _constant_retention_coefficients(
             desired_retention=dr,
@@ -483,6 +604,7 @@ def _aggregate_eval_records(records: Sequence[dict[str, Any]]) -> list[dict[str,
                 "user_count": user_count,
                 "candidate_count": candidate_count,
                 "total_lanes": user_count * candidate_count,
+                "effective_lstm_max_batch": items[0].get("effective_lstm_max_batch"),
                 "repeats": len(items),
                 "mean_seconds": statistics.fmean(seconds),
                 "median_seconds": statistics.median(seconds),
@@ -490,6 +612,12 @@ def _aggregate_eval_records(records: Sequence[dict[str, Any]]) -> list[dict[str,
                 "max_seconds": max(seconds),
                 "mean_lanes_per_second": statistics.fmean(lanes_per_second),
                 "mean_lane_days_per_second": statistics.fmean(lane_days_per_second),
+                "mean_reviews_per_second": statistics.fmean(
+                    float(item.get("reviews_per_second") or 0.0) for item in items
+                ),
+                "mean_reviews_per_lane": statistics.fmean(
+                    float(item.get("reviews_per_lane") or 0.0) for item in items
+                ),
                 "max_torch_peak_reserved_memory_bytes": max(
                     _optional_int(item.get("torch_peak_reserved_memory_bytes")) or 0
                     for item in items
@@ -510,6 +638,15 @@ def _aggregate_eval_records(records: Sequence[dict[str, Any]]) -> list[dict[str,
                     or 0
                     for item in items
                 ),
+                "mean_metric_total_reviews": statistics.fmean(
+                    float(item.get("metric_total_reviews") or 0.0) for item in items
+                ),
+                "mean_metric_total_lapses": statistics.fmean(
+                    float(item.get("metric_total_lapses") or 0.0) for item in items
+                ),
+                "mean_metric_total_cost": statistics.fmean(
+                    float(item.get("metric_total_cost") or 0.0) for item in items
+                ),
             }
         )
     return aggregate
@@ -521,6 +658,7 @@ def _aggregate_setup_records(records: Sequence[dict[str, Any]]) -> list[dict[str
             "user_count": int(record["user_count"]),
             "candidate_count": int(record["candidate_count"]),
             "total_lanes": int(record["total_lanes"]),
+            "effective_lstm_max_batch": record.get("effective_lstm_max_batch"),
             "setup_seconds": float(record["seconds"]),
             "coefficient_generation_seconds": float(
                 record["coefficient_generation_seconds"]
@@ -555,14 +693,96 @@ def _throughput(*, seconds: float, total_lanes: int, days: int) -> dict[str, flo
     }
 
 
-def _metric_checksum(metrics_by_job: Sequence[Sequence[Any]]) -> float:
-    return float(
-        sum(
-            metrics.memorized_average + metrics.memorized_per_minute
-            for metrics_by_user in metrics_by_job
-            for metrics in metrics_by_user
+def _workload_throughput(
+    *, total_reviews: int, seconds: float, total_lanes: int
+) -> dict[str, float]:
+    return {
+        "reviews_per_second": total_reviews / max(seconds, 1e-12),
+        "reviews_per_lane": total_reviews / total_lanes,
+    }
+
+
+def _metric_summary(metrics_by_job: Sequence[Sequence[Any]]) -> dict[str, float | int]:
+    flat = [
+        metrics for metrics_by_user in metrics_by_job for metrics in metrics_by_user
+    ]
+    return {
+        "metric_checksum": float(
+            sum(
+                metrics.memorized_average + metrics.memorized_per_minute
+                for metrics in flat
+            )
+        ),
+        "metric_total_reviews": int(sum(metrics.total_reviews for metrics in flat)),
+        "metric_total_lapses": int(sum(metrics.total_lapses for metrics in flat)),
+        "metric_total_cost": float(sum(metrics.total_cost for metrics in flat)),
+    }
+
+
+def _parse_lstm_max_batch(value: str) -> LstmMaxBatchOverride:
+    stripped = value.strip().lower()
+    if stripped in {"off", "none"}:
+        return LSTM_MAX_BATCH_OFF
+    try:
+        parsed = int(stripped)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "--lstm-max-batch must be a positive integer or 'off'."
+        ) from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError(
+            "--lstm-max-batch must be a positive integer or 'off'."
         )
-    )
+    return parsed
+
+
+def _apply_lstm_max_batch_override(
+    *,
+    environment: str,
+    override: LstmMaxBatchOverride | None,
+    environ: MutableMapping[str, str] | None = None,
+) -> int | None:
+    if environment != "lstm":
+        if override is not None:
+            raise SystemExit("--lstm-max-batch can only be used with environment=lstm.")
+        return None
+    if override is None:
+        return resolve_lstm_max_batch_size(None)
+    writable_environ = os.environ if environ is None else environ
+    if override == LSTM_MAX_BATCH_OFF:
+        writable_environ["SRS_LSTM_MAX_BATCH"] = LSTM_MAX_BATCH_OFF
+        return None
+    writable_environ["SRS_LSTM_MAX_BATCH"] = str(override)
+    return resolve_lstm_max_batch_size(override)
+
+
+def _format_lstm_max_batch_override(
+    override: LstmMaxBatchOverride | None,
+) -> int | str | None:
+    if override is None:
+        return None
+    return override
+
+
+def _resolve_fixed_desired_retention(
+    value: float | None,
+    *,
+    portfolio: PortfolioSettings,
+    settings: PolicySearchSettings,
+) -> float:
+    if value is None:
+        retention_values = portfolio.seed_retention_values or ()
+        if not retention_values:
+            raise ValueError(
+                "portfolio seed_retention_values must not be empty when fixed DR is omitted."
+            )
+        value = max(float(item) for item in retention_values)
+    fixed = float(value)
+    if not settings.retention_min <= fixed <= settings.retention_max:
+        raise ValueError(
+            "fixed desired retention must be inside the configured retention bounds."
+        )
+    return fixed
 
 
 def _parse_ints(value: str | None) -> list[int]:
@@ -576,6 +796,23 @@ def _parse_ints(value: str | None) -> list[int]:
         parsed.append(int(stripped))
     if not parsed:
         raise ValueError("At least one integer is required.")
+    return parsed
+
+
+def _parse_lane_shapes(value: str) -> list[tuple[int, int]]:
+    parsed: list[tuple[int, int]] = []
+    for item in value.split(","):
+        stripped = item.strip().lower()
+        if not stripped:
+            continue
+        if "x" not in stripped:
+            raise ValueError(
+                f"Invalid lane shape '{item}'. Expected user_count x candidate_count."
+            )
+        raw_user_count, raw_candidate_count = stripped.split("x", 1)
+        parsed.append((int(raw_user_count.strip()), int(raw_candidate_count.strip())))
+    if not parsed:
+        raise ValueError("At least one lane shape is required.")
     return parsed
 
 
