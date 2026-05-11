@@ -129,7 +129,9 @@ per user with SMS-EMOA. The objective is the Pareto hypervolume gain of
 candidate `(memorized_average, -time_average)` points over the user's FSRS-6 DR
 baseline set. Portfolio profiles use `[baseline_dr_selection]` to point at a
 generated per-user manifest of 16 FSRS-6 desired-retention values, selected in
-the FSRS6 environment before formal staging/training. Portfolio artifacts are
+the FSRS6 environment before formal staging/training. The selector writes
+per-generation hypervolume progress to `<manifest>.progress.jsonl` by default.
+Portfolio artifacts are
 lambda-less and write children under
 `user_<id>/policies/policy_*/`; set
 `training.artifact_metadata_glob = "policies/**/metadata.json"` so sweep stages

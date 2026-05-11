@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 import cma
 import torch
@@ -57,6 +58,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--srs-benchmark-root", type=Path, default=None)
     parser.add_argument("--benchmark-result", default=None)
     parser.add_argument("--benchmark-partition", default=None)
+    parser.add_argument(
+        "--progress-log",
+        type=Path,
+        default=None,
+        help=("JSONL progress log path. Defaults to <output-manifest>.progress.jsonl."),
+    )
+    parser.add_argument(
+        "--no-progress-log",
+        action="store_true",
+        help="Disable the JSONL progress log.",
+    )
     return parser.parse_args()
 
 
@@ -70,6 +82,11 @@ def main() -> int:
         )
     if not output_manifest.is_absolute():
         output_manifest = (REPO_ROOT / output_manifest).resolve()
+    progress_log_path = _resolve_progress_log_path(
+        output_manifest=output_manifest,
+        progress_log=args.progress_log,
+        no_progress_log=args.no_progress_log,
+    )
 
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(args.config))
@@ -94,55 +111,73 @@ def main() -> int:
     selection_experiment = replace(config, simulation=selection_simulation)
     device = torch.device(settings.torch_device)
 
-    users = []
-    for user_id in config.users.train:
-        users.append(
-            _select_user_drs(
-                config=selection_experiment,
-                config_path=args.config,
-                settings=settings,
-                user_id=user_id,
-                benchmark_root=benchmark_root,
-                overrides=overrides,
-                benchmark_partition=args.benchmark_partition,
-                button_usage=args.button_usage,
-                device=device,
-                short_term_source=short_term_source,
-                learning_steps=learning_steps,
-                relearning_steps=relearning_steps,
-            )
+    with _SelectionProgressLogger.open(progress_log_path) as progress_logger:
+        progress_logger.write_run_start(
+            config_path=args.config,
+            output_manifest=output_manifest,
+            user_ids=config.users.train,
+            selection_environment=selection_config.selection_environment,
+            target_count=selection_config.target_count,
+            population_size=selection_config.population_size,
+            generations=selection_config.generations,
         )
-        _clear_cuda_cache(device)
+        users = []
+        for user_id in config.users.train:
+            users.append(
+                _select_user_drs(
+                    config=selection_experiment,
+                    config_path=args.config,
+                    settings=settings,
+                    user_id=user_id,
+                    benchmark_root=benchmark_root,
+                    overrides=overrides,
+                    benchmark_partition=args.benchmark_partition,
+                    button_usage=args.button_usage,
+                    device=device,
+                    short_term_source=short_term_source,
+                    learning_steps=learning_steps,
+                    relearning_steps=relearning_steps,
+                    progress_logger=progress_logger,
+                )
+            )
+            _clear_cuda_cache(device)
 
-    _write_json(
-        output_manifest,
-        {
-            "schema_version": 1,
-            "artifact_kind": "baseline-dr-selection-manifest",
-            "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
-            "config": {
-                "path": str(args.config),
-                "sha256": _file_sha256(args.config),
-                "name": config.name,
-                "family": config.family,
-                "seed": config.seed,
+        _write_json(
+            output_manifest,
+            {
+                "schema_version": 1,
+                "artifact_kind": "baseline-dr-selection-manifest",
+                "created_at": _utc_timestamp(),
+                "config": {
+                    "path": str(args.config),
+                    "sha256": _file_sha256(args.config),
+                    "name": config.name,
+                    "family": config.family,
+                    "seed": config.seed,
+                },
+                "code_commit": _git_commit(),
+                "selection_environment": selection_config.selection_environment,
+                "target_count": selection_config.target_count,
+                "reference": selection_config.reference,
+                "objective": {
+                    "name": "hypervolume_2d",
+                    "dimensions": ["memorized_average", "negative_time_average"],
+                },
+                "optimizer": {
+                    "name": "cma_es",
+                    "population_size": selection_config.population_size,
+                    "generations": selection_config.generations,
+                },
+                "progress_log": str(progress_log_path)
+                if progress_log_path is not None
+                else None,
+                "users": users,
             },
-            "code_commit": _git_commit(),
-            "selection_environment": selection_config.selection_environment,
-            "target_count": selection_config.target_count,
-            "reference": selection_config.reference,
-            "objective": {
-                "name": "hypervolume_2d",
-                "dimensions": ["memorized_average", "negative_time_average"],
-            },
-            "optimizer": {
-                "name": "cma_es",
-                "population_size": selection_config.population_size,
-                "generations": selection_config.generations,
-            },
-            "users": users,
-        },
-    )
+        )
+        progress_logger.write_run_complete(
+            output_manifest=output_manifest,
+            completed_users=len(users),
+        )
     return 0
 
 
@@ -160,6 +195,7 @@ def _select_user_drs(
     short_term_source: str | None,
     learning_steps: list[float],
     relearning_steps: list[float],
+    progress_logger: _SelectionProgressLogger,
 ) -> dict[str, Any]:
     selection = config.baseline_dr_selection
     target_count = selection.target_count
@@ -194,6 +230,19 @@ def _select_user_drs(
             "mean_hypervolume": best_hv,
         }
     ]
+    progress_logger.write_generation(
+        user_id=user_id,
+        generation=-1,
+        candidate_count=1,
+        generation_best_hypervolume=best_hv,
+        generation_mean_hypervolume=best_hv,
+        generation_min_hypervolume=best_hv,
+        generation_max_hypervolume=best_hv,
+        incumbent_best_hypervolume=best_hv,
+        improved=True,
+        generation_best_desired_retention_values=anchor,
+        incumbent_desired_retention_values=best_values,
+    )
 
     sigma0 = max((settings.retention_max - settings.retention_min) / 6.0, 1e-3)
     strategy = cma.CMAEvolutionStrategy(
@@ -244,16 +293,35 @@ def _select_user_drs(
             range(len(hypervolumes)),
             key=lambda index: hypervolumes[index],
         )
-        if hypervolumes[generation_best_index] > best_hv:
-            best_hv = hypervolumes[generation_best_index]
+        generation_best_hv = hypervolumes[generation_best_index]
+        mean_hv = float(sum(hypervolumes) / len(hypervolumes))
+        improved = generation_best_hv > best_hv
+        if improved:
+            best_hv = generation_best_hv
             best_values = candidate_sets[generation_best_index]
             best_metrics = metrics_by_candidate[generation_best_index]
         history.append(
             {
                 "generation": generation,
                 "best_hypervolume": best_hv,
-                "mean_hypervolume": float(sum(hypervolumes) / len(hypervolumes)),
+                "mean_hypervolume": mean_hv,
+                "generation_best_hypervolume": generation_best_hv,
             }
+        )
+        progress_logger.write_generation(
+            user_id=user_id,
+            generation=generation,
+            candidate_count=len(candidate_sets),
+            generation_best_hypervolume=generation_best_hv,
+            generation_mean_hypervolume=mean_hv,
+            generation_min_hypervolume=float(min(hypervolumes)),
+            generation_max_hypervolume=float(max(hypervolumes)),
+            incumbent_best_hypervolume=best_hv,
+            improved=improved,
+            generation_best_desired_retention_values=candidate_sets[
+                generation_best_index
+            ],
+            incumbent_desired_retention_values=best_values,
         )
 
     return {
@@ -281,6 +349,106 @@ def _select_user_drs(
             "selection_environment": config.baseline_dr_selection.selection_environment,
         },
     }
+
+
+class _SelectionProgressLogger:
+    def __init__(self, path: Path | None, handle: TextIO | None) -> None:
+        self.path = path
+        self._handle = handle
+
+    @classmethod
+    def open(cls, path: Path | None) -> _SelectionProgressLogger:
+        if path is None:
+            return cls(path=None, handle=None)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return cls(path=path, handle=path.open("w", encoding="utf-8"))
+
+    def __enter__(self) -> _SelectionProgressLogger:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+
+    def write_run_start(
+        self,
+        *,
+        config_path: Path,
+        output_manifest: Path,
+        user_ids: Sequence[int],
+        selection_environment: str,
+        target_count: int,
+        population_size: int,
+        generations: int,
+    ) -> None:
+        self._write(
+            "run_started",
+            config_path=str(config_path),
+            output_manifest=str(output_manifest),
+            user_ids=list(user_ids),
+            selection_environment=selection_environment,
+            target_count=target_count,
+            population_size=population_size,
+            generations=generations,
+        )
+
+    def write_generation(
+        self,
+        *,
+        user_id: int,
+        generation: int,
+        candidate_count: int,
+        generation_best_hypervolume: float,
+        generation_mean_hypervolume: float,
+        generation_min_hypervolume: float,
+        generation_max_hypervolume: float,
+        incumbent_best_hypervolume: float,
+        improved: bool,
+        generation_best_desired_retention_values: Sequence[float],
+        incumbent_desired_retention_values: Sequence[float],
+    ) -> None:
+        self._write(
+            "generation_evaluated",
+            user_id=user_id,
+            generation=generation,
+            candidate_count=candidate_count,
+            generation_best_hypervolume=generation_best_hypervolume,
+            generation_mean_hypervolume=generation_mean_hypervolume,
+            generation_min_hypervolume=generation_min_hypervolume,
+            generation_max_hypervolume=generation_max_hypervolume,
+            incumbent_best_hypervolume=incumbent_best_hypervolume,
+            improved=improved,
+            generation_best_desired_retention_values=list(
+                generation_best_desired_retention_values
+            ),
+            incumbent_desired_retention_values=list(incumbent_desired_retention_values),
+        )
+
+    def write_run_complete(
+        self, *, output_manifest: Path, completed_users: int
+    ) -> None:
+        self._write(
+            "run_completed",
+            output_manifest=str(output_manifest),
+            completed_users=completed_users,
+        )
+
+    def _write(self, event: str, **fields: Any) -> None:
+        if self._handle is None:
+            return
+        payload = {
+            "type": "baseline_dr_selection_progress",
+            "event": event,
+            "created_at": _utc_timestamp(),
+            **fields,
+        }
+        json.dump(payload, self._handle, sort_keys=True, allow_nan=False)
+        self._handle.write("\n")
+        self._handle.flush()
 
 
 def _evaluate_candidate_sets(
@@ -361,6 +529,24 @@ def _canonical_dr_values(
     if len(result) != target_count:
         raise ValueError("Could not build a de-duplicated DR vector.")
     return tuple(result)
+
+
+def _resolve_progress_log_path(
+    *,
+    output_manifest: Path,
+    progress_log: Path | None,
+    no_progress_log: bool,
+) -> Path | None:
+    if no_progress_log:
+        return None
+    path = progress_log or output_manifest.with_suffix(".progress.jsonl")
+    if not path.is_absolute():
+        path = (REPO_ROOT / path).resolve()
+    return path
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def _file_sha256(path: Path) -> str:

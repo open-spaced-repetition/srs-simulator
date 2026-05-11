@@ -255,7 +255,9 @@ Portfolio baseline selection:
 
 - Portfolio ADR/AP profiles use `[baseline_dr_selection]` manifests with 16
   per-user FSRS-6 DR values selected under the `fsrs6` environment by
-  `select_fsrs6_baseline_drs.py`.
+  `select_fsrs6_baseline_drs.py`. The selector writes a JSONL progress log next
+  to the manifest by default, with one `generation_evaluated` record per user
+  and CMA-ES generation containing the current hypervolume statistics.
 - Generate the manifest before `stage-baseline`, then run a manifest-driven
   FSRS6 baseline sweep across `fsrs6,lstm`, for example:
 
