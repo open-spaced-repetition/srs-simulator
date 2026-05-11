@@ -10,6 +10,9 @@ Project rules:
 6. For performance-related changes, run a baseline performance test first and report results by engine (event vs vectorized) affected by the change.
 7. Use `uv run pyright` for static type checking.
 8. For GPU experiments, monitor shared GPU memory usage when judging out-of-memory or VRAM spill behavior. Do not rely only on `nvidia-smi` FB/dedicated memory; shared GPU memory above 1 GiB likely means VRAM spill and severe simulator slowdown.
+   - Windows: check `Task Manager -> Performance -> GPU -> Shared GPU memory`, or run PowerShell `Get-Counter '\GPU Adapter Memory(*)\Shared Usage'`.
+   - WSL: from the Linux shell, run `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Get-Counter '\GPU Adapter Memory(*)\Shared Usage'"`.
+   - Native Linux: `nvidia-smi` usually reports dedicated/FB memory rather than Windows-style shared GPU memory; use `watch -n 1 nvidia-smi` for VRAM plus system/CUDA profiling to infer spill behavior.
 9. For batched retention sweep experiments, use environment-specific lane caps when possible: `fsrs6` is typically safe at `max_lanes_per_batch = 8192`, while `lstm` should use `max_lanes_per_batch = 1024` to avoid shared GPU memory spill.
 10. The sandbox does not have GPU access. Commands or code paths that need CUDA/GPU execution must be run outside the sandbox.
 11. Tests use `unittest`, not pytest. Run focused tests with `uv run python -m unittest tests.test_module_name` and full discovery with `uv run python -m unittest discover tests`.
