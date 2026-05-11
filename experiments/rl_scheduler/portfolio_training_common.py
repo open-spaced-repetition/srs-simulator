@@ -18,6 +18,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _evaluate_fsrs6_baseline_grid,
     _float,
     _read_training_policy_search,
+    _relative_path_string,
 )
 from experiments.rl_scheduler.portfolio_selection import (
     DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
@@ -431,11 +432,18 @@ def run_portfolio_train_jobs(
             "artifacts_written",
             device=device,
             passed=result.passed,
-            portfolio_path=str(result.job.output_dir / "portfolio.json"),
-            portfolio_metrics_path=str(
-                result.job.output_dir / "portfolio_metrics.json"
+            portfolio_path=_relative_path_string(
+                result.job.output_dir / "portfolio.json",
+                base=result.job.output_dir,
             ),
-            child_artifact_paths=[str(path) for path in artifact_paths],
+            portfolio_metrics_path=_relative_path_string(
+                result.job.output_dir / "portfolio_metrics.json",
+                base=result.job.output_dir,
+            ),
+            child_artifact_paths=[
+                _relative_path_string(path, base=result.job.output_dir)
+                for path in artifact_paths
+            ],
         )
         outcomes.append(
             adapter.build_outcome(
@@ -544,7 +552,7 @@ def progress_for_jobs(
         progress = TrainingProgress(job.output_dir / "training_progress.jsonl")
         progress.write(
             "started",
-            config_path=str(config_path),
+            config_path=_relative_path_string(config_path, base=job.output_dir),
             user_id=job.user_id,
             execution_mode=execution_mode,
         )

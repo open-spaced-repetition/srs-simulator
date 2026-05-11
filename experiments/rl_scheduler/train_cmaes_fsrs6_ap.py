@@ -34,6 +34,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _read_training_policy_search,
     _relative_gain,
     _relative_gain_gate_metrics,
+    _relative_path_string,
     _score,
     _write_json,
 )
@@ -566,7 +567,10 @@ def run_training_jobs(
             device=ctx.device,
             policies=len(results_by_job[job_index]),
             passed_policies=passed_count,
-            artifact_paths=[str(path) for path in artifact_paths],
+            artifact_paths=[
+                _relative_path_string(path, base=job.output_dir)
+                for path in artifact_paths
+            ],
         )
         outcomes.append(
             APTrainJobResult(
@@ -619,7 +623,7 @@ def _progress_for_jobs(
         progress = TrainingProgress(job.output_dir / "training_progress.jsonl")
         progress.write(
             "started",
-            config_path=str(config_path),
+            config_path=_relative_path_string(config_path, base=job.output_dir),
             user_id=job.user_id,
             lambda_value=job.lambda_value,
         )
@@ -912,6 +916,7 @@ def _write_grid_artifacts(
             },
         )
         metadata_path = result_dir / "metadata.json"
+        metadata_dir = metadata_path.parent
         _write_json(
             metadata_path,
             {
@@ -937,8 +942,14 @@ def _write_grid_artifacts(
                 "code_commit": _git_commit(),
                 "lambda_value": lambda_value,
                 "baseline_desired_retention": dr,
-                "config_snapshot_path": str(config_path.resolve()),
-                "training_command_path": str(training_command_path)
+                "config_snapshot_path": _relative_path_string(
+                    config_path,
+                    base=metadata_dir,
+                ),
+                "training_command_path": _relative_path_string(
+                    training_command_path,
+                    base=metadata_dir,
+                )
                 if training_command_path
                 else None,
                 "metrics_path": "metrics.json",
@@ -954,9 +965,12 @@ def _write_grid_artifacts(
                 "passed_overfit_gate": result.passed,
                 "relative_memorized_gain": rel_mem,
                 "relative_efficiency_gain": rel_eff,
-                "policy_path": str(policy_path),
-                "metadata_path": str(metadata_path),
-                "metrics_path": str(metrics_path),
+                "policy_path": _relative_path_string(policy_path, base=output_dir),
+                "metadata_path": _relative_path_string(
+                    metadata_path,
+                    base=output_dir,
+                ),
+                "metrics_path": _relative_path_string(metrics_path, base=output_dir),
                 "clipped_dimensions": result.clipped_dimensions,
                 "optimizer_seed": result.optimizer_seed,
             }

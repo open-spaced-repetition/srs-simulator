@@ -227,7 +227,10 @@ def _require_lambda_value(job: InProcessTrainJob) -> float:
 def _progress_for_jobs(
     *, jobs: list[InProcessTrainJob], config_path: Path
 ) -> list[Any]:
-    from experiments.rl_scheduler.policy_search_common import TrainingProgress
+    from experiments.rl_scheduler.policy_search_common import (
+        TrainingProgress,
+        _relative_path_string,
+    )
 
     progresses = []
     for job in jobs:
@@ -235,7 +238,7 @@ def _progress_for_jobs(
         progress = TrainingProgress(job.output_dir / "training_progress.jsonl")
         progress.write(
             "started",
-            config_path=str(config_path),
+            config_path=_relative_path_string(config_path, base=job.output_dir),
             user_id=job.user_id,
             lambda_value=job.lambda_value,
             execution_mode="in_process_batch",
@@ -384,6 +387,7 @@ def _run_fsrs6_adr_cmaes_jobs(
         _passes_overfit_gate,
         _policy_feature_version,
         _relative_gain,
+        _relative_path_string,
         _score,
     )
     from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
@@ -670,9 +674,9 @@ def _run_fsrs6_adr_cmaes_jobs(
             "artifacts_written",
             device=train_bundle.device,
             passed=result.passed,
-            policy_path=str(policy_path),
-            metrics_path=str(metrics_path),
-            metadata_path=str(metadata_path),
+            policy_path=_relative_path_string(policy_path, base=job.output_dir),
+            metrics_path=_relative_path_string(metrics_path, base=job.output_dir),
+            metadata_path=_relative_path_string(metadata_path, base=job.output_dir),
         )
         outcomes.append(
             InProcessTrainOutcome(

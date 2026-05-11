@@ -30,6 +30,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _read_training_policy_search,
     _relative_gain,
     _relative_gain_gate_metrics,
+    _relative_path_string,
     _score,
     _optimizer_seed,
     _write_json,
@@ -86,7 +87,7 @@ def main() -> int:
     progress = TrainingProgress(output_dir / "training_progress.jsonl")
     progress.write(
         "started",
-        config_path=str(args.config),
+        config_path=_relative_path_string(args.config, base=output_dir),
         user_id=args.user_id,
         lambda_value=args.lambda_value,
     )
@@ -229,9 +230,9 @@ def main() -> int:
         "artifacts_written",
         device=train_bundle.device,
         passed=result.passed,
-        policy_path=str(policy_path),
-        metrics_path=str(metrics_path),
-        metadata_path=str(metadata_path),
+        policy_path=_relative_path_string(policy_path, base=output_dir),
+        metrics_path=_relative_path_string(metrics_path, base=output_dir),
+        metadata_path=_relative_path_string(metadata_path, base=output_dir),
     )
     return 0 if result.passed else 1
 
@@ -435,6 +436,7 @@ def write_artifact(
         },
     )
     metadata_path = output_dir / "metadata.json"
+    metadata_dir = metadata_path.parent
     _write_json(
         metadata_path,
         {
@@ -460,8 +462,14 @@ def write_artifact(
             "code_commit": _git_commit(),
             "lambda_value": lambda_value,
             "baseline_desired_retention": settings.baseline_desired_retention,
-            "config_snapshot_path": str(config_path.resolve()),
-            "training_command_path": str(training_command_path)
+            "config_snapshot_path": _relative_path_string(
+                config_path,
+                base=metadata_dir,
+            ),
+            "training_command_path": _relative_path_string(
+                training_command_path,
+                base=metadata_dir,
+            )
             if training_command_path
             else None,
             "metrics_path": "metrics.json",

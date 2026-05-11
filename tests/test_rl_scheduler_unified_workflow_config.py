@@ -567,7 +567,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
                             "user_id": 1,
                             "desired_retention": None,
                             "fsrs6_ap_baseline_desired_retention": None,
-                            "fsrs6_ap_policy": "/tmp/policy_0/policy.json",
+                            "fsrs6_ap_policy": "policies/policy_0/policy.json",
                             "title": "AP policy_0",
                             "memorized_average": 110.0,
                             "time_average": 1.0,

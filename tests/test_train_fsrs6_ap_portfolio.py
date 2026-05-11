@@ -33,7 +33,7 @@ from experiments.rl_scheduler.portfolio_selection import (
     SelectionTask,
     select_survivors_for_generation,
 )
-from simulator.experiment_infra import ExperimentConfig
+from simulator.experiment_infra import ExperimentConfig, validate_scheduler_artifact
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
 from simulator.fsrs6_ap_policy import clip_fsrs6_ap_weights
 
@@ -206,6 +206,9 @@ class FSRS6APPortfolioTests(unittest.TestCase):
             config = _config(root)
             config_path = root / "config.toml"
             config_path.write_text("", encoding="utf-8")
+            command_record_path = root / "commands" / "train.json"
+            command_record_path.parent.mkdir()
+            command_record_path.write_text("{}", encoding="utf-8")
             settings = PolicySearchSettings.from_mapping(config.training_policy_search)
             portfolio = APPortfolioSettings(portfolio_size=1)
             ap_settings = APSettings(dr_batch_size=1, weight_delta_scale=0.5)
@@ -221,6 +224,7 @@ class FSRS6APPortfolioTests(unittest.TestCase):
                 job=APPortfolioTrainJob(
                     user_id=1,
                     output_dir=root / "out",
+                    command_record_path=command_record_path,
                 ),
                 baseline_desired_retention_values=(0.52, 0.54),
                 baseline_metrics=[_metrics(10.0, 4.0), _metrics(11.0, 5.0)],
@@ -258,6 +262,19 @@ class FSRS6APPortfolioTests(unittest.TestCase):
                 )
             )
             metadata = json.loads(artifact_paths[0].read_text(encoding="utf-8"))
+            portfolio_payload = json.loads(
+                (root / "out" / "portfolio.json").read_text(encoding="utf-8")
+            )
+            validated = validate_scheduler_artifact(
+                artifact_paths[0],
+                require_files=True,
+            )
+            metadata_config_resolves = (
+                validated.config_snapshot_path == config_path.resolve()
+            )
+            metadata_command_resolves = (
+                validated.training_command_path == command_record_path.resolve()
+            )
             policy = json.loads(
                 (root / "out" / "policies" / "policy_0" / "policy.json").read_text(
                     encoding="utf-8"
@@ -268,9 +285,33 @@ class FSRS6APPortfolioTests(unittest.TestCase):
         self.assertEqual(metrics["final_population_hypervolume"], 10.0)
         self.assertIsNone(metadata["baseline_desired_retention"])
         self.assertNotIn("lambda_value", metadata)
+        self.assertFalse(Path(metadata["config_snapshot_path"]).is_absolute())
+        self.assertFalse(Path(metadata["training_command_path"]).is_absolute())
+        self.assertTrue(metadata_config_resolves)
+        self.assertTrue(metadata_command_resolves)
         self.assertEqual(metadata["scheduler_desired_retention"], 0.83)
         self.assertEqual(
             metadata["action_space"], "fsrs6_ap_weight_delta_portfolio_child"
+        )
+        self.assertEqual(
+            metadata["policy_path"],
+            "policy.json",
+        )
+        self.assertEqual(
+            metrics["portfolio_id"],
+            metadata["portfolio_id"],
+        )
+        self.assertEqual(
+            portfolio_payload["children"][0]["policy_path"],
+            "policies/policy_0/policy.json",
+        )
+        self.assertEqual(
+            portfolio_payload["children"][0]["metadata_path"],
+            "policies/policy_0/metadata.json",
+        )
+        self.assertEqual(
+            portfolio_payload["children"][0]["metrics_path"],
+            "policies/policy_0/metrics.json",
         )
         self.assertEqual(policy["baseline_desired_retention"], 0.83)
 

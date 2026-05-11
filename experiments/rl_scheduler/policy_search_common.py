@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -781,6 +782,11 @@ def _git_commit() -> str:
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _relative_path_string(path: Path, *, base: Path) -> str:
+    relative = Path(os.path.relpath(path.resolve(), base.resolve()))
+    return relative.as_posix()
 
 
 def _int(value: Any, field_name: str, minimum: int) -> int:

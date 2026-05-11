@@ -21,6 +21,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _git_commit,
     _int,
     _metrics_from_stats,
+    _relative_path_string,
     _write_json,
 )
 from experiments.rl_scheduler.portfolio_selection import (
@@ -762,6 +763,7 @@ def _write_portfolio_artifacts(
             },
         )
         metadata_path = child_dir / "metadata.json"
+        metadata_dir = metadata_path.parent
         _write_json(
             metadata_path,
             {
@@ -786,8 +788,14 @@ def _write_portfolio_artifacts(
                 "portfolio_index": child.portfolio_index,
                 "hypervolume_contribution": child.hypervolume_contribution,
                 "training_objective": "hypervolume",
-                "config_snapshot_path": str(config_path.resolve()),
-                "training_command_path": str(result.job.command_record_path)
+                "config_snapshot_path": _relative_path_string(
+                    config_path,
+                    base=metadata_dir,
+                ),
+                "training_command_path": _relative_path_string(
+                    result.job.command_record_path,
+                    base=metadata_dir,
+                )
                 if result.job.command_record_path
                 else None,
                 "metrics_path": "metrics.json",
@@ -801,9 +809,12 @@ def _write_portfolio_artifacts(
                 "portfolio_index": child.portfolio_index,
                 "candidate_id": child.candidate.candidate_id,
                 "scheduler_desired_retention": child.candidate.desired_retention,
-                "policy_path": str(policy_path),
-                "metadata_path": str(metadata_path),
-                "metrics_path": str(metrics_path),
+                "policy_path": _relative_path_string(policy_path, base=output_dir),
+                "metadata_path": _relative_path_string(
+                    metadata_path,
+                    base=output_dir,
+                ),
+                "metrics_path": _relative_path_string(metrics_path, base=output_dir),
                 "hypervolume_contribution": child.hypervolume_contribution,
                 "pareto_rank": child.pareto_rank,
                 "metrics": asdict(child.candidate.metrics),
