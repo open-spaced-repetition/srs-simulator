@@ -302,13 +302,16 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             config.training_policy_search["feature_version"],
             "fsrs6_adr_log_linear_v1",
         )
+        self.assertEqual(config.baseline_dr_selection.target_count, 16)
         self.assertEqual(
-            len(config.training_policy_search["baseline_desired_retention_values"]),
-            23,
+            config.baseline_dr_selection.manifest,
+            Path(
+                "artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr.json"
+            ),
         )
         self.assertEqual(config.training_portfolio["population_size"], 64)
         self.assertEqual(config.training_portfolio["offspring_size"], 64)
-        self.assertEqual(config.training_portfolio["portfolio_size"], 23)
+        self.assertEqual(config.training_portfolio["portfolio_size"], 16)
         self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
         self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
         self.assertEqual(config.analyze_pareto.comparisons, ("fsrs6_adr:fsrs6",))
@@ -356,7 +359,8 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.training_batch.trainer, "auto")
         self.assertEqual(config.training_portfolio["population_size"], 64)
         self.assertEqual(config.training_portfolio["offspring_size"], 64)
-        self.assertEqual(config.training_portfolio["portfolio_size"], 23)
+        self.assertEqual(config.training_portfolio["portfolio_size"], 16)
+        self.assertEqual(config.baseline_dr_selection.target_count, 16)
         self.assertEqual(config.training_portfolio["retention_mutation_scale"], 0.02)
         self.assertEqual(config.training_ap["weight_delta_scale"], 0.5)
         self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_ap",))

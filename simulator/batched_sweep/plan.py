@@ -9,6 +9,9 @@ from typing import Any
 import torch
 
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
+from simulator.experiment_infra.baseline_dr_selection import (
+    load_baseline_dr_manifest,
+)
 from simulator.batched_sweep.runner import BatchedSweepContext, _build_sweep_lanes
 from simulator.batched_sweep.fsrs6_adr_policy import (
     resolve_fsrs6_adr_policy_specs,
@@ -123,6 +126,18 @@ def build_batched_sweep_plan(
     drs = dr_values(args.start_retention, args.end_retention, args.step)
     if any(value <= 0.0 or value >= 1.0 for value in drs):
         raise ValueError("Retention grid values must satisfy 0 < value < 1.")
+    fsrs6_dr_values_by_user: dict[int, tuple[float, ...]] = {}
+    fsrs6_dr_manifest = getattr(args, "fsrs6_dr_manifest", None)
+    if fsrs6_dr_manifest is not None and any(
+        parse_scheduler_spec(raw)[0] == "fsrs6" for raw in schedulers
+    ):
+        manifest = load_baseline_dr_manifest(
+            Path(fsrs6_dr_manifest),
+            user_ids=user_ids,
+        )
+        fsrs6_dr_values_by_user = {
+            user_id: manifest.values_for_user(user_id) for user_id in user_ids
+        }
     devices = parse_cuda_devices(args.cuda_devices)
     if devices and not torch.cuda.is_available():
         raise ValueError("--cuda-devices was provided but CUDA is not available.")
@@ -165,6 +180,7 @@ def build_batched_sweep_plan(
         fsrs6_adr_policy_specs=fsrs6_adr_policy_specs,
         fsrs6_ap_policy=getattr(args, "fsrs6_ap_policy", None),
         fsrs6_ap_policy_specs=fsrs6_ap_policy_specs,
+        fsrs6_dr_values_by_user=fsrs6_dr_values_by_user,
     )
     batches_by_env: dict[str, list[list[int]]] = {}
     batch_size_by_env: dict[str, int | None] = {}
@@ -327,6 +343,12 @@ def _lane_counts_by_user(
     for raw in ctx.schedulers:
         name, _, _ = parse_scheduler_spec(raw)
         if name in {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}:
+            if name == "fsrs6" and ctx.fsrs6_dr_values_by_user:
+                for user_id in user_ids:
+                    counts_by_user[user_id] = counts_by_user.get(user_id, 0) + len(
+                        ctx.fsrs6_dr_values_by_user.get(user_id, ())
+                    )
+                continue
             lanes_per_user += len(ctx.dr_values)
             continue
         if name == "fsrs6_adr" and ctx.fsrs6_adr_policy_specs:

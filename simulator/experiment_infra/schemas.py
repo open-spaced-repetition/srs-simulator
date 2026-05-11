@@ -409,6 +409,77 @@ class BaselineSource:
 
 
 @dataclass(frozen=True, slots=True)
+class BaselineDRSelectionConfig:
+    manifest: Path | None = None
+    selection_environment: str = "fsrs6"
+    target_count: int = 16
+    reference: str = "uniform_anchor"
+    population_size: int = 32
+    generations: int = 10
+    tolerance: float = 1e-9
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> BaselineDRSelectionConfig:
+        raw = raw or {}
+        manifest = raw.get("manifest")
+        raw_tolerance = _optional_float(
+            raw.get("tolerance"),
+            "baseline_dr_selection.tolerance",
+            minimum=0.0,
+        )
+        return cls(
+            manifest=Path(_require_str(manifest, "baseline_dr_selection.manifest"))
+            if manifest is not None
+            else None,
+            selection_environment=_require_str(
+                raw.get("selection_environment", "fsrs6"),
+                "baseline_dr_selection.selection_environment",
+            ),
+            target_count=_require_int(
+                raw.get("target_count", 16),
+                "baseline_dr_selection.target_count",
+                minimum=1,
+            ),
+            reference=_require_str(
+                raw.get("reference", "uniform_anchor"),
+                "baseline_dr_selection.reference",
+            ),
+            population_size=_require_int(
+                raw.get("population_size", 32),
+                "baseline_dr_selection.population_size",
+                minimum=2,
+            ),
+            generations=_require_int(
+                raw.get("generations", 10),
+                "baseline_dr_selection.generations",
+                minimum=1,
+            ),
+            tolerance=float(raw_tolerance if raw_tolerance is not None else 1e-9),
+        )
+
+    def __post_init__(self) -> None:
+        if self.selection_environment != "fsrs6":
+            raise ValueError(
+                "baseline_dr_selection.selection_environment must be fsrs6."
+            )
+        if self.reference != "uniform_anchor":
+            raise ValueError("baseline_dr_selection.reference must be uniform_anchor.")
+        if self.tolerance <= 0.0:
+            raise ValueError("baseline_dr_selection.tolerance must be > 0.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "manifest": str(self.manifest) if self.manifest is not None else None,
+            "selection_environment": self.selection_environment,
+            "target_count": self.target_count,
+            "reference": self.reference,
+            "population_size": self.population_size,
+            "generations": self.generations,
+            "tolerance": self.tolerance,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class SimulationScope:
     engine: str
     days: int
@@ -886,6 +957,7 @@ class ExperimentConfig:
     stages: tuple[StageName, ...]
     users: UserSplit
     baseline: BaselineSource
+    baseline_dr_selection: BaselineDRSelectionConfig
     simulation: SimulationScope
     gpu_guard: GpuGuardConfig
     performance: PerformanceConfig
@@ -953,6 +1025,12 @@ class ExperimentConfig:
             users=UserSplit.from_mapping(_require_mapping(raw.get("users"), "users")),
             baseline=BaselineSource.from_mapping(
                 _require_mapping(raw.get("baseline"), "baseline")
+            ),
+            baseline_dr_selection=BaselineDRSelectionConfig.from_mapping(
+                _require_mapping(
+                    raw.get("baseline_dr_selection", {}),
+                    "baseline_dr_selection",
+                )
             ),
             simulation=SimulationScope.from_mapping(
                 _require_mapping(raw.get("simulation"), "simulation")
@@ -1050,6 +1128,7 @@ class ExperimentConfig:
             "stages": [stage.value for stage in self.stages],
             "users": self.users.to_dict(),
             "baseline": self.baseline.to_dict(),
+            "baseline_dr_selection": self.baseline_dr_selection.to_dict(),
             "simulation": self.simulation.to_dict(),
             "gpu_guard": self.gpu_guard.to_dict(),
             "performance": self.performance.to_dict(),

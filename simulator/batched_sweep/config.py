@@ -87,6 +87,7 @@ class BatchedSweepConfig:
         short_term = _table(raw, "short_term", required=False)
         fsrs6_adr = _table(raw, "fsrs6_adr", required=False)
         fsrs6_ap = _table(raw, "fsrs6_ap", required=False)
+        fsrs6 = _table(raw, "fsrs6", required=False)
 
         args = argparse.Namespace(
             config=config_path,
@@ -240,6 +241,11 @@ class BatchedSweepConfig:
                 fsrs6_ap.get("lambda_values"),
                 "fsrs6_ap.lambda_values",
             ),
+            fsrs6_dr_manifest=_optional_path(
+                fsrs6.get("dr_manifest"),
+                "fsrs6.dr_manifest",
+                base_path=base_path,
+            ),
         )
         return cls(path=config_path, args=args, envs=envs, schedulers=schedulers)
 
@@ -336,6 +342,10 @@ def _adapt_experiment_config(
         if "fsrs6_ap" in scheduler_names
         else None,
     )
+    baseline_dr_selection = _table(raw, "baseline_dr_selection", required=False)
+    fsrs6 = {}
+    if baseline_dr_selection.get("manifest") is not None:
+        fsrs6["dr_manifest"] = baseline_dr_selection["manifest"]
 
     return {
         "schema_version": raw.get("schema_version", 1),
@@ -360,6 +370,7 @@ def _adapt_experiment_config(
             "diagnostic_csv_logs": performance.get("diagnostic_csv_logs", False),
         },
         "short_term": short_term,
+        "fsrs6": fsrs6,
         "fsrs6_adr": fsrs6_adr,
         "fsrs6_ap": fsrs6_ap,
     }

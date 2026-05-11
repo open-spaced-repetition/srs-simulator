@@ -402,11 +402,19 @@ def _evaluate_fsrs6_baseline_grid(
     baseline_dr_values: tuple[float, ...],
     job_count: int,
     seed: int,
+    baseline_dr_values_by_job: Sequence[tuple[float, ...]] | None = None,
 ) -> list[list[CandidateMetrics]]:
+    if baseline_dr_values_by_job is None:
+        baseline_dr_values_by_job = [baseline_dr_values for _job in range(job_count)]
+    if len(baseline_dr_values_by_job) != job_count:
+        raise ValueError("baseline_dr_values_by_job length must match job_count.")
+    flat_dr_values = [
+        dr for job_dr_values in baseline_dr_values_by_job for dr in job_dr_values
+    ]
     sched_ops = FSRS6BatchSchedulerOps(
         weights=bundle.scheduler_weights,
         desired_retention=torch.tensor(
-            [dr for _job in range(job_count) for dr in baseline_dr_values],
+            flat_dr_values,
             device=bundle.device,
             dtype=torch.float32,
         ),
@@ -435,10 +443,13 @@ def _evaluate_fsrs6_baseline_grid(
         short_term_loops_limit=settings.short_term_loops_limit,
     )
     metrics = [_metrics_from_stats(item) for item in stats]
-    dr_count = len(baseline_dr_values)
-    return [
-        metrics[index * dr_count : (index + 1) * dr_count] for index in range(job_count)
-    ]
+    split_metrics: list[list[CandidateMetrics]] = []
+    offset = 0
+    for job_dr_values in baseline_dr_values_by_job:
+        next_offset = offset + len(job_dr_values)
+        split_metrics.append(metrics[offset:next_offset])
+        offset = next_offset
+    return split_metrics
 
 
 def _evaluate_adr_candidates(

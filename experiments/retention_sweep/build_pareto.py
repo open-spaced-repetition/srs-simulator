@@ -22,6 +22,10 @@ from simulator.scheduler_spec import (
     scheduler_uses_desired_retention,
 )
 from simulator.retention_sweep.log_filter import LogFilenameFilter
+from simulator.experiment_infra.baseline_dr_selection import (
+    BaselineDRManifest,
+    load_baseline_dr_manifest,
+)
 
 
 RUN_ID_SCOPED_SCHEDULERS = {
@@ -153,6 +157,15 @@ def parse_args() -> argparse.Namespace:
         "--hide-labels",
         action="store_true",
         help="Hide point annotations for scheduler configurations.",
+    )
+    parser.add_argument(
+        "--baseline-dr-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "JSON manifest of per-user FSRS6 baseline desired-retention values. "
+            "Rows with a desired retention outside the user's manifest are ignored."
+        ),
     )
     return parser.parse_args()
 
@@ -511,6 +524,7 @@ def _iter_log_entries(
     run_id_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
     user_id_filter: Optional[int] = None,
+    baseline_dr_manifest: BaselineDRManifest | None = None,
 ) -> Iterable[Tuple[Optional[float], Dict[str, Any]]]:
     only_scheduler = (
         next(iter(scheduler_filter))
@@ -620,6 +634,13 @@ def _iter_log_entries(
                 continue
             if desired_value < min_retention or desired_value > max_retention:
                 continue
+            if (
+                baseline_dr_manifest is not None
+                and scheduler == "fsrs6"
+                and user_id is not None
+                and not baseline_dr_manifest.contains_value(user_id, desired_value)
+            ):
+                continue
         else:
             desired_value = None
 
@@ -641,11 +662,31 @@ def _iter_log_entries(
                 or fsrs6_adr_baseline_dr > max_retention
             ):
                 continue
+            if (
+                baseline_dr_manifest is not None
+                and fsrs6_adr_baseline_dr is not None
+                and user_id is not None
+                and not baseline_dr_manifest.contains_value(
+                    user_id,
+                    fsrs6_adr_baseline_dr,
+                )
+            ):
+                continue
         elif scheduler == "fsrs6_ap":
             title, fsrs6_ap_baseline_dr = _resolve_fsrs6_ap_label(meta, base_dirs)
             if fsrs6_ap_baseline_dr is not None and (
                 fsrs6_ap_baseline_dr < min_retention
                 or fsrs6_ap_baseline_dr > max_retention
+            ):
+                continue
+            if (
+                baseline_dr_manifest is not None
+                and fsrs6_ap_baseline_dr is not None
+                and user_id is not None
+                and not baseline_dr_manifest.contains_value(
+                    user_id,
+                    fsrs6_ap_baseline_dr,
+                )
             ):
                 continue
         elif scheduler == "fixed":
@@ -777,6 +818,7 @@ def _build_results(
     dedupe_short_term: bool = False,
     dedupe_engine: bool = False,
     user_id_filter: Optional[int] = None,
+    baseline_dr_manifest: BaselineDRManifest | None = None,
 ) -> List[Dict[str, Any]]:
     by_retention: Dict[RetentionKey, Dict[str, Any]] = {}
     by_retention_rank: Dict[RetentionKey, int] = {}
@@ -799,6 +841,7 @@ def _build_results(
         run_id_filter,
         fixed_interval_filter,
         user_id_filter,
+        baseline_dr_manifest,
     ):
         if title_prefix:
             entry["title"] = f"{title_prefix} {entry['title']}"
@@ -1307,6 +1350,11 @@ def main() -> None:
     engine_series = [engine_filter]
     if args.compare_engine:
         engine_series = ["event", "batched"]
+    baseline_dr_manifest = (
+        load_baseline_dr_manifest(args.baseline_dr_manifest)
+        if args.baseline_dr_manifest is not None
+        else None
+    )
     for env in envs:
         if run_dr:
             for scheduler in dr_schedulers:
@@ -1331,6 +1379,7 @@ def main() -> None:
                                 dedupe_short_term=args.compare_short_term,
                                 dedupe_engine=args.compare_engine,
                                 user_id_filter=args.user_id,
+                                baseline_dr_manifest=baseline_dr_manifest,
                             )
                             if not results:
                                 continue
@@ -1406,6 +1455,7 @@ def main() -> None:
                             dedupe_short_term=args.compare_short_term,
                             dedupe_engine=args.compare_engine,
                             user_id_filter=args.user_id,
+                            baseline_dr_manifest=baseline_dr_manifest,
                         )
                         if not fixed_results:
                             continue

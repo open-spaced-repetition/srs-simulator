@@ -430,20 +430,25 @@ def _initial_populations(
     settings: PolicySearchSettings,
     portfolio: PortfolioSettings,
     family_context: _ADRFamilyContext,
+    seed_retention_values_by_job: Sequence[Sequence[float]],
     device: torch.device,
     seed: int,
 ) -> tuple[list[list[PortfolioCandidate]], list[int]]:
-    seed_coefficients = [
-        _constant_retention_coefficients(
-            desired_retention=dr,
-            settings=settings,
-            feature_version=family_context.feature_version,
-        )
-        for dr in portfolio.seed_retention_values or ()
-    ]
     populations: list[list[PortfolioCandidate]] = []
     next_ids: list[int] = []
-    for job in jobs:
+    for job, seed_retention_values in zip(
+        jobs,
+        seed_retention_values_by_job,
+        strict=True,
+    ):
+        seed_coefficients = [
+            _constant_retention_coefficients(
+                desired_retention=dr,
+                settings=settings,
+                feature_version=family_context.feature_version,
+            )
+            for dr in seed_retention_values
+        ]
         generator = generator_for_job(device=device, seed=seed, user_id=job.user_id)
         candidates: list[PortfolioCandidate] = []
         for index in range(portfolio.population_size):

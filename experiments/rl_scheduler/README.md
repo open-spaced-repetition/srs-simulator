@@ -57,8 +57,10 @@ experiment should continue.
   and CUDA evidence, checks output and baseline roots, and runs CUDA smoke/guard
   checks when the profile requires GPU.
 - **stage-baseline**: exact metadata-based staging of FSRS-6 baseline JSONL
-  logs from `baseline.log_root` into the current run. Formal workflows should
-  not silently rerun baselines as a fallback.
+  logs from `baseline.log_root` into the current run. When
+  `[baseline_dr_selection].manifest` is configured, staging uses the selected
+  per-user DR values from that manifest instead of a global DR grid. Formal
+  workflows should not silently rerun baselines as a fallback.
 - **train-overfit**: train a separate policy on the training user and compare it
   against the training-user baseline. If a policy family cannot beat baseline
   even when overfitting is allowed, stop that family before generalization
@@ -249,6 +251,19 @@ Batching model:
   root, and batch sizing. The formal runner uses that table directly, so no
   separate retention_sweep TOML is needed.
 
+Portfolio baseline selection:
+
+- Portfolio ADR/AP profiles use `[baseline_dr_selection]` manifests with 16
+  per-user FSRS-6 DR values selected under the `fsrs6` environment by
+  `select_fsrs6_baseline_drs.py`.
+- Generate the manifest before `stage-baseline`, then run a manifest-driven
+  FSRS6 baseline sweep across `fsrs6,lstm`, for example:
+
+```bash
+uv run python experiments/rl_scheduler/select_fsrs6_baseline_drs.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_portfolio_users_1_8.toml
+uv run python experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 8 --env fsrs6,lstm --sched fsrs6 --fsrs6-dr-manifest artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr.json --log-dir logs/retention_sweep --log-layout user --seed 42 --no-progress
+```
+
 Sampling benchmark:
 
 - `benchmark_sampling.py` measures ADR portfolio candidate sampling cost by
@@ -375,7 +390,7 @@ scheduler. Do not read hidden memory state from the environment.
 
 - Before running: `dry-run` and `preflight` pass.
 - Baseline: `stage-baseline` matches exact engine, environment, scheduler, user,
-  and DR metadata.
+  and DR metadata; portfolio profiles match the manifest-selected DRs per user.
 - Training: every required user, lambda, and baseline DR combination has an
   artifact or an explicit failure. Portfolio trainers are per-user and
   lambda-less.

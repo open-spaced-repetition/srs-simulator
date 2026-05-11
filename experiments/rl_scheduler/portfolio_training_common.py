@@ -41,6 +41,9 @@ from experiments.rl_scheduler.portfolio_selection import (
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
+from simulator.experiment_infra.baseline_dr_selection import (
+    load_baseline_dr_manifest,
+)
 from simulator.experiment_infra.schemas import ExperimentConfig
 from simulator.short_term_config import resolve_short_term_config
 
@@ -68,6 +71,52 @@ class PortfolioFamilyAdapter:
     selection_default_workers: int = DEFAULT_SELECTION_PROCESS_POOL_WORKERS
 
 
+def _baseline_dr_values_by_job(
+    *,
+    jobs: Sequence[Any],
+    config: ExperimentConfig,
+    repo_root: Path,
+    fallback: tuple[float, ...],
+    settings: PolicySearchSettings,
+) -> list[tuple[float, ...]]:
+    manifest_path = config.baseline_dr_selection.manifest
+    if manifest_path is None:
+        return [fallback for _job in jobs]
+    resolved_path = manifest_path.expanduser()
+    if not resolved_path.is_absolute():
+        resolved_path = (repo_root / resolved_path).resolve()
+    manifest = load_baseline_dr_manifest(
+        resolved_path,
+        target_count=config.baseline_dr_selection.target_count,
+        user_ids=[job.user_id for job in jobs],
+        tolerance=config.baseline_dr_selection.tolerance,
+    )
+    values_by_job = [manifest.values_for_user(job.user_id) for job in jobs]
+    for value in [item for values in values_by_job for item in values]:
+        if not (settings.retention_min <= value <= settings.retention_max):
+            raise ValueError(
+                "baseline_dr_selection manifest values must be inside "
+                "training.policy_search retention bounds."
+            )
+    return values_by_job
+
+
+def _seed_retention_values_by_job(
+    *,
+    config: ExperimentConfig,
+    portfolio: Any,
+    baseline_dr_values_by_job: Sequence[tuple[float, ...]],
+) -> list[tuple[float, ...]]:
+    configured_seed_values = getattr(portfolio, "seed_retention_values", None)
+    if (
+        "seed_retention_values" in config.training_portfolio
+        and configured_seed_values is not None
+    ):
+        seed_values = tuple(float(item) for item in configured_seed_values)
+        return [seed_values for _values in baseline_dr_values_by_job]
+    return [tuple(values) for values in baseline_dr_values_by_job]
+
+
 def run_portfolio_train_jobs(
     *,
     jobs: Sequence[Any],
@@ -87,15 +136,28 @@ def run_portfolio_train_jobs(
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(config_path))
     baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
+    baseline_dr_values_by_job = _baseline_dr_values_by_job(
+        jobs=jobs,
+        config=config,
+        repo_root=repo_root,
+        fallback=baseline_dr_values,
+        settings=settings,
+    )
+    representative_baseline_dr_values = baseline_dr_values_by_job[0]
     family_context = adapter.build_family_context(
         config=config,
         raw_training_policy_search=raw_training_policy_search,
-        baseline_dr_values=baseline_dr_values,
+        baseline_dr_values=representative_baseline_dr_values,
     )
     portfolio = adapter.settings_from_mapping(
         config.training_portfolio,
         settings=settings,
-        default_seed_retention_values=baseline_dr_values,
+        default_seed_retention_values=representative_baseline_dr_values,
+    )
+    seed_retention_values_by_job = _seed_retention_values_by_job(
+        config=config,
+        portfolio=portfolio,
+        baseline_dr_values_by_job=baseline_dr_values_by_job,
     )
     device = torch.device(settings.torch_device)
     benchmark_root = resolve_benchmark_root(repo_root, srs_benchmark_root).resolve()
@@ -129,7 +191,11 @@ def run_portfolio_train_jobs(
     baseline_bundle = _build_bundle(
         config=config,
         settings=settings,
-        lane_user_ids=[job.user_id for job in jobs for _dr in baseline_dr_values],
+        lane_user_ids=[
+            job.user_id
+            for job, dr_values in zip(jobs, baseline_dr_values_by_job, strict=True)
+            for _dr in dr_values
+        ],
         benchmark_root=benchmark_root,
         overrides=overrides,
         benchmark_partition=benchmark_partition,
@@ -143,20 +209,28 @@ def run_portfolio_train_jobs(
         config=config,
         settings=settings,
         bundle=baseline_bundle,
-        baseline_dr_values=baseline_dr_values,
+        baseline_dr_values=representative_baseline_dr_values,
         job_count=len(jobs),
+        baseline_dr_values_by_job=baseline_dr_values_by_job,
         seed=config.seed,
     )
-    for progress, baselines in zip(progresses, baseline_metrics_by_job, strict=True):
+    for progress, baselines, job_dr_values in zip(
+        progresses,
+        baseline_metrics_by_job,
+        baseline_dr_values_by_job,
+        strict=True,
+    ):
         progress.write(
             "baseline_grid_evaluated",
             device=baseline_bundle.device,
-            effective_lanes=len(baseline_dr_values),
-            batch_effective_lanes=len(jobs) * len(baseline_dr_values),
-            baseline_desired_retention_values=list(baseline_dr_values),
+            effective_lanes=len(job_dr_values),
+            batch_effective_lanes=sum(
+                len(values) for values in baseline_dr_values_by_job
+            ),
+            baseline_desired_retention_values=list(job_dr_values),
             metrics=[
                 {"baseline_desired_retention": dr, **asdict(metrics)}
-                for dr, metrics in zip(baseline_dr_values, baselines, strict=True)
+                for dr, metrics in zip(job_dr_values, baselines, strict=True)
             ],
         )
     del baseline_bundle
@@ -167,6 +241,7 @@ def run_portfolio_train_jobs(
         settings=settings,
         portfolio=portfolio,
         family_context=family_context,
+        seed_retention_values_by_job=seed_retention_values_by_job,
         device=device,
         seed=config.seed,
     )
@@ -402,7 +477,7 @@ def run_portfolio_train_jobs(
             adapter.build_result(
                 job=job,
                 job_index=job_index,
-                baseline_desired_retention_values=baseline_dr_values,
+                baseline_desired_retention_values=baseline_dr_values_by_job[job_index],
                 baseline_metrics=baseline_metrics_by_job[job_index],
                 baseline_hypervolume=baseline_hv[job_index],
                 portfolio_hypervolume=selected_hv,

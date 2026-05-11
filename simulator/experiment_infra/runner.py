@@ -30,6 +30,10 @@ from simulator.experiment_infra.schemas import (
     RunRecord,
     StageName,
 )
+from simulator.experiment_infra.baseline_dr_selection import (
+    BaselineDRManifest,
+    load_baseline_dr_manifest,
+)
 from simulator.retention_sweep.log_filter import LogFilenameFilter
 from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
@@ -843,6 +847,7 @@ def run_sweep(
             jobs = [
                 *_build_sweep_baseline_lanes(
                     config=config,
+                    repo_root=repo_root,
                     outputs_root=outputs_root,
                 ),
                 *artifact_lanes,
@@ -2926,19 +2931,44 @@ def run_stage_baseline(
     notes: list[str] = []
     staged_logs: list[Path] = []
     baseline_envs = config.baseline.environments or (config.simulation.environment,)
+    required_users = (
+        set(config.users.train)
+        | set(config.users.validation)
+        | set(config.users.reserved_test)
+    )
     logs_by_env_user: dict[tuple[str, int], list[Path]] = {}
     retentions_by_env_user: dict[tuple[str, int], set[float]] = {}
+    selected_retentions_by_user: dict[int, tuple[float, ...]] = {}
+
+    try:
+        selected_retentions_by_user = _baseline_dr_values_by_user(
+            config=config,
+            repo_root=repo_root,
+            user_ids=sorted(required_users),
+            fallback=config.baseline.desired_retention_values,
+        )
+    except ValueError as exc:
+        failures.append(FailureClass.INVALID_CONFIG)
+        notes.append(f"Invalid baseline DR selection manifest: {exc}")
 
     if not baseline_root.exists():
         failures.append(FailureClass.INVALID_BASELINE)
         notes.append(f"Baseline log root does not exist: {baseline_root}")
-    else:
-        required_users = (
-            set(config.users.train)
-            | set(config.users.validation)
-            | set(config.users.reserved_test)
+    elif not failures:
+        all_selected_retentions = tuple(
+            sorted(
+                {
+                    retention
+                    for retentions in selected_retentions_by_user.values()
+                    for retention in retentions
+                }
+            )
         )
-        filename_filter = _baseline_filename_filter(config, environments=baseline_envs)
+        filename_filter = _baseline_filename_filter(
+            config,
+            environments=baseline_envs,
+            desired_retention_values=all_selected_retentions,
+        )
         candidate_paths = _baseline_candidate_paths(
             baseline_root=baseline_root,
             required_users=required_users,
@@ -2952,13 +2982,25 @@ def run_stage_baseline(
             if isinstance(user_id, bool) or not isinstance(user_id, int):
                 notes.append(f"Skipping {path}: missing integer user_id.")
                 continue
+            expected_retentions = selected_retentions_by_user.get(user_id, ())
             environment = meta.get("environment")
             if environment not in baseline_envs:
+                continue
+            if (
+                config.baseline_dr_selection.manifest is not None
+                and expected_retentions
+                and _matched_retention_value(
+                    meta.get("desired_retention"),
+                    expected_retentions,
+                )
+                is None
+            ):
                 continue
             metadata_errors = _baseline_metadata_errors(
                 config=config,
                 meta=meta,
                 expected_environment=str(environment),
+                expected_desired_retention_values=expected_retentions,
             )
             if metadata_errors:
                 notes.extend(f"{path}: {error}" for error in metadata_errors)
@@ -2967,7 +3009,7 @@ def run_stage_baseline(
             logs_by_env_user.setdefault(env_user_key, []).append(path)
             retention_value = _matched_retention_value(
                 meta.get("desired_retention"),
-                config.baseline.desired_retention_values,
+                expected_retentions,
             )
             if retention_value is not None:
                 retentions_by_env_user.setdefault(env_user_key, set()).add(
@@ -2989,18 +3031,20 @@ def run_stage_baseline(
         if not logs_by_env_user:
             failures.append(FailureClass.INVALID_BASELINE)
             notes.append("No exact baseline logs matched the config.")
-        if config.baseline.desired_retention_values:
+        if any(selected_retentions_by_user.values()):
             missing_pairs: list[str] = []
-            required_retentions = set(config.baseline.desired_retention_values)
             for environment in baseline_envs:
                 for user_id in sorted(required_users):
+                    required_retentions = set(
+                        selected_retentions_by_user.get(user_id, ())
+                    )
                     missing_retentions = sorted(
                         required_retentions
                         - retentions_by_env_user.get((environment, user_id), set())
                     )
                     for retention in missing_retentions:
                         missing_pairs.append(
-                            f"env={environment},user={user_id},ret={retention:.2f}"
+                            f"env={environment},user={user_id},ret={retention:.12g}"
                         )
             if missing_pairs:
                 failures.append(FailureClass.INVALID_BASELINE)
@@ -3091,6 +3135,10 @@ def run_stage_baseline(
         "matched_retentions_by_environment_user": {
             f"{environment}:user_{user_id}": sorted(values)
             for (environment, user_id), values in sorted(retentions_by_env_user.items())
+        },
+        "selected_retentions_by_user": {
+            str(user_id): list(values)
+            for user_id, values in sorted(selected_retentions_by_user.items())
         },
         "staged_logs": [str(path) for path in staged_logs],
         "config_snapshot_path": str(config_snapshot_path),
@@ -3615,6 +3663,7 @@ def _baseline_metadata_errors(
     config: ExperimentConfig,
     meta: dict[str, Any],
     expected_environment: str | None = None,
+    expected_desired_retention_values: tuple[float, ...] | None = None,
 ) -> list[str]:
     errors = _simulation_metadata_errors(
         config=config,
@@ -3623,17 +3672,17 @@ def _baseline_metadata_errors(
         expected_scheduler=config.baseline.scheduler,
         expected_environment=expected_environment,
     )
-    if config.baseline.desired_retention_values:
+    expected_retentions = (
+        expected_desired_retention_values
+        if expected_desired_retention_values is not None
+        else config.baseline.desired_retention_values
+    )
+    if expected_retentions:
         actual_retention = meta.get("desired_retention")
-        if (
-            _matched_retention_value(
-                actual_retention, config.baseline.desired_retention_values
-            )
-            is None
-        ):
+        if _matched_retention_value(actual_retention, expected_retentions) is None:
             errors.append(
                 "metadata desired_retention expected one of "
-                f"{list(config.baseline.desired_retention_values)!r}, "
+                f"{list(expected_retentions)!r}, "
                 f"got {actual_retention!r}"
             )
     return errors
@@ -3643,15 +3692,19 @@ def _baseline_filename_filter(
     config: ExperimentConfig,
     *,
     environments: Sequence[str] | None = None,
+    desired_retention_values: tuple[float, ...] | None = None,
 ) -> LogFilenameFilter:
     short_term = "on" if config.simulation.short_term_source else "off"
     short_term_source = config.simulation.short_term_source or "any"
+    retention_values = (
+        desired_retention_values
+        if desired_retention_values is not None
+        else config.baseline.desired_retention_values
+    )
     retention_values_by_scheduler = None
-    if len(config.baseline.desired_retention_values) == 1:
+    if len(retention_values) == 1:
         retention_values_by_scheduler = {
-            config.baseline.scheduler: round(
-                config.baseline.desired_retention_values[0], 2
-            )
+            config.baseline.scheduler: round(retention_values[0], 2)
         }
     return LogFilenameFilter(
         envs=list(environments or (config.simulation.environment,)),
@@ -3659,12 +3712,8 @@ def _baseline_filename_filter(
         engine=config.baseline.expected_engine,
         short_term=short_term,
         short_term_source=short_term_source,
-        start_retention=min(config.baseline.desired_retention_values)
-        if config.baseline.desired_retention_values
-        else None,
-        end_retention=max(config.baseline.desired_retention_values)
-        if config.baseline.desired_retention_values
-        else None,
+        start_retention=min(retention_values) if retention_values else None,
+        end_retention=max(retention_values) if retention_values else None,
         priority=config.simulation.priority,
         retention_values_by_scheduler=retention_values_by_scheduler,
     )
@@ -4495,17 +4544,24 @@ def _build_sweep_artifact_lane(
 def _build_sweep_baseline_lanes(
     *,
     config: ExperimentConfig,
+    repo_root: Path,
     outputs_root: Path,
 ) -> list[SweepBatchLane]:
     if config.baseline.scheduler != "fsrs6":
         return []
-    dr_values = (
+    fallback = (
         config.baseline.desired_retention_values
         or _training_baseline_desired_retention_values(config)
     )
+    dr_values_by_user = _baseline_dr_values_by_user(
+        config=config,
+        repo_root=repo_root,
+        user_ids=config.users.train,
+        fallback=fallback,
+    )
     lanes: list[SweepBatchLane] = []
     for user_id in config.users.train:
-        for desired_retention in dr_values:
+        for desired_retention in dr_values_by_user[user_id]:
             dr_token = _format_retention_token(desired_retention)
             lanes.append(
                 SweepBatchLane(
@@ -4990,6 +5046,10 @@ def _run_configured_batched_retention_sweep(
         fsrs6_ap_lambda_values=_sweep_policy_lambda_values(config)
         if "fsrs6_ap" in scheduler_names
         else None,
+        fsrs6_dr_manifest=_resolve_baseline_dr_manifest_path(
+            config=config,
+            repo_root=repo_root,
+        ),
     )
     plan = build_batched_sweep_plan(
         repo_root=repo_root,
@@ -5616,6 +5676,80 @@ def _format_lambda_token(value: float) -> str:
 
 def _format_retention_token(value: float) -> str:
     return _format_lambda_token(value)
+
+
+def _resolve_baseline_dr_manifest_path(
+    *, config: ExperimentConfig, repo_root: Path
+) -> Path | None:
+    manifest = config.baseline_dr_selection.manifest
+    if manifest is None:
+        return None
+    return _resolve_repo_path(repo_root, manifest)
+
+
+def _load_baseline_dr_manifest(
+    *,
+    config: ExperimentConfig,
+    repo_root: Path,
+    user_ids: Sequence[int] | None = None,
+) -> BaselineDRManifest | None:
+    manifest_path = _resolve_baseline_dr_manifest_path(
+        config=config,
+        repo_root=repo_root,
+    )
+    if manifest_path is None:
+        return None
+    return load_baseline_dr_manifest(
+        manifest_path,
+        target_count=config.baseline_dr_selection.target_count,
+        user_ids=user_ids,
+        tolerance=config.baseline_dr_selection.tolerance,
+    )
+
+
+def _baseline_dr_values_for_user(
+    *,
+    config: ExperimentConfig,
+    repo_root: Path,
+    user_id: int,
+    fallback: tuple[float, ...] | None = None,
+) -> tuple[float, ...]:
+    manifest = _load_baseline_dr_manifest(
+        config=config,
+        repo_root=repo_root,
+        user_ids=(user_id,),
+    )
+    if manifest is not None:
+        return manifest.values_for_user(user_id)
+    return (
+        fallback
+        if fallback is not None
+        else _training_baseline_desired_retention_values(config)
+    )
+
+
+def _baseline_dr_values_by_user(
+    *,
+    config: ExperimentConfig,
+    repo_root: Path,
+    user_ids: Sequence[int],
+    fallback: tuple[float, ...] | None = None,
+) -> dict[int, tuple[float, ...]]:
+    manifest = _load_baseline_dr_manifest(
+        config=config,
+        repo_root=repo_root,
+        user_ids=user_ids,
+    )
+    if manifest is not None:
+        return {
+            int(user_id): manifest.values_for_user(int(user_id)) for user_id in user_ids
+        }
+    values = (
+        fallback
+        if fallback is not None
+        else _training_baseline_desired_retention_values(config)
+    )
+    return {int(user_id): values for user_id in user_ids}
 
 
 def _training_baseline_desired_retention_values(

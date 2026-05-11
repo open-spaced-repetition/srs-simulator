@@ -119,20 +119,24 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             feature_version=feature_version,
         )
         return max(1, optimizer.population_size)
+    baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
+    if config.baseline_dr_selection.manifest is not None:
+        baseline_dr_values = _uniform_retention_values(
+            settings.retention_min,
+            settings.retention_max,
+            config.baseline_dr_selection.target_count,
+        )
     if trainer == "fsrs6_adr_portfolio":
         portfolio = PortfolioSettings.from_mapping(
             config.training_portfolio,
             settings=settings,
-            default_seed_retention_values=_baseline_dr_values(
-                raw_training_policy_search, settings
-            ),
+            default_seed_retention_values=baseline_dr_values,
         )
         return max(
             len(portfolio.seed_retention_values or ()),
             portfolio.population_size,
             portfolio.offspring_size,
         )
-    baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
     if trainer == "fsrs6_ap_cmaes":
         optimizer = ap_optimizer_settings_from_mapping(config.training_optimizer)
         ap_settings = APSettings.from_config(
@@ -156,6 +160,19 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             portfolio.offspring_size,
         )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
+
+
+def _uniform_retention_values(
+    retention_min: float,
+    retention_max: float,
+    count: int,
+) -> tuple[float, ...]:
+    if count < 1:
+        return ()
+    if count == 1:
+        return (float(retention_min),)
+    step = (retention_max - retention_min) / (count - 1)
+    return tuple(float(retention_min + step * index) for index in range(count))
 
 
 def run_in_process_train_batch(

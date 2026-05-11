@@ -19,6 +19,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.experiment_infra import ExperimentConfig
+from simulator.experiment_infra.baseline_dr_selection import (
+    BaselineDRManifest,
+    load_baseline_dr_manifest,
+)
 from experiments.retention_sweep.cli_utils import has_flag
 from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     ObjectivePoint,
@@ -156,6 +160,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "affect the comparison."
         ),
     )
+    parser.add_argument(
+        "--baseline-dr-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "JSON manifest of per-user FSRS6 baseline desired-retention values. "
+            "Rows with a non-null DR outside the user's manifest are ignored."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.config is not None:
         args = _merge_config_args(cli_args=args, config_path=args.config, argv=argv)
@@ -216,6 +229,12 @@ def _merge_config_args(
         cli_args.no_dedupe = True
     if analyze.comparisons and not has_flag(argv, "--comparisons"):
         cli_args.comparisons = ",".join(analyze.comparisons)
+    if config.baseline_dr_selection.manifest is not None and not has_flag(
+        argv, "--baseline-dr-manifest"
+    ):
+        cli_args.baseline_dr_manifest = _resolve_repo_path(
+            config.baseline_dr_selection.manifest
+        )
     return cli_args
 
 
@@ -340,6 +359,11 @@ def _row_series_identity(item: dict[str, Any]) -> str | None:
 def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
     envs = set(parse_csv(args.env))
     schedulers = set(parse_csv(args.sched))
+    baseline_dr_manifest: BaselineDRManifest | None = (
+        load_baseline_dr_manifest(args.baseline_dr_manifest)
+        if args.baseline_dr_manifest is not None
+        else None
+    )
     raw_rows: list[SweepRow] = []
     for path in iter_candidate_paths(args.log_dir, args.start_user, args.end_user):
         mtime_ns = path.stat().st_mtime_ns
@@ -379,6 +403,16 @@ def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
                 row.desired_retention is None
                 or args.start_retention <= row.desired_retention <= args.end_retention
             ):
+                if (
+                    baseline_dr_manifest is not None
+                    and row.desired_retention is not None
+                    and row.scheduler in {"fsrs6", "fsrs6_adr", "fsrs6_ap"}
+                    and not baseline_dr_manifest.contains_value(
+                        row.user_id,
+                        row.desired_retention,
+                    )
+                ):
+                    continue
                 raw_rows.append(row)
 
     if args.no_dedupe:

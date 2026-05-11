@@ -153,31 +153,14 @@ log_root = "logs/retention_sweep"
 expected_engine = "batched"
 stage_mode = "copy"
 environments = ["fsrs6", "lstm"]
-desired_retention_values = [
-  0.52,
-  0.54,
-  0.56,
-  0.58,
-  0.60,
-  0.62,
-  0.64,
-  0.66,
-  0.68,
-  0.70,
-  0.72,
-  0.74,
-  0.76,
-  0.78,
-  0.80,
-  0.82,
-  0.84,
-  0.86,
-  0.88,
-  0.90,
-  0.92,
-  0.94,
-  0.96,
-]
+
+[baseline_dr_selection]
+manifest = "artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_128_16dr.json"
+selection_environment = "fsrs6"
+target_count = 16
+reference = "uniform_anchor"
+population_size = 32
+generations = 10
 
 [simulation]
 engine = "batched"
@@ -234,31 +217,6 @@ coefficient_max = 12.0
 retention_min = 0.50
 retention_max = 0.98
 baseline_desired_retention = 0.90
-baseline_desired_retention_values = [
-  0.52,
-  0.54,
-  0.56,
-  0.58,
-  0.60,
-  0.62,
-  0.64,
-  0.66,
-  0.68,
-  0.70,
-  0.72,
-  0.74,
-  0.76,
-  0.78,
-  0.80,
-  0.82,
-  0.84,
-  0.86,
-  0.88,
-  0.90,
-  0.92,
-  0.94,
-  0.96,
-]
 torch_device = "cuda"
 short_term_threshold = 0.5
 short_term_loops_limit = 10
@@ -271,7 +229,7 @@ algorithm = "sms_emoa"
 population_size = 64
 generations = 20
 offspring_size = 64
-portfolio_size = 23
+portfolio_size = 16
 mutation_scale = 0.35
 retention_mutation_scale = 0.02
 reference_margin_fraction = 0.05
@@ -288,8 +246,8 @@ log_layout = "user"
 max_lanes_per_batch = 1024
 torch_device = "cuda"
 benchmark_partition = "0"
-start_retention = 0.52
-end_retention = 0.96
+start_retention = 0.50
+end_retention = 0.98
 step = 0.02
 no_progress = true
 no_log = false
@@ -306,8 +264,8 @@ schedulers = ["fsrs6", "fsrs6_ap"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
-start_retention = 0.52
-end_retention = 0.96
+start_retention = 0.50
+end_retention = 0.98
 short_term = "off"
 short_term_source = "any"
 engine = "batched"
@@ -322,8 +280,8 @@ envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6", "fsrs6_ap"]
 comparisons = ["fsrs6_ap:fsrs6"]
 result_glob = "analysis.md"
-start_retention = 0.52
-end_retention = 0.96
+start_retention = 0.50
+end_retention = 0.98
 short_term = "off"
 engine = "batched"
 fuzz = "off"

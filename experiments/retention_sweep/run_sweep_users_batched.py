@@ -164,6 +164,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "policy root or manifest."
         ),
     )
+    parser.add_argument(
+        "--fsrs6-dr-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "JSON manifest with per-user FSRS6 desired-retention values. When "
+            "set, fsrs6 DR lanes use those values instead of the uniform range."
+        ),
+    )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
     )
@@ -309,6 +318,7 @@ def _merge_config_args(
         "fsrs6_ap_train_run_root": ("--fsrs6-ap-train-run-root",),
         "fsrs6_ap_policy_manifest": ("--fsrs6-ap-policy-manifest",),
         "fsrs6_ap_lambda_values": ("--fsrs6-ap-lambda-values",),
+        "fsrs6_dr_manifest": ("--fsrs6-dr-manifest",),
         "log_dir": ("--log-dir",),
         "log_layout": ("--log-layout",),
         "no_log": ("--no-log",),
@@ -351,6 +361,11 @@ def _print_dry_run(plan) -> None:
         print(f"example log dir: {plan.example_log_dir}")
     if plan.ctx.fsrs6_adr_policy_specs:
         print(f"fsrs6_adr policies: {len(plan.ctx.fsrs6_adr_policy_specs)}")
+    if plan.ctx.fsrs6_dr_values_by_user:
+        counts = sorted(
+            {len(values) for values in plan.ctx.fsrs6_dr_values_by_user.values()}
+        )
+        print(f"fsrs6 manifest DR counts: {counts}")
 
 
 if __name__ == "__main__":

@@ -60,6 +60,7 @@ class BatchedSweepContext:
     fsrs6_adr_policy_specs: tuple[FSRS6ADRPolicySpec, ...] = ()
     fsrs6_ap_policy: Path | None = None
     fsrs6_ap_policy_specs: tuple[FSRS6APPolicySpec, ...] = ()
+    fsrs6_dr_values_by_user: Mapping[int, tuple[float, ...]] | None = None
 
 
 _DR_SCHEDULERS = {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}
@@ -94,15 +95,17 @@ def _build_dr_grid_lanes(
     scheduler_spec: str,
     dr_values: list[float],
     fixed_interval: float | None,
+    dr_values_by_user: Mapping[int, tuple[float, ...]] | None = None,
     log_layout: str = "user",
 ) -> list[BatchedSweepLogLane]:
     lanes: list[BatchedSweepLogLane] = []
-    for desired_retention in dr_values:
+
+    def add_lane(user_id: int, desired_retention: float) -> None:
         scheduler_subpath = Path(f"sched_{scheduler_name}") / (
             f"dr_{_format_float_token(desired_retention)}"
         )
         dr_root = log_root / scheduler_subpath
-        lanes.extend(
+        lanes.append(
             BatchedSweepLogLane(
                 user_id=user_id,
                 log_root=dr_root,
@@ -118,8 +121,17 @@ def _build_dr_grid_lanes(
                 desired_retention=desired_retention,
                 fixed_interval=fixed_interval,
             )
-            for user_id in batch
         )
+
+    if dr_values_by_user is None:
+        for desired_retention in dr_values:
+            for user_id in batch:
+                add_lane(user_id, desired_retention)
+        return lanes
+
+    for user_id in batch:
+        for desired_retention in dr_values_by_user.get(user_id, ()):
+            add_lane(user_id, desired_retention)
     return lanes
 
 
@@ -144,6 +156,9 @@ def _build_sweep_lanes(
                     scheduler_name=name,
                     scheduler_spec=raw,
                     dr_values=ctx.dr_values,
+                    dr_values_by_user=ctx.fsrs6_dr_values_by_user
+                    if name == "fsrs6" and ctx.fsrs6_dr_values_by_user
+                    else None,
                     fixed_interval=None,
                 )
             )

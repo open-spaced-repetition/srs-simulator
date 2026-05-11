@@ -152,6 +152,12 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[
         help="Pass --hide-labels to build_pareto.py.",
     )
     parser.add_argument(
+        "--baseline-dr-manifest",
+        type=Path,
+        default=None,
+        help="Pass a per-user FSRS6 baseline DR manifest to build_pareto.py.",
+    )
+    parser.add_argument(
         "--uv-cmd",
         default="uv",
         help="Command to invoke uv (override if needed).",
@@ -241,6 +247,12 @@ def _merge_config_args(
         cli_args.no_plot = True
     if build_config.hide_labels and not has_flag(argv, "--hide-labels"):
         cli_args.hide_labels = True
+    if experiment.baseline_dr_selection.manifest is not None and not has_flag(
+        argv, "--baseline-dr-manifest"
+    ):
+        cli_args.baseline_dr_manifest = _resolve_repo_path(
+            experiment.baseline_dr_selection.manifest
+        )
     return cli_args
 
 
@@ -277,6 +289,8 @@ def _build_command(
         cmd.append("--no-plot")
     if args.hide_labels:
         cmd.append("--hide-labels")
+    if args.baseline_dr_manifest is not None:
+        cmd.extend(["--baseline-dr-manifest", str(args.baseline_dr_manifest)])
     if args.output_dir is not None:
         cmd.extend(
             [

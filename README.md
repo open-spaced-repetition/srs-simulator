@@ -68,6 +68,7 @@ profiles and machine-readable stage records:
 
 ```bash
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_cmaes_users_1_8.toml --stage all --run-id fsrs6_adr_linear_cmaes_users_1_8_v1
+uv run python experiments/rl_scheduler/select_fsrs6_baseline_drs.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_portfolio_users_1_8.toml
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_portfolio_users_1_8.toml --stage all --run-id fsrs6_adr_linear_portfolio_users_1_8_v1
 uv run python experiments/rl_scheduler/run_experiment.py --config experiments/rl_scheduler/configs/fsrs6_ap_cmaes_users_1_8.toml --stage all --run-id fsrs6_ap_cmaes_users_1_8_v1
 uv run python experiments/rl_scheduler/inspect_run.py --run-root artifacts/rl_scheduler/fsrs6_adr_linear_cmaes_users_1_8/fsrs6_adr_linear_cmaes_users_1_8_v1
@@ -82,8 +83,9 @@ ADR portfolio child artifacts by `memorized_average / deck`.
 outputs. `preflight` writes a config snapshot, resolved config, command record,
 run record, GPU summary, gate summary, manifest, and preflight summary under the
 configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata,
-including configured `baseline.desired_retention_values`, and stages exact
-baseline logs by copy or hardlink without staging CSV sidecars. `train-overfit`
+including configured `baseline.desired_retention_values` or per-user
+`[baseline_dr_selection]` manifest values, and stages exact baseline logs by
+copy or hardlink without staging CSV sidecars. `train-overfit`
 runs the user-provided `training.command_template` once per training user and
 lambda value by default; portfolio trainers run once per training user and do
 not use `training.lambda_grid`. When `[training.batch].enabled = true`, supported
@@ -103,7 +105,7 @@ metadata contract before they can be used by formal stages.
 3-parameter `fsrs6_adr_log_linear_v1` policy per user and baseline desired
 retention with CMA-ES, then evaluates the resulting ordinary `fsrs6_adr`
 schedulers.
-`fsrs6_adr_linear_portfolio_users_1_8.toml` trains 23 simplified
+`fsrs6_adr_linear_portfolio_users_1_8.toml` trains 16 simplified
 3-parameter `fsrs6_adr_log_linear_v1` portfolio children per user with
 SMS-EMOA hypervolume optimization, then evaluates them as ordinary
 `fsrs6_adr` schedulers.
@@ -125,7 +127,10 @@ control DR and user batching.
 `fsrs6_adr_portfolio` and `fsrs6_ap_portfolio` train multiple child policies
 per user with SMS-EMOA. The objective is the Pareto hypervolume gain of
 candidate `(memorized_average, -time_average)` points over the user's FSRS-6 DR
-baseline grid. Portfolio artifacts are lambda-less and write children under
+baseline set. Portfolio profiles use `[baseline_dr_selection]` to point at a
+generated per-user manifest of 16 FSRS-6 desired-retention values, selected in
+the FSRS6 environment before formal staging/training. Portfolio artifacts are
+lambda-less and write children under
 `user_<id>/policies/policy_*/`; set
 `training.artifact_metadata_glob = "policies/**/metadata.json"` so sweep stages
 discover each child policy.
@@ -197,7 +202,7 @@ uv run python experiments/retention_sweep/plot_short_loops.py --env lstm --sched
 ```
 
 - `run_sweep_users.py` fans out `run_sweep.py` across a user-id range and supports `--max-parallel`, `--cuda-devices` (round-robin per worker), plus MPS env passthrough; `--max-parallel` only delivers speedups when GPU Multi-Process Service (MPS) is enabled on the host. In parallel it shows an overall work bar, a user bar, and per-worker bars (disable with `--child-progress off`, and use `--show-commands on` if you need the raw subprocess commands).
-- `run_sweep_users_batched.py` runs LSTM/FSRS6 retention sweeps with the batched tensor engine. By default it uses `--max-lanes-per-batch 10000` to precompute outer user batches before loading per-user weights, keeping each user's scheduler/DR lanes together; use `--batch-size` only when you want a fixed outer user count, such as distributing work with `--cuda-devices`. Each batch expands `(user, scheduler, parameter/DR)` into simulation lanes, so mixed scheduler sweeps share one batched engine call per environment batch. It is also the supported entrypoint for FSRS-trained `fsrs6_adr` and `fsrs6_ap` policies evaluated in FSRS6 or external LSTM environments. Use `--fsrs6-adr-policy <policy.json>` for one policy, `--fsrs6-adr-policy-root <train-overfit/train_outputs>` or `--fsrs6-adr-train-run-root <run-root>` to expand trained `(user, baseline DR, lambda)` policies or lambda-less portfolio child policies, or `--fsrs6-adr-policy-manifest <policies.toml>` for explicit entries. Use `--fsrs6-ap-policy <policy.json>` for one AP policy, `--fsrs6-ap-policy-root <train-overfit/train_outputs>` or `--fsrs6-ap-train-run-root <run-root>` to expand trained `(user, baseline DR, lambda)` AP policies or lambda-less AP portfolio children, or `--fsrs6-ap-policy-manifest <policies.toml>` for explicit entries. `fsrs6_adr` and `fsrs6_ap` manifests include `baseline_desired_retention`; portfolio children may set it to `null`. Formal ADR/AP experiments keep the batched sweep settings inside `experiments/rl_scheduler/configs/*.toml` so one TOML reproduces training, sweep, Pareto build, and analysis. When that TOML is used directly with `run_sweep_users_batched.py --config`, `[sweep].log_dir` is honored as the shared log root. When it is used through `experiments/rl_scheduler/run_experiment.py --stage sweep`, the same sweep settings are run-local and logs are written to `<output_root>/<run_id>/sweep/sweep_outputs`; formal `build-pareto` scans `<output_root>/<run_id>` rather than the shared log root. Batched sweeps use `--log-layout user` by default, so `--log-dir logs/retention_sweep` writes `logs/retention_sweep/user_<id>/sched_...` for all schedulers and can be consumed directly by `build_pareto_users.py`; use `--log-layout sweep` to keep the legacy `sched_.../user_<id>` layout. Short-term steps are supported via `--short-term-source steps`, and LSTM sched-based short-term is supported via `--short-term-source sched`. Batched sweeps skip per-user daily CSV sidecars and batch GPU CSV logs by default; pass `--diagnostic-csv-logs` to write them under the normal log root.
+- `run_sweep_users_batched.py` runs LSTM/FSRS6 retention sweeps with the batched tensor engine. By default it uses `--max-lanes-per-batch 10000` to precompute outer user batches before loading per-user weights, keeping each user's scheduler/DR lanes together; use `--batch-size` only when you want a fixed outer user count, such as distributing work with `--cuda-devices`. Each batch expands `(user, scheduler, parameter/DR)` into simulation lanes, so mixed scheduler sweeps share one batched engine call per environment batch. It is also the supported entrypoint for FSRS-trained `fsrs6_adr` and `fsrs6_ap` policies evaluated in FSRS6 or external LSTM environments. Use `--fsrs6-dr-manifest <manifest.json>` to run FSRS6 DR lanes from per-user selected baseline DR values instead of the uniform range. Use `--fsrs6-adr-policy <policy.json>` for one policy, `--fsrs6-adr-policy-root <train-overfit/train_outputs>` or `--fsrs6-adr-train-run-root <run-root>` to expand trained `(user, baseline DR, lambda)` policies or lambda-less portfolio child policies, or `--fsrs6-adr-policy-manifest <policies.toml>` for explicit entries. Use `--fsrs6-ap-policy <policy.json>` for one AP policy, `--fsrs6-ap-policy-root <train-overfit/train_outputs>` or `--fsrs6-ap-train-run-root <run-root>` to expand trained `(user, baseline DR, lambda)` AP policies or lambda-less AP portfolio children, or `--fsrs6-ap-policy-manifest <policies.toml>` for explicit entries. `fsrs6_adr` and `fsrs6_ap` manifests include `baseline_desired_retention`; portfolio children may set it to `null`. Formal ADR/AP experiments keep the batched sweep settings inside `experiments/rl_scheduler/configs/*.toml` so one TOML reproduces training, sweep, Pareto build, and analysis. When that TOML is used directly with `run_sweep_users_batched.py --config`, `[sweep].log_dir` is honored as the shared log root. When it is used through `experiments/rl_scheduler/run_experiment.py --stage sweep`, the same sweep settings are run-local and logs are written to `<output_root>/<run_id>/sweep/sweep_outputs`; formal `build-pareto` scans `<output_root>/<run_id>` rather than the shared log root. Batched sweeps use `--log-layout user` by default, so `--log-dir logs/retention_sweep` writes `logs/retention_sweep/user_<id>/sched_...` for all schedulers and can be consumed directly by `build_pareto_users.py`; use `--log-layout sweep` to keep the legacy `sched_.../user_<id>` layout. Short-term steps are supported via `--short-term-source steps`, and LSTM sched-based short-term is supported via `--short-term-source sched`. Batched sweeps skip per-user daily CSV sidecars and batch GPU CSV logs by default; pass `--diagnostic-csv-logs` to write them under the normal log root.
 - `SRS_LSTM_MAX_BATCH` defaults to 65536. This is a throughput-oriented chunk size and can use more than 10 GiB of GPU memory on larger LSTM lane batches; reduce it if shared GPU memory spill appears, or keep `--max-lanes-per-batch` at or below the default 10000 unless memory allows larger chunks.
 - `build_pareto_users.py` fans out `build_pareto.py` across a user-id range.
 - `aggregate_users.py` aggregates per-user retention_sweep logs into summary JSON, recursively scanning nested batched lane logs under `--log-dir`. By default it plots FSRS-6 equivalent distributions vs Anki-SM-2/Memrise; use `--equiv-baselines` to choose different baseline scheduler specs and `--equiv-pairs` for generic DR-scheduler pair boxplots such as `lstm:fsrs6`. Use `--equiv-report fsrs3` (and include `fsrs3` in `--sched`) to switch the baseline-equivalence target to FSRSv3.

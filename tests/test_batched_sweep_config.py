@@ -281,6 +281,57 @@ no_log = true
 
         self.assertEqual(config.args.log_layout, "sweep")
 
+    def test_fsrs6_manifest_replaces_uniform_dr_grid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "sweep.toml"
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "target_count": 2,
+                        "users": [
+                            {
+                                "user_id": 1,
+                                "desired_retention_values": [0.51, 0.61],
+                            },
+                            {
+                                "user_id": 2,
+                                "desired_retention_values": [0.52, 0.62],
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            raw = (
+                _valid_config(root / "logs")
+                .replace('schedulers = ["fsrs6", "anki_sm2"]', 'schedulers = ["fsrs6"]')
+                .replace("end = 0.52", "end = 0.54")
+                + f'\n[fsrs6]\ndr_manifest = "{manifest_path.as_posix()}"\n'
+            )
+            path.write_text(raw, encoding="utf-8")
+
+            config = load_batched_sweep_config(path)
+            plan = build_batched_sweep_plan(
+                repo_root=REPO_ROOT,
+                args=config.args,
+                envs=list(config.envs),
+                schedulers=list(config.schedulers),
+            )
+            lanes = _build_sweep_lanes(
+                batch=plan.batches[0],
+                ctx=plan.ctx,
+                environment="lstm",
+            )
+
+        self.assertEqual(config.args.fsrs6_dr_manifest, manifest_path)
+        self.assertEqual(plan.total_lanes, 4)
+        self.assertEqual(
+            [(lane.user_id, lane.desired_retention) for lane in lanes],
+            [(1, 0.51), (1, 0.61), (2, 0.52), (2, 0.62)],
+        )
+
     def test_defaults_to_single_user_batch_with_lane_cap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sweep.toml"
