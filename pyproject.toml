@@ -34,3 +34,6 @@ explicit = true
 dev = [
     "ruff>=0.14.13",
 ]
+
+[tool.ruff.lint]
+ignore = ["E402"]
