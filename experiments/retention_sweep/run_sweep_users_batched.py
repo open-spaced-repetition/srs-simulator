@@ -6,25 +6,15 @@ import argparse
 import sys
 from pathlib import Path
 
-import torch
 from tqdm import tqdm
-
-
-def _enable_expandable_cuda_segments() -> None:
-    set_allocator_settings = getattr(torch.cuda.memory, "_set_allocator_settings", None)
-    if set_allocator_settings is None:
-        return
-    try:
-        set_allocator_settings("expandable_segments:True")
-    except (AttributeError, RuntimeError, TypeError):
-        return
-
-
-_enable_expandable_cuda_segments()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.cuda_allocator import enable_expandable_cuda_segments
+
+enable_expandable_cuda_segments()
 
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH

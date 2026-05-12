@@ -9,6 +9,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from simulator.cuda_allocator import enable_expandable_cuda_segments
+
+enable_expandable_cuda_segments()
+
 from simulator.experiment_infra import StageName
 from simulator.experiment_infra.runner import run_all, run_stage
 
