@@ -3706,17 +3706,29 @@ def _baseline_filename_filter(
         retention_values_by_scheduler = {
             config.baseline.scheduler: round(retention_values[0], 2)
         }
+    start_retention, end_retention = _filename_retention_bounds(retention_values)
     return LogFilenameFilter(
         envs=list(environments or (config.simulation.environment,)),
         scheds=[config.baseline.scheduler],
         engine=config.baseline.expected_engine,
         short_term=short_term,
         short_term_source=short_term_source,
-        start_retention=min(retention_values) if retention_values else None,
-        end_retention=max(retention_values) if retention_values else None,
+        start_retention=start_retention,
+        end_retention=end_retention,
         priority=config.simulation.priority,
         retention_values_by_scheduler=retention_values_by_scheduler,
     )
+
+
+def _filename_retention_bounds(
+    retention_values: Sequence[float],
+) -> tuple[float | None, float | None]:
+    if not retention_values:
+        return None, None
+    # Log filenames store ret= rounded to two decimals. Keep filename filtering
+    # broad enough for continuous DRs; exact matching still happens via metadata.
+    tolerance = 0.005000001
+    return min(retention_values) - tolerance, max(retention_values) + tolerance
 
 
 def _baseline_candidate_paths(
@@ -5190,7 +5202,12 @@ def _batched_retention_lane_filename_filter(
     short_term = "on" if config.simulation.short_term_source else "off"
     short_term_source = config.simulation.short_term_source or "any"
     retention_values_by_scheduler = None
+    start_retention = None
+    end_retention = None
     if lane.desired_retention is not None:
+        start_retention, end_retention = _filename_retention_bounds(
+            (float(lane.desired_retention),)
+        )
         retention_values_by_scheduler = {
             lane.scheduler_name: round(float(lane.desired_retention), 2)
         }
@@ -5204,12 +5221,8 @@ def _batched_retention_lane_filename_filter(
         run_id=run_id
         if lane.scheduler_name in RUN_ID_SCOPED_SWEEP_SCHEDULERS
         else None,
-        start_retention=float(lane.desired_retention)
-        if lane.desired_retention is not None
-        else None,
-        end_retention=float(lane.desired_retention)
-        if lane.desired_retention is not None
-        else None,
+        start_retention=start_retention,
+        end_retention=end_retention,
         priority=config.simulation.priority,
         retention_values_by_scheduler=retention_values_by_scheduler,
     )
