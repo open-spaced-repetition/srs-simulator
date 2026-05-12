@@ -126,6 +126,7 @@ fsrs6_adr_train_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8
 log_dir = "logs/retention_sweep"
 log_layout = "user"
 batch_size = 8
+max_lanes_per_batch = 1024
 torch_device = "cuda"
 benchmark_partition = "0"
 start_retention = 0.50
@@ -133,6 +134,12 @@ end_retention = 0.98
 step = 0.02
 no_progress = true
 no_log = false
+
+[sweep.env_overrides.fsrs6]
+max_lanes_per_batch = 8192
+
+[sweep.env_overrides.lstm]
+max_lanes_per_batch = 1024
 
 [build_pareto]
 envs = ["fsrs6", "lstm"]
