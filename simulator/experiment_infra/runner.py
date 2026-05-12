@@ -3056,12 +3056,17 @@ def run_stage_baseline(
         if not failures:
             for environment, user_id in sorted(logs_by_env_user):
                 for source in logs_by_env_user[(environment, user_id)]:
-                    dest = (
-                        staged_root
-                        / f"env_{environment}"
-                        / f"user_{user_id}"
-                        / source.name
+                    source_meta = _read_log_meta(source) or {}
+                    retention_value = _matched_retention_value(
+                        source_meta.get("desired_retention"),
+                        selected_retentions_by_user.get(user_id, ()),
                     )
+                    dest_parent = staged_root / f"env_{environment}" / f"user_{user_id}"
+                    if retention_value is not None:
+                        dest_parent = dest_parent / (
+                            "dr_" + _format_retention_token(retention_value)
+                        )
+                    dest = dest_parent / source.name
                     _stage_baseline_file(
                         source=source,
                         dest=dest,

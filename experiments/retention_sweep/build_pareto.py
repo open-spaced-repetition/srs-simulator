@@ -717,6 +717,8 @@ def _iter_log_entries(
             "engine": engine_value,
             "run_id": meta.get("run_id"),
         }
+        if desired_value is not None:
+            entry["desired_retention"] = desired_value
         if scheduler == "fsrs6_adr":
             entry.update(
                 {

@@ -543,6 +543,94 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertIn("| fsrs6_adr - fsrs6 | 1 | 1/1 | 0/1 | 0/1 | 0/1 | 0/1 |", report)
         self.assertIn("Loaded 2 records", report)
 
+    def test_analyze_scheduler_comparison_manifest_keeps_exact_baseline_dr(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_dir = root / "pareto"
+            log_dir.mkdir()
+            manifest_path = root / "manifest.json"
+            exact_dr = 0.5386559409988914
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "target_count": 1,
+                        "users": [
+                            {
+                                "user_id": 1,
+                                "desired_retention_values": [exact_dr],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (log_dir / "simulation_results_retention_sweep_user_1.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 1,
+                            "title": "DR=53.87%",
+                            "desired_retention": exact_dr,
+                            "memorized_average": 100.0,
+                            "time_average": 1.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 100.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_adr",
+                            "user_id": 1,
+                            "desired_retention": None,
+                            "fsrs6_adr_baseline_desired_retention": None,
+                            "fsrs6_adr_policy": "policies/policy_0/policy.json",
+                            "memorized_average": 110.0,
+                            "time_average": 1.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 110.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            args = parse_analyze_args(
+                [
+                    "--log-dir",
+                    str(log_dir),
+                    "--env",
+                    "fsrs6",
+                    "--sched",
+                    "fsrs6,fsrs6_adr",
+                    "--comparisons",
+                    "fsrs6_adr:fsrs6",
+                    "--start-user",
+                    "1",
+                    "--end-user",
+                    "1",
+                    "--start-retention",
+                    "0.50",
+                    "--end-retention",
+                    "0.98",
+                    "--baseline-dr-manifest",
+                    str(manifest_path),
+                ]
+            )
+            report = render_report(args)
+
+        self.assertIn("Loaded 2 records", report)
+        self.assertIn("| fsrs6 | fsrs6 | 1 | 1-1 | 1 |", report)
+        self.assertIn("| fsrs6 | fsrs6_adr | 1 | 1-1 | 0 |", report)
+
     def test_analyze_scheduler_comparison_reports_no_dr_ap_hypervolume(
         self,
     ) -> None:

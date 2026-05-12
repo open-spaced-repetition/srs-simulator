@@ -350,6 +350,46 @@ class BaselineDRSelectionManifestTests(unittest.TestCase):
             [0.5002, 0.9796],
         )
 
+    def test_stage_baseline_keeps_same_rounded_filename_drs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path = root / "manifest.json"
+            values = [0.8267075195512398, 0.8296779378941778]
+            _write_manifest(manifest_path, values)
+            log_root = root / "logs"
+            user_dir = log_root / "user_1" / "sched_fsrs6"
+            for value in values:
+                _write_baseline_log(
+                    user_dir
+                    / f"dr_{str(value).replace('.', 'p')}"
+                    / "env=fsrs6_sched=fsrs6_engine=batched_prio=new-first_seed=42_ret=0.83.jsonl",
+                    desired_retention=value,
+                )
+            config_path = root / "config.toml"
+            _write_workflow_config(
+                config_path,
+                log_root=log_root,
+                manifest=manifest_path,
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.STAGE_BASELINE,
+                repo_root=REPO_ROOT,
+                run_id="manifest-same-rounded",
+            )
+
+        self.assertEqual(result.exit_code, 0, result.summary["notes"])
+        self.assertEqual(len(result.summary["staged_logs"]), 2)
+        self.assertEqual(
+            result.summary["matched_retentions_by_user"]["1"],
+            values,
+        )
+        self.assertEqual(
+            len({Path(path).parent.name for path in result.summary["staged_logs"]}),
+            2,
+        )
+
     def test_stage_baseline_reports_missing_manifest_selected_dr(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

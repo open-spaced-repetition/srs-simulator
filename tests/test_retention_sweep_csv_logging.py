@@ -705,6 +705,38 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(results[0]["user_id"], 1)
         self.assertEqual(results[0]["memorized_average"], 10.0)
 
+    def test_build_pareto_preserves_exact_desired_retention(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "logs" / "retention_sweep"
+            user_log_dir = root / "user_1" / "sched_fsrs6" / "dr_exact"
+            args = _write_log_args(user_log_dir, False)
+            args.engine = "batched"
+            args.scheduler = "fsrs6"
+            args.scheduler_spec = "fsrs6"
+            args.desired_retention = 0.5386559409988914
+            simulate_cli._write_log(args, _stats())
+
+            results = _build_results(
+                root,
+                "fsrs6",
+                {"fsrs6"},
+                0.50,
+                0.98,
+                [REPO_ROOT, root],
+                None,
+                None,
+                None,
+                "batched",
+                user_id_filter=1,
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]["desired_retention"],
+            0.5386559409988914,
+        )
+        self.assertEqual(results[0]["title"], "DR=53.87%")
+
     def test_build_pareto_filters_fsrs6_adr_baseline_dr_range(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "logs" / "retention_sweep"
