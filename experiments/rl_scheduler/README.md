@@ -262,12 +262,15 @@ Portfolio baseline selection:
   lanes, defaulting to 8192. Portfolio profiles use the low-budget selector
   setting (`population_size = 16`, `generations = 5`) so the per-user baseline
   DR search budget stays close to the portfolio training lane budget.
-- Generate the manifest before `stage-baseline`, then run a manifest-driven
-  FSRS6 baseline sweep across `fsrs6,lstm`, for example:
+- Use `run_portfolio_workflow.py` as the single entry point for manifest
+  generation, manifest-driven FSRS6 baseline sweep across `fsrs6,lstm`, and the
+  formal experiment stages. Existing manifests are reused by default; pass
+  `--force-manifest` to regenerate them. For example:
 
 ```bash
-uv run python experiments/rl_scheduler/select_fsrs6_baseline_drs.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_portfolio_users_1_8.toml
-uv run python experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 8 --env fsrs6,lstm --sched fsrs6 --fsrs6-dr-manifest artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json --log-dir logs/retention_sweep --log-layout user --seed 42 --no-progress
+uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
+  --config experiments/rl_scheduler/configs/fsrs6_adr_portfolio_users_1_8_v3.toml \
+  --run-id fsrs6_adr_portfolio_users_1_8_v3
 ```
 
 Sampling benchmark:
