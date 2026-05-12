@@ -161,6 +161,27 @@ visualizer orders and colors their surfaces by `memorized_average / deck`.
 Lambda-less ADR portfolio runs are grouped as `lambda_none`; omit
 `--lambda-values` when plotting only new portfolio child artifacts.
 
+Compare per-user Pareto fronts from two or more formal run roots:
+
+```bash
+uv run python experiments/rl_scheduler/plot_pareto_run_comparison.py \
+  --series FSRS-trained=artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1 \
+  --series LSTM-trained=artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_lstm_train_portfolio_users_1_8_pop16_v1 \
+  --env lstm \
+  --scheduler fsrs6_adr \
+  --out-dir experiments/rl_scheduler/plots/adr_lstm_pareto_comparison \
+  --title-prefix "LSTM environment FSRS6 ADR Pareto comparison"
+```
+
+The Pareto comparison plotter reads each run's
+`build-pareto/build_pareto_outputs/simulation_results_retention_sweep_user_*.json`
+files and writes one PNG per user. It defaults to the same axis layout as
+`build-pareto`: memorized cards on the x-axis and study minutes per day on the
+y-axis. The first series' `fsrs6` baseline is included by default; pass
+`--no-baseline` to plot only the compared scheduler series. Each `--series`
+argument can point either at a formal run root or directly at a
+`build_pareto_outputs` directory.
+
 ## Current Main Experiments
 
 Representative profiles:
