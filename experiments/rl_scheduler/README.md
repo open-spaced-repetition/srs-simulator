@@ -76,13 +76,17 @@ experiment should continue.
   under `<output_root>/<run_id>/sweep/sweep_outputs/`; the standalone
   `run_sweep_users_batched.py --config` entrypoint still honors the TOML
   `[sweep].log_dir` shared-log setting.
-- **build-pareto/analyze-pareto**: the external efficiency frontier and Markdown
+- **build-pareto/analyze-pareto**: the external Pareto frontier and Markdown
   comparison report built from sweep logs. Formal `build-pareto` scans the
   run root so staged baselines and run-local sweep outputs are compared without
-  stale shared retention-sweep logs. Internal
-  reward, loss, acceptance rate, and promotion flags are diagnostics only; they
-  do not replace Pareto evidence. Pareto charts should be generated per user;
-  do not generate a user-aggregated Pareto plot.
+  stale shared retention-sweep logs. `analyze-pareto` uses scheduler-only HV
+  delta, HV delta / baseline HV, per-user HV delta five-number summaries, and
+  coverage-aware budget-memory gain AUC plus memory-target regret AUC as
+  primary Pareto evidence.
+  Unweighted policy-point averages of memorized cards, time, and efficiency are
+  diagnostics only. Internal reward, loss, acceptance rate, and promotion flags
+  are diagnostics only; they do not replace Pareto evidence. Pareto charts
+  should be generated per user; do not generate a user-aggregated Pareto plot.
 
 ## Standard Stage Flow
 

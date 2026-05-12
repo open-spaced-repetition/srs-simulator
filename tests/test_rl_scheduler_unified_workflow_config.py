@@ -544,6 +544,197 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertIn("### Same-user same-DR dominance", report)
         self.assertIn("| fsrs6_adr - fsrs6 | 1 | 1/1 | 0/1 | 0/1 | 0/1 | 0/1 |", report)
         self.assertIn("Loaded 2 records", report)
+        self.assertIn("### Primary hypervolume summary vs FSRS6 baseline", report)
+        self.assertIn("### Policy-point diagnostics", report)
+
+    def test_analyze_scheduler_comparison_reports_hv_and_envelope_metrics(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "pareto"
+            log_dir.mkdir()
+            (log_dir / "simulation_results_retention_sweep_user_1.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 1,
+                            "desired_retention": 0.5,
+                            "memorized_average": 100.0,
+                            "time_average": 10.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 10.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 1,
+                            "desired_retention": 0.6,
+                            "memorized_average": 150.0,
+                            "time_average": 20.0,
+                            "reviews_average": 20.0,
+                            "avg_accum_memorized_per_hour": 7.5,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 1,
+                            "desired_retention": 0.7,
+                            "memorized_average": 180.0,
+                            "time_average": 40.0,
+                            "reviews_average": 40.0,
+                            "avg_accum_memorized_per_hour": 4.5,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_adr",
+                            "user_id": 1,
+                            "desired_retention": None,
+                            "fsrs6_adr_policy": "policy/u1-a.json",
+                            "memorized_average": 120.0,
+                            "time_average": 12.0,
+                            "reviews_average": 12.0,
+                            "avg_accum_memorized_per_hour": 10.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_adr",
+                            "user_id": 1,
+                            "desired_retention": None,
+                            "fsrs6_adr_policy": "policy/u1-b.json",
+                            "memorized_average": 160.0,
+                            "time_average": 20.0,
+                            "reviews_average": 20.0,
+                            "avg_accum_memorized_per_hour": 8.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (log_dir / "simulation_results_retention_sweep_user_2.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 2,
+                            "desired_retention": 0.5,
+                            "memorized_average": 80.0,
+                            "time_average": 10.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 8.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 2,
+                            "desired_retention": 0.6,
+                            "memorized_average": 130.0,
+                            "time_average": 30.0,
+                            "reviews_average": 30.0,
+                            "avg_accum_memorized_per_hour": 4.3,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 2,
+                            "desired_retention": 0.7,
+                            "memorized_average": 160.0,
+                            "time_average": 50.0,
+                            "reviews_average": 50.0,
+                            "avg_accum_memorized_per_hour": 3.2,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_adr",
+                            "user_id": 2,
+                            "desired_retention": None,
+                            "fsrs6_adr_policy": "policy/u2-a.json",
+                            "memorized_average": 140.0,
+                            "time_average": 35.0,
+                            "reviews_average": 35.0,
+                            "avg_accum_memorized_per_hour": 4.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_adr",
+                            "user_id": 2,
+                            "desired_retention": None,
+                            "fsrs6_adr_policy": "policy/u2-b.json",
+                            "memorized_average": 170.0,
+                            "time_average": 50.0,
+                            "reviews_average": 50.0,
+                            "avg_accum_memorized_per_hour": 3.4,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            args = parse_analyze_args(
+                [
+                    "--log-dir",
+                    str(log_dir),
+                    "--env",
+                    "fsrs6",
+                    "--sched",
+                    "fsrs6,fsrs6_adr",
+                    "--comparisons",
+                    "fsrs6_adr:fsrs6",
+                    "--start-user",
+                    "1",
+                    "--end-user",
+                    "2",
+                ]
+            )
+            report = render_report(args)
+
+        self.assertIn("HV delta min", report)
+        self.assertIn(
+            "| fsrs6_adr | 2690.00 | 2825.00 | 135.00 | 5.019% | -175.00 | -175.00 | -175.00 | 310.00 | 310.00 | 4 | 2 |",
+            report,
+        )
+        self.assertIn("### Budget-memory gain AUC vs FSRS6 baseline", report)
+        self.assertIn(
+            "| fsrs6_adr | 1/2 | 3/6 | 28.571% | -5.0 | -3.030% |",
+            report,
+        )
+        self.assertIn("### Memory-target regret AUC vs FSRS6 baseline", report)
+        self.assertIn(
+            "| fsrs6_adr | 2/2 | 5/6 | 81.250% | 5.66 | 26.618% |",
+            report,
+        )
 
     def test_analyze_scheduler_comparison_manifest_keeps_exact_baseline_dr(
         self,
@@ -698,8 +889,10 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             )
             report = render_report(args)
 
-        self.assertIn("### Hypervolume vs FSRS6 baseline", report)
+        self.assertIn("### Primary hypervolume summary vs FSRS6 baseline", report)
+        self.assertIn("### Per-user hypervolume vs FSRS6 baseline", report)
         self.assertIn("| user | baseline HV | fsrs6_ap HV | HV delta |", report)
+        self.assertIn("scheduler frontier points", report)
         self.assertIn("| 1 | 0.25 | 0.75 | 0.50 | 1 |", report)
 
     def test_runner_executes_build_and_analyze_pareto_stages(self) -> None:

@@ -43,34 +43,54 @@ Provenance:
 
 ## External Pareto Results
 
-Hypervolume values below are the sum of per-user `HV delta` from
+Scheduler-only hypervolume values below are the sum of per-user `HV delta` from
 `analyze-pareto`, comparing FSRS6 ADR against the FSRS6 baseline under the same
-low-budget baseline DR manifest.
+low-budget baseline DR manifest. Average memorized/time/efficiency are now
+diagnostic-only in `analysis.md`.
 
-| environment | run | HV delta sum | HV delta / baseline HV | ADR avg memorized | ADR avg time | ADR avg efficiency | ADR frontier points |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | v3 64/64 gen20 | 114,353 | 4.110% | 6,497.3 | 47.97 | 26.84 | 128 |
-| FSRS6 | pop16 gen10 | 85,125 | 3.059% | 6,493.1 | 49.76 | 26.58 | 127 |
-| FSRS6 | pop16 gen20 | 104,884 | 3.770% | 6,553.0 | 50.42 | 25.42 | 128 |
-| FSRS6 | pop16 gen30 | 111,226 | 3.998% | 6,547.7 | 47.96 | 25.63 | 128 |
-| LSTM | v3 64/64 gen20 | 68,782 | 2.421% | 6,364.3 | 58.93 | 24.05 | 117 |
-| LSTM | pop16 gen10 | 66,041 | 2.324% | 6,384.1 | 59.46 | 24.23 | 121 |
-| LSTM | pop16 gen20 | 73,610 | 2.591% | 6,431.5 | 60.86 | 22.88 | 122 |
-| LSTM | pop16 gen30 | 70,314 | 2.475% | 6,410.0 | 58.68 | 22.84 | 119 |
+| environment | run | HV delta sum | HV delta / baseline HV | HV delta median | HV delta max | scheduler frontier points |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| FSRS6 | v3 64/64 gen20 | 109,224 | 3.926% | 7,392 | 43,351 | 128 |
+| FSRS6 | pop16 gen10 | 74,882 | 2.691% | 5,583 | 25,235 | 127 |
+| FSRS6 | pop16 gen20 | 96,880 | 3.482% | 6,327 | 37,079 | 128 |
+| FSRS6 | pop16 gen30 | 104,360 | 3.751% | 6,523 | 40,771 | 128 |
+| LSTM | v3 64/64 gen20 | 47,097 | 1.658% | 3,592 | 13,120 | 125 |
+| LSTM | pop16 gen10 | 42,718 | 1.503% | 2,981 | 14,606 | 125 |
+| LSTM | pop16 gen20 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
+| LSTM | pop16 gen30 | 52,781 | 1.858% | 3,924 | 15,470 | 125 |
+
+Target LSTM budget-memory gain AUC, target scheduler rows only. Positive values
+mean the scheduler remembers more cards at the same budget.
+
+| run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v3 64/64 gen20 | 8/8 | 104/118 | 98.562% | +3.5 | +0.052% |
+| pop16 gen10 | 8/8 | 94/111 | 98.558% | -21.8 | -0.322% |
+| pop16 gen20 | 8/8 | 92/111 | 98.428% | -2.6 | -0.038% |
+| pop16 gen30 | 8/8 | 92/111 | 98.428% | -6.0 | -0.088% |
+
+Target LSTM memory-target regret AUC, target scheduler rows only. Negative
+values mean the scheduler reaches the same memorized-card targets faster.
+
+| run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v3 64/64 gen20 | 8/8 | 110/118 | 98.266% | +2.00 | +5.090% |
+| pop16 gen10 | 8/8 | 101/111 | 97.767% | +4.48 | +11.651% |
+| pop16 gen20 | 8/8 | 102/111 | 97.854% | +2.51 | +6.420% |
+| pop16 gen30 | 8/8 | 105/111 | 98.222% | +2.78 | +7.077% |
 
 Delta from pop16 gen10 to pop16 gen20:
 
-| environment | HV delta sum change | HV delta percent-point change | avg memorized change | avg time change | avg efficiency change |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | +19,759 | +0.710 pp | +59.9 | +0.66 | -1.16 |
-| LSTM | +7,569 | +0.266 pp | +47.4 | +1.40 | -1.35 |
+| environment | HV delta sum change | HV delta percent-point change | budget-gain AUC change | target-regret AUC change |
+| --- | ---: | ---: | ---: | ---: |
+| FSRS6 | +21,998 | +0.791 pp | +24.5 | -1.32 |
+| LSTM | +13,131 | +0.462 pp | +19.2 | -1.97 |
 
 Interpretation:
 
 - Gen10 is materially undertrained versus gen20 on the target LSTM metric.
-- Gen10 has higher LSTM average efficiency than gen20 because it learns a more
-  conservative frontier, but it gives up substantial LSTM HV and memorized
-  cards.
+- The earlier average-efficiency comparison was a policy-point diagnostic; the
+  more relevant LSTM budget-gain AUC also favors gen20 by +19.2 memorized cards.
 - Gen10 also falls below the comparable 64/64 v3 run on LSTM HV, while gen20
   and gen30 both remain above it.
 
@@ -114,9 +134,9 @@ Do not promote 10 generations for the LSTM-focused pop16/off16 experiment.
 
 The 10-generation run is faster, but it cuts too much search:
 
-- LSTM HV delta sum: 66,041 for gen10 vs 73,610 for gen20
-- LSTM regression from gen20: -7,569 HV, or -10.28%
-- LSTM result also falls below the comparable 64/64 v3 run by -2,741 HV
+- LSTM HV delta sum: 42,718 for gen10 vs 55,849 for gen20
+- LSTM regression from gen20: -13,131 HV, or -23.51%
+- LSTM result also falls below the comparable 64/64 v3 run by -4,379 HV
 - Training HV is still rising quickly at generation 9
 
 The current best setting remains pop16/off16 with 20 generations. The 30-

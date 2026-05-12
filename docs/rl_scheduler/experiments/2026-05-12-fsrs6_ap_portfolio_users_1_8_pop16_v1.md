@@ -44,31 +44,50 @@ Provenance:
 
 ## External Pareto Results
 
-Hypervolume values are sums of per-user `HV delta` from `analyze-pareto`,
-comparing the trained scheduler against the same FSRS6 baseline manifest.
+Scheduler-only hypervolume values are sums of per-user `HV delta` from
+`analyze-pareto`, comparing the trained scheduler against the same FSRS6
+baseline manifest. Average memorized/time/efficiency are now diagnostic-only in
+`analysis.md`.
 
-| environment | run | HV delta sum | HV delta / baseline HV | avg memorized | avg time | avg efficiency | target frontier points |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | AP pop16 | 92,877 | 3.338% | 6,556.5 | 52.74 | 24.97 | 128 |
-| FSRS6 | ADR pop16 | 104,884 | 3.770% | 6,553.0 | 50.42 | 25.42 | 128 |
-| LSTM | AP pop16 | 70,190 | 2.470% | 6,454.4 | 63.76 | 23.12 | 119 |
-| LSTM | ADR pop16 | 73,610 | 2.591% | 6,431.5 | 60.86 | 22.88 | 122 |
+| environment | run | HV delta sum | HV delta / baseline HV | HV delta median | HV delta max | scheduler frontier points |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| FSRS6 | AP pop16 | 80,676 | 2.900% | 5,317 | 32,494 | 128 |
+| FSRS6 | ADR pop16 | 96,880 | 3.482% | 6,327 | 37,079 | 128 |
+| LSTM | AP pop16 | 45,380 | 1.597% | 2,786 | 18,515 | 127 |
+| LSTM | ADR pop16 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
+
+Target LSTM budget-memory gain AUC, target scheduler rows only. Positive values
+mean the scheduler remembers more cards at the same budget.
+
+| run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| AP pop16 | 8/8 | 96/111 | 98.692% | -3.4 | -0.051% |
+| ADR pop16 | 8/8 | 92/111 | 98.428% | -2.6 | -0.038% |
+
+Target LSTM memory-target regret AUC, target scheduler rows only. Negative
+values mean the scheduler reaches the same memorized-card targets faster.
+
+| run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| AP pop16 | 8/8 | 107/111 | 99.177% | +4.19 | +10.652% |
+| ADR pop16 | 8/8 | 102/111 | 97.854% | +2.51 | +6.420% |
 
 AP minus ADR:
 
-| environment | HV delta change | relative change | percent-point change | memorized change | time change | efficiency change |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | -12,007 | -11.45% | -0.432 pp | +3.5 | +2.32 | -0.45 |
-| LSTM | -3,419 | -4.65% | -0.120 pp | +22.9 | +2.90 | +0.24 |
+| environment | HV delta change | relative change | percent-point change | budget-gain AUC change | target-regret AUC change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| FSRS6 | -16,204 | -16.73% | -0.582 pp | -8.4 | +0.93 |
+| LSTM | -10,469 | -18.74% | -0.368 pp | -0.8 | +1.68 |
 
 Interpretation:
 
 - AP pop16 does not beat ADR pop16 on hypervolume in either evaluation
   environment.
-- The LSTM gap is small: AP is behind ADR by 3.4k HV, or 4.65% relative to ADR.
-- AP has slightly higher average memorized counts, especially on LSTM, but spends
-  more time. Hypervolume prefers the ADR frontier shape under this budget.
-- FSRS6 is the clearer loss for AP: -12.0k HV and -0.432 percentage points.
+- The LSTM gap is material: AP is behind ADR by 10.5k HV, or 18.7% relative to
+  ADR.
+- On the LSTM envelope AP is also behind ADR: -0.8 memorized cards in
+  budget-gain AUC and +1.68 minutes in target-regret AUC.
+- FSRS6 is also a clear loss for AP: -16.2k HV and -0.582 percentage points.
 
 ## AP Policy Parameter Distribution
 

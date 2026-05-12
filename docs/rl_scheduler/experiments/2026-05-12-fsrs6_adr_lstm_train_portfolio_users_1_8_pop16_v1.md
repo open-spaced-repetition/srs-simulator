@@ -43,31 +43,55 @@ Provenance:
 
 ## External Pareto Results
 
-Hypervolume values are sums of per-user `HV delta` from `analyze-pareto`,
-comparing FSRS6 ADR against the same low-budget FSRS6 baseline manifest.
+Scheduler-only hypervolume values are sums of per-user `HV delta` from
+`analyze-pareto`, comparing FSRS6 ADR against the same low-budget FSRS6
+baseline manifest. Policy point averages are now treated as diagnostics in the
+generated analysis, not as primary Pareto quality metrics.
 
-| environment | run | HV delta sum | HV delta / baseline HV | ADR avg memorized | ADR avg time | ADR avg efficiency |
+| environment | run | HV delta sum | HV delta / baseline HV | HV delta min | p25 | median | p75 | max | scheduler frontier points |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| FSRS6 | FSRS-trained pop16 gen20 | 96,880 | 3.482% | 1,238 | 1,918 | 6,327 | 9,894 | 37,079 | 128 |
+| FSRS6 | LSTM-trained pop16 gen20 | 54,706 | 1.966% | 1,205 | 1,320 | 3,497 | 4,638 | 23,991 | 124 |
+| LSTM | FSRS-trained pop16 gen20 | 55,849 | 1.966% | 733 | 1,556 | 4,110 | 7,161 | 19,119 | 125 |
+| LSTM | LSTM-trained pop16 gen20 | 91,189 | 3.209% | 1,089 | 1,547 | 3,728 | 13,221 | 38,095 | 128 |
+
+Budget-memory gain AUC integrates max-memorized gain over all FSRS6-baseline
+frontier time budgets per user. Positive values mean the scheduler remembers
+more cards at the same budget.
+
+| environment | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | FSRS-trained pop16 gen20 | 104,884 | 3.770% | 6,553.0 | 50.42 | 25.42 |
-| FSRS6 | LSTM-trained pop16 gen20 | 73,679 | 2.648% | 6,490.7 | 54.77 | 25.37 |
-| LSTM | FSRS-trained pop16 gen20 | 73,610 | 2.591% | 6,431.5 | 60.86 | 22.88 |
-| LSTM | LSTM-trained pop16 gen20 | 107,815 | 3.795% | 6,413.7 | 65.36 | 23.35 |
+| FSRS6 | FSRS-trained | 8/8 | 101/115 | 98.365% | +26.0 | +0.380% |
+| FSRS6 | LSTM-trained | 8/8 | 98/115 | 97.778% | -2.5 | -0.037% |
+| LSTM | FSRS-trained | 8/8 | 92/111 | 98.428% | -2.6 | -0.038% |
+| LSTM | LSTM-trained | 8/8 | 93/111 | 97.837% | +9.5 | +0.141% |
+
+Memory-target regret AUC integrates min-time regret over all FSRS6-baseline
+frontier memory targets per user. Negative values mean the scheduler reaches the
+same memorized-card targets faster.
+
+| environment | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| FSRS6 | FSRS-trained | 8/8 | 106/115 | 98.094% | -1.15 | -4.155% |
+| FSRS6 | LSTM-trained | 8/8 | 105/115 | 97.773% | +1.37 | +4.933% |
+| LSTM | FSRS-trained | 8/8 | 102/111 | 97.854% | +2.51 | +6.420% |
+| LSTM | LSTM-trained | 8/8 | 103/111 | 97.573% | -1.08 | -2.744% |
 
 LSTM-trained minus FSRS-trained:
 
-| environment | HV delta change | relative change | percent-point change | ADR memorized change | ADR time change | ADR efficiency change |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | -31,205 | -29.75% | -1.122 pp | -62.3 | +4.35 | -0.05 |
-| LSTM | +34,206 | +46.47% | +1.204 pp | -17.8 | +4.50 | +0.47 |
+| environment | HV delta change | relative change | percent-point change | budget-gain AUC change | target-regret AUC change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| FSRS6 | -42,174 | -43.53% | -1.516 pp | -28.5 | +2.52 |
+| LSTM | +35,340 | +63.28% | +1.244 pp | +12.1 | -3.59 |
 
 Interpretation:
 
 - Training directly in LSTM substantially improves the target LSTM external HV:
-  +34.2k HV, or +46.5% relative to the FSRS-trained pop16 run.
-- The gain trades off FSRS6 external performance: FSRS6 HV drops by 31.2k.
-- The all-point average memorized count is slightly lower in LSTM, while HV is
-  much higher. This means the LSTM-trained portfolio redistributes frontier
-  coverage rather than simply increasing every point.
+  +35.3k HV, or +63.3% relative to the FSRS-trained pop16 run.
+- The gain trades off FSRS6 external performance: FSRS6 HV drops by 42.2k.
+- On the LSTM external envelope, LSTM training moves budget-gain AUC from -2.6
+  to +9.5 memorized cards and target-regret AUC from +2.51 minutes to -1.08
+  minutes.
 
 ## Policy Parameter Distribution
 
@@ -184,9 +208,9 @@ contribute about 6% of final training HV. This does not suggest cutting below
 For the stated priority, LSTM-trained FSRS6 ADR is better than the FSRS-trained
 pop16 baseline.
 
-- Target LSTM HV improves from 73,610 to 107,815, a +34,206 gain.
-- Relative LSTM HV improvement increases from 2.591% to 3.795%.
-- FSRS6 HV regresses from 104,884 to 73,679, so the learned policy is more
+- Target LSTM HV improves from 55,849 to 91,189, a +35,340 gain.
+- Relative LSTM HV improvement increases from 1.966% to 3.209%.
+- FSRS6 HV regresses from 96,880 to 54,706, so the learned policy is more
   environment-specific.
 - Policy parameters differ materially, especially lower stability slope
   (`c_s`) and much less negative difficulty curvature (`c_d2`).
