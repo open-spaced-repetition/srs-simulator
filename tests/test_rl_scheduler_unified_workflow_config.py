@@ -306,9 +306,11 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(
             config.baseline_dr_selection.manifest,
             Path(
-                "artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr.json"
+                "artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json"
             ),
         )
+        self.assertEqual(config.baseline_dr_selection.population_size, 16)
+        self.assertEqual(config.baseline_dr_selection.generations, 5)
         self.assertEqual(config.training_portfolio["population_size"], 64)
         self.assertEqual(config.training_portfolio["offspring_size"], 64)
         self.assertEqual(config.training_portfolio["portfolio_size"], 16)

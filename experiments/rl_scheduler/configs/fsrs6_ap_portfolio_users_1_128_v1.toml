@@ -155,12 +155,12 @@ stage_mode = "copy"
 environments = ["fsrs6", "lstm"]
 
 [baseline_dr_selection]
-manifest = "artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_128_16dr.json"
+manifest = "artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_128_16dr_pop16_gen5.json"
 selection_environment = "fsrs6"
 target_count = 16
 reference = "uniform_anchor"
-population_size = 32
-generations = 10
+population_size = 16
+generations = 5
 
 [simulation]
 engine = "batched"

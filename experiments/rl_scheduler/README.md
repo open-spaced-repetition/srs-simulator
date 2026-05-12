@@ -259,13 +259,15 @@ Portfolio baseline selection:
   to the manifest by default, with one `generation_evaluated` record per user
   and CMA-ES generation containing the current hypervolume statistics. It
   evaluates multiple users in the same GPU batch up to `--max-lanes-per-batch`
-  lanes, defaulting to 8192.
+  lanes, defaulting to 8192. Portfolio profiles use the low-budget selector
+  setting (`population_size = 16`, `generations = 5`) so the per-user baseline
+  DR search budget stays close to the portfolio training lane budget.
 - Generate the manifest before `stage-baseline`, then run a manifest-driven
   FSRS6 baseline sweep across `fsrs6,lstm`, for example:
 
 ```bash
 uv run python experiments/rl_scheduler/select_fsrs6_baseline_drs.py --config experiments/rl_scheduler/configs/fsrs6_adr_linear_portfolio_users_1_8.toml
-uv run python experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 8 --env fsrs6,lstm --sched fsrs6 --fsrs6-dr-manifest artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr.json --log-dir logs/retention_sweep --log-layout user --seed 42 --no-progress
+uv run python experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --end-user 8 --env fsrs6,lstm --sched fsrs6 --fsrs6-dr-manifest artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json --log-dir logs/retention_sweep --log-layout user --seed 42 --no-progress
 ```
 
 Sampling benchmark:
