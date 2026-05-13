@@ -27,7 +27,10 @@ from simulator.math.fsrs_batch import (
     fsrs6_stability_after_success as fsrs6_stability_after_success_batch,
     fsrs6_stability_short_term as fsrs6_stability_short_term_batch,
 )
-from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.fsrs6_adr_policy import (
+    FEATURE_VERSION_LOG_POLY_TIME,
+    FSRS6ADRPolicy,
+)
 
 if TYPE_CHECKING:
     import torch
@@ -51,20 +54,24 @@ class FSRS6ADRScheduler(Scheduler):
         policy_json: str | Path,
         fsrs_weights: Optional[Sequence[float]] = None,
         priority_mode: str = "low_retrievability",
+        simulation_days: float | None = None,
     ) -> None:
         if priority_mode not in self.PRIORITY_MODES:
             raise ValueError(f"Unknown priority_mode '{priority_mode}'")
         self.policy = FSRS6ADRPolicy.from_json(policy_json)
+        if simulation_days is not None and simulation_days <= 0.0:
+            raise ValueError("simulation_days must be positive when provided.")
         weights = resolve_fsrs6_weights(fsrs_weights)
         if len(weights) != 21:
             raise ValueError("FSRS6ADRScheduler expects 21 FSRS-6 weights.")
         self.params = FSRS6Params(tuple(float(w) for w in weights), bounds=Bounds())
         self.priority_mode = priority_mode
+        self.simulation_days = float(simulation_days) if simulation_days else None
 
     def init_card(self, card_view: CardView, rating: int, day: float):
         s, d = fsrs6_init_state(self.params, rating)
         state = {"s": s, "d": d}
-        interval = self._interval_for_state(state)
+        interval = self._interval_for_state(state, day=day)
         return interval, state
 
     def schedule(self, card_view: CardView, rating: int, elapsed: float, day: float):
@@ -89,7 +96,7 @@ class FSRS6ADRScheduler(Scheduler):
             "s": _clamp_s(self.params.bounds, s),
             "d": _clamp_d(self.params.bounds, d),
         }
-        return self._interval_for_state(state), state
+        return self._interval_for_state(state, day=day), state
 
     def review_priority(self, card_view: CardView, day: float) -> Sequence[float]:
         state: dict[str, float] = card_view.scheduler_state or {}
@@ -110,10 +117,19 @@ class FSRS6ADRScheduler(Scheduler):
             return (-float(d), card_view.due, card_view.id)
         return super().review_priority(card_view, day)
 
-    def _interval_for_state(self, state: dict[str, Any]) -> float:
+    def _remaining_time_norm(self, day: float) -> float | None:
+        if self.simulation_days is None:
+            return None
+        return min(1.0, max(0.0, (self.simulation_days - day) / self.simulation_days))
+
+    def _interval_for_state(self, state: dict[str, Any], *, day: float) -> float:
         stability = float(state["s"])
         difficulty = float(state["d"])
-        retention = self.policy.evaluate(stability, difficulty)
+        retention = self.policy.evaluate(
+            stability,
+            difficulty,
+            remaining_time_norm=self._remaining_time_norm(day),
+        )
         return fsrs6_next_interval(self.params, stability, retention)
 
 
@@ -144,6 +160,7 @@ class FSRS6ADRBatchedSchedulerOps:
         self._bounds = scheduler.params.bounds
         self._policy = scheduler.policy
         self._feature_count = scheduler.policy.feature_count
+        self._feature_version = scheduler.policy.feature_version
         self._coefficients = torch.tensor(
             self._policy.coefficients, device=device, dtype=dtype
         )
@@ -165,6 +182,17 @@ class FSRS6ADRBatchedSchedulerOps:
             self._bounds.d_max,
         )
         self._priority_mode = scheduler.priority_mode
+        self._remaining_time_norm = torch.tensor(1.0, device=device, dtype=dtype)
+
+    def set_time_context(self, *, current_day: float, simulation_days: float) -> None:
+        if simulation_days <= 0.0:
+            raise ValueError("simulation_days must be positive.")
+        value = min(1.0, max(0.0, (simulation_days - current_day) / simulation_days))
+        self._remaining_time_norm = self._torch.tensor(
+            value,
+            device=self.device,
+            dtype=self.dtype,
+        )
 
     def init_state(self, deck_size: int) -> FSRS6ADRBatchedState:
         s = self._torch.full(
@@ -290,6 +318,21 @@ class FSRS6ADRBatchedSchedulerOps:
             return self._retention_min + (
                 self._retention_max - self._retention_min
             ) * self._torch.sigmoid(logit)
+        if self._feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+            t_norm = self._remaining_time_norm
+            logit = (
+                logit
+                + self._coefficients[3] * t_norm
+                + self._coefficients[4] * s_norm * d_norm
+                + self._coefficients[5] * s_norm * t_norm
+                + self._coefficients[6] * d_norm * t_norm
+                + self._coefficients[7] * s_norm * s_norm
+                + self._coefficients[8] * d_norm * d_norm
+                + self._coefficients[9] * t_norm * t_norm
+            )
+            return self._retention_min + (
+                self._retention_max - self._retention_min
+            ) * self._torch.sigmoid(logit)
         logit = (
             logit
             + self._coefficients[3] * s_norm * d_norm
@@ -345,6 +388,7 @@ class FSRS6ADRBatchSchedulerOps:
         self._bounds = bounds
         self._policy = policy
         self._feature_count = policy.feature_count
+        self._feature_version = policy.feature_version
         if coefficients is None:
             self._coefficients = torch.tensor(
                 policy.coefficients, device=device, dtype=dtype
@@ -375,6 +419,17 @@ class FSRS6ADRBatchSchedulerOps:
             bounds.d_max,
         )
         self._priority_mode = priority_mode
+        self._remaining_time_norm = torch.tensor(1.0, device=device, dtype=dtype)
+
+    def set_time_context(self, *, current_day: float, simulation_days: float) -> None:
+        if simulation_days <= 0.0:
+            raise ValueError("simulation_days must be positive.")
+        value = min(1.0, max(0.0, (simulation_days - current_day) / simulation_days))
+        self._remaining_time_norm = self._torch.tensor(
+            value,
+            device=self.device,
+            dtype=self.dtype,
+        )
 
     def init_state(self, user_count: int, deck_size: int) -> FSRS6ADRBatchState:
         s = self._torch.full(
@@ -521,12 +576,25 @@ class FSRS6ADRBatchSchedulerOps:
                 + coefficients[:, 2] * d_norm
             )
             if self._feature_count != 3:
-                logit = (
-                    logit
-                    + coefficients[:, 3] * s_norm * d_norm
-                    + coefficients[:, 4] * s_norm * s_norm
-                    + coefficients[:, 5] * d_norm * d_norm
-                )
+                if self._feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+                    t_norm = self._remaining_time_norm
+                    logit = (
+                        logit
+                        + coefficients[:, 3] * t_norm
+                        + coefficients[:, 4] * s_norm * d_norm
+                        + coefficients[:, 5] * s_norm * t_norm
+                        + coefficients[:, 6] * d_norm * t_norm
+                        + coefficients[:, 7] * s_norm * s_norm
+                        + coefficients[:, 8] * d_norm * d_norm
+                        + coefficients[:, 9] * t_norm * t_norm
+                    )
+                else:
+                    logit = (
+                        logit
+                        + coefficients[:, 3] * s_norm * d_norm
+                        + coefficients[:, 4] * s_norm * s_norm
+                        + coefficients[:, 5] * d_norm * d_norm
+                    )
         else:
             logit = (
                 self._coefficients[0]
@@ -534,12 +602,25 @@ class FSRS6ADRBatchSchedulerOps:
                 + self._coefficients[2] * d_norm
             )
             if self._feature_count != 3:
-                logit = (
-                    logit
-                    + self._coefficients[3] * s_norm * d_norm
-                    + self._coefficients[4] * s_norm * s_norm
-                    + self._coefficients[5] * d_norm * d_norm
-                )
+                if self._feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+                    t_norm = self._remaining_time_norm
+                    logit = (
+                        logit
+                        + self._coefficients[3] * t_norm
+                        + self._coefficients[4] * s_norm * d_norm
+                        + self._coefficients[5] * s_norm * t_norm
+                        + self._coefficients[6] * d_norm * t_norm
+                        + self._coefficients[7] * s_norm * s_norm
+                        + self._coefficients[8] * d_norm * d_norm
+                        + self._coefficients[9] * t_norm * t_norm
+                    )
+                else:
+                    logit = (
+                        logit
+                        + self._coefficients[3] * s_norm * d_norm
+                        + self._coefficients[4] * s_norm * s_norm
+                        + self._coefficients[5] * d_norm * d_norm
+                    )
         return self._retention_min + (
             self._retention_max - self._retention_min
         ) * self._torch.sigmoid(logit)

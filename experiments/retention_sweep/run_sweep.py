@@ -51,7 +51,8 @@ def parse_args() -> argparse.Namespace:
         env_help="Comma-separated list of environments to sweep.",
         sched_help=(
             "Comma-separated list of schedulers to sweep "
-            "(include sspmmc, fsrs6_adr, fsrs6_default_adr, or anki_sm2_ap "
+            "(include sspmmc, fsrs6_adr, fsrs6_adr_time, fsrs6_default_adr, "
+            "or anki_sm2_ap "
             "to run policies; use fixed@<days> for fixed intervals)."
         ),
     )
@@ -116,8 +117,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr "
-            "or fsrs6_default_adr."
+            "Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr, "
+            "fsrs6_adr_time, or fsrs6_default_adr."
         ),
     )
     parser.add_argument(
@@ -196,7 +197,7 @@ def _progress_label(args: argparse.Namespace) -> str:
     if args.scheduler == "sspmmc":
         if args.sspmmc_policy:
             label = f"{label}:{args.sspmmc_policy.stem}"
-    elif args.scheduler in {"fsrs6_adr", "fsrs6_default_adr"}:
+    elif args.scheduler in {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}:
         if args.fsrs6_adr_policy:
             label = f"{label}:{args.fsrs6_adr_policy.stem}"
     elif args.scheduler == "anki_sm2_ap":
@@ -437,11 +438,17 @@ def main() -> None:
     fsrs6_adr_scheduler_specs = [
         spec
         for spec in scheduler_specs
-        if spec[0] in {"fsrs6_adr", "fsrs6_default_adr"}
+        if spec[0] in {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
     ]
     has_fsrs6_adr = bool(fsrs6_adr_scheduler_specs)
     for name, _, _ in scheduler_specs:
-        if name in {"sspmmc", "fsrs6_adr", "fsrs6_default_adr", "fixed"}:
+        if name in {
+            "sspmmc",
+            "fsrs6_adr",
+            "fsrs6_adr_time",
+            "fsrs6_default_adr",
+            "fixed",
+        }:
             continue
         if scheduler_uses_desired_retention(name):
             if name not in dr_schedulers:
@@ -468,7 +475,8 @@ def main() -> None:
         raise SystemExit("No SSP-MMC policies found. Provide --sspmmc-policy-dir.")
     if run_fsrs6_adr and args.fsrs6_adr_policy is None:
         raise SystemExit(
-            "--sched fsrs6_adr or fsrs6_default_adr requires --fsrs6-adr-policy."
+            "--sched fsrs6_adr, fsrs6_adr_time, or fsrs6_default_adr "
+            "requires --fsrs6-adr-policy."
         )
     if "anki_sm2_ap" in non_dr_schedulers and args.anki_sm2_ap_policy is None:
         raise SystemExit("--sched anki_sm2_ap requires --anki-sm2-ap-policy.")

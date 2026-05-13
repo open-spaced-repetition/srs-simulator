@@ -68,7 +68,7 @@ class BatchedSweepContext:
 
 
 _DR_SCHEDULERS = {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}
-_ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
+_ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
 _LOG_LAYOUTS = {"user", "sweep"}
 
 
@@ -456,7 +456,10 @@ def _max_lanes_per_batch_for_environment(
 
 def _same_adr_policy_bounds(lhs: FSRS6ADRPolicy, rhs: FSRS6ADRPolicy) -> bool:
     return (
-        math.isclose(lhs.retention_min, rhs.retention_min, rel_tol=0.0, abs_tol=1e-9)
+        lhs.feature_version == rhs.feature_version
+        and math.isclose(
+            lhs.retention_min, rhs.retention_min, rel_tol=0.0, abs_tol=1e-9
+        )
         and math.isclose(
             lhs.retention_max, rhs.retention_max, rel_tol=0.0, abs_tol=1e-9
         )
@@ -663,7 +666,7 @@ def _build_mixed_scheduler_ops(
                 weight_source = fsrs_default_weights
             else:
                 if fsrs_weights is None:
-                    raise ValueError("Expected FSRS-6 weights for fsrs6_adr scheduler.")
+                    raise ValueError(f"Expected FSRS-6 weights for {name} scheduler.")
                 weight_source = fsrs_weights
             policy_paths: list[Path] = []
             for lane in group_lanes:
@@ -680,8 +683,9 @@ def _build_mixed_scheduler_ops(
             for policy_path, candidate in zip(policy_paths, policies, strict=True):
                 if not _same_adr_policy_bounds(candidate, policy):
                     raise ValueError(
-                        "Batched fsrs6_adr sweep requires identical policy retention "
-                        f"and FSRS bounds. Mismatch at {policy_path}."
+                        f"Batched {name} sweep requires identical policy feature "
+                        "version, retention bounds, and FSRS bounds. "
+                        f"Mismatch at {policy_path}."
                     )
             coefficients = torch.tensor(
                 [candidate.coefficients for candidate in policies],
@@ -863,7 +867,10 @@ def run_batch_core(
         needs_fsrs_weights = (
             environment == "fsrs6"
             or "fsrs6" in scheduler_names
-            or "fsrs6_adr" in scheduler_names
+            or bool(
+                _ADR_POLICY_SCHEDULERS.intersection(scheduler_names)
+                - {"fsrs6_default_adr"}
+            )
         )
         needs_fsrs_default = (
             environment == "fsrs6_default"

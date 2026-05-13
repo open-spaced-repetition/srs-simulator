@@ -60,13 +60,19 @@ COMMAND_TIMEOUT_EXIT_CODE = 124
 TRAIN_OVERFIT_GATE_PASS_FRACTION = 0.8
 RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
     "fsrs6_adr",
+    "fsrs6_adr_time",
     "fsrs6_default_adr",
     "fsrs6_ap",
     "anki_sm2_ap",
 }
-FSRS6_ADR_POLICY_SOURCE_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
+FSRS6_ADR_POLICY_SOURCE_SCHEDULERS = {
+    "fsrs6_adr",
+    "fsrs6_adr_time",
+    "fsrs6_default_adr",
+}
 PORTFOLIO_CHILD_ACTION_SPACES = {
     "sd_retention_function_portfolio_child",
+    "sdt_retention_function_portfolio_child",
     "fsrs6_ap_weight_delta_portfolio_child",
     "anki_sm2_ap_params_portfolio_child",
 }
@@ -4759,6 +4765,30 @@ def _sweep_batch_lane_result(job: SweepBatchLane) -> dict[str, Any]:
     }
 
 
+def _same_fsrs6_adr_policy_shape(lhs: Any, rhs: Any) -> bool:
+    lhs_bounds = lhs.bounds
+    rhs_bounds = rhs.bounds
+    return (
+        lhs.feature_version == rhs.feature_version
+        and math.isclose(
+            lhs.retention_min,
+            rhs.retention_min,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+        and math.isclose(
+            lhs.retention_max,
+            rhs.retention_max,
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+        and math.isclose(lhs_bounds.s_min, rhs_bounds.s_min, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs_bounds.s_max, rhs_bounds.s_max, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs_bounds.d_min, rhs_bounds.d_min, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs_bounds.d_max, rhs_bounds.d_max, rel_tol=0.0, abs_tol=1e-9)
+    )
+
+
 def _run_batched_sweep_jobs(
     *,
     config: ExperimentConfig,
@@ -4857,11 +4887,12 @@ def _run_batched_sweep_jobs(
     for lane_index, job in enumerate(jobs):
         lane_index_by_scheduler.setdefault(job.scheduler_name, []).append(lane_index)
     scheduler_names = set(lane_index_by_scheduler)
+    fit_fsrs_adr_schedulers = FSRS6_ADR_POLICY_SOURCE_SCHEDULERS - {"fsrs6_default_adr"}
     benchmark_root = resolve_benchmark_root(repo_root, None).resolve()
     needs_fit_fsrs_weights = (
         config.simulation.environment == "fsrs6"
         or "fsrs6" in scheduler_names
-        or "fsrs6_adr" in scheduler_names
+        or bool(fit_fsrs_adr_schedulers & scheduler_names)
     )
     fsrs_weights: torch.Tensor | None = None
     if needs_fit_fsrs_weights:
@@ -4950,20 +4981,10 @@ def _run_batched_sweep_jobs(
         policies = [FSRS6ADRPolicy.from_json(path) for path in adr_policy_paths]
         template = policies[0]
         for policy in policies[1:]:
-            if not math.isclose(
-                policy.retention_min,
-                template.retention_min,
-                rel_tol=0.0,
-                abs_tol=1e-9,
-            ) or not math.isclose(
-                policy.retention_max,
-                template.retention_max,
-                rel_tol=0.0,
-                abs_tol=1e-9,
-            ):
+            if not _same_fsrs6_adr_policy_shape(policy, template):
                 raise ValueError(
                     f"Batched {adr_scheduler_name} sweep requires identical policy "
-                    "retention bounds."
+                    "feature version, retention bounds, and FSRS bounds."
                 )
         coefficients = torch.tensor(
             [policy.coefficients for policy in policies],
@@ -4977,7 +4998,9 @@ def _run_batched_sweep_jobs(
             )
         else:
             if fsrs_weights is None:
-                raise ValueError("Batched fsrs6_adr scheduler requires FSRS-6 weights.")
+                raise ValueError(
+                    f"Batched {adr_scheduler_name} scheduler requires FSRS-6 weights."
+                )
             scheduler_weights = fsrs_weights.to(device)
         scheduler_groups.append(
             _MixedSchedulerGroup(

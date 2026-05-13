@@ -21,6 +21,7 @@ from experiments.rl_scheduler.policy_search_common import (
 )
 from simulator.fsrs6_adr_policy import (
     FEATURE_VERSION_LOG_LINEAR,
+    FEATURE_VERSION_LOG_POLY_TIME,
     FSRS6ADRPolicy,
 )
 
@@ -33,6 +34,12 @@ class TrainFSRS6ADRConfigTests(unittest.TestCase):
         self.assertEqual(
             _policy_feature_version({"feature_version": FEATURE_VERSION_LOG_LINEAR}),
             FEATURE_VERSION_LOG_LINEAR,
+        )
+
+    def test_policy_feature_version_accepts_time_variant(self) -> None:
+        self.assertEqual(
+            _policy_feature_version({"feature_version": FEATURE_VERSION_LOG_POLY_TIME}),
+            FEATURE_VERSION_LOG_POLY_TIME,
         )
 
     def test_policy_feature_version_rejects_unknown_variant(self) -> None:

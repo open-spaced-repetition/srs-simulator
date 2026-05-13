@@ -11,11 +11,13 @@ from simulator.math.fsrs import Bounds
 
 FEATURE_VERSION_LOG_POLY = "fsrs6_adr_log_poly_v1"
 FEATURE_VERSION_LOG_LINEAR = "fsrs6_adr_log_linear_v1"
+FEATURE_VERSION_LOG_POLY_TIME = "fsrs6_adr_log_poly_time_v1"
 FEATURE_VERSION = FEATURE_VERSION_LOG_POLY
 FEATURE_COUNT = 6
 FEATURE_COUNTS = {
     FEATURE_VERSION_LOG_POLY: 6,
     FEATURE_VERSION_LOG_LINEAR: 3,
+    FEATURE_VERSION_LOG_POLY_TIME: 10,
 }
 
 
@@ -139,12 +141,23 @@ class FSRS6ADRPolicy:
             encoding="utf-8",
         )
 
-    def evaluate(self, stability: float, difficulty: float) -> float:
+    @property
+    def uses_remaining_time(self) -> bool:
+        return self.feature_version == FEATURE_VERSION_LOG_POLY_TIME
+
+    def evaluate(
+        self,
+        stability: float,
+        difficulty: float,
+        *,
+        remaining_time_norm: float | None = None,
+    ) -> float:
         features = policy_features(
             stability,
             difficulty,
             self.bounds,
             feature_version=self.feature_version,
+            remaining_time_norm=remaining_time_norm,
         )
         logit = sum(
             coef * feature for coef, feature in zip(self.coefficients, features)
@@ -172,17 +185,47 @@ def log_linear_features(
     return (1.0, x_s, x_d)
 
 
+def log_poly_time_features(
+    stability: float,
+    difficulty: float,
+    remaining_time_norm: float | None,
+    bounds: Bounds = Bounds(),
+) -> tuple[float, float, float, float, float, float, float, float, float, float]:
+    x_s, x_d = _normalized_inputs(stability, difficulty, bounds)
+    x_t = _normalized_remaining_time(remaining_time_norm)
+    return (
+        1.0,
+        x_s,
+        x_d,
+        x_t,
+        x_s * x_d,
+        x_s * x_t,
+        x_d * x_t,
+        x_s * x_s,
+        x_d * x_d,
+        x_t * x_t,
+    )
+
+
 def policy_features(
     stability: float,
     difficulty: float,
     bounds: Bounds = Bounds(),
     *,
     feature_version: str = FEATURE_VERSION,
+    remaining_time_norm: float | None = None,
 ) -> tuple[float, ...]:
     if feature_version == FEATURE_VERSION_LOG_POLY:
         return log_poly_features(stability, difficulty, bounds)
     if feature_version == FEATURE_VERSION_LOG_LINEAR:
         return log_linear_features(stability, difficulty, bounds)
+    if feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+        return log_poly_time_features(
+            stability,
+            difficulty,
+            remaining_time_norm,
+            bounds,
+        )
     _feature_count(feature_version)
     raise AssertionError("unreachable")
 
@@ -207,6 +250,15 @@ def _normalized_inputs(
     return x_s, x_d
 
 
+def _normalized_remaining_time(value: float | None) -> float:
+    if value is None:
+        return 1.0
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("remaining_time_norm must be finite.")
+    return min(1.0, max(0.0, result))
+
+
 def _feature_count(feature_version: str) -> int:
     try:
         return FEATURE_COUNTS[feature_version]
@@ -221,6 +273,8 @@ def _feature_count(feature_version: str) -> int:
 def _default_title(feature_version: str) -> str:
     if feature_version == FEATURE_VERSION_LOG_LINEAR:
         return "FSRS6 ADR log linear"
+    if feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+        return "FSRS6 ADR log polynomial with remaining time"
     _feature_count(feature_version)
     return "FSRS6 ADR log polynomial"
 
@@ -259,9 +313,11 @@ __all__ = [
     "FEATURE_VERSION",
     "FEATURE_VERSION_LOG_LINEAR",
     "FEATURE_VERSION_LOG_POLY",
+    "FEATURE_VERSION_LOG_POLY_TIME",
     "FSRS6ADRPolicy",
     "feature_count",
     "log_linear_features",
     "log_poly_features",
+    "log_poly_time_features",
     "policy_features",
 ]

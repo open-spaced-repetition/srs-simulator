@@ -57,7 +57,7 @@ from experiments.rl_scheduler.portfolio_training_common import (
 from simulator.batched_engine.multiuser_engine import simulate_multiuser
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
-from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.fsrs6_adr_policy import FEATURE_VERSION_LOG_POLY_TIME, FSRS6ADRPolicy
 from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 
@@ -605,7 +605,10 @@ def _write_portfolio_artifacts(
     )
     if effective_feature_version is None:
         raise ValueError("feature_version is required for ADR portfolio artifacts.")
-    scheduler_name = _scheduler_name_for_settings(settings)
+    scheduler_name = _scheduler_name_for_settings(
+        settings,
+        feature_version=effective_feature_version,
+    )
     portfolio_id = _portfolio_id(
         user_id=result.job.user_id,
         seed=config.seed,
@@ -660,7 +663,9 @@ def _write_portfolio_artifacts(
                 "seed": config.seed,
                 "policy_path": "policy.json",
                 "feature_version": effective_feature_version,
-                "action_space": "sd_retention_function_portfolio_child",
+                "action_space": _action_space_for_feature_version(
+                    effective_feature_version
+                ),
                 "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
                 "code_commit": _git_commit(),
                 "baseline_desired_retention": None,
@@ -822,16 +827,29 @@ def _generator_for_job(
 
 
 def _portfolio_id(*, user_id: int, seed: int, scheduler_name: str = "fsrs6_adr") -> str:
-    prefix = (
-        "fsrs6-default-adr" if scheduler_name == "fsrs6_default_adr" else "fsrs6-adr"
-    )
+    prefix = {
+        "fsrs6_default_adr": "fsrs6-default-adr",
+        "fsrs6_adr_time": "fsrs6-adr-time",
+    }.get(scheduler_name, "fsrs6-adr")
     return f"{prefix}-portfolio-user-{user_id}-seed-{seed}"
 
 
-def _scheduler_name_for_settings(settings: PolicySearchSettings) -> str:
+def _scheduler_name_for_settings(
+    settings: PolicySearchSettings,
+    *,
+    feature_version: str | None = None,
+) -> str:
     if settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT:
         return "fsrs6_default_adr"
+    if feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+        return "fsrs6_adr_time"
     return "fsrs6_adr"
+
+
+def _action_space_for_feature_version(feature_version: str) -> str:
+    if feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+        return "sdt_retention_function_portfolio_child"
+    return "sd_retention_function_portfolio_child"
 
 
 def _zero_metrics() -> CandidateMetrics:

@@ -67,6 +67,15 @@ class MixedBatchSchedulerOps:
         )
         return MixedBatchSchedulerState(states=states)
 
+    def set_time_context(self, *, current_day: float, simulation_days: float) -> None:
+        for group in self._groups:
+            setter = getattr(group.ops, "set_time_context", None)
+            if setter is not None:
+                setter(
+                    current_day=current_day,
+                    simulation_days=simulation_days,
+                )
+
     def review_priority(
         self,
         state: MixedBatchSchedulerState,

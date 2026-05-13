@@ -189,11 +189,19 @@ SCHEDULER_FACTORIES = {
         policy_json=_require_fsrs6_adr_policy(args.fsrs6_adr_policy),
         fsrs_weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
         priority_mode=args.scheduler_priority,
+        simulation_days=args.days,
+    ),
+    "fsrs6_adr_time": lambda args: FSRS6ADRScheduler(
+        policy_json=_require_fsrs6_adr_policy(args.fsrs6_adr_policy),
+        fsrs_weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
+        priority_mode=args.scheduler_priority,
+        simulation_days=args.days,
     ),
     "fsrs6_default_adr": lambda args: FSRS6ADRScheduler(
         policy_json=_require_fsrs6_adr_policy(args.fsrs6_adr_policy),
         fsrs_weights=None,
         priority_mode=args.scheduler_priority,
+        simulation_days=args.days,
     ),
     "fsrs6_ap": lambda args: FSRS6APScheduler(
         policy_json=_require_fsrs6_ap_policy(args.fsrs6_ap_policy),
@@ -384,8 +392,8 @@ def main() -> None:
         type=Path,
         default=None,
         help=(
-            "Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr "
-            "or fsrs6_default_adr."
+            "Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr, "
+            "fsrs6_adr_time, or fsrs6_default_adr."
         ),
     )
     parser.add_argument(

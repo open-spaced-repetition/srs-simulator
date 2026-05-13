@@ -30,11 +30,12 @@ from simulator.experiment_infra.baseline_dr_selection import (
 
 RUN_ID_SCOPED_SCHEDULERS = {
     "fsrs6_adr",
+    "fsrs6_adr_time",
     "fsrs6_default_adr",
     "fsrs6_ap",
     "anki_sm2_ap",
 }
-ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
+ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
     re.IGNORECASE,

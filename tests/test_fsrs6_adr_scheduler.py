@@ -18,7 +18,14 @@ from simulator.math.fsrs import Bounds
 from simulator.fsrs6_adr_policy import (
     FEATURE_VERSION_LOG_LINEAR as SA_FEATURE_VERSION_LOG_LINEAR,
 )
+from simulator.fsrs6_adr_policy import (
+    FEATURE_VERSION_LOG_POLY_TIME as SA_FEATURE_VERSION_LOG_POLY_TIME,
+)
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.batched_engine.mixed_scheduler import (
+    MixedBatchSchedulerOps,
+    MixedSchedulerGroup,
+)
 from simulator.schedulers.fsrs import (
     FSRS3BatchSchedulerOps,
     FSRS6BatchSchedulerOps,
@@ -102,6 +109,35 @@ class FSRS6ADRSchedulerTests(unittest.TestCase):
         self.assertEqual(loaded.feature_count, 3)
         self.assertEqual(len(loaded.coefficients), 3)
 
+    def test_time_policy_round_trips_feature_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_path = Path(tmp) / "policy.json"
+            FSRS6ADRPolicy.baseline(
+                desired_retention=0.9,
+                retention_min=0.5,
+                retention_max=0.98,
+                feature_version=SA_FEATURE_VERSION_LOG_POLY_TIME,
+            ).write_json(policy_path)
+
+            loaded = FSRS6ADRPolicy.from_json(policy_path)
+
+        self.assertEqual(loaded.feature_version, SA_FEATURE_VERSION_LOG_POLY_TIME)
+        self.assertEqual(loaded.feature_count, 10)
+        self.assertEqual(len(loaded.coefficients), 10)
+
+    def test_time_policy_uses_normalized_remaining_time_feature(self) -> None:
+        policy = FSRS6ADRPolicy(
+            coefficients=(0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            retention_min=0.5,
+            retention_max=0.98,
+            feature_version=SA_FEATURE_VERSION_LOG_POLY_TIME,
+        )
+
+        early = policy.evaluate(1.0, 5.0, remaining_time_norm=1.0)
+        late = policy.evaluate(1.0, 5.0, remaining_time_norm=0.0)
+
+        self.assertGreater(early, late)
+
     def test_policy_round_trips_null_baseline_desired_retention(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "policy.json"
@@ -163,6 +199,37 @@ class FSRS6ADRSchedulerTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(adr_interval, fsrs_interval))
 
+    def test_event_time_policy_uses_simulation_day_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_path = Path(tmp) / "policy.json"
+            FSRS6ADRPolicy(
+                coefficients=(
+                    0.0,
+                    0.0,
+                    0.0,
+                    4.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ),
+                retention_min=0.5,
+                retention_max=0.98,
+                feature_version=SA_FEATURE_VERSION_LOG_POLY_TIME,
+            ).write_json(policy_path)
+            scheduler = FSRS6ADRScheduler(
+                policy_json=policy_path,
+                fsrs_weights=None,
+                simulation_days=10.0,
+            )
+
+            early_interval, _ = scheduler.init_card(_view(None), 3, 0.0)
+            late_interval, _ = scheduler.init_card(_view(None), 3, 10.0)
+
+        self.assertLess(early_interval, late_interval)
+
     def test_batch_ops_accept_per_user_coefficients(self) -> None:
         policy = FSRS6ADRPolicy.baseline(desired_retention=0.9)
         weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
@@ -191,6 +258,86 @@ class FSRS6ADRSchedulerTests(unittest.TestCase):
         )
 
         self.assertGreater(float(intervals[1]), float(intervals[0]))
+
+    def test_batch_ops_accept_time_per_user_coefficients(self) -> None:
+        policy = FSRS6ADRPolicy(
+            coefficients=(
+                0.0,
+                0.0,
+                0.0,
+                4.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ),
+            retention_min=0.5,
+            retention_max=0.98,
+            feature_version=SA_FEATURE_VERSION_LOG_POLY_TIME,
+        )
+        weights = torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS])
+        coefficients = torch.tensor(
+            [list(policy.coefficients), list(policy.coefficients)],
+            dtype=torch.float32,
+        )
+        ops = FSRS6ADRBatchSchedulerOps(
+            weights=weights,
+            policy=policy,
+            coefficients=coefficients,
+            bounds=Bounds(),
+            priority_mode="low_retrievability",
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        state = ops.init_state(user_count=2, deck_size=1)
+        ops.set_time_context(current_day=0.0, simulation_days=10.0)
+        early_interval = ops.update_learn(
+            state,
+            user_idx=torch.tensor([0]),
+            card_idx=torch.tensor([0]),
+            rating=torch.tensor([3]),
+        )
+        ops.set_time_context(current_day=10.0, simulation_days=10.0)
+        late_interval = ops.update_learn(
+            state,
+            user_idx=torch.tensor([1]),
+            card_idx=torch.tensor([0]),
+            rating=torch.tensor([3]),
+        )
+
+        self.assertLess(float(early_interval[0]), float(late_interval[0]))
+
+    def test_mixed_batch_scheduler_forwards_time_context(self) -> None:
+        class DummyOps:
+            def __init__(self) -> None:
+                self.context: tuple[float, float] | None = None
+
+            def init_state(self, user_count: int, deck_size: int):
+                return (user_count, deck_size)
+
+            def set_time_context(
+                self, *, current_day: float, simulation_days: float
+            ) -> None:
+                self.context = (current_day, simulation_days)
+
+        dummy = DummyOps()
+        mixed = MixedBatchSchedulerOps(
+            groups=[
+                MixedSchedulerGroup(
+                    lane_indices=torch.tensor([0], dtype=torch.int64),
+                    ops=dummy,
+                )
+            ],
+            lane_count=1,
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+
+        mixed.set_time_context(current_day=3.0, simulation_days=10.0)
+
+        self.assertEqual(dummy.context, (3.0, 10.0))
 
     def test_batch_ops_accept_linear_per_user_coefficients(self) -> None:
         policy = FSRS6ADRPolicy.baseline(

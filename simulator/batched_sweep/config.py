@@ -335,7 +335,7 @@ def _adapt_experiment_config(
     schedulers = _str_list(sweep.get("schedulers", ["fsrs6"]), "sweep.schedulers")
     scheduler_names = {item.split("@", 1)[0] for item in schedulers}
     uses_fsrs6_adr_policy_source = bool(
-        scheduler_names & {"fsrs6_adr", "fsrs6_default_adr"}
+        scheduler_names & {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
     )
     lambda_grid = training.get("lambda_grid")
     if _training_uses_portfolio_trainer(training):

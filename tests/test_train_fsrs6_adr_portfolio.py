@@ -50,7 +50,7 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
     resolve_fsrs6_adr_policy_specs,
 )
 from simulator.experiment_infra import ExperimentConfig, validate_scheduler_artifact
-from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.fsrs6_adr_policy import FEATURE_VERSION_LOG_POLY_TIME, FSRS6ADRPolicy
 
 
 def _metrics(memorized: float, time_average: float) -> CandidateMetrics:
@@ -901,6 +901,74 @@ class FSRS6ADRPortfolioArtifactTests(unittest.TestCase):
         )
         self.assertEqual(portfolio_payload["scheduler_name"], "fsrs6_default_adr")
         self.assertEqual(validated.scheduler_name, "fsrs6_default_adr")
+
+    def test_time_feature_writes_time_scheduler_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _config(root)
+            config_path = root / "config.toml"
+            config_path.write_text("", encoding="utf-8")
+            command_record_path = root / "commands" / "train.json"
+            command_record_path.parent.mkdir()
+            command_record_path.write_text("{}", encoding="utf-8")
+            settings = PolicySearchSettings.from_mapping(config.training_policy_search)
+            portfolio = PortfolioSettings(portfolio_size=1)
+            candidate = PortfolioCandidate(
+                candidate_id=7,
+                coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                metrics=_metrics(20.0, 2.0),
+            )
+            result = UserPortfolioResult(
+                job=PortfolioTrainJob(
+                    user_id=1,
+                    output_dir=root / "out",
+                    command_record_path=command_record_path,
+                ),
+                baseline_desired_retention_values=(0.52,),
+                baseline_metrics=[_metrics(10.0, 4.0)],
+                baseline_hypervolume=1.0,
+                portfolio_hypervolume=3.0,
+                hypervolume_improvement=2.0,
+                final_population_hypervolume=10.0,
+                final_population_hypervolume_improvement=9.0,
+                reference_point=ObjectivePoint(0.0, -10.0),
+                selected_children=[
+                    SelectedPortfolioChild(
+                        portfolio_index=0,
+                        candidate=candidate,
+                        hypervolume_contribution=2.0,
+                        pareto_rank=0,
+                    )
+                ],
+                final_population=[candidate],
+                history=[],
+                passed=True,
+            )
+
+            artifact_paths = _write_portfolio_artifacts(
+                result=result,
+                config=config,
+                config_path=config_path,
+                settings=settings,
+                portfolio=portfolio,
+                feature_version=FEATURE_VERSION_LOG_POLY_TIME,
+            )
+            metadata = json.loads(artifact_paths[0].read_text(encoding="utf-8"))
+            portfolio_payload = json.loads(
+                (root / "out" / "portfolio.json").read_text(encoding="utf-8")
+            )
+            validated = validate_scheduler_artifact(
+                artifact_paths[0],
+                require_files=True,
+            )
+
+        self.assertEqual(metadata["scheduler_name"], "fsrs6_adr_time")
+        self.assertEqual(
+            metadata["action_space"],
+            "sdt_retention_function_portfolio_child",
+        )
+        self.assertEqual(portfolio_payload["scheduler_name"], "fsrs6_adr_time")
+        self.assertEqual(validated.scheduler_name, "fsrs6_adr_time")
 
 
 class FSRS6ADRPortfolioResolverTests(unittest.TestCase):

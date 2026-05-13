@@ -37,11 +37,12 @@ SUPPORTED_SCHEDS = {
     "memrise",
     "fixed",
     "fsrs6_adr",
+    "fsrs6_adr_time",
     "fsrs6_default_adr",
     "fsrs6_ap",
     "anki_sm2_ap",
 }
-ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
+ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
 
 
 @dataclass(frozen=True)

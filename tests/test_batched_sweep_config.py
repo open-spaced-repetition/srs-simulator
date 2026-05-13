@@ -805,6 +805,63 @@ class FSRS6ADRPolicyExpansionTests(unittest.TestCase):
             all(lane.scheduler_name == "fsrs6_default_adr" for lane in lanes)
         )
 
+    def test_time_adr_uses_adr_policy_source_and_scheduler_log_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            for index in range(2):
+                policy_dir = root / "user_1" / "policies" / f"policy_{index}"
+                policy_dir.mkdir(parents=True)
+                FSRS6ADRPolicy(
+                    coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                    baseline_desired_retention=None,
+                    feature_version="fsrs6_adr_log_poly_time_v1",
+                ).write_json(policy_dir / "policy.json")
+                (policy_dir / "metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "scheduler_name": "fsrs6_adr_time",
+                            "training_user_ids": [1],
+                            "policy_path": "policy.json",
+                            "baseline_desired_retention": None,
+                            "portfolio_index": index,
+                            "action_space": "sdt_retention_function_portfolio_child",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            specs = resolve_fsrs6_adr_policy_specs(
+                user_ids=[1],
+                dr_values=[0.50, 0.52],
+                policy_root=root,
+            )
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6_adr_time"],
+                dr_values=[0.50, 0.52],
+                fsrs6_adr_policy_specs=specs,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="fsrs6")
+
+        self.assertEqual(len(specs), 2)
+        self.assertEqual(
+            [
+                lane.final_log_dir.relative_to(Path(tmp) / "logs").as_posix()
+                for lane in lanes
+            ],
+            [
+                "user_1/sched_fsrs6_adr_time/policy_0",
+                "user_1/sched_fsrs6_adr_time/policy_1",
+            ],
+        )
+        self.assertTrue(all(lane.scheduler_name == "fsrs6_adr_time" for lane in lanes))
+
     def test_policy_manifest_resolves_relative_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

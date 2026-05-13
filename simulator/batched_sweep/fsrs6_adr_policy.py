@@ -11,7 +11,7 @@ import tomllib
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 
-ADR_SCHEDULER_NAMES = frozenset({"fsrs6_adr", "fsrs6_default_adr"})
+ADR_SCHEDULER_NAMES = frozenset({"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"})
 
 
 @dataclass(frozen=True, slots=True)

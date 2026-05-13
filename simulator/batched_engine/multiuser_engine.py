@@ -262,6 +262,9 @@ def simulate_multiuser(
                 progress_bar.update(1)
             if progress_callback is not None:
                 progress_callback(day + 1, days)
+            time_context = getattr(sched_ops, "set_time_context", None)
+            if time_context is not None:
+                time_context(current_day=float(day), simulation_days=float(days))
             day_float = torch.tensor(float(day), device=torch_device, dtype=env_dtype)
 
             learned_mask = reps > 0
