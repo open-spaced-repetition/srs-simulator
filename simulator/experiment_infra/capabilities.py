@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from simulator.scheduler_catalog import batched_scheduler_names, event_scheduler_names
 from simulator.scheduler_spec import scheduler_uses_desired_retention
 
 
@@ -12,40 +13,9 @@ class EngineName(StrEnum):
 
 
 EVENT_ENVS = ("lstm", "fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default")
-EVENT_SCHEDULERS = (
-    "fsrs6",
-    "fsrs6_default",
-    "fsrs3",
-    "fsrs3_default",
-    "hlr",
-    "dash",
-    "lstm",
-    "fixed",
-    "anki_sm2",
-    "anki_sm2_ap",
-    "memrise",
-    "sspmmc",
-    "fsrs6_adr",
-    "fsrs6_adr_time",
-    "fsrs6_default_adr",
-    "fsrs6_ap",
-)
+EVENT_SCHEDULERS = event_scheduler_names()
 BATCHED_ENVS = ("lstm", "fsrs6", "fsrs6_default")
-BATCHED_SCHEDULERS = (
-    "fsrs6",
-    "fsrs6_default",
-    "fsrs3",
-    "fsrs3_default",
-    "lstm",
-    "fixed",
-    "anki_sm2",
-    "anki_sm2_ap",
-    "memrise",
-    "fsrs6_adr",
-    "fsrs6_adr_time",
-    "fsrs6_default_adr",
-    "fsrs6_ap",
-)
+BATCHED_SCHEDULERS = batched_scheduler_names()
 
 
 @dataclass(frozen=True, slots=True)

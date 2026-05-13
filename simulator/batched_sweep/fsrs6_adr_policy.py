@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
+from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 
-ADR_SCHEDULER_NAMES = frozenset({"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"})
+ADR_SCHEDULER_NAMES = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
 
 
 @dataclass(frozen=True, slots=True)

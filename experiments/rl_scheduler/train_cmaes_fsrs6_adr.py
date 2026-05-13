@@ -38,11 +38,8 @@ from experiments.rl_scheduler.policy_search_common import (
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
-from simulator.fsrs6_adr_policy import (
-    FEATURE_VERSION_LOG_POLY_TIME,
-    FSRS6ADRPolicy,
-    feature_count,
-)
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy, feature_count
+from simulator.scheduler_catalog import fsrs6_adr_variant_for_feature_version
 from simulator.short_term_config import resolve_short_term_config
 
 
@@ -441,6 +438,7 @@ def write_artifact(
     )
     metadata_path = output_dir / "metadata.json"
     metadata_dir = metadata_path.parent
+    variant = fsrs6_adr_variant_for_feature_version(feature_version)
     _write_json(
         metadata_path,
         {
@@ -453,7 +451,7 @@ def write_artifact(
                 config.seed,
             ),
             "family": config.family,
-            "scheduler_name": _scheduler_name_for_feature_version(feature_version),
+            "scheduler_name": variant.scheduler_name,
             "environment": config.simulation.environment,
             "engine": config.simulation.engine,
             "training_user_ids": [user_id],
@@ -461,7 +459,7 @@ def write_artifact(
             "seed": config.seed,
             "policy_path": "policy.json",
             "feature_version": feature_version,
-            "action_space": _action_space_for_feature_version(feature_version),
+            "action_space": variant.action_space,
             "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "code_commit": _git_commit(),
             "lambda_value": lambda_value,
@@ -483,18 +481,6 @@ def write_artifact(
         },
     )
     return policy_path, metrics_path, metadata_path
-
-
-def _scheduler_name_for_feature_version(feature_version: str) -> str:
-    if feature_version == FEATURE_VERSION_LOG_POLY_TIME:
-        return "fsrs6_adr_time"
-    return "fsrs6_adr"
-
-
-def _action_space_for_feature_version(feature_version: str) -> str:
-    if feature_version == FEATURE_VERSION_LOG_POLY_TIME:
-        return "sdt_retention_function"
-    return "sd_retention_function"
 
 
 def _clear_cuda_cache(device: torch.device) -> None:

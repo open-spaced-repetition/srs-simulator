@@ -45,6 +45,12 @@ from simulator.batched_sweep.weights import (
 from simulator.batched_sweep.fsrs6_adr_policy import FSRS6ADRPolicySpec
 from simulator.batched_sweep.fsrs6_ap_policy import FSRS6APPolicySpec
 from simulator.batched_sweep.anki_sm2_ap_policy import AnkiSM2APPolicySpec
+from simulator.scheduler_catalog import (
+    PolicySource,
+    batched_scheduler_names,
+    get_scheduler_descriptor,
+    schedulers_for_policy_source,
+)
 
 
 @dataclass(frozen=True)
@@ -67,8 +73,12 @@ class BatchedSweepContext:
     fsrs6_dr_values_by_user: Mapping[int, tuple[float, ...]] | None = None
 
 
-_DR_SCHEDULERS = {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}
-_ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
+_DR_SCHEDULERS = {
+    name
+    for name in batched_scheduler_names()
+    if get_scheduler_descriptor(name).uses_desired_retention
+}
+_ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
 _LOG_LAYOUTS = {"user", "sweep"}
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 import tomllib
 
+from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.defaults import (
     DEFAULT_COST_LIMIT_MINUTES,
@@ -335,7 +336,7 @@ def _adapt_experiment_config(
     schedulers = _str_list(sweep.get("schedulers", ["fsrs6"]), "sweep.schedulers")
     scheduler_names = {item.split("@", 1)[0] for item in schedulers}
     uses_fsrs6_adr_policy_source = bool(
-        scheduler_names & {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
+        scheduler_names & schedulers_for_policy_source(PolicySource.FSRS6_ADR)
     )
     lambda_grid = training.get("lambda_grid")
     if _training_uses_portfolio_trainer(training):

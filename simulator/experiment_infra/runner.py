@@ -40,6 +40,12 @@ from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
     MixedSchedulerGroup as _MixedSchedulerGroup,
 )
+from simulator.scheduler_catalog import (
+    PolicySource,
+    PORTFOLIO_CHILD_ACTION_SPACES,
+    run_id_scoped_sweep_schedulers,
+    schedulers_for_policy_source,
+)
 
 
 SUPPORTED_RUNNER_STAGES = {
@@ -58,24 +64,10 @@ SUPPORTED_RUNNER_STAGES = {
 
 COMMAND_TIMEOUT_EXIT_CODE = 124
 TRAIN_OVERFIT_GATE_PASS_FRACTION = 0.8
-RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
-    "fsrs6_adr",
-    "fsrs6_adr_time",
-    "fsrs6_default_adr",
-    "fsrs6_ap",
-    "anki_sm2_ap",
-}
-FSRS6_ADR_POLICY_SOURCE_SCHEDULERS = {
-    "fsrs6_adr",
-    "fsrs6_adr_time",
-    "fsrs6_default_adr",
-}
-PORTFOLIO_CHILD_ACTION_SPACES = {
-    "sd_retention_function_portfolio_child",
-    "sdt_retention_function_portfolio_child",
-    "fsrs6_ap_weight_delta_portfolio_child",
-    "anki_sm2_ap_params_portfolio_child",
-}
+RUN_ID_SCOPED_SWEEP_SCHEDULERS = run_id_scoped_sweep_schedulers()
+FSRS6_ADR_POLICY_SOURCE_SCHEDULERS = schedulers_for_policy_source(
+    PolicySource.FSRS6_ADR
+)
 
 
 @dataclass(frozen=True, slots=True)

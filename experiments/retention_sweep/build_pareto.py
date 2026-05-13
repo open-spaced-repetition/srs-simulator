@@ -21,21 +21,19 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.scheduler_catalog import (
+    PolicySource,
+    run_id_scoped_sweep_schedulers,
+    schedulers_for_policy_source,
+)
 from simulator.retention_sweep.log_filter import LogFilenameFilter
 from simulator.experiment_infra.baseline_dr_selection import (
     BaselineDRManifest,
     load_baseline_dr_manifest,
 )
 
-
-RUN_ID_SCOPED_SCHEDULERS = {
-    "fsrs6_adr",
-    "fsrs6_adr_time",
-    "fsrs6_default_adr",
-    "fsrs6_ap",
-    "anki_sm2_ap",
-}
-ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
+RUN_ID_SCOPED_SCHEDULERS = run_id_scoped_sweep_schedulers()
+ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
     re.IGNORECASE,

@@ -32,6 +32,7 @@ from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     non_dominated_indices,
     reference_point,
 )
+from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
@@ -46,7 +47,7 @@ DEFAULT_METRIC = "avg_accum_memorized_per_hour"
 USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$")
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
 DR_TOKEN_RE = re.compile(r"(?:^|[_\W])dr[_=-]([01]?(?:\.\d+)?)", re.IGNORECASE)
-ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
+ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
 
 
 @dataclass(frozen=True)

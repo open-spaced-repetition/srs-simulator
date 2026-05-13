@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from simulator.scheduler_catalog import try_get_scheduler_descriptor
+
 
 def parse_scheduler_spec(value: str) -> tuple[str, float | None, str]:
     raw = value.strip()
@@ -43,13 +45,9 @@ def format_float(value: float | None) -> str:
 
 
 def scheduler_uses_desired_retention(scheduler: str) -> bool:
-    return scheduler not in {
-        "fixed",
-        "anki_sm2",
-        "memrise",
-        "fsrs6_adr",
-        "fsrs6_adr_time",
-        "fsrs6_default_adr",
-        "fsrs6_ap",
-        "anki_sm2_ap",
-    }
+    # Unknown schedulers default to desired-retention semantics so log scanners can
+    # still group points without a hard failure.
+    descriptor = try_get_scheduler_descriptor(scheduler)
+    if descriptor is None:
+        return True
+    return descriptor.uses_desired_retention

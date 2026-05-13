@@ -20,6 +20,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
+from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
 from simulator.retention_sweep.grid import dr_values as grid_dr_values
 from simulator.retention_sweep.sspmmc import (
     resolve_sspmmc_policy_paths as resolve_sspmmc_policy_paths,
@@ -36,6 +37,8 @@ from experiments.retention_sweep.cli_utils import (
     add_short_term_args,
     parse_csv,
 )
+
+ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
 
 
 def parse_args() -> argparse.Namespace:
@@ -197,7 +200,7 @@ def _progress_label(args: argparse.Namespace) -> str:
     if args.scheduler == "sspmmc":
         if args.sspmmc_policy:
             label = f"{label}:{args.sspmmc_policy.stem}"
-    elif args.scheduler in {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}:
+    elif args.scheduler in ADR_POLICY_SCHEDULERS:
         if args.fsrs6_adr_policy:
             label = f"{label}:{args.fsrs6_adr_policy.stem}"
     elif args.scheduler == "anki_sm2_ap":
@@ -436,18 +439,14 @@ def main() -> None:
     fixed_schedulers = [spec for spec in scheduler_specs if spec[0] == "fixed"]
     has_sspmmc = any(spec[0] == "sspmmc" for spec in scheduler_specs)
     fsrs6_adr_scheduler_specs = [
-        spec
-        for spec in scheduler_specs
-        if spec[0] in {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
+        spec for spec in scheduler_specs if spec[0] in ADR_POLICY_SCHEDULERS
     ]
     has_fsrs6_adr = bool(fsrs6_adr_scheduler_specs)
     for name, _, _ in scheduler_specs:
         if name in {
             "sspmmc",
-            "fsrs6_adr",
-            "fsrs6_adr_time",
-            "fsrs6_default_adr",
             "fixed",
+            *ADR_POLICY_SCHEDULERS,
         }:
             continue
         if scheduler_uses_desired_retention(name):

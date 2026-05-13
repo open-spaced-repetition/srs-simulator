@@ -23,26 +23,17 @@ from simulator.batched_sweep.anki_sm2_ap_policy import (
     resolve_anki_sm2_ap_policy_specs,
 )
 from simulator.batched_sweep.utils import chunked, dr_values, parse_cuda_devices
+from simulator.scheduler_catalog import (
+    PolicySource,
+    batched_scheduler_names,
+    schedulers_for_policy_source,
+)
 from simulator.scheduler_spec import parse_scheduler_spec
 
 
 SUPPORTED_ENVS = {"lstm", "fsrs6", "fsrs6_default"}
-SUPPORTED_SCHEDS = {
-    "fsrs6",
-    "fsrs6_default",
-    "fsrs3_default",
-    "fsrs3",
-    "lstm",
-    "anki_sm2",
-    "memrise",
-    "fixed",
-    "fsrs6_adr",
-    "fsrs6_adr_time",
-    "fsrs6_default_adr",
-    "fsrs6_ap",
-    "anki_sm2_ap",
-}
-ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_adr_time", "fsrs6_default_adr"}
+SUPPORTED_SCHEDS = set(batched_scheduler_names())
+ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
 
 
 @dataclass(frozen=True)
