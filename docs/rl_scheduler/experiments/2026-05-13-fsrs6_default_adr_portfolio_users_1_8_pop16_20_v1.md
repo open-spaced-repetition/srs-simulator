@@ -63,20 +63,22 @@ memory target faster.
 
 | environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget coverage | memory-target regret AUC | target coverage |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
-| FSRS6 | default ADR | -17,411 | -0.626% | 127 | -10.8 | 96/115, 98.029% span | -0.47 | 96/115, 93.432% span |
-| FSRS6 | ADR | +96,880 | +3.482% | 128 | +65.4 | 101/115, 98.365% span | -2.92 | 106/115, 98.094% span |
-| FSRS6 | default ADR - ADR | -114,291 | -4.108 pp | -1 | -76.2 | -5 budgets | +2.45 | -10 targets |
-| LSTM | default ADR | -72,379 | -2.547% | 123 | -53.6 | 91/111, 98.458% span | +4.17 | 91/111, 91.953% span |
-| LSTM | ADR | +55,849 | +1.966% | 125 | +28.1 | 92/111, 98.428% span | -1.02 | 102/111, 97.854% span |
-| LSTM | default ADR - ADR | -128,227 | -4.513 pp | -2 | -81.7 | -1 budget | +5.19 | -11 targets |
+| FSRS6 | default ADR | -17,411 | -0.626% | 127 | +45.2 | 80/115, 56.951% span | -1.72 | 70/115, 65.859% span |
+| FSRS6 | ADR | +96,880 | +3.482% | 128 | +90.7 | 88/115, 81.550% span | -4.57 | 81/115, 78.146% span |
+| FSRS6 | default ADR - ADR | -114,291 | -4.108 pp | -1 | -45.5 | -8 budgets | +2.85 | -11 targets |
+| LSTM | default ADR | -72,379 | -2.547% | 123 | +43.0 | 75/111, 51.513% span | +3.99 | 72/111, 71.649% span |
+| LSTM | ADR | +55,849 | +1.966% | 125 | +62.2 | 79/111, 82.466% span | -1.82 | 81/111, 83.775% span |
+| LSTM | default ADR - ADR | -128,227 | -4.513 pp | -2 | -19.2 | -4 budgets | +5.81 | -9 targets |
 
 The result is not close. Default-ADR loses to ordinary ADR on every primary
 external metric in both environments:
 
 - FSRS6 HV moves from `+96,880` for ADR to `-17,411` for default ADR.
 - LSTM HV moves from `+55,849` for ADR to `-72,379` for default ADR.
-- LSTM budget-memory gain AUC moves from `+28.1` to `-53.6`.
-- LSTM memory-target regret AUC moves from `-1.02` to `+4.17`.
+- LSTM budget-memory gain AUC remains positive versus the FSRS6 baseline, but
+  trails ordinary ADR: `+62.2` for ADR versus `+43.0` for default ADR.
+- LSTM memory-target regret AUC moves from `-1.82` for ADR to `+3.99` for
+  default ADR.
 
 ## Per-User HV Delta
 
@@ -132,12 +134,12 @@ Do not promote `fsrs6_default_adr`.
 
 Changing only the ADR scheduler-side FSRS6 weights from user-fitted weights to
 default FSRS6 weights is a material regression. It turns the matched pop16
-portfolio from a positive external Pareto result into a negative one:
+portfolio from a positive external HV result into a negative one:
 
 - FSRS6: `-114,291` HV versus ordinary ADR.
 - LSTM: `-128,227` HV versus ordinary ADR.
-- LSTM budget-memory gain AUC: `-81.7` versus ordinary ADR.
-- LSTM memory-target regret AUC: `+5.19` minutes versus ordinary ADR.
+- LSTM budget-memory gain AUC: `-19.2` versus ordinary ADR.
+- LSTM memory-target regret AUC: `+5.81` minutes versus ordinary ADR.
 
 The ordinary `fsrs6_adr` variant remains the correct pop16/off16/gen20 baseline.
 `fsrs6_default_adr` is useful as a negative control showing that ADR's

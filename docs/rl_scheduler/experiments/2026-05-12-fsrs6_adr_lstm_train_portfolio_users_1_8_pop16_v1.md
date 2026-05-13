@@ -55,36 +55,36 @@ generated analysis, not as primary Pareto quality metrics.
 | LSTM | FSRS-trained pop16 gen20 | 55,849 | 1.966% | 733 | 1,556 | 4,110 | 7,161 | 19,119 | 125 |
 | LSTM | LSTM-trained pop16 gen20 | 91,189 | 3.209% | 1,089 | 1,547 | 3,728 | 13,221 | 38,095 | 128 |
 
-Budget-memory gain AUC integrates memorized-card gain over all FSRS6-baseline
-frontier time budgets per user, using linear interpolation between each
-scheduler's Pareto frontier points. Positive values mean the scheduler remembers
-more cards at the same budget.
+Budget-memory gain AUC integrates memorized-card gain over the common covered
+time-budget interval between the FSRS6 baseline frontier and each scheduler
+frontier, using linear interpolation only. Positive values mean the scheduler
+remembers more cards at the same budget.
 
 | environment | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | FSRS-trained | 8/8 | 101/115 | 98.365% | +65.4 | +0.954% |
-| FSRS6 | LSTM-trained | 8/8 | 98/115 | 97.778% | +39.0 | +0.570% |
-| LSTM | FSRS-trained | 8/8 | 92/111 | 98.428% | +28.1 | +0.414% |
-| LSTM | LSTM-trained | 8/8 | 93/111 | 97.837% | +43.2 | +0.637% |
+| FSRS6 | FSRS-trained | 8/8 | 88/115 | 81.550% | +90.7 | +1.349% |
+| FSRS6 | LSTM-trained | 8/8 | 87/115 | 82.252% | +60.4 | +0.898% |
+| LSTM | FSRS-trained | 8/8 | 79/111 | 82.466% | +62.2 | +0.935% |
+| LSTM | LSTM-trained | 8/8 | 80/111 | 83.370% | +73.5 | +1.105% |
 
-Memory-target regret AUC integrates time regret over all FSRS6-baseline frontier
-memory targets per user, using linear interpolation between each scheduler's
-Pareto frontier points. Negative values mean the scheduler reaches the same
-memorized-card targets faster.
+Memory-target regret AUC integrates time regret over the common covered
+memory-target interval between the FSRS6 baseline frontier and each scheduler
+frontier, using linear interpolation only. Negative values mean the scheduler
+reaches the same memorized-card targets faster.
 
 | environment | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | FSRS-trained | 8/8 | 106/115 | 98.094% | -2.92 | -10.591% |
-| FSRS6 | LSTM-trained | 8/8 | 105/115 | 97.773% | -1.04 | -3.744% |
-| LSTM | FSRS-trained | 8/8 | 102/111 | 97.854% | -1.02 | -2.599% |
-| LSTM | LSTM-trained | 8/8 | 103/111 | 97.573% | -4.42 | -11.278% |
+| FSRS6 | FSRS-trained | 8/8 | 81/115 | 78.146% | -4.57 | -13.632% |
+| FSRS6 | LSTM-trained | 8/8 | 83/115 | 79.690% | -2.32 | -6.811% |
+| LSTM | FSRS-trained | 8/8 | 81/111 | 83.775% | -1.82 | -4.176% |
+| LSTM | LSTM-trained | 8/8 | 80/111 | 85.141% | -7.39 | -15.674% |
 
 LSTM-trained minus FSRS-trained:
 
 | environment | HV delta change | relative change | percent-point change | budget-gain AUC change | target-regret AUC change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | -42,174 | -43.53% | -1.516 pp | -26.4 | +1.88 |
-| LSTM | +35,340 | +63.28% | +1.244 pp | +15.1 | -3.40 |
+| FSRS6 | -42,174 | -43.53% | -1.516 pp | -30.3 | +2.25 |
+| LSTM | +35,340 | +63.28% | +1.244 pp | +11.3 | -5.57 |
 
 Interpretation:
 
@@ -92,8 +92,8 @@ Interpretation:
   +35.3k HV, or +63.3% relative to the FSRS-trained pop16 run.
 - The gain trades off FSRS6 external performance: FSRS6 HV drops by 42.2k.
 - On the LSTM external envelope, LSTM training moves interpolated budget-gain
-  AUC from +28.1 to +43.2 memorized cards and target-regret AUC from -1.02
-  minutes to -4.42 minutes.
+  AUC from +62.2 to +73.5 memorized cards and target-regret AUC from -1.82
+  minutes to -7.39 minutes.
 
 ## Policy Parameter Distribution
 
@@ -212,6 +212,8 @@ pop16 baseline.
 
 - Target LSTM HV improves from 55,849 to 91,189, a +35,340 gain.
 - Relative LSTM HV improvement increases from 1.966% to 3.209%.
+- Target LSTM AUC also improves: budget-memory gain rises from +62.2 to +73.5,
+  and memory-target regret improves from -1.82 to -7.39 minutes.
 - FSRS6 HV regresses from 96,880 to 54,706, so the learned policy is more
   environment-specific.
 - Policy parameters differ materially, especially lower stability slope
