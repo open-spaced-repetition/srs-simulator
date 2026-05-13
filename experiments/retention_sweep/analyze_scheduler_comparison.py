@@ -11,6 +11,7 @@ import statistics
 import sys
 from contextlib import redirect_stdout
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional Markdown file to write the report to.",
+    )
+    parser.add_argument(
+        "--summary-path",
+        type=Path,
+        default=None,
+        help="Optional JSON file to write the machine-readable analysis summary to.",
     )
     parser.add_argument(
         "--log-dir",
@@ -507,6 +514,32 @@ def fmt_percent(value: float) -> str:
 
 def fmt_quantile(value: float) -> str:
     return f"{value:.2f}"
+
+
+def finite_float(value: float | None) -> float | None:
+    if value is None:
+        return None
+    if not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def fmt_float_optional(value: float | None, digits: int = 2) -> str:
+    if value is None:
+        return f"{float('nan'):.{digits}f}"
+    return f"{value:.{digits}f}"
+
+
+def fmt_int_optional(value: float | None) -> str:
+    if value is None:
+        return f"{float('nan'):.0f}"
+    return f"{value:.0f}"
+
+
+def fmt_percent_optional(value: float | None) -> str:
+    if value is None:
+        return f"{float('nan'):.3f}%"
+    return f"{value:.3f}%"
 
 
 def nearest_rank(values: list[float], quantile: float) -> float:
@@ -1068,7 +1101,9 @@ def interpolated_memorized_under_budget(
         return None
     if budget < frontier[0].time_average:
         return None
-    if budget >= frontier[-1].time_average:
+    if budget > frontier[-1].time_average:
+        return None
+    if math.isclose(budget, frontier[-1].time_average):
         return frontier[-1].memorized_average
 
     for left, right in zip(frontier[:-1], frontier[1:]):
@@ -1091,7 +1126,9 @@ def interpolated_min_time_for_memory_target(
     frontier = sorted_frontier(rows, sort_key="memory")
     if not frontier:
         return None
-    if target <= frontier[0].memorized_average:
+    if target < frontier[0].memorized_average:
+        return None
+    if math.isclose(target, frontier[0].memorized_average):
         return frontier[0].time_average
     if target > frontier[-1].memorized_average:
         return None
@@ -1106,6 +1143,47 @@ def interpolated_min_time_for_memory_target(
         ratio = (target - left_memory) / (right_memory - left_memory)
         return left.time_average + ratio * (right.time_average - left.time_average)
     return None
+
+
+def common_interval(
+    left_min: float,
+    left_max: float,
+    right_min: float,
+    right_max: float,
+) -> tuple[float, float] | None:
+    start = max(left_min, right_min)
+    end = min(left_max, right_max)
+    if end <= start:
+        return None
+    return start, end
+
+
+def values_in_interval(values: list[float], start: float, end: float) -> list[float]:
+    return sorted(
+        {
+            value
+            for value in values
+            if (start < value < end)
+            or math.isclose(value, start)
+            or math.isclose(value, end)
+        }
+    )
+
+
+def integration_grid(
+    baseline_values: list[float],
+    target_values: list[float],
+    start: float,
+    end: float,
+) -> list[float]:
+    return sorted(
+        {
+            start,
+            end,
+            *values_in_interval(baseline_values, start, end),
+            *values_in_interval(target_values, start, end),
+        }
+    )
 
 
 def budget_memory_gain_auc_user_summaries(
@@ -1131,50 +1209,74 @@ def budget_memory_gain_auc_user_summaries(
             user_id=user_id,
         )
         baseline_frontier = sorted_frontier(baseline_rows, sort_key="time")
-        budgets: list[float] = []
-        baseline_memories: list[float] = []
-        target_memories: list[float | None] = []
-        for budget in sorted({row.time_average for row in baseline_frontier}):
-            baseline_memory = interpolated_memorized_under_budget(baseline_rows, budget)
-            if baseline_memory is None:
-                continue
-            budgets.append(budget)
-            baseline_memories.append(baseline_memory)
-            target_memory = interpolated_memorized_under_budget(target_rows, budget)
-            target_memories.append(target_memory)
-
-        if not budgets:
+        target_frontier = sorted_frontier(target_rows, sort_key="time")
+        if not baseline_frontier:
             continue
 
-        total_span = max(budgets) - min(budgets) if len(budgets) > 1 else 0.0
+        baseline_budgets = sorted({row.time_average for row in baseline_frontier})
+        total_span = (
+            max(baseline_budgets) - min(baseline_budgets)
+            if len(baseline_budgets) > 1
+            else 0.0
+        )
         covered_span = 0.0
         memory_gain_area = 0.0
         baseline_memory_area = 0.0
-        for index in range(len(budgets) - 1):
-            left_memory = target_memories[index]
-            right_memory = target_memories[index + 1]
-            if left_memory is None or right_memory is None:
-                continue
-            width = budgets[index + 1] - budgets[index]
-            if width <= 0.0:
-                continue
-            left_baseline_memory = baseline_memories[index]
-            right_baseline_memory = baseline_memories[index + 1]
-            left_gain = left_memory - left_baseline_memory
-            right_gain = right_memory - right_baseline_memory
-            memory_gain_area += width * ((left_gain + right_gain) / 2.0)
-            baseline_memory_area += width * (
-                (left_baseline_memory + right_baseline_memory) / 2.0
+        covered_budget_count = 0
+        if target_frontier:
+            interval = common_interval(
+                baseline_frontier[0].time_average,
+                baseline_frontier[-1].time_average,
+                target_frontier[0].time_average,
+                target_frontier[-1].time_average,
             )
-            covered_span += width
+            if interval is not None:
+                start, end = interval
+                covered_budget_count = len(
+                    values_in_interval(baseline_budgets, start, end)
+                )
+                budgets = integration_grid(
+                    baseline_budgets,
+                    sorted({row.time_average for row in target_frontier}),
+                    start,
+                    end,
+                )
+                for left_budget, right_budget in zip(budgets[:-1], budgets[1:]):
+                    width = right_budget - left_budget
+                    if width <= 0.0:
+                        continue
+                    left_baseline_memory = interpolated_memorized_under_budget(
+                        baseline_rows, left_budget
+                    )
+                    right_baseline_memory = interpolated_memorized_under_budget(
+                        baseline_rows, right_budget
+                    )
+                    left_target_memory = interpolated_memorized_under_budget(
+                        target_rows, left_budget
+                    )
+                    right_target_memory = interpolated_memorized_under_budget(
+                        target_rows, right_budget
+                    )
+                    if (
+                        left_baseline_memory is None
+                        or right_baseline_memory is None
+                        or left_target_memory is None
+                        or right_target_memory is None
+                    ):
+                        continue
+                    left_gain = left_target_memory - left_baseline_memory
+                    right_gain = right_target_memory - right_baseline_memory
+                    memory_gain_area += width * ((left_gain + right_gain) / 2.0)
+                    baseline_memory_area += width * (
+                        (left_baseline_memory + right_baseline_memory) / 2.0
+                    )
+                    covered_span += width
 
         summaries.append(
             BudgetMemoryGainAucUserSummary(
                 user_id=user_id,
-                budget_count=len(budgets),
-                covered_budget_count=sum(
-                    1 for target_memory in target_memories if target_memory is not None
-                ),
+                budget_count=len(baseline_budgets),
+                covered_budget_count=covered_budget_count,
                 total_span=total_span,
                 covered_span=covered_span,
                 memory_gain_auc=(memory_gain_area / covered_span)
@@ -1275,52 +1377,74 @@ def memory_target_regret_auc_user_summaries(
             user_id=user_id,
         )
         baseline_frontier = sorted_frontier(baseline_rows, sort_key="memory")
-        targets: list[float] = []
-        baseline_times: list[float] = []
-        target_times: list[float | None] = []
-        for target in sorted({row.memorized_average for row in baseline_frontier}):
-            baseline_time = interpolated_min_time_for_memory_target(
-                baseline_rows, target
-            )
-            if baseline_time is None:
-                continue
-            targets.append(target)
-            baseline_times.append(baseline_time)
-            target_time = interpolated_min_time_for_memory_target(target_rows, target)
-            target_times.append(target_time)
-
-        if not targets:
+        target_frontier = sorted_frontier(target_rows, sort_key="memory")
+        if not baseline_frontier:
             continue
 
-        total_span = max(targets) - min(targets) if len(targets) > 1 else 0.0
+        baseline_targets = sorted({row.memorized_average for row in baseline_frontier})
+        total_span = (
+            max(baseline_targets) - min(baseline_targets)
+            if len(baseline_targets) > 1
+            else 0.0
+        )
         covered_span = 0.0
         time_regret_area = 0.0
         baseline_time_area = 0.0
-        for index in range(len(targets) - 1):
-            left_time = target_times[index]
-            right_time = target_times[index + 1]
-            if left_time is None or right_time is None:
-                continue
-            width = targets[index + 1] - targets[index]
-            if width <= 0.0:
-                continue
-            left_baseline_time = baseline_times[index]
-            right_baseline_time = baseline_times[index + 1]
-            left_regret = left_time - left_baseline_time
-            right_regret = right_time - right_baseline_time
-            time_regret_area += width * ((left_regret + right_regret) / 2.0)
-            baseline_time_area += width * (
-                (left_baseline_time + right_baseline_time) / 2.0
+        covered_target_count = 0
+        if target_frontier:
+            interval = common_interval(
+                baseline_frontier[0].memorized_average,
+                baseline_frontier[-1].memorized_average,
+                target_frontier[0].memorized_average,
+                target_frontier[-1].memorized_average,
             )
-            covered_span += width
+            if interval is not None:
+                start, end = interval
+                covered_target_count = len(
+                    values_in_interval(baseline_targets, start, end)
+                )
+                targets = integration_grid(
+                    baseline_targets,
+                    sorted({row.memorized_average for row in target_frontier}),
+                    start,
+                    end,
+                )
+                for left_target, right_target in zip(targets[:-1], targets[1:]):
+                    width = right_target - left_target
+                    if width <= 0.0:
+                        continue
+                    left_baseline_time = interpolated_min_time_for_memory_target(
+                        baseline_rows, left_target
+                    )
+                    right_baseline_time = interpolated_min_time_for_memory_target(
+                        baseline_rows, right_target
+                    )
+                    left_target_time = interpolated_min_time_for_memory_target(
+                        target_rows, left_target
+                    )
+                    right_target_time = interpolated_min_time_for_memory_target(
+                        target_rows, right_target
+                    )
+                    if (
+                        left_baseline_time is None
+                        or right_baseline_time is None
+                        or left_target_time is None
+                        or right_target_time is None
+                    ):
+                        continue
+                    left_regret = left_target_time - left_baseline_time
+                    right_regret = right_target_time - right_baseline_time
+                    time_regret_area += width * ((left_regret + right_regret) / 2.0)
+                    baseline_time_area += width * (
+                        (left_baseline_time + right_baseline_time) / 2.0
+                    )
+                    covered_span += width
 
         summaries.append(
             MemoryTargetRegretAucUserSummary(
                 user_id=user_id,
-                target_count=len(targets),
-                covered_target_count=sum(
-                    1 for target_time in target_times if target_time is not None
-                ),
+                target_count=len(baseline_targets),
+                covered_target_count=covered_target_count,
                 total_span=total_span,
                 covered_span=covered_span,
                 time_regret_auc=(time_regret_area / covered_span)
@@ -1426,6 +1550,1001 @@ def pareto_counts(
     )
 
 
+def build_coverage_summary(
+    rows: list[SweepRow],
+    envs: tuple[str, ...],
+    schedulers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    groups = grouped(rows)
+    output_rows: list[dict[str, Any]] = []
+    for env in envs:
+        for scheduler in schedulers:
+            group_rows = groups.get((env, scheduler), [])
+            users = sorted({row.user_id for row in group_rows})
+            drs = sorted(
+                {
+                    round(row.desired_retention, 4)
+                    for row in group_rows
+                    if row.desired_retention is not None
+                }
+            )
+            output_rows.append(
+                {
+                    "environment": env,
+                    "scheduler": scheduler,
+                    "records": len(group_rows),
+                    "users": users,
+                    "user_range": f"{users[0]}-{users[-1]}" if users else None,
+                    "desired_retention_count": len(drs),
+                    "desired_retention_values": drs,
+                }
+            )
+    return output_rows
+
+
+def build_policy_point_diagnostics(
+    rows: list[SweepRow],
+    env: str,
+    schedulers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    output_rows: list[dict[str, Any]] = []
+    for scheduler in schedulers:
+        selected = [
+            row for row in rows if row.environment == env and row.scheduler == scheduler
+        ]
+        output_rows.append(
+            {
+                "scheduler": scheduler,
+                "policy_point_avg_memorized": finite_float(
+                    average([row.memorized_average for row in selected])
+                ),
+                "policy_point_avg_time": finite_float(
+                    average([row.time_average for row in selected])
+                ),
+                "policy_point_avg_efficiency": finite_float(
+                    average([row.efficiency for row in selected])
+                ),
+                "policy_point_avg_reviews": finite_float(
+                    average([row.reviews_average for row in selected])
+                ),
+                "record_count": len(selected),
+            }
+        )
+    return output_rows
+
+
+def build_pairwise_delta_summary(
+    rows: list[SweepRow],
+    env: str,
+    comparisons: tuple[tuple[str, str], ...],
+) -> list[dict[str, Any]]:
+    env_rows = [row for row in rows if row.environment == env]
+    by_key = {
+        (row.scheduler, row.user_id, round(row.desired_retention * 10000)): row
+        for row in env_rows
+        if row.desired_retention is not None
+    }
+    output_rows: list[dict[str, Any]] = []
+    for left, right in comparisons:
+        deltas_mem: list[float] = []
+        deltas_time: list[float] = []
+        deltas_eff: list[float] = []
+        mem_wins = 0
+        time_wins = 0
+        eff_wins = 0
+        pair_count = 0
+        for row in env_rows:
+            if row.scheduler != left or row.desired_retention is None:
+                continue
+            key = (right, row.user_id, round(row.desired_retention * 10000))
+            other = by_key.get(key)
+            if other is None:
+                continue
+            pair_count += 1
+            delta_mem = row.memorized_average - other.memorized_average
+            delta_time = row.time_average - other.time_average
+            delta_eff = row.efficiency - other.efficiency
+            deltas_mem.append(delta_mem)
+            deltas_time.append(delta_time)
+            deltas_eff.append(delta_eff)
+            mem_wins += delta_mem > 0
+            time_wins += delta_time < 0
+            eff_wins += delta_eff > 0
+        output_rows.append(
+            {
+                "left_scheduler": left,
+                "right_scheduler": right,
+                "comparison": f"{left} - {right}",
+                "pairs": pair_count,
+                "delta_memorized_mean": finite_float(average(deltas_mem)),
+                "delta_time_mean": finite_float(average(deltas_time)),
+                "delta_efficiency_mean": finite_float(average(deltas_eff)),
+                "efficiency_wins": eff_wins,
+                "time_wins": time_wins,
+                "memory_wins": mem_wins,
+            }
+        )
+    return output_rows
+
+
+def build_dominance_summary(
+    rows: list[SweepRow],
+    env: str,
+    comparisons: tuple[tuple[str, str], ...],
+) -> list[dict[str, Any]]:
+    env_rows = [row for row in rows if row.environment == env]
+    by_key = {
+        (row.scheduler, row.user_id, round(row.desired_retention * 10000)): row
+        for row in env_rows
+        if row.desired_retention is not None
+    }
+    output_rows: list[dict[str, Any]] = []
+    for left, right in comparisons:
+        pair_count = 0
+        left_dominates = 0
+        right_dominates = 0
+        left_more_mem_more_time = 0
+        left_less_mem_less_time = 0
+        equal = 0
+        for row in env_rows:
+            if row.scheduler != left or row.desired_retention is None:
+                continue
+            key = (right, row.user_id, round(row.desired_retention * 10000))
+            other = by_key.get(key)
+            if other is None:
+                continue
+            pair_count += 1
+            left_no_worse = (
+                row.memorized_average >= other.memorized_average
+                and row.time_average <= other.time_average
+            )
+            left_strictly_better = (
+                row.memorized_average > other.memorized_average
+                or row.time_average < other.time_average
+            )
+            right_no_worse = (
+                other.memorized_average >= row.memorized_average
+                and other.time_average <= row.time_average
+            )
+            right_strictly_better = (
+                other.memorized_average > row.memorized_average
+                or other.time_average < row.time_average
+            )
+            if left_no_worse and left_strictly_better:
+                left_dominates += 1
+            elif right_no_worse and right_strictly_better:
+                right_dominates += 1
+            elif (
+                row.memorized_average == other.memorized_average
+                and row.time_average == other.time_average
+            ):
+                equal += 1
+            elif (
+                row.memorized_average > other.memorized_average
+                and row.time_average > other.time_average
+            ):
+                left_more_mem_more_time += 1
+            elif (
+                row.memorized_average < other.memorized_average
+                and row.time_average < other.time_average
+            ):
+                left_less_mem_less_time += 1
+            else:
+                equal += 1
+        output_rows.append(
+            {
+                "left_scheduler": left,
+                "right_scheduler": right,
+                "comparison": f"{left} - {right}",
+                "pairs": pair_count,
+                "left_dominates": left_dominates,
+                "right_dominates": right_dominates,
+                "left_more_memory_more_time": left_more_mem_more_time,
+                "left_less_memory_less_time": left_less_mem_less_time,
+                "equal": equal,
+            }
+        )
+    return output_rows
+
+
+def build_best_point_summary(
+    rows: list[SweepRow],
+    env: str,
+    schedulers: tuple[str, ...],
+    *,
+    mode: str,
+) -> list[dict[str, Any]]:
+    output_rows: list[dict[str, Any]] = []
+    for scheduler in schedulers:
+        best = best_by_user(rows, env=env, scheduler=scheduler, mode=mode)
+        values = list(best.values())
+        output_rows.append(
+            {
+                "scheduler": scheduler,
+                "avg_efficiency": finite_float(
+                    average([row.efficiency for row in values])
+                ),
+                "avg_memorized": finite_float(
+                    average([row.memorized_average for row in values])
+                ),
+                "avg_time": finite_float(average([row.time_average for row in values])),
+                "avg_reviews": finite_float(
+                    average([row.reviews_average for row in values])
+                ),
+                "avg_desired_retention": finite_float(
+                    average_optional([row.desired_retention for row in values])
+                ),
+                "users": sorted(best),
+            }
+        )
+    return output_rows
+
+
+def build_primary_hypervolume_summary(
+    rows: list[SweepRow],
+    env: str,
+    *,
+    baseline_scheduler: str,
+    target_schedulers: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    output_rows: list[dict[str, Any]] = []
+    for target_scheduler in target_schedulers:
+        summaries = hypervolume_user_summaries(
+            rows,
+            env,
+            baseline_scheduler=baseline_scheduler,
+            target_scheduler=target_scheduler,
+        )
+        if not summaries:
+            continue
+        baseline_hv_sum = sum(summary.baseline_hv for summary in summaries)
+        target_hv_sum = sum(summary.target_hv for summary in summaries)
+        hv_delta_sum = sum(summary.hv_delta for summary in summaries)
+        hv_delta_ratio = (
+            (hv_delta_sum / baseline_hv_sum) * 100.0
+            if baseline_hv_sum
+            else float("nan")
+        )
+        hv_min, hv_p25, hv_median, hv_p75, hv_max = five_number_summary(
+            [summary.hv_delta for summary in summaries]
+        )
+        output_rows.append(
+            {
+                "scheduler": target_scheduler,
+                "baseline_scheduler": baseline_scheduler,
+                "baseline_hv_sum": finite_float(baseline_hv_sum),
+                "scheduler_hv_sum": finite_float(target_hv_sum),
+                "hv_delta_sum": finite_float(hv_delta_sum),
+                "hv_delta_baseline_ratio_percent": finite_float(hv_delta_ratio),
+                "hv_delta_five_number": {
+                    "min": finite_float(hv_min),
+                    "p25": finite_float(hv_p25),
+                    "median": finite_float(hv_median),
+                    "p75": finite_float(hv_p75),
+                    "max": finite_float(hv_max),
+                },
+                "scheduler_frontier_points": sum(
+                    summary.target_frontier_count for summary in summaries
+                ),
+                "users": len(summaries),
+            }
+        )
+    return output_rows
+
+
+def build_budget_memory_gain_auc_summary(
+    rows: list[SweepRow],
+    env: str,
+    schedulers: tuple[str, ...],
+    *,
+    baseline_scheduler: str,
+) -> list[dict[str, Any]]:
+    output_rows: list[dict[str, Any]] = []
+    for scheduler in schedulers:
+        summaries = budget_memory_gain_auc_user_summaries(
+            rows,
+            env,
+            baseline_scheduler=baseline_scheduler,
+            target_scheduler=scheduler,
+        )
+        if not summaries:
+            continue
+        budget_count = sum(summary.budget_count for summary in summaries)
+        covered_budget_count = sum(
+            summary.covered_budget_count for summary in summaries
+        )
+        total_span = sum(summary.total_span for summary in summaries)
+        covered_span = sum(summary.covered_span for summary in summaries)
+        memory_gain_aucs = [
+            summary.memory_gain_auc
+            for summary in summaries
+            if summary.memory_gain_auc is not None
+        ]
+        baseline_memory_aucs = [
+            summary.baseline_memory_auc
+            for summary in summaries
+            if summary.baseline_memory_auc is not None
+        ]
+        mean_memory_gain_auc = (
+            average(memory_gain_aucs) if memory_gain_aucs else float("nan")
+        )
+        mean_baseline_memory_auc = (
+            average(baseline_memory_aucs) if baseline_memory_aucs else float("nan")
+        )
+        span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
+        relative_gain_auc = (
+            (mean_memory_gain_auc / mean_baseline_memory_auc) * 100.0
+            if baseline_memory_aucs and mean_baseline_memory_auc
+            else float("nan")
+        )
+        output_rows.append(
+            {
+                "scheduler": scheduler,
+                "baseline_scheduler": baseline_scheduler,
+                "auc_users": len(memory_gain_aucs),
+                "users": len(summaries),
+                "budget_count": budget_count,
+                "covered_budget_count": covered_budget_count,
+                "total_span": finite_float(total_span),
+                "covered_span": finite_float(covered_span),
+                "span_coverage_percent": finite_float(span_coverage),
+                "memory_gain_auc_mean": finite_float(mean_memory_gain_auc),
+                "baseline_memory_auc_mean": finite_float(mean_baseline_memory_auc),
+                "relative_gain_auc_percent": finite_float(relative_gain_auc),
+            }
+        )
+    return output_rows
+
+
+def build_memory_target_regret_auc_summary(
+    rows: list[SweepRow],
+    env: str,
+    schedulers: tuple[str, ...],
+    *,
+    baseline_scheduler: str,
+) -> list[dict[str, Any]]:
+    output_rows: list[dict[str, Any]] = []
+    for scheduler in schedulers:
+        summaries = memory_target_regret_auc_user_summaries(
+            rows,
+            env,
+            baseline_scheduler=baseline_scheduler,
+            target_scheduler=scheduler,
+        )
+        if not summaries:
+            continue
+        target_count = sum(summary.target_count for summary in summaries)
+        covered_target_count = sum(
+            summary.covered_target_count for summary in summaries
+        )
+        total_span = sum(summary.total_span for summary in summaries)
+        covered_span = sum(summary.covered_span for summary in summaries)
+        time_regret_aucs = [
+            summary.time_regret_auc
+            for summary in summaries
+            if summary.time_regret_auc is not None
+        ]
+        baseline_time_aucs = [
+            summary.baseline_time_auc
+            for summary in summaries
+            if summary.baseline_time_auc is not None
+        ]
+        mean_time_regret_auc = (
+            average(time_regret_aucs) if time_regret_aucs else float("nan")
+        )
+        mean_baseline_time_auc = (
+            average(baseline_time_aucs) if baseline_time_aucs else float("nan")
+        )
+        span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
+        relative_regret_auc = (
+            (mean_time_regret_auc / mean_baseline_time_auc) * 100.0
+            if baseline_time_aucs and mean_baseline_time_auc
+            else float("nan")
+        )
+        output_rows.append(
+            {
+                "scheduler": scheduler,
+                "baseline_scheduler": baseline_scheduler,
+                "auc_users": len(time_regret_aucs),
+                "users": len(summaries),
+                "target_count": target_count,
+                "covered_target_count": covered_target_count,
+                "total_span": finite_float(total_span),
+                "covered_span": finite_float(covered_span),
+                "span_coverage_percent": finite_float(span_coverage),
+                "time_regret_auc_mean": finite_float(mean_time_regret_auc),
+                "baseline_time_auc_mean": finite_float(mean_baseline_time_auc),
+                "relative_regret_auc_percent": finite_float(relative_regret_auc),
+            }
+        )
+    return output_rows
+
+
+def build_per_user_hypervolume_summary(
+    rows: list[SweepRow],
+    env: str,
+    *,
+    baseline_scheduler: str,
+    target_scheduler: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "user_id": summary.user_id,
+            "baseline_scheduler": baseline_scheduler,
+            "target_scheduler": target_scheduler,
+            "baseline_hv": finite_float(summary.baseline_hv),
+            "target_hv": finite_float(summary.target_hv),
+            "hv_delta": finite_float(summary.hv_delta),
+            "target_frontier_count": summary.target_frontier_count,
+        }
+        for summary in hypervolume_user_summaries(
+            rows,
+            env,
+            baseline_scheduler=baseline_scheduler,
+            target_scheduler=target_scheduler,
+        )
+    ]
+
+
+def build_pareto_frontier_summary(
+    rows: list[SweepRow],
+    env: str,
+    schedulers: tuple[str, ...],
+) -> dict[str, Any]:
+    total, counts, users = pareto_counts(rows, env, schedulers)
+    return {
+        "total_frontier_points": total,
+        "by_scheduler": [
+            {
+                "scheduler": scheduler,
+                "frontier_points": counts[scheduler],
+                "users": users[scheduler],
+            }
+            for scheduler in schedulers
+        ],
+    }
+
+
+def build_analysis_summary(args: argparse.Namespace) -> dict[str, Any]:
+    envs = parse_csv(args.env)
+    schedulers = parse_csv(args.sched)
+    comparisons = parse_comparisons(args.comparisons)
+    if args.start_user < 1 or args.end_user < args.start_user:
+        raise ValueError("Invalid user range.")
+
+    rows, candidate_count = load_rows(args)
+    environments: dict[str, Any] = {}
+    for env in envs:
+        env_summary: dict[str, Any] = {}
+        if "fsrs6" in schedulers:
+            target_schedulers = tuple(
+                scheduler for scheduler in schedulers if scheduler != "fsrs6"
+            )
+            env_summary["primary_hypervolume_summary"] = (
+                build_primary_hypervolume_summary(
+                    rows,
+                    env,
+                    baseline_scheduler="fsrs6",
+                    target_schedulers=target_schedulers,
+                )
+            )
+            env_summary["budget_memory_gain_auc"] = (
+                build_budget_memory_gain_auc_summary(
+                    rows,
+                    env,
+                    schedulers,
+                    baseline_scheduler="fsrs6",
+                )
+            )
+            env_summary["memory_target_regret_auc"] = (
+                build_memory_target_regret_auc_summary(
+                    rows,
+                    env,
+                    schedulers,
+                    baseline_scheduler="fsrs6",
+                )
+            )
+            env_summary["per_user_hypervolume"] = {
+                target_scheduler: build_per_user_hypervolume_summary(
+                    rows,
+                    env,
+                    baseline_scheduler="fsrs6",
+                    target_scheduler=target_scheduler,
+                )
+                for target_scheduler in target_schedulers
+            }
+        else:
+            env_summary["primary_hypervolume_summary"] = []
+            env_summary["budget_memory_gain_auc"] = []
+            env_summary["memory_target_regret_auc"] = []
+            env_summary["per_user_hypervolume"] = {}
+
+        env_summary["policy_point_diagnostics"] = build_policy_point_diagnostics(
+            rows, env, schedulers
+        )
+        env_summary["same_user_same_dr_deltas"] = build_pairwise_delta_summary(
+            rows, env, comparisons
+        )
+        env_summary["same_user_same_dr_dominance"] = build_dominance_summary(
+            rows, env, comparisons
+        )
+        env_summary["best_efficiency_points"] = build_best_point_summary(
+            rows, env, schedulers, mode="efficiency"
+        )
+        env_summary["best_efficiency_winners"] = [
+            {"scheduler": scheduler, "users": user_ids}
+            for scheduler, user_ids in winner_counts(rows, env, schedulers).items()
+        ]
+        env_summary["max_memory_points"] = build_best_point_summary(
+            rows, env, schedulers, mode="memory"
+        )
+        env_summary["pareto_frontier"] = build_pareto_frontier_summary(
+            rows, env, schedulers
+        )
+        environments[env] = env_summary
+
+    return {
+        "type": "scheduler-comparison-analysis",
+        "schema_version": 1,
+        "generated_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "run_root": str(args.run_root) if args.run_root is not None else None,
+        "analysis_summary_path": str(args.summary_path)
+        if args.summary_path is not None
+        else None,
+        "filters": {
+            "envs": list(envs),
+            "schedulers": list(schedulers),
+            "comparisons": [
+                {"left": left, "right": right} for left, right in comparisons
+            ],
+            "users": {"start": args.start_user, "end": args.end_user},
+            "retention": {
+                "start": args.start_retention,
+                "end": args.end_retention,
+            },
+            "engine": args.engine,
+            "short_term": args.short_term,
+            "fuzz": args.fuzz,
+            "metric": args.metric,
+            "dedupe": not args.no_dedupe,
+            "baseline_dr_manifest": str(args.baseline_dr_manifest)
+            if args.baseline_dr_manifest is not None
+            else None,
+        },
+        "source": {
+            "log_dir": str(args.log_dir),
+            "output_path": str(args.output_path)
+            if args.output_path is not None
+            else None,
+        },
+        "coverage": {
+            "loaded_records": len(rows),
+            "candidate_records": candidate_count,
+            "after_latest_file_dedupe": not args.no_dedupe,
+            "by_env_scheduler": build_coverage_summary(rows, envs, schedulers),
+        },
+        "environments": environments,
+    }
+
+
+def render_coverage_summary(rows: list[dict[str, Any]]) -> str:
+    return markdown_table(
+        ["env", "scheduler", "records", "users", "DRs"],
+        [
+            [
+                str(row["environment"]),
+                str(row["scheduler"]),
+                str(row["records"]),
+                str(row["user_range"] or "-"),
+                str(row["desired_retention_count"]),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_policy_point_diagnostics(rows: list[dict[str, Any]]) -> str:
+    return markdown_table(
+        [
+            "scheduler",
+            "policy-point avg memorized",
+            "policy-point avg time",
+            "policy-point avg efficiency",
+            "policy-point avg reviews",
+        ],
+        [
+            [
+                str(row["scheduler"]),
+                fmt_float_optional(row["policy_point_avg_memorized"], 1),
+                fmt_float_optional(row["policy_point_avg_time"], 2),
+                fmt_float_optional(row["policy_point_avg_efficiency"], 2),
+                fmt_float_optional(row["policy_point_avg_reviews"], 2),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_pairwise_delta_summary(rows: list[dict[str, Any]]) -> str:
+    return markdown_table(
+        [
+            "comparison",
+            "pairs",
+            "delta memorized",
+            "delta time",
+            "delta efficiency",
+            "eff wins",
+            "time wins",
+            "mem wins",
+        ],
+        [
+            [
+                str(row["comparison"]),
+                str(row["pairs"]),
+                fmt_float_optional(row["delta_memorized_mean"], 1),
+                fmt_float_optional(row["delta_time_mean"], 2),
+                fmt_float_optional(row["delta_efficiency_mean"], 2),
+                f"{row['efficiency_wins']}/{row['pairs']}",
+                f"{row['time_wins']}/{row['pairs']}",
+                f"{row['memory_wins']}/{row['pairs']}",
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_dominance_summary(rows: list[dict[str, Any]]) -> str:
+    return markdown_table(
+        [
+            "comparison",
+            "pairs",
+            "left dominates",
+            "right dominates",
+            "left mem+ time+",
+            "left mem- time-",
+            "equal",
+        ],
+        [
+            [
+                str(row["comparison"]),
+                str(row["pairs"]),
+                f"{row['left_dominates']}/{row['pairs']}",
+                f"{row['right_dominates']}/{row['pairs']}",
+                f"{row['left_more_memory_more_time']}/{row['pairs']}",
+                f"{row['left_less_memory_less_time']}/{row['pairs']}",
+                f"{row['equal']}/{row['pairs']}",
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_best_point_summary(rows: list[dict[str, Any]]) -> str:
+    return markdown_table(
+        [
+            "scheduler",
+            "avg efficiency",
+            "avg memorized",
+            "avg time",
+            "avg reviews",
+            "avg DR",
+        ],
+        [
+            [
+                str(row["scheduler"]),
+                fmt_float_optional(row["avg_efficiency"], 2),
+                fmt_float_optional(row["avg_memorized"], 1),
+                fmt_float_optional(row["avg_time"], 2),
+                fmt_float_optional(row["avg_reviews"], 2),
+                fmt_float_optional(row["avg_desired_retention"], 3),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_primary_hypervolume_summary(
+    rows: list[dict[str, Any]],
+    *,
+    baseline_scheduler: str = "fsrs6",
+) -> str:
+    if not rows:
+        return f"No {baseline_scheduler} comparison rows available."
+    return markdown_table(
+        [
+            "scheduler",
+            "baseline HV sum",
+            "scheduler HV sum",
+            "HV delta sum",
+            "HV delta / baseline HV",
+            "HV delta min",
+            "HV delta p25",
+            "HV delta median",
+            "HV delta p75",
+            "HV delta max",
+            "scheduler frontier points",
+            "users",
+        ],
+        [
+            [
+                str(row["scheduler"]),
+                fmt_float_optional(row["baseline_hv_sum"], 2),
+                fmt_float_optional(row["scheduler_hv_sum"], 2),
+                fmt_float_optional(row["hv_delta_sum"], 2),
+                fmt_percent_optional(row["hv_delta_baseline_ratio_percent"]),
+                fmt_float_optional(row["hv_delta_five_number"]["min"], 2),
+                fmt_float_optional(row["hv_delta_five_number"]["p25"], 2),
+                fmt_float_optional(row["hv_delta_five_number"]["median"], 2),
+                fmt_float_optional(row["hv_delta_five_number"]["p75"], 2),
+                fmt_float_optional(row["hv_delta_five_number"]["max"], 2),
+                str(row["scheduler_frontier_points"]),
+                str(row["users"]),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_budget_memory_gain_auc_summary(
+    rows: list[dict[str, Any]],
+    *,
+    baseline_scheduler: str = "fsrs6",
+) -> str:
+    if not rows:
+        return f"No {baseline_scheduler} baseline time budgets available."
+    return markdown_table(
+        [
+            "scheduler",
+            "AUC users",
+            "budget coverage",
+            "span coverage",
+            f"memory gain AUC vs {baseline_scheduler}",
+            f"relative gain AUC vs {baseline_scheduler}",
+        ],
+        [
+            [
+                str(row["scheduler"]),
+                f"{row['auc_users']}/{row['users']}",
+                f"{row['covered_budget_count']}/{row['budget_count']}",
+                fmt_percent_optional(row["span_coverage_percent"]),
+                fmt_float_optional(row["memory_gain_auc_mean"], 1),
+                fmt_percent_optional(row["relative_gain_auc_percent"]),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_memory_target_regret_auc_summary(
+    rows: list[dict[str, Any]],
+    *,
+    baseline_scheduler: str = "fsrs6",
+) -> str:
+    if not rows:
+        return f"No {baseline_scheduler} baseline memory targets available."
+    return markdown_table(
+        [
+            "scheduler",
+            "AUC users",
+            "target coverage",
+            "span coverage",
+            f"time regret AUC vs {baseline_scheduler}",
+            f"relative regret AUC vs {baseline_scheduler}",
+        ],
+        [
+            [
+                str(row["scheduler"]),
+                f"{row['auc_users']}/{row['users']}",
+                f"{row['covered_target_count']}/{row['target_count']}",
+                fmt_percent_optional(row["span_coverage_percent"]),
+                fmt_float_optional(row["time_regret_auc_mean"], 2),
+                fmt_percent_optional(row["relative_regret_auc_percent"]),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_per_user_hypervolume_summary(
+    rows: list[dict[str, Any]],
+    *,
+    baseline_scheduler: str = "fsrs6",
+    target_scheduler: str,
+) -> str:
+    if not rows:
+        return f"No {baseline_scheduler} + {target_scheduler} rows available."
+    return markdown_table(
+        [
+            "user",
+            "baseline HV",
+            f"{target_scheduler} HV",
+            "HV delta",
+            "scheduler frontier points",
+        ],
+        [
+            [
+                str(row["user_id"]),
+                fmt_float_optional(row["baseline_hv"], 2),
+                fmt_float_optional(row["target_hv"], 2),
+                fmt_float_optional(row["hv_delta"], 2),
+                str(row["target_frontier_count"]),
+            ]
+            for row in rows
+        ],
+    )
+
+
+def render_pareto_frontier_summary(summary: dict[str, Any]) -> tuple[str, str]:
+    rows = [
+        [
+            str(row["scheduler"]),
+            str(row["frontier_points"]),
+            str(row["users"]),
+        ]
+        for row in summary["by_scheduler"]
+    ]
+    return (
+        str(summary["total_frontier_points"]),
+        markdown_table(["scheduler", "frontier points", "users"], rows),
+    )
+
+
+def render_env_summary(
+    summary: dict[str, Any],
+    env: str,
+    schedulers: tuple[str, ...],
+) -> str:
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        print(f"\n## {env} environment\n")
+        if "fsrs6" in schedulers:
+            target_schedulers = tuple(
+                scheduler for scheduler in schedulers if scheduler != "fsrs6"
+            )
+            if target_schedulers:
+                print("### Primary hypervolume summary vs FSRS6 baseline\n")
+                print(
+                    "Scheduler HV is computed from the scheduler's own Pareto "
+                    "frontier with an FSRS6-baseline reference point; it is not "
+                    "computed from the combined FSRS6 + scheduler frontier.\n"
+                )
+                print(
+                    render_primary_hypervolume_summary(
+                        summary["primary_hypervolume_summary"],
+                        baseline_scheduler="fsrs6",
+                    )
+                )
+
+                print("\n### Budget-memory gain AUC vs FSRS6 baseline\n")
+                print(
+                    "Gain AUC integrates memorized-card gain over the common "
+                    "covered time-budget interval between the FSRS6 baseline "
+                    "frontier and each scheduler frontier, using linear "
+                    "interpolation only. Positive values mean the scheduler "
+                    "remembers more cards at the same budget. Relative gain "
+                    "divides mean memory gain AUC by mean covered baseline memory "
+                    "AUC.\n"
+                )
+                print(
+                    render_budget_memory_gain_auc_summary(
+                        summary["budget_memory_gain_auc"],
+                        baseline_scheduler="fsrs6",
+                    )
+                )
+
+                print("\n### Memory-target regret AUC vs FSRS6 baseline\n")
+                print(
+                    "Regret AUC integrates time regret over the common covered "
+                    "memory-target interval between the FSRS6 baseline frontier "
+                    "and each scheduler frontier, using linear interpolation only. "
+                    "Negative values mean the scheduler reaches the same "
+                    "memorized-card targets faster. Relative regret divides mean "
+                    "time regret AUC by mean covered baseline time AUC.\n"
+                )
+                print(
+                    render_memory_target_regret_auc_summary(
+                        summary["memory_target_regret_auc"],
+                        baseline_scheduler="fsrs6",
+                    )
+                )
+
+        print("\n### Policy-point diagnostics\n")
+        print(
+            "Unweighted policy-point averages describe where the sampled policies lie; "
+            "they are not the primary Pareto metrics.\n"
+        )
+        print(render_policy_point_diagnostics(summary["policy_point_diagnostics"]))
+
+        print("\n### Same-user same-DR deltas\n")
+        print(render_pairwise_delta_summary(summary["same_user_same_dr_deltas"]))
+
+        print("\n### Same-user same-DR dominance\n")
+        print(render_dominance_summary(summary["same_user_same_dr_dominance"]))
+
+        print("\n### Diagnostic best-efficiency point per user\n")
+        print(render_best_point_summary(summary["best_efficiency_points"]))
+        winners = summary["best_efficiency_winners"]
+        denominator = sum(len(row["users"]) for row in winners)
+        winner_text = ", ".join(
+            f"{row['scheduler']}: {len(row['users'])}/{denominator}"
+            f" users {row['users']}"
+            for row in winners
+            if row["users"]
+        )
+        print(f"\nBest-efficiency winners: {winner_text}")
+
+        print("\n### Diagnostic max-memory point per user\n")
+        print(render_best_point_summary(summary["max_memory_points"]))
+
+        total, table = render_pareto_frontier_summary(summary["pareto_frontier"])
+        print(f"\n### Pareto frontier by user\n\nTotal frontier points: {total}\n")
+        print(table)
+
+        if "fsrs6" in schedulers:
+            target_schedulers = tuple(
+                scheduler for scheduler in schedulers if scheduler != "fsrs6"
+            )
+            for target_scheduler in target_schedulers:
+                title = "### Per-user hypervolume vs FSRS6 baseline"
+                if len(target_schedulers) > 1:
+                    title = f"{title}: {target_scheduler}"
+                print(f"\n{title}\n")
+                print(
+                    render_per_user_hypervolume_summary(
+                        summary["per_user_hypervolume"].get(target_scheduler, []),
+                        baseline_scheduler="fsrs6",
+                        target_scheduler=target_scheduler,
+                    )
+                )
+    return buffer.getvalue()
+
+
+def render_summary_report(summary: dict[str, Any]) -> str:
+    filters = summary["filters"]
+    envs = tuple(str(env) for env in filters["envs"])
+    schedulers = tuple(str(scheduler) for scheduler in filters["schedulers"])
+    coverage = summary["coverage"]
+    buffer = io.StringIO()
+    with redirect_stdout(buffer):
+        print("# FSRS-6 Scheduler Comparison\n")
+        print(
+            "Filters: "
+            f"env={','.join(envs)}, "
+            f"scheduler={','.join(schedulers)}, "
+            f"users={filters['users']['start']}-{filters['users']['end']}, "
+            f"retention={filters['retention']['start']:.2f}-"
+            f"{filters['retention']['end']:.2f}, "
+            f"engine={filters['engine']}, short_term={filters['short_term']}, "
+            f"fuzz={filters['fuzz']}, "
+            "budget_gain_auc=common_covered_frontier_interval, "
+            "memory_target_regret_auc=common_covered_frontier_interval"
+        )
+        loaded = coverage["loaded_records"]
+        candidate_count = coverage["candidate_records"]
+        print(
+            f"Loaded {loaded} records"
+            + (
+                f" after latest-file dedupe from {candidate_count} matching records."
+                if coverage["after_latest_file_dedupe"]
+                else "."
+            )
+        )
+
+        print("\n## Coverage\n")
+        print(render_coverage_summary(coverage["by_env_scheduler"]))
+
+        for env in envs:
+            print(
+                render_env_summary(
+                    summary["environments"][env],
+                    env,
+                    schedulers,
+                ),
+                end="",
+            )
+    return buffer.getvalue()
+
+
 def print_env_report(
     rows: list[SweepRow],
     env: str,
@@ -1455,9 +2574,9 @@ def print_env_report(
 
             print("\n### Budget-memory gain AUC vs FSRS6 baseline\n")
             print(
-                "Gain AUC integrates memorized-card gain over all FSRS6-baseline "
-                "frontier time budgets per user, using linear interpolation "
-                "between each scheduler's Pareto frontier points. Positive "
+                "Gain AUC integrates memorized-card gain over the common covered "
+                "time-budget interval between the FSRS6 baseline frontier and each "
+                "scheduler frontier, using linear interpolation only. Positive "
                 "values mean the scheduler remembers more cards at the same "
                 "budget. Relative gain divides mean memory gain AUC by mean "
                 "covered baseline memory AUC.\n"
@@ -1473,12 +2592,12 @@ def print_env_report(
 
             print("\n### Memory-target regret AUC vs FSRS6 baseline\n")
             print(
-                "Regret AUC integrates time regret over all FSRS6-baseline "
-                "frontier memory targets per user, using linear interpolation "
-                "between each scheduler's Pareto frontier points. Negative "
-                "values mean the scheduler reaches the same memorized-card "
-                "targets faster. Relative regret divides mean time regret AUC "
-                "by mean covered baseline time AUC.\n"
+                "Regret AUC integrates time regret over the common covered "
+                "memory-target interval between the FSRS6 baseline frontier and "
+                "each scheduler frontier, using linear interpolation only. "
+                "Negative values mean the scheduler reaches the same memorized-card "
+                "targets faster. Relative regret divides mean time regret AUC by "
+                "mean covered baseline time AUC.\n"
             )
             print(
                 memory_target_regret_auc_table(
@@ -1571,54 +2690,22 @@ def print_env_report(
 
 
 def render_report(args: argparse.Namespace) -> str:
-    envs = parse_csv(args.env)
-    schedulers = parse_csv(args.sched)
-    comparisons = parse_comparisons(args.comparisons)
-    if args.start_user < 1 or args.end_user < args.start_user:
-        raise ValueError("Invalid user range.")
-
-    rows, candidate_count = load_rows(args)
-    buffer = io.StringIO()
-    with redirect_stdout(buffer):
-        print("# FSRS-6 Scheduler Comparison\n")
-        print(
-            "Filters: "
-            f"env={','.join(envs)}, "
-            f"scheduler={','.join(schedulers)}, "
-            f"users={args.start_user}-{args.end_user}, "
-            f"retention={args.start_retention:.2f}-{args.end_retention:.2f}, "
-            f"engine={args.engine}, short_term={args.short_term}, fuzz={args.fuzz}, "
-            "budget_gain_auc=interpolated_baseline_frontier, "
-            "memory_target_regret_auc=interpolated_baseline_frontier"
-        )
-        print(
-            f"Loaded {len(rows)} records"
-            + (
-                f" after latest-file dedupe from {candidate_count} matching records."
-                if not args.no_dedupe
-                else "."
-            )
-        )
-
-        print("\n## Coverage\n")
-        print(coverage_table(rows, envs, schedulers))
-
-        for env in envs:
-            print_env_report(
-                rows,
-                env,
-                schedulers,
-                comparisons,
-            )
-    return buffer.getvalue()
+    return render_summary_report(build_analysis_summary(args))
 
 
 def main() -> int:
     args = parse_args()
-    report = render_report(args)
+    summary = build_analysis_summary(args)
+    report = render_summary_report(summary)
     if args.output_path is not None:
         args.output_path.parent.mkdir(parents=True, exist_ok=True)
         args.output_path.write_text(report, encoding="utf-8")
+    if args.summary_path is not None:
+        args.summary_path.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_path.write_text(
+            json.dumps(summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     print(report, end="")
     return 0
 

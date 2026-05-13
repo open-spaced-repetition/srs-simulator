@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.rl_scheduler.run_portfolio_workflow import (
     _baseline_sweep_command,
     _default_baseline_run_id,
+    _report_command,
     build_workflow_steps,
 )
 from simulator.experiment_infra.schemas import ExperimentConfig
@@ -87,6 +88,62 @@ class PortfolioWorkflowTests(unittest.TestCase):
         self.assertIn("already exists", steps[0].reason or "")
         self.assertTrue(steps[1].skipped)
         self.assertTrue(steps[2].skipped)
+
+    def test_report_step_uses_config_and_can_be_skipped(self) -> None:
+        config_path = (
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/anki_sm2_ap_portfolio_users_1_8_pop16_20_v1.toml"
+        )
+        config = ExperimentConfig.from_toml(config_path)
+        manifest = config.baseline_dr_selection.manifest
+        self.assertIsNotNone(manifest)
+        assert manifest is not None
+        command = _report_command(
+            config=config,
+            formal_run_id="anki_sm2_ap_portfolio_users_1_8_pop16_20_v1",
+        )
+
+        self.assertIn("experiments/rl_scheduler/generate_experiment_report.py", command)
+        self.assertEqual(
+            command[command.index("--candidate-label") + 1],
+            "Anki SM2 AP",
+        )
+        self.assertIn("--comparison-run-root", command)
+
+        steps = build_workflow_steps(
+            config_path=config_path,
+            config=config,
+            manifest_path=REPO_ROOT / manifest,
+            formal_run_id="anki_sm2_ap_portfolio_users_1_8_pop16_20_v1",
+            baseline_run_id="baseline",
+            selector_max_lanes_per_batch=8192,
+            baseline_max_lanes_per_batch=None,
+            formal_stage="all",
+            force_manifest=False,
+            skip_manifest=True,
+            skip_baseline_sweep=True,
+            skip_formal_stages=False,
+        )
+        self.assertEqual(steps[-1].name, "report")
+        self.assertFalse(steps[-1].skipped)
+
+        skipped_steps = build_workflow_steps(
+            config_path=config_path,
+            config=config,
+            manifest_path=REPO_ROOT / manifest,
+            formal_run_id="anki_sm2_ap_portfolio_users_1_8_pop16_20_v1",
+            baseline_run_id="baseline",
+            selector_max_lanes_per_batch=8192,
+            baseline_max_lanes_per_batch=None,
+            formal_stage="all",
+            force_manifest=False,
+            skip_manifest=True,
+            skip_baseline_sweep=True,
+            skip_formal_stages=False,
+            skip_report=True,
+        )
+        self.assertTrue(skipped_steps[-1].skipped)
+        self.assertIn("--skip-report", skipped_steps[-1].reason or "")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,7 @@ from simulator.experiment_infra.baseline_dr_selection import (
     BaselineDRManifest,
     load_baseline_dr_manifest,
 )
+from simulator.experiment_infra.gpu_monitor import GpuMonitor, GpuMonitorSummary
 from simulator.retention_sweep.log_filter import LogFilenameFilter
 from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
@@ -412,6 +413,7 @@ def run_train_overfit(
     manifest_path = stage_root / "manifest.json"
     commands_root = stage_root / "commands"
     outputs_root = stage_root / "train_outputs"
+    gpu_monitor = _maybe_start_stage_gpu_monitor(config=config, stage_root=stage_root)
 
     shutil.copyfile(config_path, config_snapshot_path)
     _write_json(resolved_config_path, config.to_dict())
@@ -547,6 +549,7 @@ def run_train_overfit(
                 runtime_batch_metrics = {}
     unique_failures = tuple(dict.fromkeys(failures))
     passed = not unique_failures
+    gpu_monitor_summary = _stop_stage_gpu_monitor(gpu_monitor)
     gate_summary = GateSummary(
         gate_name=StageName.TRAIN_OVERFIT.value,
         passed=passed,
@@ -586,6 +589,7 @@ def run_train_overfit(
             "timeout_seconds": config.performance.timeout_seconds,
             **runtime_batch_metrics,
         },
+        gpu_monitor_summary=gpu_monitor_summary,
     )
     if config.performance.write_performance_summary:
         _write_json(performance_summary_path, performance_summary.to_dict())
@@ -631,6 +635,9 @@ def run_train_overfit(
         "performance_summary_path": str(performance_summary_path)
         if config.performance.write_performance_summary
         else None,
+        "gpu_monitor_summary_path": str(gpu_monitor_summary.summary_path)
+        if gpu_monitor_summary is not None
+        else None,
         "manifest_path": str(manifest_path),
         "environment": provenance,
     }
@@ -657,6 +664,11 @@ def run_train_overfit(
                 if config.performance.write_performance_summary
                 else ()
             ),
+            *(
+                (gpu_monitor_summary.jsonl_path, gpu_monitor_summary.summary_path)
+                if gpu_monitor_summary is not None
+                else ()
+            ),
             manifest_path,
             *command_records,
             *stdout_paths,
@@ -677,6 +689,9 @@ def run_train_overfit(
     }
     if config.performance.write_performance_summary:
         manifest_artifacts["performance_summary"] = performance_summary_path
+    if gpu_monitor_summary is not None:
+        manifest_artifacts["gpu_monitor_jsonl"] = gpu_monitor_summary.jsonl_path
+        manifest_artifacts["gpu_monitor_summary"] = gpu_monitor_summary.summary_path
     manifest_artifacts.update(
         {
             f"training_command_record_{index}": path
@@ -747,6 +762,7 @@ def run_sweep(
     train_summary_path = (
         output_root / run_id / StageName.TRAIN_OVERFIT.value / "training_summary.json"
     )
+    gpu_monitor = _maybe_start_stage_gpu_monitor(config=config, stage_root=stage_root)
 
     shutil.copyfile(config_path, config_snapshot_path)
     _write_json(resolved_config_path, config.to_dict())
@@ -1066,6 +1082,7 @@ def run_sweep(
 
     unique_failures = tuple(dict.fromkeys(failures))
     passed = not unique_failures
+    gpu_monitor_summary = _stop_stage_gpu_monitor(gpu_monitor)
     gate_summary = GateSummary(
         gate_name=StageName.SWEEP.value,
         passed=passed,
@@ -1108,6 +1125,7 @@ def run_sweep(
             else 0,
             "timeout_seconds": config.performance.timeout_seconds,
         },
+        gpu_monitor_summary=gpu_monitor_summary,
     )
     if config.performance.write_performance_summary:
         _write_json(performance_summary_path, performance_summary.to_dict())
@@ -1158,6 +1176,9 @@ def run_sweep(
         "performance_summary_path": str(performance_summary_path)
         if config.performance.write_performance_summary
         else None,
+        "gpu_monitor_summary_path": str(gpu_monitor_summary.summary_path)
+        if gpu_monitor_summary is not None
+        else None,
         "manifest_path": str(manifest_path),
         "environment": provenance,
     }
@@ -1182,6 +1203,11 @@ def run_sweep(
             *(
                 (performance_summary_path,)
                 if config.performance.write_performance_summary
+                else ()
+            ),
+            *(
+                (gpu_monitor_summary.jsonl_path, gpu_monitor_summary.summary_path)
+                if gpu_monitor_summary is not None
                 else ()
             ),
             manifest_path,
@@ -1210,6 +1236,9 @@ def run_sweep(
     }
     if config.performance.write_performance_summary:
         manifest_artifacts["performance_summary"] = performance_summary_path
+    if gpu_monitor_summary is not None:
+        manifest_artifacts["gpu_monitor_jsonl"] = gpu_monitor_summary.jsonl_path
+        manifest_artifacts["gpu_monitor_summary"] = gpu_monitor_summary.summary_path
     manifest_artifacts.update(
         {
             f"scheduler_artifact_metadata_{index}": path
@@ -1559,6 +1588,7 @@ def run_analyze_pareto(
     analyze_summary_path = stage_root / "analyze_pareto_summary.json"
     manifest_path = stage_root / "manifest.json"
     output_dir = stage_root / "analyze_pareto_outputs"
+    analysis_data_summary_path = output_dir / "analysis_summary.json"
     run_root = output_root / run_id
     build_stage_root = run_root / StageName.BUILD_PARETO.value
     build_summary_path = build_stage_root / "build_pareto_summary.json"
@@ -1620,6 +1650,7 @@ def run_analyze_pareto(
             command_results.append(
                 {
                     "output_dir": str(output_dir),
+                    "analysis_summary_path": str(analysis_data_summary_path),
                     "command_record_path": str(analyze_command_record_path),
                     "stdout_path": str(analyze_stdout_path),
                     "stderr_path": str(analyze_stderr_path),
@@ -1659,6 +1690,18 @@ def run_analyze_pareto(
             if empty_paths:
                 failures.append(FailureClass.INVALID_ARTIFACT)
                 notes.append(f"Analyze-Pareto output is empty: {empty_paths[0]}")
+            elif not analysis_data_summary_path.exists():
+                failures.append(FailureClass.INCOMPLETE_OUTPUT)
+                notes.append(
+                    "Analyze-Pareto machine summary is missing: "
+                    f"{analysis_data_summary_path}"
+                )
+            elif analysis_data_summary_path.stat().st_size == 0:
+                failures.append(FailureClass.INVALID_ARTIFACT)
+                notes.append(
+                    "Analyze-Pareto machine summary is empty: "
+                    f"{analysis_data_summary_path}"
+                )
 
     unique_failures = tuple(dict.fromkeys(failures))
     passed = not unique_failures
@@ -1704,6 +1747,9 @@ def run_analyze_pareto(
         "build_stage_root": str(build_stage_root),
         "analyze_pareto_config": config.analyze_pareto.to_dict(),
         "result_paths": [str(path) for path in result_paths],
+        "analysis_summary_path": str(analysis_data_summary_path)
+        if analysis_data_summary_path.exists()
+        else None,
         "command_results": command_results,
         "config_snapshot_path": str(config_snapshot_path),
         "resolved_config_path": str(resolved_config_path),
@@ -1736,6 +1782,11 @@ def run_analyze_pareto(
             *stdout_paths,
             *stderr_paths,
             *result_paths,
+            *(
+                (analysis_data_summary_path,)
+                if analysis_data_summary_path.exists()
+                else ()
+            ),
         ),
     )
     _write_json(run_record_path, run_record.to_dict())
@@ -1748,6 +1799,8 @@ def run_analyze_pareto(
         "run_record": run_record_path,
         "analyze_pareto_summary": analyze_summary_path,
     }
+    if analysis_data_summary_path.exists():
+        manifest_artifacts["analysis_summary"] = analysis_data_summary_path
     manifest_artifacts.update(
         {
             f"analyze_pareto_command_record_{index}": path
@@ -3405,6 +3458,7 @@ def _build_stage_performance_summary(
     notes: list[str],
     runtime_metrics: dict[str, Any],
     execution_shape: dict[str, Any],
+    gpu_monitor_summary: GpuMonitorSummary | None = None,
 ) -> PerformanceSummary:
     device = _resolve_performance_device(config)
     runtime = {
@@ -3434,11 +3488,77 @@ def _build_stage_performance_summary(
             **execution_shape,
         },
         runtime_metrics=runtime,
-        gpu_metrics=_gpu_performance_metrics(device),
+        gpu_metrics={
+            **_gpu_performance_metrics(device),
+            **_gpu_monitor_performance_metrics(gpu_monitor_summary),
+        },
         disk_metrics=_disk_metrics(stage_root),
         failure_class=failures[0] if failures else None,
         notes=tuple(notes),
     )
+
+
+def _maybe_start_stage_gpu_monitor(
+    *,
+    config: ExperimentConfig,
+    stage_root: Path,
+) -> GpuMonitor | None:
+    device = _resolve_performance_device(config)
+    enabled = config.performance.gpu_monitor_enabled
+    if enabled is None:
+        enabled = device.startswith("cuda")
+    if not enabled:
+        return None
+    monitor = GpuMonitor(
+        output_dir=stage_root / "gpu_monitor",
+        interval_seconds=config.performance.gpu_monitor_interval_seconds,
+    )
+    monitor.start()
+    return monitor
+
+
+def _stop_stage_gpu_monitor(monitor: GpuMonitor | None) -> GpuMonitorSummary | None:
+    if monitor is None:
+        return None
+    return monitor.stop()
+
+
+def _gpu_monitor_performance_metrics(
+    summary: GpuMonitorSummary | None,
+) -> dict[str, Any]:
+    if summary is None:
+        return {
+            "gpu_monitor_enabled": False,
+            "gpu_monitor_summary_path": None,
+            "gpu_monitor_jsonl_path": None,
+            "gpu_monitor_shared_memory_peak_single_adapter_bytes": None,
+            "gpu_monitor_shared_memory_peak_summed_bytes": None,
+            "gpu_monitor_shared_memory_spill_detected": None,
+        }
+    return {
+        "gpu_monitor_enabled": summary.enabled,
+        "gpu_monitor_summary_path": str(summary.summary_path),
+        "gpu_monitor_jsonl_path": str(summary.jsonl_path),
+        "gpu_monitor_sample_count": summary.sample_count,
+        "gpu_monitor_shared_memory_peak_single_adapter_bytes": (
+            summary.shared_memory_peak_single_adapter_bytes
+        ),
+        "gpu_monitor_shared_memory_peak_summed_bytes": (
+            summary.shared_memory_peak_summed_bytes
+        ),
+        "gpu_monitor_shared_memory_spill_threshold_bytes": (
+            summary.shared_memory_spill_threshold_bytes
+        ),
+        "gpu_monitor_shared_memory_spill_detected": (
+            summary.shared_memory_spill_detected
+        ),
+        "gpu_monitor_nvidia_smi_peak_memory_used_mib": (
+            summary.nvidia_smi_peak_memory_used_mib
+        ),
+        "gpu_monitor_nvidia_smi_peak_utilization_percent": (
+            summary.nvidia_smi_peak_utilization_percent
+        ),
+    }
 
 
 def _resolve_performance_device(config: ExperimentConfig) -> str:
@@ -5566,6 +5686,7 @@ def _format_analyze_pareto_command(
         config.analyze_pareto.log_dir or (build_stage_root / "build_pareto_outputs"),
     )
     output_path = output_dir / "analysis.md"
+    summary_path = output_dir / "analysis_summary.json"
     values: dict[str, Any] = {
         "run_id": run_id,
         "seed": config.seed,
@@ -5576,6 +5697,7 @@ def _format_analyze_pareto_command(
         "stage_root": str(stage_root),
         "output_dir": str(output_dir),
         "output_path": str(output_path),
+        "summary_path": str(summary_path),
         "log_dir": str(log_dir),
         "build_stage_root": str(build_stage_root),
         "build_pareto_outputs_dir": str(build_stage_root / "build_pareto_outputs"),
@@ -5607,6 +5729,8 @@ def _format_analyze_pareto_command(
         str(log_dir),
         "--output-path",
         str(output_path),
+        "--summary-path",
+        str(summary_path),
     ]
 
 

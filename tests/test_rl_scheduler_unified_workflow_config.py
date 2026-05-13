@@ -14,8 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.retention_sweep.analyze_scheduler_comparison import (
     SweepRow,
+    build_analysis_summary,
+    budget_memory_gain_auc_user_summaries,
     interpolated_memorized_under_budget,
     interpolated_min_time_for_memory_target,
+    memory_target_regret_auc_user_summaries,
     parse_args as parse_analyze_args,
     render_report,
 )
@@ -42,7 +45,7 @@ def _write_workflow_config(
         else ""
     )
     analyze_command = (
-        f'command_template = ["{sys.executable}", "{analyze_script}", "{{output_dir}}"]'
+        f'command_template = ["{sys.executable}", "{analyze_script}", "{{output_dir}}", "{{summary_path}}"]'
         if analyze_script is not None
         else ""
     )
@@ -622,6 +625,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             args = parse_analyze_args(
                 ["--config", str(config_path), "--log-dir", str(log_dir)]
             )
+            summary = build_analysis_summary(args)
             report = render_report(args)
 
         self.assertIn("fsrs6_adr - fsrs6", report)
@@ -630,6 +634,9 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertIn("Loaded 2 records", report)
         self.assertIn("### Primary hypervolume summary vs FSRS6 baseline", report)
         self.assertIn("### Policy-point diagnostics", report)
+        hv_rows = summary["environments"]["fsrs6"]["primary_hypervolume_summary"]
+        self.assertEqual(hv_rows[0]["scheduler"], "fsrs6_adr")
+        self.assertIn("budget_memory_gain_auc", summary["environments"]["fsrs6"])
 
     def test_analyze_scheduler_comparison_reports_hv_and_envelope_metrics(
         self,
@@ -811,12 +818,12 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
         self.assertIn("### Budget-memory gain AUC vs FSRS6 baseline", report)
         self.assertIn(
-            "| fsrs6_adr | 1/2 | 3/6 | 28.571% | -5.0 | -3.030% |",
+            "| fsrs6_adr | 2/2 | 2/6 | 32.857% | 8.1 | 5.830% |",
             report,
         )
         self.assertIn("### Memory-target regret AUC vs FSRS6 baseline", report)
         self.assertIn(
-            "| fsrs6_adr | 2/2 | 5/6 | 81.250% | 4.69 | 22.059% |",
+            "| fsrs6_adr | 2/2 | 2/6 | 37.500% | -2.96 | -9.556% |",
             report,
         )
 
@@ -852,10 +859,98 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
 
         self.assertIsNone(interpolated_memorized_under_budget(rows, 9.0))
         self.assertEqual(interpolated_memorized_under_budget(rows, 15.0), 150.0)
-        self.assertEqual(interpolated_memorized_under_budget(rows, 25.0), 200.0)
-        self.assertEqual(interpolated_min_time_for_memory_target(rows, 90.0), 10.0)
+        self.assertIsNone(interpolated_memorized_under_budget(rows, 25.0))
+        self.assertIsNone(interpolated_min_time_for_memory_target(rows, 90.0))
         self.assertEqual(interpolated_min_time_for_memory_target(rows, 150.0), 15.0)
         self.assertIsNone(interpolated_min_time_for_memory_target(rows, 250.0))
+
+    def test_auc_summaries_integrate_only_common_frontier_interval(self) -> None:
+        rows = [
+            SweepRow(
+                environment="fsrs6",
+                scheduler="fsrs6",
+                user_id=1,
+                desired_retention=0.5,
+                memorized_average=100.0,
+                time_average=10.0,
+                reviews_average=10.0,
+                efficiency=10.0,
+                path=Path("baseline-a.json"),
+                mtime_ns=0,
+            ),
+            SweepRow(
+                environment="fsrs6",
+                scheduler="fsrs6",
+                user_id=1,
+                desired_retention=0.6,
+                memorized_average=200.0,
+                time_average=20.0,
+                reviews_average=20.0,
+                efficiency=10.0,
+                path=Path("baseline-b.json"),
+                mtime_ns=0,
+            ),
+            SweepRow(
+                environment="fsrs6",
+                scheduler="fsrs6",
+                user_id=1,
+                desired_retention=0.7,
+                memorized_average=300.0,
+                time_average=30.0,
+                reviews_average=30.0,
+                efficiency=10.0,
+                path=Path("baseline-c.json"),
+                mtime_ns=0,
+            ),
+            SweepRow(
+                environment="fsrs6",
+                scheduler="fsrs6_adr",
+                user_id=1,
+                desired_retention=None,
+                memorized_average=150.0,
+                time_average=18.0,
+                reviews_average=18.0,
+                efficiency=8.3,
+                path=Path("target-a.json"),
+                mtime_ns=0,
+            ),
+            SweepRow(
+                environment="fsrs6",
+                scheduler="fsrs6_adr",
+                user_id=1,
+                desired_retention=None,
+                memorized_average=250.0,
+                time_average=28.0,
+                reviews_average=28.0,
+                efficiency=8.9,
+                path=Path("target-b.json"),
+                mtime_ns=0,
+            ),
+        ]
+
+        budget = budget_memory_gain_auc_user_summaries(
+            rows,
+            "fsrs6",
+            baseline_scheduler="fsrs6",
+            target_scheduler="fsrs6_adr",
+        )[0]
+        regret = memory_target_regret_auc_user_summaries(
+            rows,
+            "fsrs6",
+            baseline_scheduler="fsrs6",
+            target_scheduler="fsrs6_adr",
+        )[0]
+
+        self.assertEqual(budget.covered_budget_count, 1)
+        self.assertEqual(budget.total_span, 20.0)
+        self.assertEqual(budget.covered_span, 10.0)
+        self.assertAlmostEqual(budget.memory_gain_auc or 0.0, -30.0)
+        self.assertAlmostEqual(budget.baseline_memory_auc or 0.0, 230.0)
+        self.assertEqual(regret.covered_target_count, 1)
+        self.assertEqual(regret.total_span, 200.0)
+        self.assertEqual(regret.covered_span, 100.0)
+        self.assertAlmostEqual(regret.time_regret_auc or 0.0, 3.0)
+        self.assertAlmostEqual(regret.baseline_time_auc or 0.0, 20.0)
 
     def test_analyze_scheduler_comparison_manifest_keeps_exact_baseline_dr(
         self,
@@ -1113,8 +1208,10 @@ import sys
 from pathlib import Path
 
 output_dir = Path(sys.argv[1])
+summary_path = Path(sys.argv[2])
 output_dir.mkdir(parents=True, exist_ok=True)
 (output_dir / "analysis.md").write_text("# Analysis\\n", encoding="utf-8")
+summary_path.write_text('{"type": "scheduler-comparison-analysis"}\\n', encoding="utf-8")
 """.lstrip(),
                 encoding="utf-8",
             )
@@ -1152,6 +1249,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
             self.assertEqual(analyze_result.exit_code, 0)
             self.assertEqual(build_result.summary["type"], "build-pareto")
             self.assertEqual(analyze_result.summary["type"], "analyze-pareto")
+            self.assertIsNotNone(analyze_result.summary["analysis_summary_path"])
             build_command_record = json.loads(
                 (
                     output_root

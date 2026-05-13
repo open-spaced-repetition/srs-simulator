@@ -9,7 +9,7 @@ Project rules:
 5. Do not push code to remotes.
 6. For performance-related changes, run a baseline performance test first and report results by engine (event vs vectorized) affected by the change.
 7. Use `uv run pyright` for static type checking.
-8. For GPU experiments, monitor shared GPU memory usage when judging out-of-memory or VRAM spill behavior. Do not rely only on `nvidia-smi` FB/dedicated memory; shared GPU memory above 1 GiB likely means VRAM spill and severe simulator slowdown.
+8. For GPU experiments, rely on the automatic GPU monitor artifacts when judging out-of-memory or VRAM spill behavior. Do not rely only on `nvidia-smi` FB/dedicated memory or manual screenshots; shared GPU memory above 1 GiB likely means VRAM spill and severe simulator slowdown. CUDA `train-overfit` and `sweep` stages write `<stage>/gpu_monitor/gpu_memory.jsonl` and `<stage>/gpu_monitor/summary.json` by default, and `performance_summary.json` records the monitor summary path and spill fields.
    - Windows: check `Task Manager -> Performance -> GPU -> Shared GPU memory`, or run PowerShell `Get-Counter '\GPU Adapter Memory(*)\Shared Usage'`.
    - WSL: from the Linux shell, run `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Get-Counter '\GPU Adapter Memory(*)\Shared Usage'"`.
    - Native Linux: `nvidia-smi` usually reports dedicated/FB memory rather than Windows-style shared GPU memory; use `watch -n 1 nvidia-smi` for VRAM plus system/CUDA profiling to infer spill behavior.

@@ -74,6 +74,8 @@ class PerformanceConfig:
     device: str | None = None
     memory_budget_fraction: float | None = None
     nvml_sample_interval_seconds: float = 2.0
+    gpu_monitor_enabled: bool | None = None
+    gpu_monitor_interval_seconds: float = 2.0
     timeout_seconds: float | None = None
     progress_interval_seconds: float = 30.0
     write_performance_summary: bool = True
@@ -95,6 +97,16 @@ class PerformanceConfig:
             "performance.progress_interval_seconds",
             minimum=0.0,
         )
+        gpu_monitor_enabled = raw.get("gpu_monitor_enabled")
+        if gpu_monitor_enabled is not None:
+            gpu_monitor_enabled = _require_bool(
+                gpu_monitor_enabled, "performance.gpu_monitor_enabled"
+            )
+        gpu_monitor_interval_seconds = _optional_float(
+            raw.get("gpu_monitor_interval_seconds", 2.0),
+            "performance.gpu_monitor_interval_seconds",
+            minimum=0.0,
+        )
         return cls(
             device=device,
             memory_budget_fraction=_optional_float(
@@ -103,6 +115,8 @@ class PerformanceConfig:
                 minimum=0.0,
             ),
             nvml_sample_interval_seconds=float(nvml_sample_interval_seconds or 0.0),
+            gpu_monitor_enabled=gpu_monitor_enabled,
+            gpu_monitor_interval_seconds=float(gpu_monitor_interval_seconds or 0.0),
             timeout_seconds=_optional_float(
                 raw.get("timeout_seconds"),
                 "performance.timeout_seconds",
@@ -133,6 +147,8 @@ class PerformanceConfig:
             and self.nvml_sample_interval_seconds <= 0.0
         ):
             raise ValueError("performance.nvml_sample_interval_seconds must be > 0.")
+        if self.gpu_monitor_interval_seconds <= 0.0:
+            raise ValueError("performance.gpu_monitor_interval_seconds must be > 0.")
         if self.timeout_seconds is not None and self.timeout_seconds <= 0.0:
             raise ValueError("performance.timeout_seconds must be > 0.")
         if (
@@ -146,6 +162,8 @@ class PerformanceConfig:
             "device": self.device,
             "memory_budget_fraction": self.memory_budget_fraction,
             "nvml_sample_interval_seconds": self.nvml_sample_interval_seconds,
+            "gpu_monitor_enabled": self.gpu_monitor_enabled,
+            "gpu_monitor_interval_seconds": self.gpu_monitor_interval_seconds,
             "timeout_seconds": self.timeout_seconds,
             "progress_interval_seconds": self.progress_interval_seconds,
             "write_performance_summary": self.write_performance_summary,
@@ -955,6 +973,67 @@ class AnalyzeParetoConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportConfig:
+    enabled: bool = False
+    output_path: Path | None = None
+    comparison_run_root: Path | None = None
+    candidate_label: str | None = None
+    comparison_label: str | None = None
+    question: str | None = None
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> ReportConfig:
+        raw = raw or {}
+        output_path = raw.get("output_path")
+        comparison_run_root = raw.get("comparison_run_root")
+        candidate_label = raw.get("candidate_label")
+        comparison_label = raw.get("comparison_label")
+        question = raw.get("question")
+        return cls(
+            enabled=_require_bool(raw.get("enabled", False), "report.enabled"),
+            output_path=Path(_require_str(output_path, "report.output_path"))
+            if output_path is not None
+            else None,
+            comparison_run_root=Path(
+                _require_str(comparison_run_root, "report.comparison_run_root")
+            )
+            if comparison_run_root is not None
+            else None,
+            candidate_label=_require_str(candidate_label, "report.candidate_label")
+            if candidate_label is not None
+            else None,
+            comparison_label=_require_str(comparison_label, "report.comparison_label")
+            if comparison_label is not None
+            else None,
+            question=_require_str(question, "report.question")
+            if question is not None
+            else None,
+        )
+
+    def __post_init__(self) -> None:
+        if self.enabled and self.output_path is None:
+            raise ValueError("report.output_path is required when report.enabled=true.")
+        if self.enabled and self.comparison_run_root is None:
+            raise ValueError(
+                "report.comparison_run_root is required when report.enabled=true."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "output_path": str(self.output_path)
+            if self.output_path is not None
+            else None,
+            "comparison_run_root": str(self.comparison_run_root)
+            if self.comparison_run_root is not None
+            else None,
+            "candidate_label": self.candidate_label,
+            "comparison_label": self.comparison_label,
+            "question": self.question,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ExperimentConfig:
     name: str
     family: str
@@ -985,6 +1064,7 @@ class ExperimentConfig:
     )
     build_pareto: BuildParetoConfig = field(default_factory=BuildParetoConfig)
     analyze_pareto: AnalyzeParetoConfig = field(default_factory=AnalyzeParetoConfig)
+    report: ReportConfig = field(default_factory=ReportConfig)
     pareto_command_template: tuple[str, ...] = ()
     pareto_result_glob: str = "*.json"
     pareto_plot_glob: str = "*.png"
@@ -1018,6 +1098,7 @@ class ExperimentConfig:
         analyze_pareto = _require_mapping(
             raw.get("analyze_pareto", {}), "analyze_pareto"
         )
+        report = _require_mapping(raw.get("report", {}), "report")
         pareto = _require_mapping(raw.get("pareto", {}), "pareto")
         select = _require_mapping(raw.get("select", {}), "select")
         aggregate = _require_mapping(raw.get("aggregate", {}), "aggregate")
@@ -1089,6 +1170,7 @@ class ExperimentConfig:
             sweep_batched=BatchedSweepStageConfig.from_mapping(sweep),
             build_pareto=BuildParetoConfig.from_mapping(build_pareto),
             analyze_pareto=AnalyzeParetoConfig.from_mapping(analyze_pareto),
+            report=ReportConfig.from_mapping(report),
             pareto_command_template=_str_tuple(
                 pareto.get("command_template", []), "pareto.command_template"
             ),
@@ -1162,6 +1244,7 @@ class ExperimentConfig:
             "analyze_pareto": {
                 **self.analyze_pareto.to_dict(),
             },
+            "report": self.report.to_dict(),
             "pareto": {
                 "command_template": list(self.pareto_command_template),
                 "result_glob": self.pareto_result_glob,

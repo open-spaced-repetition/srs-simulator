@@ -167,3 +167,11 @@ engine = "batched"
 fuzz = "off"
 metric = "avg_accum_memorized_per_hour"
 no_dedupe = false
+
+[report]
+enabled = true
+output_path = "docs/rl_scheduler/experiments/2026-05-13-anki_sm2_ap_portfolio_users_1_8_pop16_20_v1.md"
+comparison_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1"
+candidate_label = "Anki SM2 AP"
+comparison_label = "ADR"
+question = "Evaluate whether a no-DR Anki SM2 adaptive-parameter portfolio can match or improve the matched-budget FSRS6 ADR portfolio on external Pareto metrics."

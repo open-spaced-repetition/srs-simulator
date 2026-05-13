@@ -89,8 +89,11 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertEqual(config.performance.device, "cpu")
         self.assertEqual(config.performance.timeout_seconds, 120.0)
         self.assertTrue(config.performance.write_performance_summary)
+        self.assertIsNone(config.performance.gpu_monitor_enabled)
+        self.assertEqual(config.performance.gpu_monitor_interval_seconds, 2.0)
         self.assertFalse(config.train_batch_baseline_desired_retention_values)
         self.assertFalse(config.training_batch.enabled)
+        self.assertFalse(config.report.enabled)
 
     def test_rejects_overlapping_user_splits(self) -> None:
         raw = VALID_CONFIG.replace("validation = [2, 3]", "validation = [1, 3]")
@@ -112,6 +115,40 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "memory_budget_fraction"):
                 ExperimentConfig.from_toml(path)
+
+    def test_loads_report_and_gpu_monitor_config(self) -> None:
+        raw = (
+            VALID_CONFIG.replace(
+                "diagnostic_csv_logs = false",
+                (
+                    "diagnostic_csv_logs = false\n"
+                    "gpu_monitor_enabled = false\n"
+                    "gpu_monitor_interval_seconds = 5.0"
+                ),
+            )
+            + """
+
+[report]
+enabled = true
+output_path = "docs/report.md"
+comparison_run_root = "artifacts/comparison"
+candidate_label = "candidate"
+comparison_label = "comparison"
+question = "Does candidate beat comparison?"
+"""
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertFalse(config.performance.gpu_monitor_enabled)
+        self.assertEqual(config.performance.gpu_monitor_interval_seconds, 5.0)
+        self.assertTrue(config.report.enabled)
+        self.assertEqual(str(config.report.output_path), "docs/report.md")
+        self.assertEqual(config.report.candidate_label, "candidate")
+        self.assertTrue(config.to_dict()["report"]["enabled"])
 
     def test_rejects_duplicate_lambda_grid(self) -> None:
         raw = VALID_CONFIG.replace(

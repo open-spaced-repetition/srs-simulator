@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.experiment_infra import StageName
+from simulator.experiment_infra.gpu_monitor import GpuMonitor
 from simulator.experiment_infra.schemas import ExperimentConfig
 
 
@@ -110,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         help="Stop after baseline preparation.",
     )
     parser.add_argument(
+        "--skip-report",
+        action="store_true",
+        help="Do not run the configured experiment report step.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print planned commands without executing them.",
@@ -152,6 +158,7 @@ def main() -> int:
         skip_manifest=args.skip_manifest,
         skip_baseline_sweep=args.skip_baseline_sweep,
         skip_formal_stages=args.skip_formal_stages,
+        skip_report=args.skip_report,
     )
 
     results: list[dict[str, Any]] = []
@@ -165,8 +172,19 @@ def main() -> int:
         if args.dry_run:
             results.append({**step.to_dict(), "exit_code": None})
             continue
-        completed = subprocess.run(step.command, cwd=REPO_ROOT, check=False)
+        monitor = _start_external_gpu_monitor(
+            config=config,
+            formal_run_id=formal_run_id,
+            step_name=step.name,
+            dry_run=args.dry_run,
+        )
+        try:
+            completed = subprocess.run(step.command, cwd=REPO_ROOT, check=False)
+        finally:
+            gpu_summary = monitor.stop() if monitor is not None else None
         results.append({**step.to_dict(), "exit_code": completed.returncode})
+        if gpu_summary is not None:
+            results[-1]["gpu_monitor_summary_path"] = str(gpu_summary.summary_path)
         if completed.returncode != 0:
             print(
                 json.dumps(
@@ -213,6 +231,7 @@ def build_workflow_steps(
     skip_manifest: bool,
     skip_baseline_sweep: bool,
     skip_formal_stages: bool,
+    skip_report: bool = False,
 ) -> list[WorkflowStep]:
     steps: list[WorkflowStep] = []
     if skip_manifest:
@@ -301,6 +320,51 @@ def build_workflow_steps(
             )
         )
 
+    if skip_report:
+        steps.append(
+            WorkflowStep(
+                name="report",
+                skipped=True,
+                reason="disabled by --skip-report",
+            )
+        )
+    elif not config.report.enabled:
+        steps.append(
+            WorkflowStep(
+                name="report",
+                skipped=True,
+                reason="report.enabled is false",
+            )
+        )
+    elif skip_formal_stages:
+        steps.append(
+            WorkflowStep(
+                name="report",
+                skipped=True,
+                reason="formal stages skipped",
+            )
+        )
+    elif formal_stage not in {"all", StageName.ANALYZE_PARETO.value}:
+        steps.append(
+            WorkflowStep(
+                name="report",
+                skipped=True,
+                reason=f"formal stage {formal_stage!r} does not produce a reportable run",
+            )
+        )
+    else:
+        steps.append(
+            WorkflowStep(
+                name="report",
+                command=tuple(
+                    _report_command(
+                        config=config,
+                        formal_run_id=formal_run_id,
+                    )
+                ),
+            )
+        )
+
     return steps
 
 
@@ -351,6 +415,60 @@ def _default_baseline_run_id(manifest: Path) -> str:
     if stem.startswith("fsrs6_"):
         stem = stem[len("fsrs6_") :]
     return f"fsrs6_baseline_{stem}"
+
+
+def _report_command(*, config: ExperimentConfig, formal_run_id: str) -> list[str]:
+    if config.report.output_path is None:
+        raise ValueError("report.output_path is required.")
+    if config.report.comparison_run_root is None:
+        raise ValueError("report.comparison_run_root is required.")
+    run_root = _resolve_repo_path(config.output_root) / formal_run_id
+    command = [
+        "uv",
+        "run",
+        "python",
+        "experiments/rl_scheduler/generate_experiment_report.py",
+        "--run-root",
+        str(run_root),
+        "--comparison-run-root",
+        str(_resolve_repo_path(config.report.comparison_run_root)),
+        "--output-path",
+        str(_resolve_repo_path(config.report.output_path)),
+    ]
+    if config.report.candidate_label is not None:
+        command.extend(["--candidate-label", config.report.candidate_label])
+    if config.report.comparison_label is not None:
+        command.extend(["--comparison-label", config.report.comparison_label])
+    if config.report.question is not None:
+        command.extend(["--question", config.report.question])
+    return command
+
+
+def _start_external_gpu_monitor(
+    *,
+    config: ExperimentConfig,
+    formal_run_id: str,
+    step_name: str,
+    dry_run: bool,
+) -> GpuMonitor | None:
+    if dry_run or step_name not in {"select-baseline-drs", "sweep-fsrs6-baseline"}:
+        return None
+    device = config.performance.device or config.gpu_guard.device or "cpu"
+    enabled = config.performance.gpu_monitor_enabled
+    if enabled is None:
+        enabled = device.startswith("cuda")
+    if not enabled:
+        return None
+    monitor = GpuMonitor(
+        output_dir=_resolve_repo_path(config.output_root)
+        / formal_run_id
+        / "workflow"
+        / step_name
+        / "gpu_monitor",
+        interval_seconds=config.performance.gpu_monitor_interval_seconds,
+    )
+    monitor.start()
+    return monitor
 
 
 def _resolve_repo_path(path: Path) -> Path:
