@@ -87,6 +87,7 @@ class BatchedSweepConfig:
         short_term = _table(raw, "short_term", required=False)
         fsrs6_adr = _table(raw, "fsrs6_adr", required=False)
         fsrs6_ap = _table(raw, "fsrs6_ap", required=False)
+        anki_sm2_ap = _table(raw, "anki_sm2_ap", required=False)
         fsrs6 = _table(raw, "fsrs6", required=False)
 
         args = argparse.Namespace(
@@ -241,6 +242,26 @@ class BatchedSweepConfig:
                 fsrs6_ap.get("lambda_values"),
                 "fsrs6_ap.lambda_values",
             ),
+            anki_sm2_ap_policy=_optional_path(
+                anki_sm2_ap.get("policy"),
+                "anki_sm2_ap.policy",
+                base_path=base_path,
+            ),
+            anki_sm2_ap_policy_root=_optional_path(
+                anki_sm2_ap.get("policy_root"),
+                "anki_sm2_ap.policy_root",
+                base_path=base_path,
+            ),
+            anki_sm2_ap_train_run_root=_optional_path(
+                anki_sm2_ap.get("train_run_root"),
+                "anki_sm2_ap.train_run_root",
+                base_path=base_path,
+            ),
+            anki_sm2_ap_policy_manifest=_optional_path(
+                anki_sm2_ap.get("policy_manifest"),
+                "anki_sm2_ap.policy_manifest",
+                base_path=base_path,
+            ),
             fsrs6_dr_manifest=_optional_path(
                 fsrs6.get("dr_manifest"),
                 "fsrs6.dr_manifest",
@@ -345,6 +366,14 @@ def _adapt_experiment_config(
         if "fsrs6_ap" in scheduler_names
         else None,
     )
+    anki_sm2_ap = _adapt_experiment_policy_source(
+        sweep,
+        prefix="anki_sm2_ap",
+        lambda_grid=None,
+        default_train_run_root=default_train_run_root
+        if "anki_sm2_ap" in scheduler_names
+        else None,
+    )
     baseline_dr_selection = _table(raw, "baseline_dr_selection", required=False)
     fsrs6 = {}
     if baseline_dr_selection.get("manifest") is not None:
@@ -376,6 +405,7 @@ def _adapt_experiment_config(
         "fsrs6": fsrs6,
         "fsrs6_adr": fsrs6_adr,
         "fsrs6_ap": fsrs6_ap,
+        "anki_sm2_ap": anki_sm2_ap,
     }
 
 
@@ -413,7 +443,11 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     batch = training.get("batch")
     if isinstance(batch, Mapping):
         trainer = batch.get("trainer")
-        if trainer in {"fsrs6_adr_portfolio", "fsrs6_ap_portfolio"}:
+        if trainer in {
+            "fsrs6_adr_portfolio",
+            "fsrs6_ap_portfolio",
+            "anki_sm2_ap_portfolio",
+        }:
             return True
     command_template = training.get("command_template", [])
     if isinstance(command_template, str) or not isinstance(command_template, Sequence):
@@ -423,6 +457,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
         {
             "train_fsrs6_adr_portfolio.py",
             "train_fsrs6_ap_portfolio.py",
+            "train_anki_sm2_ap_portfolio.py",
         }
         & script_names
     )

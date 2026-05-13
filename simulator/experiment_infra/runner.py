@@ -61,11 +61,13 @@ RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
     "fsrs6_adr",
     "fsrs6_default_adr",
     "fsrs6_ap",
+    "anki_sm2_ap",
 }
 FSRS6_ADR_POLICY_SOURCE_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 PORTFOLIO_CHILD_ACTION_SPACES = {
     "sd_retention_function_portfolio_child",
     "fsrs6_ap_weight_delta_portfolio_child",
+    "anki_sm2_ap_params_portfolio_child",
 }
 
 
@@ -5098,6 +5100,12 @@ def _run_configured_batched_retention_sweep(
         fsrs6_ap_lambda_values=_sweep_policy_lambda_values(config)
         if "fsrs6_ap" in scheduler_names
         else None,
+        anki_sm2_ap_policy=None,
+        anki_sm2_ap_policy_root=None,
+        anki_sm2_ap_train_run_root=run_root
+        if "anki_sm2_ap" in scheduler_names
+        else None,
+        anki_sm2_ap_policy_manifest=None,
         fsrs6_dr_manifest=_resolve_baseline_dr_manifest_path(
             config=config,
             repo_root=repo_root,
@@ -5197,6 +5205,9 @@ def _run_configured_batched_retention_sweep(
                     lane.fsrs6_ap_baseline_desired_retention
                 ),
                 "fsrs6_ap_lambda_value": lane.fsrs6_ap_lambda_value,
+                "anki_sm2_ap_policy": str(lane.anki_sm2_ap_policy)
+                if lane.anki_sm2_ap_policy is not None
+                else None,
                 "output_dir": str(lane.final_log_dir),
                 "log_paths": [str(path) for path in matched_logs],
                 "exit_code": 0,
@@ -5339,6 +5350,13 @@ def _validate_batched_retention_lane_logs(
                     "metadata fsrs6_ap_baseline_desired_retention expected "
                     f"{lane.fsrs6_ap_baseline_desired_retention!r}, "
                     f"got {actual_baseline_dr!r}"
+                )
+        if lane.anki_sm2_ap_policy is not None:
+            actual_policy = meta.get("anki_sm2_ap_policy")
+            if actual_policy != str(lane.anki_sm2_ap_policy):
+                errors.append(
+                    "metadata anki_sm2_ap_policy expected "
+                    f"{lane.anki_sm2_ap_policy!s}, got {actual_policy!r}"
                 )
         if errors:
             return (
@@ -5845,6 +5863,7 @@ def _training_uses_portfolio_trainer(config: ExperimentConfig) -> bool:
     if config.training_batch.trainer in {
         "fsrs6_adr_portfolio",
         "fsrs6_ap_portfolio",
+        "anki_sm2_ap_portfolio",
     }:
         return True
     script_names = {Path(item).name for item in config.train_command_template}
@@ -5852,6 +5871,7 @@ def _training_uses_portfolio_trainer(config: ExperimentConfig) -> bool:
         {
             "train_fsrs6_adr_portfolio.py",
             "train_fsrs6_ap_portfolio.py",
+            "train_anki_sm2_ap_portfolio.py",
         }
         & script_names
     )

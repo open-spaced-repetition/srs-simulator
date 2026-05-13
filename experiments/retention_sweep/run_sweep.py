@@ -51,8 +51,8 @@ def parse_args() -> argparse.Namespace:
         env_help="Comma-separated list of environments to sweep.",
         sched_help=(
             "Comma-separated list of schedulers to sweep "
-            "(include sspmmc, fsrs6_adr, or fsrs6_default_adr to run policies; "
-            "use fixed@<days> for fixed intervals)."
+            "(include sspmmc, fsrs6_adr, fsrs6_default_adr, or anki_sm2_ap "
+            "to run policies; use fixed@<days> for fixed intervals)."
         ),
     )
     add_common_sim_args(
@@ -119,6 +119,12 @@ def parse_args() -> argparse.Namespace:
             "Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr "
             "or fsrs6_default_adr."
         ),
+    )
+    parser.add_argument(
+        "--anki-sm2-ap-policy",
+        type=Path,
+        default=None,
+        help="Path to an Anki SM2 AP policy JSON when using --sched anki_sm2_ap.",
     )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
@@ -193,6 +199,9 @@ def _progress_label(args: argparse.Namespace) -> str:
     elif args.scheduler in {"fsrs6_adr", "fsrs6_default_adr"}:
         if args.fsrs6_adr_policy:
             label = f"{label}:{args.fsrs6_adr_policy.stem}"
+    elif args.scheduler == "anki_sm2_ap":
+        if args.anki_sm2_ap_policy:
+            label = f"{label}:{args.anki_sm2_ap_policy.stem}"
     elif scheduler_uses_desired_retention(args.scheduler):
         label = f"{label} dr={args.desired_retention:.2f}"
     return f"u{args.user_id} {label}" if args.user_id is not None else label
@@ -461,6 +470,8 @@ def main() -> None:
         raise SystemExit(
             "--sched fsrs6_adr or fsrs6_default_adr requires --fsrs6-adr-policy."
         )
+    if "anki_sm2_ap" in non_dr_schedulers and args.anki_sm2_ap_policy is None:
+        raise SystemExit("--sched anki_sm2_ap requires --anki-sm2-ap-policy.")
 
     priority_fn = (
         review_first_priority if args.priority == "review-first" else new_first_priority

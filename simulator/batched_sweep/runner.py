@@ -22,6 +22,7 @@ from simulator.schedulers.memrise import MemriseBatchSchedulerOps, MemriseSchedu
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.fsrs6_ap_policy import FSRS6APPolicy
+from simulator.anki_sm2_ap_policy import AnkiSM2APPolicy
 from simulator.short_term_config import resolve_short_term_config
 from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
@@ -43,6 +44,7 @@ from simulator.batched_sweep.weights import (
 )
 from simulator.batched_sweep.fsrs6_adr_policy import FSRS6ADRPolicySpec
 from simulator.batched_sweep.fsrs6_ap_policy import FSRS6APPolicySpec
+from simulator.batched_sweep.anki_sm2_ap_policy import AnkiSM2APPolicySpec
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,8 @@ class BatchedSweepContext:
     fsrs6_adr_policy_specs: tuple[FSRS6ADRPolicySpec, ...] = ()
     fsrs6_ap_policy: Path | None = None
     fsrs6_ap_policy_specs: tuple[FSRS6APPolicySpec, ...] = ()
+    anki_sm2_ap_policy: Path | None = None
+    anki_sm2_ap_policy_specs: tuple[AnkiSM2APPolicySpec, ...] = ()
     fsrs6_dr_values_by_user: Mapping[int, tuple[float, ...]] | None = None
 
 
@@ -254,8 +258,41 @@ def _build_sweep_lanes(
                 )
             continue
 
+        if name == "anki_sm2_ap" and ctx.anki_sm2_ap_policy_specs:
+            batch_users = set(batch)
+            for spec in ctx.anki_sm2_ap_policy_specs:
+                if spec.user_id not in batch_users:
+                    continue
+                policy_token = (
+                    f"policy_{spec.policy_index}"
+                    if spec.policy_index is not None
+                    else f"policy_{spec.path.parent.name}"
+                )
+                scheduler_subpath = Path("sched_anki_sm2_ap") / policy_token
+                scheduler_root = ctx.log_root / scheduler_subpath
+                lanes.append(
+                    BatchedSweepLogLane(
+                        user_id=spec.user_id,
+                        log_root=scheduler_root,
+                        log_dir=_lane_log_dir(
+                            log_root=ctx.log_root,
+                            user_id=spec.user_id,
+                            scheduler_subpath=scheduler_subpath,
+                            log_layout=ctx.log_layout,
+                        ),
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=None,
+                        fixed_interval=None,
+                        anki_sm2_ap_policy=spec.path,
+                    )
+                )
+            continue
+
         policy = ctx.fsrs6_adr_policy if name in _ADR_POLICY_SCHEDULERS else None
         ap_policy = ctx.fsrs6_ap_policy if name == "fsrs6_ap" else None
+        anki_sm2_ap_policy = ctx.anki_sm2_ap_policy if name == "anki_sm2_ap" else None
         scheduler_subpath = Path(f"sched_{name}")
         if name == "fixed" and interval is not None:
             scheduler_subpath = scheduler_subpath / (
@@ -265,6 +302,8 @@ def _build_sweep_lanes(
             scheduler_subpath = scheduler_subpath / f"policy_{policy.stem}"
         elif name == "fsrs6_ap" and ap_policy is not None:
             scheduler_subpath = scheduler_subpath / f"policy_{ap_policy.stem}"
+        elif name == "anki_sm2_ap" and anki_sm2_ap_policy is not None:
+            scheduler_subpath = scheduler_subpath / f"policy_{anki_sm2_ap_policy.stem}"
         scheduler_root = ctx.log_root / scheduler_subpath
         lanes.extend(
             BatchedSweepLogLane(
@@ -283,6 +322,7 @@ def _build_sweep_lanes(
                 fixed_interval=interval,
                 fsrs6_adr_policy=policy,
                 fsrs6_ap_policy=ap_policy,
+                anki_sm2_ap_policy=anki_sm2_ap_policy,
             )
             for user_id in batch
         )
@@ -692,6 +732,40 @@ def _build_mixed_scheduler_ops(
                 device=device,
                 dtype=torch.float32,
             )
+        elif name == "anki_sm2_ap":
+            policy_paths: list[Path] = []
+            for lane in group_lanes:
+                policy_path = lane.anki_sm2_ap_policy
+                if policy_path is None:
+                    raise ValueError(
+                        "--sched anki_sm2_ap requires an Anki SM2 AP policy source."
+                    )
+                policy_paths.append(policy_path)
+            policies = [
+                AnkiSM2APPolicy.from_json(policy_path) for policy_path in policy_paths
+            ]
+            params_by_name = {
+                name: torch.tensor(
+                    [policy.params_dict()[name] for policy in policies],
+                    device=device,
+                    dtype=torch.float32,
+                )
+                for name in policies[0].params_dict()
+            }
+            scheduler = AnkiSM2Scheduler()
+            ops = AnkiSM2BatchSchedulerOps(
+                graduating_interval=params_by_name["graduating_interval"],
+                easy_interval=params_by_name["easy_interval"],
+                easy_bonus=params_by_name["easy_bonus"],
+                hard_interval_factor=params_by_name["hard_interval_factor"],
+                ease_start=params_by_name["ease_start"],
+                ease_min=scheduler.ease_min,
+                ease_max=scheduler.ease_max,
+                new_interval_factor=params_by_name["new_interval_factor"],
+                interval_multiplier=params_by_name["interval_multiplier"],
+                device=device,
+                dtype=torch.float32,
+            )
         elif name == "anki_sm2":
             scheduler = AnkiSM2Scheduler()
             ops = AnkiSM2BatchSchedulerOps(
@@ -702,6 +776,8 @@ def _build_mixed_scheduler_ops(
                 ease_start=scheduler.ease_start,
                 ease_min=scheduler.ease_min,
                 ease_max=scheduler.ease_max,
+                new_interval_factor=scheduler.new_interval_factor,
+                interval_multiplier=scheduler.interval_multiplier,
                 device=device,
                 dtype=torch.float32,
             )

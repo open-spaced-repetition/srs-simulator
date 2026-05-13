@@ -50,4 +50,5 @@ def scheduler_uses_desired_retention(scheduler: str) -> bool:
         "fsrs6_adr",
         "fsrs6_default_adr",
         "fsrs6_ap",
+        "anki_sm2_ap",
     }

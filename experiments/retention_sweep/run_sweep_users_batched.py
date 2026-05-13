@@ -84,7 +84,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         sched_help=(
             "Comma-separated schedulers to sweep "
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
-            "anki_sm2, memrise, fixed, fsrs6_adr, fsrs6_default_adr, fsrs6_ap)."
+            "anki_sm2, anki_sm2_ap, memrise, fixed, fsrs6_adr, "
+            "fsrs6_default_adr, fsrs6_ap)."
         ),
     )
     add_retention_range_args(parser)
@@ -171,6 +172,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Optional comma-separated lambda values to select from an FSRS6 AP "
             "policy root or manifest."
         ),
+    )
+    parser.add_argument(
+        "--anki-sm2-ap-policy",
+        type=Path,
+        default=None,
+        help="Path to an Anki SM2 AP policy JSON when using --sched anki_sm2_ap.",
+    )
+    parser.add_argument(
+        "--anki-sm2-ap-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing trained Anki SM2 AP policy artifacts, usually "
+            "train-overfit/train_outputs."
+        ),
+    )
+    parser.add_argument(
+        "--anki-sm2-ap-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "Training run root; treated as "
+            "<root>/train-overfit/train_outputs for Anki SM2 AP policy discovery."
+        ),
+    )
+    parser.add_argument(
+        "--anki-sm2-ap-policy-manifest",
+        type=Path,
+        default=None,
+        help="TOML manifest with [[policies]] Anki SM2 AP entries.",
     )
     parser.add_argument(
         "--fsrs6-dr-manifest",
@@ -326,6 +357,10 @@ def _merge_config_args(
         "fsrs6_ap_train_run_root": ("--fsrs6-ap-train-run-root",),
         "fsrs6_ap_policy_manifest": ("--fsrs6-ap-policy-manifest",),
         "fsrs6_ap_lambda_values": ("--fsrs6-ap-lambda-values",),
+        "anki_sm2_ap_policy": ("--anki-sm2-ap-policy",),
+        "anki_sm2_ap_policy_root": ("--anki-sm2-ap-policy-root",),
+        "anki_sm2_ap_train_run_root": ("--anki-sm2-ap-train-run-root",),
+        "anki_sm2_ap_policy_manifest": ("--anki-sm2-ap-policy-manifest",),
         "fsrs6_dr_manifest": ("--fsrs6-dr-manifest",),
         "log_dir": ("--log-dir",),
         "log_layout": ("--log-layout",),
@@ -369,6 +404,10 @@ def _print_dry_run(plan) -> None:
         print(f"example log dir: {plan.example_log_dir}")
     if plan.ctx.fsrs6_adr_policy_specs:
         print(f"fsrs6_adr policies: {len(plan.ctx.fsrs6_adr_policy_specs)}")
+    if plan.ctx.fsrs6_ap_policy_specs:
+        print(f"fsrs6_ap policies: {len(plan.ctx.fsrs6_ap_policy_specs)}")
+    if plan.ctx.anki_sm2_ap_policy_specs:
+        print(f"anki_sm2_ap policies: {len(plan.ctx.anki_sm2_ap_policy_specs)}")
     if plan.ctx.fsrs6_dr_values_by_user:
         counts = sorted(
             {len(values) for values in plan.ctx.fsrs6_dr_values_by_user.values()}

@@ -7,10 +7,10 @@ CEM, CMA-ES, portfolio search, and other policy-search methods as long as the
 output is a scheduler artifact that can enter the same external evaluation
 pipeline.
 
-The current implemented research lines are `fsrs6_adr` and `fsrs6_ap`
-(Adaptive Parameters): black-box optimizers learn scheduler-side FSRS-6
-retention policies, or directly search the 21 FSRS-6 scheduler weights, then
-use stability `S` and difficulty `D` to compute the next interval.
+The current implemented research lines are `fsrs6_adr`, `fsrs6_ap`
+(Adaptive Parameters), and `anki_sm2_ap`: black-box optimizers learn
+scheduler-side FSRS-6 retention policies, directly search the 21 FSRS-6
+scheduler weights, or search the 7 Anki SM2 runtime parameters.
 A core rule is
 that training and evaluation must not read the environment's hidden memory
 state. A learned scheduler must maintain its own scheduler state. For these
@@ -27,6 +27,8 @@ FSRS-6 state update to obtain `S` and `D`.
 - `train_fsrs6_ap_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
   ordinary `fsrs6_ap` child policies, optimizing hypervolume against the FSRS-6
   DR-grid baseline.
+- `train_anki_sm2_ap_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
+  no-DR `anki_sm2_ap` child policies over the 7 Anki SM2 parameters.
 - `policy_search_common.py`: shared policy-search settings, metric, artifact,
   and evaluation helpers used by the active trainers.
 - `train-overfit` can run these trainers through `[training.batch]` so users are
@@ -211,6 +213,10 @@ Representative profiles:
 - `configs/fsrs6_ap_portfolio_users_1_8_v2.toml`: the adaptive-parameter portfolio
   family that jointly mutates runtime desired retention and the 21 AP weight
   deltas, then exports 23 no-DR `fsrs6_ap` child artifacts per user.
+- `configs/anki_sm2_ap_portfolio_users_1_8_pop16_20_v1.toml`: the Anki SM2
+  adaptive-parameter portfolio with the matched pop16/off16/gen20 budget and
+  7-parameter bounds based on Anki 24.11, with the interval upper bounds capped
+  at 100 days for search.
 
 Abandoned directions:
 
@@ -257,8 +263,9 @@ and export `fsrs6_default_adr`, which keeps the configured training environment
 unchanged but evaluates ADR scheduler-side state with default FSRS-6 weights.
 CMA-ES profiles keep the same `[training.policy_search]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,
-initial mean, and coefficient bounds in `[training.optimizer]`. AP profiles add
-`[training.ap].dr_batch_size` and `weight_delta_scale`, plus
+initial mean, and coefficient bounds in `[training.optimizer]`. FSRS AP profiles add
+`[training.ap].dr_batch_size` and `weight_delta_scale`; Anki SM2 AP portfolio
+profiles add `parameter_delta_scale`. Both use
 `training.batch_baseline_desired_retention_values = true` when DR values should
 be batched inside each training job.
 

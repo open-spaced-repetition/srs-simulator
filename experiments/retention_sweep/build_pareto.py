@@ -32,6 +32,7 @@ RUN_ID_SCOPED_SCHEDULERS = {
     "fsrs6_adr",
     "fsrs6_default_adr",
     "fsrs6_ap",
+    "anki_sm2_ap",
 }
 ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 SA_FSRS6_DR_TOKEN_RE = re.compile(
@@ -407,6 +408,29 @@ def _is_fsrs6_ap_portfolio_child(metadata: Optional[Dict[str, Any]]) -> bool:
     )
 
 
+def _anki_sm2_ap_portfolio_child_label(
+    policy_path: Path,
+    metadata: Dict[str, Any],
+) -> str:
+    policy_index = metadata.get("portfolio_index")
+    if isinstance(policy_index, int):
+        return f"Anki AP policy_{policy_index}"
+    return f"Anki AP {policy_path.parent.name}"
+
+
+def _is_anki_sm2_ap_portfolio_child(metadata: Optional[Dict[str, Any]]) -> bool:
+    if metadata is None:
+        return False
+    return (
+        "baseline_desired_retention" in metadata
+        and metadata.get("baseline_desired_retention") is None
+        and (
+            metadata.get("action_space") == "anki_sm2_ap_params_portfolio_child"
+            or "portfolio_index" in metadata
+        )
+    )
+
+
 def _resolve_fsrs6_ap_label(
     meta: Dict[str, Any], base_dirs: Sequence[Path]
 ) -> tuple[str, Optional[float]]:
@@ -456,9 +480,41 @@ def _resolve_fsrs6_ap_label(
     return f"AP {title or path.stem}", None
 
 
+def _resolve_anki_sm2_ap_label(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> str:
+    policy_path = meta.get("anki_sm2_ap_policy")
+    if not policy_path:
+        return "Anki SM2 AP"
+    path = Path(policy_path)
+    if not path.is_absolute():
+        for base_dir in base_dirs:
+            candidate = (base_dir / path).resolve()
+            if candidate.exists():
+                path = candidate
+                break
+    sibling_metadata = _load_policy_sibling_metadata(
+        path,
+        scheduler_name="anki_sm2_ap",
+    )
+    if _is_anki_sm2_ap_portfolio_child(sibling_metadata):
+        if sibling_metadata is None:
+            raise AssertionError("portfolio metadata unexpectedly missing")
+        return _anki_sm2_ap_portfolio_child_label(path, sibling_metadata)
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            raw_title = payload.get("title")
+            if isinstance(raw_title, str) and raw_title.strip():
+                return raw_title.strip()
+        except (OSError, json.JSONDecodeError):
+            pass
+    return f"Anki AP {path.stem}"
+
+
 def _format_scheduler_title(scheduler: str) -> str:
     labels = {
         "anki_sm2": "Anki-SM-2",
+        "anki_sm2_ap": "Anki-SM-2 AP",
         "memrise": "Memrise",
     }
     return labels.get(scheduler, scheduler)
@@ -691,6 +747,8 @@ def _iter_log_entries(
                 )
             ):
                 continue
+        elif scheduler == "anki_sm2_ap":
+            title = _resolve_anki_sm2_ap_label(meta, base_dirs)
         elif scheduler == "fixed":
             title = f"Ivl={format_float(fixed_interval)}"
         elif scheduler_uses_desired_retention(scheduler):
@@ -740,6 +798,8 @@ def _iter_log_entries(
                     "fsrs6_ap_lambda_value": meta.get("fsrs6_ap_lambda_value"),
                 }
             )
+        elif scheduler == "anki_sm2_ap":
+            entry.update({"anki_sm2_ap_policy": meta.get("anki_sm2_ap_policy")})
         yield desired_value, entry
 
 
@@ -783,6 +843,10 @@ def _no_desired_dedupe_key(
                 title_key = f"{title_key}|dr={baseline_dr}"
             if lambda_value is not None:
                 title_key = f"{title_key}|lambda={lambda_value}"
+    if scheduler_name == "anki_sm2_ap":
+        policy_path = entry.get("anki_sm2_ap_policy")
+        if isinstance(policy_path, str) and policy_path:
+            title_key = policy_path
 
     short_term_source = entry.get("short_term_source")
     engine = entry.get("engine")
@@ -1071,6 +1135,7 @@ def _plot_compare_frontier(
 
     single_point_markers = {
         "anki_sm2": "^",
+        "anki_sm2_ap": "v",
         "memrise": "s",
     }
 

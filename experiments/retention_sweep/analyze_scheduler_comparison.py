@@ -34,7 +34,7 @@ from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
-DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr", "fsrs6_ap")
+DEFAULT_SCHEDULERS = ("fsrs6", "fsrs6_adr", "fsrs6_ap", "anki_sm2_ap")
 DEFAULT_METRIC = "avg_accum_memorized_per_hour"
 USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$")
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
@@ -312,6 +312,7 @@ def parse_desired_retention(item: dict[str, Any]) -> float | None:
         "desired_retention",
         "fsrs6_adr_baseline_desired_retention",
         "fsrs6_ap_baseline_desired_retention",
+        "anki_sm2_ap_baseline_desired_retention",
         "retention",
     ):
         value = item.get(key)
@@ -357,6 +358,7 @@ def row_from_item(
     if desired_retention is None and item.get("scheduler") not in {
         *ADR_POLICY_SCHEDULERS,
         "fsrs6_ap",
+        "anki_sm2_ap",
     }:
         return None
     return SweepRow(
@@ -381,6 +383,10 @@ def _row_series_identity(item: dict[str, Any]) -> str | None:
             return policy
     if item.get("scheduler") == "fsrs6_ap":
         policy = item.get("fsrs6_ap_policy")
+        if isinstance(policy, str) and policy.strip():
+            return policy
+    if item.get("scheduler") == "anki_sm2_ap":
+        policy = item.get("anki_sm2_ap_policy")
         if isinstance(policy, str) and policy.strip():
             return policy
     title = item.get("title")
@@ -439,7 +445,13 @@ def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
                 if (
                     baseline_dr_manifest is not None
                     and row.desired_retention is not None
-                    and row.scheduler in {"fsrs6", *ADR_POLICY_SCHEDULERS, "fsrs6_ap"}
+                    and row.scheduler
+                    in {
+                        "fsrs6",
+                        *ADR_POLICY_SCHEDULERS,
+                        "fsrs6_ap",
+                        "anki_sm2_ap",
+                    }
                     and not baseline_dr_manifest.contains_value(
                         row.user_id,
                         row.desired_retention,

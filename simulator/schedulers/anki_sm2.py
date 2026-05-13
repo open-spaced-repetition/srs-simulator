@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import TYPE_CHECKING
 
 import torch
 
 from simulator.core import CardView, Scheduler
-
-if TYPE_CHECKING:
-    import torch
 
 
 class AnkiSM2Scheduler(Scheduler):
@@ -25,6 +21,8 @@ class AnkiSM2Scheduler(Scheduler):
         ease_start: float = 2.5,
         ease_min: float = 1.3,
         ease_max: float = 5.5,
+        new_interval_factor: float = 0.0,
+        interval_multiplier: float = 1.0,
     ) -> None:
         self.graduating_interval = float(graduating_interval)
         self.easy_interval = float(easy_interval)
@@ -33,6 +31,8 @@ class AnkiSM2Scheduler(Scheduler):
         self.ease_start = float(ease_start)
         self.ease_min = float(ease_min)
         self.ease_max = float(ease_max)
+        self.new_interval_factor = float(new_interval_factor)
+        self.interval_multiplier = float(interval_multiplier)
 
     def init_card(self, card_view: CardView, rating: int, day: float):
         interval, ease = self._next_interval(
@@ -63,15 +63,19 @@ class AnkiSM2Scheduler(Scheduler):
         if is_new_card:
             interval = max(1.0, new_card_interval)
         elif rating == 1:
-            interval = 1.0
+            interval = max(1.0, current_interval * self.new_interval_factor)
         else:
-            interval = _passing_review_interval(
-                prev_interval=current_interval,
-                elapsed=max(0.0, float(elapsed)),
-                ease=ease,
-                hard_multiplier=self.hard_interval_factor,
-                easy_multiplier=self.easy_bonus,
-                rating=rating,
+            interval = max(
+                1.0,
+                _passing_review_interval(
+                    prev_interval=current_interval,
+                    elapsed=max(0.0, float(elapsed)),
+                    ease=ease,
+                    hard_multiplier=self.hard_interval_factor,
+                    easy_multiplier=self.easy_bonus,
+                    rating=rating,
+                )
+                * self.interval_multiplier,
             )
 
         if rating == 1:
@@ -90,33 +94,45 @@ def _anki_next_interval(
     rating,
     ease,
     *,
-    graduating_interval: float,
-    easy_interval: float,
-    easy_bonus: float,
-    hard_interval_factor: float,
-    ease_min: float,
-    ease_max: float,
+    graduating_interval: float | torch.Tensor,
+    easy_interval: float | torch.Tensor,
+    easy_bonus: float | torch.Tensor,
+    hard_interval_factor: float | torch.Tensor,
+    ease_min: float | torch.Tensor,
+    ease_max: float | torch.Tensor,
+    new_interval_factor: float | torch.Tensor,
+    interval_multiplier: float | torch.Tensor,
 ):
-    new_ease = ease.clamp(min=ease_min, max=ease_max)
+    graduating_interval = _param_like(graduating_interval, prev_interval)
+    easy_interval = _param_like(easy_interval, prev_interval)
+    easy_bonus = _param_like(easy_bonus, prev_interval)
+    hard_interval_factor = _param_like(hard_interval_factor, prev_interval)
+    ease_min = _param_like(ease_min, prev_interval)
+    ease_max = _param_like(ease_max, prev_interval)
+    new_interval_factor = _param_like(new_interval_factor, prev_interval)
+    interval_multiplier = _param_like(interval_multiplier, prev_interval)
+
+    new_ease = torch.minimum(torch.maximum(ease, ease_min), ease_max)
     current_interval = torch.clamp(prev_interval, min=1.0)
     is_new_card = prev_interval == 0.0
-    new_card_interval = prev_interval.new_full(prev_interval.shape, graduating_interval)
-    new_card_interval = new_card_interval.where(rating < 4, easy_interval)
+    new_card_interval = torch.where(rating < 4, graduating_interval, easy_interval)
 
     is_early = elapsed < current_interval
     hard_multiplier = hard_interval_factor
     easy_multiplier = easy_bonus
 
-    hard_minimum = (
-        torch.zeros_like(current_interval)
-        if hard_multiplier <= 1.0
-        else current_interval + 1.0
+    hard_minimum = torch.where(
+        hard_multiplier <= 1.0,
+        torch.zeros_like(current_interval),
+        current_interval + 1.0,
     )
     hard_non_early = _constrain_passing_interval_tensor(
         current_interval * hard_multiplier, hard_minimum
     )
-    good_minimum = (
-        current_interval + 1.0 if hard_multiplier <= 1.0 else hard_non_early + 1.0
+    good_minimum = torch.where(
+        hard_multiplier <= 1.0,
+        current_interval + 1.0,
+        hard_non_early + 1.0,
     )
     days_late = torch.clamp(elapsed - current_interval, min=0.0)
     good_non_early = _constrain_passing_interval_tensor(
@@ -146,61 +162,167 @@ def _anki_next_interval(
     good_interval = torch.where(is_early, good_early, good_non_early)
     easy_interval_val = torch.where(is_early, easy_early, easy_non_early)
 
-    interval = torch.where(
-        is_new_card,
-        new_card_interval,
-        torch.where(
-            rating == 2,
-            hard_interval,
-            torch.where(rating == 4, easy_interval_val, good_interval),
-        ),
+    passing_interval = torch.where(
+        rating == 2,
+        hard_interval,
+        torch.where(rating == 4, easy_interval_val, good_interval),
     )
-    interval = torch.where(rating == 1, torch.ones_like(interval), interval)
+    review_interval = torch.where(
+        rating == 1,
+        current_interval * new_interval_factor,
+        passing_interval * interval_multiplier,
+    )
+    interval = torch.where(is_new_card, new_card_interval, review_interval)
+    interval = interval.clamp(min=1.0)
 
     new_ease = new_ease + -0.2 * (rating == 1).to(new_ease.dtype)
     new_ease = new_ease + -0.15 * (rating == 2).to(new_ease.dtype)
     new_ease = new_ease + 0.15 * (rating == 4).to(new_ease.dtype)
-    new_ease = new_ease.clamp(min=ease_min, max=ease_max)
+    new_ease = torch.minimum(torch.maximum(new_ease, ease_min), ease_max)
     return interval, new_ease
+
+
+def _param_like(value: float | torch.Tensor, reference: torch.Tensor):
+    tensor = torch.as_tensor(value, device=reference.device, dtype=reference.dtype)
+    if tensor.ndim == 0:
+        return tensor.expand_as(reference)
+    if tensor.shape == reference.shape:
+        return tensor
+    raise ValueError(
+        f"scheduler parameter tensor must be scalar or shape {tuple(reference.shape)}, "
+        f"got {tuple(tensor.shape)}."
+    )
+
+
+def _param_vector(
+    value: float | torch.Tensor,
+    *,
+    user_count: int,
+    device: torch.device,
+    dtype: torch.dtype,
+    field_name: str,
+) -> torch.Tensor:
+    tensor = torch.as_tensor(value, device=device, dtype=dtype)
+    if tensor.ndim == 0:
+        return tensor.expand(user_count).clone()
+    if tensor.ndim == 1 and int(tensor.shape[0]) == user_count:
+        return tensor.clone()
+    raise ValueError(
+        f"{field_name} must be scalar or a tensor with shape ({user_count},)."
+    )
 
 
 @dataclass
 class AnkiBatchState:
-    ease: "torch.Tensor"
+    ease: torch.Tensor
+    graduating_interval: torch.Tensor
+    easy_interval: torch.Tensor
+    easy_bonus: torch.Tensor
+    hard_interval_factor: torch.Tensor
+    ease_start: torch.Tensor
+    ease_min: torch.Tensor
+    ease_max: torch.Tensor
+    new_interval_factor: torch.Tensor
+    interval_multiplier: torch.Tensor
 
 
 class AnkiSM2BatchSchedulerOps:
     def __init__(
         self,
         *,
-        graduating_interval: float,
-        easy_interval: float,
-        easy_bonus: float,
-        hard_interval_factor: float,
-        ease_start: float,
-        ease_min: float,
-        ease_max: float,
-        device: "torch.device",
-        dtype: "torch.dtype",
+        graduating_interval: float | torch.Tensor,
+        easy_interval: float | torch.Tensor,
+        easy_bonus: float | torch.Tensor,
+        hard_interval_factor: float | torch.Tensor,
+        ease_start: float | torch.Tensor,
+        ease_min: float | torch.Tensor,
+        ease_max: float | torch.Tensor,
+        new_interval_factor: float | torch.Tensor = 0.0,
+        interval_multiplier: float | torch.Tensor = 1.0,
+        device: torch.device,
+        dtype: torch.dtype,
     ) -> None:
         self.device = device
         self.dtype = dtype
-        self._graduating_interval = float(graduating_interval)
-        self._easy_interval = float(easy_interval)
-        self._easy_bonus = float(easy_bonus)
-        self._hard_interval_factor = float(hard_interval_factor)
-        self._ease_start = float(ease_start)
-        self._ease_min = float(ease_min)
-        self._ease_max = float(ease_max)
+        self._graduating_interval = graduating_interval
+        self._easy_interval = easy_interval
+        self._easy_bonus = easy_bonus
+        self._hard_interval_factor = hard_interval_factor
+        self._ease_start = ease_start
+        self._ease_min = ease_min
+        self._ease_max = ease_max
+        self._new_interval_factor = new_interval_factor
+        self._interval_multiplier = interval_multiplier
 
     def init_state(self, user_count: int, deck_size: int) -> AnkiBatchState:
-        ease = torch.full(
-            (user_count, deck_size),
+        ease_start = _param_vector(
             self._ease_start,
+            user_count=user_count,
             device=self.device,
             dtype=self.dtype,
+            field_name="ease_start",
         )
-        return AnkiBatchState(ease=ease)
+        ease = ease_start[:, None].expand(user_count, deck_size).clone()
+        return AnkiBatchState(
+            ease=ease,
+            graduating_interval=_param_vector(
+                self._graduating_interval,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="graduating_interval",
+            ),
+            easy_interval=_param_vector(
+                self._easy_interval,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="easy_interval",
+            ),
+            easy_bonus=_param_vector(
+                self._easy_bonus,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="easy_bonus",
+            ),
+            hard_interval_factor=_param_vector(
+                self._hard_interval_factor,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="hard_interval_factor",
+            ),
+            ease_start=ease_start,
+            ease_min=_param_vector(
+                self._ease_min,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="ease_min",
+            ),
+            ease_max=_param_vector(
+                self._ease_max,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="ease_max",
+            ),
+            new_interval_factor=_param_vector(
+                self._new_interval_factor,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="new_interval_factor",
+            ),
+            interval_multiplier=_param_vector(
+                self._interval_multiplier,
+                user_count=user_count,
+                device=self.device,
+                dtype=self.dtype,
+                field_name="interval_multiplier",
+            ),
+        )
 
     def review_priority(
         self, state: AnkiBatchState, elapsed: "torch.Tensor"
@@ -223,12 +345,14 @@ class AnkiSM2BatchSchedulerOps:
             elapsed,
             rating,
             state.ease[user_idx, card_idx],
-            graduating_interval=self._graduating_interval,
-            easy_interval=self._easy_interval,
-            easy_bonus=self._easy_bonus,
-            hard_interval_factor=self._hard_interval_factor,
-            ease_min=self._ease_min,
-            ease_max=self._ease_max,
+            graduating_interval=state.graduating_interval[user_idx],
+            easy_interval=state.easy_interval[user_idx],
+            easy_bonus=state.easy_bonus[user_idx],
+            hard_interval_factor=state.hard_interval_factor[user_idx],
+            ease_min=state.ease_min[user_idx],
+            ease_max=state.ease_max[user_idx],
+            new_interval_factor=state.new_interval_factor[user_idx],
+            interval_multiplier=state.interval_multiplier[user_idx],
         )
         state.ease[user_idx, card_idx] = new_ease
         return intervals
@@ -249,12 +373,14 @@ class AnkiSM2BatchSchedulerOps:
             elapsed,
             rating,
             state.ease[user_idx, card_idx],
-            graduating_interval=self._graduating_interval,
-            easy_interval=self._easy_interval,
-            easy_bonus=self._easy_bonus,
-            hard_interval_factor=self._hard_interval_factor,
-            ease_min=self._ease_min,
-            ease_max=self._ease_max,
+            graduating_interval=state.graduating_interval[user_idx],
+            easy_interval=state.easy_interval[user_idx],
+            easy_bonus=state.easy_bonus[user_idx],
+            hard_interval_factor=state.hard_interval_factor[user_idx],
+            ease_min=state.ease_min[user_idx],
+            ease_max=state.ease_max[user_idx],
+            new_interval_factor=state.new_interval_factor[user_idx],
+            interval_multiplier=state.interval_multiplier[user_idx],
         )
         state.ease[user_idx, card_idx] = new_ease
         return intervals
@@ -347,6 +473,8 @@ class AnkiSM2BatchedSchedulerOps:
         self._ease_start = float(scheduler.ease_start)
         self._ease_min = float(scheduler.ease_min)
         self._ease_max = float(scheduler.ease_max)
+        self._new_interval_factor = float(scheduler.new_interval_factor)
+        self._interval_multiplier = float(scheduler.interval_multiplier)
 
     def init_state(self, deck_size: int) -> AnkiBatchedState:
         ease = self._torch.full(
@@ -380,6 +508,8 @@ class AnkiSM2BatchedSchedulerOps:
             hard_interval_factor=self._hard_interval_factor,
             ease_min=self._ease_min,
             ease_max=self._ease_max,
+            new_interval_factor=self._new_interval_factor,
+            interval_multiplier=self._interval_multiplier,
         )
         state.ease[idx] = new_ease
         return intervals
@@ -407,6 +537,8 @@ class AnkiSM2BatchedSchedulerOps:
             hard_interval_factor=self._hard_interval_factor,
             ease_min=self._ease_min,
             ease_max=self._ease_max,
+            new_interval_factor=self._new_interval_factor,
+            interval_multiplier=self._interval_multiplier,
         )
         state.ease[idx] = new_ease
         return intervals

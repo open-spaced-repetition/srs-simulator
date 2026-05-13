@@ -31,6 +31,7 @@ from simulator.schedulers import (
     LSTMScheduler,
     FixedIntervalScheduler,
     AnkiSM2Scheduler,
+    AnkiSM2APScheduler,
     MemriseScheduler,
     FSRS6ADRScheduler,
     FSRS6APScheduler,
@@ -132,6 +133,14 @@ def _require_fsrs6_ap_policy(path: Path | None) -> Path:
     return path
 
 
+def _require_anki_sm2_ap_policy(path: Path | None) -> Path:
+    if path is None:
+        raise ValueError(
+            "Anki SM2 AP scheduler requires --anki-sm2-ap-policy pointing to a policy JSON."
+        )
+    return path
+
+
 SCHEDULER_FACTORIES = {
     "fsrs6": lambda args: FSRS6Scheduler(
         weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
@@ -189,6 +198,9 @@ SCHEDULER_FACTORIES = {
     "fsrs6_ap": lambda args: FSRS6APScheduler(
         policy_json=_require_fsrs6_ap_policy(args.fsrs6_ap_policy),
         priority_mode=args.scheduler_priority,
+    ),
+    "anki_sm2_ap": lambda args: AnkiSM2APScheduler(
+        policy_json=_require_anki_sm2_ap_policy(args.anki_sm2_ap_policy),
     ),
 }
 
@@ -382,6 +394,12 @@ def main() -> None:
         default=None,
         help="Path to an FSRS6 AP policy JSON when using --sched fsrs6_ap.",
     )
+    parser.add_argument(
+        "--anki-sm2-ap-policy",
+        type=Path,
+        default=None,
+        help="Path to an Anki SM2 AP policy JSON when using --sched anki_sm2_ap.",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed.")
     args = parser.parse_args()
 
@@ -566,12 +584,15 @@ def _format_plot_footer(args: argparse.Namespace) -> str:
     sspmmc_policy = getattr(args, "sspmmc_policy", None)
     fsrs6_adr_policy = getattr(args, "fsrs6_adr_policy", None)
     fsrs6_ap_policy = getattr(args, "fsrs6_ap_policy", None)
+    anki_sm2_ap_policy = getattr(args, "anki_sm2_ap_policy", None)
     if sspmmc_policy:
         extra.append(f"sspmmc-policy={sspmmc_policy.stem}")
     if fsrs6_adr_policy:
         extra.append(f"fsrs6-adr-policy={fsrs6_adr_policy.stem}")
     if fsrs6_ap_policy:
         extra.append(f"fsrs6-ap-policy={fsrs6_ap_policy.stem}")
+    if anki_sm2_ap_policy:
+        extra.append(f"anki-sm2-ap-policy={anki_sm2_ap_policy.stem}")
     if short_term_source != "off":
         extra.append(f"learning-steps={','.join(str(step) for step in learning_steps)}")
         extra.append(
@@ -842,6 +863,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
     sspmmc_policy = getattr(args, "sspmmc_policy", None)
     fsrs6_adr_policy = getattr(args, "fsrs6_adr_policy", None)
     fsrs6_ap_policy = getattr(args, "fsrs6_ap_policy", None)
+    anki_sm2_ap_policy = getattr(args, "anki_sm2_ap_policy", None)
     if sspmmc_policy:
         parts.append(f"policy={sspmmc_policy.stem}")
     if fsrs6_adr_policy:
@@ -860,6 +882,8 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             parts.append(f"policy-dr={format_float(ap_baseline_dr)}")
         if ap_lambda is not None:
             parts.append(f"lambda={format_float(ap_lambda)}")
+    if anki_sm2_ap_policy:
+        parts.append(f"policy={anki_sm2_ap_policy.stem}")
     parts.extend(
         [
             f"user={args.user_id or 1}",
@@ -902,6 +926,7 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             args, "fsrs6_ap_baseline_desired_retention", None
         ),
         "fsrs6_ap_lambda_value": getattr(args, "fsrs6_ap_lambda_value", None),
+        "anki_sm2_ap_policy": str(anki_sm2_ap_policy) if anki_sm2_ap_policy else None,
         "fixed_interval": fixed_interval,
         "seed": args.seed,
         "fuzz": bool(getattr(args, "fuzz", False)),

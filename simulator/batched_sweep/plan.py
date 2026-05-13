@@ -19,6 +19,9 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
 from simulator.batched_sweep.fsrs6_ap_policy import (
     resolve_fsrs6_ap_policy_specs,
 )
+from simulator.batched_sweep.anki_sm2_ap_policy import (
+    resolve_anki_sm2_ap_policy_specs,
+)
 from simulator.batched_sweep.utils import chunked, dr_values, parse_cuda_devices
 from simulator.scheduler_spec import parse_scheduler_spec
 
@@ -36,6 +39,7 @@ SUPPORTED_SCHEDS = {
     "fsrs6_adr",
     "fsrs6_default_adr",
     "fsrs6_ap",
+    "anki_sm2_ap",
 }
 ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 
@@ -89,6 +93,12 @@ def build_batched_sweep_plan(
                 "--sched fsrs6_ap requires an FSRS6 AP policy source "
                 "(--fsrs6-ap-policy, --fsrs6-ap-policy-root, "
                 "--fsrs6-ap-train-run-root, or --fsrs6-ap-policy-manifest)."
+            )
+        if name == "anki_sm2_ap" and not _has_anki_sm2_ap_source(args):
+            raise ValueError(
+                "--sched anki_sm2_ap requires an Anki SM2 AP policy source "
+                "(--anki-sm2-ap-policy, --anki-sm2-ap-policy-root, "
+                "--anki-sm2-ap-train-run-root, or --anki-sm2-ap-policy-manifest)."
             )
 
     batch_size = getattr(args, "batch_size", None)
@@ -167,6 +177,15 @@ def build_batched_sweep_plan(
                 policy_manifest=getattr(args, "fsrs6_ap_policy_manifest", None),
                 lambda_values=getattr(args, "fsrs6_ap_lambda_values", None),
             )
+    anki_sm2_ap_policy_specs = ()
+    if any(parse_scheduler_spec(raw)[0] == "anki_sm2_ap" for raw in schedulers):
+        if _uses_expanded_anki_sm2_ap_source(args):
+            anki_sm2_ap_policy_specs = resolve_anki_sm2_ap_policy_specs(
+                user_ids=user_ids,
+                policy_root=getattr(args, "anki_sm2_ap_policy_root", None),
+                train_run_root=getattr(args, "anki_sm2_ap_train_run_root", None),
+                policy_manifest=getattr(args, "anki_sm2_ap_policy_manifest", None),
+            )
 
     ctx = BatchedSweepContext(
         repo_root=repo_root,
@@ -182,6 +201,8 @@ def build_batched_sweep_plan(
         fsrs6_adr_policy_specs=fsrs6_adr_policy_specs,
         fsrs6_ap_policy=getattr(args, "fsrs6_ap_policy", None),
         fsrs6_ap_policy_specs=fsrs6_ap_policy_specs,
+        anki_sm2_ap_policy=getattr(args, "anki_sm2_ap_policy", None),
+        anki_sm2_ap_policy_specs=anki_sm2_ap_policy_specs,
         fsrs6_dr_values_by_user=fsrs6_dr_values_by_user,
     )
     batches_by_env: dict[str, list[list[int]]] = {}
@@ -361,6 +382,10 @@ def _lane_counts_by_user(
             for spec in ctx.fsrs6_ap_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
             continue
+        if name == "anki_sm2_ap" and ctx.anki_sm2_ap_policy_specs:
+            for spec in ctx.anki_sm2_ap_policy_specs:
+                counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
+            continue
         lanes_per_user += 1
     return {
         user_id: lanes_per_user + counts_by_user.get(user_id, 0) for user_id in user_ids
@@ -425,5 +450,36 @@ def _uses_expanded_fsrs6_ap_source(args: argparse.Namespace) -> bool:
             "Configure only one expanded FSRS6 AP policy source: "
             "--fsrs6-ap-policy-root, --fsrs6-ap-train-run-root, or "
             "--fsrs6-ap-policy-manifest."
+        )
+    return any(expanded)
+
+
+def _has_anki_sm2_ap_source(args: argparse.Namespace) -> bool:
+    return any(
+        getattr(args, attr, None) is not None
+        for attr in (
+            "anki_sm2_ap_policy",
+            "anki_sm2_ap_policy_root",
+            "anki_sm2_ap_train_run_root",
+            "anki_sm2_ap_policy_manifest",
+        )
+    )
+
+
+def _uses_expanded_anki_sm2_ap_source(args: argparse.Namespace) -> bool:
+    expanded = [
+        getattr(args, "anki_sm2_ap_policy_root", None) is not None,
+        getattr(args, "anki_sm2_ap_train_run_root", None) is not None,
+        getattr(args, "anki_sm2_ap_policy_manifest", None) is not None,
+    ]
+    if getattr(args, "anki_sm2_ap_policy", None) is not None and any(expanded):
+        raise ValueError(
+            "--anki-sm2-ap-policy cannot be combined with expanded Anki SM2 AP policy sources."
+        )
+    if sum(expanded) > 1:
+        raise ValueError(
+            "Configure only one expanded Anki SM2 AP policy source: "
+            "--anki-sm2-ap-policy-root, --anki-sm2-ap-train-run-root, or "
+            "--anki-sm2-ap-policy-manifest."
         )
     return any(expanded)

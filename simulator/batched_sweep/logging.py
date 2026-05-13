@@ -54,6 +54,7 @@ class BatchedSweepLogLane:
     fsrs6_ap_policy: Path | None = None
     fsrs6_ap_baseline_desired_retention: float | None = None
     fsrs6_ap_lambda_value: float | None = None
+    anki_sm2_ap_policy: Path | None = None
     log_dir: Path | None = None
 
     @property
@@ -120,6 +121,7 @@ def _build_log_args(
     log_dir: Path,
     fsrs6_adr_policy: Path | None = None,
     fsrs6_ap_policy: Path | None = None,
+    anki_sm2_ap_policy: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         engine="batched",
@@ -144,6 +146,7 @@ def _build_log_args(
         fsrs6_ap_policy=fsrs6_ap_policy,
         fsrs6_ap_baseline_desired_retention=None,
         fsrs6_ap_lambda_value=None,
+        anki_sm2_ap_policy=anki_sm2_ap_policy,
         fixed_interval=fixed_interval,
         seed=args.seed,
         fuzz=args.fuzz,
@@ -259,6 +262,7 @@ def simulate_and_log_lanes(
             log_dir=user_log_dir,
             fsrs6_adr_policy=lane.fsrs6_adr_policy,
             fsrs6_ap_policy=lane.fsrs6_ap_policy,
+            anki_sm2_ap_policy=lane.anki_sm2_ap_policy,
         )
         log_args.fsrs6_adr_baseline_desired_retention = (
             lane.fsrs6_adr_baseline_desired_retention
@@ -308,6 +312,7 @@ def simulate_and_log(
             fixed_interval=fixed_interval,
             fsrs6_adr_policy=getattr(args, "fsrs6_adr_policy", None),
             fsrs6_ap_policy=getattr(args, "fsrs6_ap_policy", None),
+            anki_sm2_ap_policy=getattr(args, "anki_sm2_ap_policy", None),
         )
         for user_id in batch
     ]

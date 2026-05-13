@@ -443,6 +443,42 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(trainer, "fsrs6_adr_portfolio")
         self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 16)
 
+    def test_checked_in_anki_sm2_ap_portfolio_config_matches_budget(self) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "anki_sm2_ap_portfolio_users_1_8_pop16_20_v1.toml"
+        )
+
+        self.assertEqual(
+            config.name,
+            "anki_sm2_ap_portfolio_users_1_8_pop16_20_v1",
+        )
+        self.assertEqual(config.training_ap["parameter_delta_scale"], 1.0)
+        self.assertEqual(config.training_portfolio["population_size"], 16)
+        self.assertEqual(config.training_portfolio["offspring_size"], 16)
+        self.assertEqual(config.training_portfolio["generations"], 20)
+        self.assertEqual(config.training_portfolio["portfolio_size"], 16)
+        self.assertEqual(config.sweep_batched.envs, ("fsrs6", "lstm"))
+        self.assertEqual(config.sweep_batched.schedulers, ("anki_sm2_ap",))
+        self.assertEqual(
+            config.build_pareto.schedulers,
+            ("fsrs6", "anki_sm2_ap"),
+        )
+
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+
+        self.assertEqual(trainer, "anki_sm2_ap_portfolio")
+        self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 16)
+
     def test_checked_in_fsrs3_scheduler_eval_config_uses_native_sweep(
         self,
     ) -> None:

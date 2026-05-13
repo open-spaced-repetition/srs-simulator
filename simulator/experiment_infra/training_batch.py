@@ -22,6 +22,7 @@ SUPPORTED_TRAINERS = {
     "fsrs6_adr_cmaes",
     "fsrs6_ap_cmaes",
     "fsrs6_ap_portfolio",
+    "anki_sm2_ap_portfolio",
 }
 
 
@@ -72,6 +73,8 @@ def resolve_in_process_trainer(
         return "fsrs6_ap_cmaes"
     if "train_fsrs6_ap_portfolio.py" in script_names:
         return "fsrs6_ap_portfolio"
+    if "train_anki_sm2_ap_portfolio.py" in script_names:
+        return "anki_sm2_ap_portfolio"
     if "train_fsrs6_adr_portfolio.py" in script_names:
         return "fsrs6_adr_portfolio"
     raise ValueError(
@@ -97,6 +100,9 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
     )
     from experiments.rl_scheduler.train_fsrs6_ap_portfolio import (
         APPortfolioSettings,
+    )
+    from experiments.rl_scheduler.train_anki_sm2_ap_portfolio import (
+        AnkiSM2APPortfolioSettings,
     )
     from experiments.rl_scheduler.train_cmaes_fsrs6_ap import (
         APSettings,
@@ -159,6 +165,13 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             portfolio.population_size,
             portfolio.offspring_size,
         )
+    if trainer == "anki_sm2_ap_portfolio":
+        portfolio = AnkiSM2APPortfolioSettings.from_mapping(
+            config.training_portfolio,
+            settings=settings,
+            default_seed_retention_values=baseline_dr_values,
+        )
+        return max(portfolio.population_size, portfolio.offspring_size)
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
 
 
@@ -199,6 +212,10 @@ def run_in_process_train_batch(
         )
     if trainer == "fsrs6_ap_portfolio":
         return _run_fsrs6_ap_portfolio_jobs(
+            jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
+        )
+    if trainer == "anki_sm2_ap_portfolio":
+        return _run_anki_sm2_ap_portfolio_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     raise ValueError(f"Unsupported in-process trainer: {trainer}")
@@ -803,6 +820,64 @@ def _run_fsrs6_ap_portfolio_jobs(
                     artifact_paths=(),
                     progress_path=None,
                     error="AP portfolio trainer did not return an outcome for this job.",
+                )
+            )
+            continue
+        outcomes.append(
+            InProcessTrainOutcome(
+                job=job,
+                passed=result.passed,
+                artifact_paths=result.artifact_paths,
+                progress_path=result.progress_path,
+                error=result.error,
+            )
+        )
+    return outcomes
+
+
+def _run_anki_sm2_ap_portfolio_jobs(
+    *,
+    jobs: list[InProcessTrainJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+) -> list[InProcessTrainOutcome]:
+    from experiments.rl_scheduler.train_anki_sm2_ap_portfolio import (
+        AnkiSM2APPortfolioTrainJob,
+        run_portfolio_train_jobs,
+    )
+
+    results = run_portfolio_train_jobs(
+        jobs=[
+            AnkiSM2APPortfolioTrainJob(
+                user_id=job.user_id,
+                output_dir=job.output_dir,
+                command_record_path=job.command_record_path,
+            )
+            for job in jobs
+        ],
+        config=config,
+        config_path=config_path,
+        repo_root=repo_root,
+        execution_mode="in_process_batch",
+    )
+    result_by_key = {
+        (result.job.user_id, result.job.output_dir): result for result in results
+    }
+    outcomes: list[InProcessTrainOutcome] = []
+    for job in jobs:
+        result = result_by_key.get((job.user_id, job.output_dir))
+        if result is None:
+            outcomes.append(
+                InProcessTrainOutcome(
+                    job=job,
+                    passed=False,
+                    artifact_paths=(),
+                    progress_path=None,
+                    error=(
+                        "Anki SM2 AP portfolio trainer did not return an outcome "
+                        "for this job."
+                    ),
                 )
             )
             continue

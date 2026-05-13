@@ -30,6 +30,10 @@ from simulator.batched_sweep.fsrs6_ap_policy import (
     FSRS6APPolicySpec,
     resolve_fsrs6_ap_policy_specs,
 )
+from simulator.batched_sweep.anki_sm2_ap_policy import (
+    AnkiSM2APPolicySpec,
+    resolve_anki_sm2_ap_policy_specs,
+)
 from simulator.batched_sweep.runner import BatchedSweepContext, run_batch_core
 from simulator.batched_sweep.execution import LocalProgressQueue, run_batches
 from simulator.batched_sweep.plan import (
@@ -65,4 +69,6 @@ __all__ = [
     "resolve_fsrs6_adr_policy_specs",
     "FSRS6APPolicySpec",
     "resolve_fsrs6_ap_policy_specs",
+    "AnkiSM2APPolicySpec",
+    "resolve_anki_sm2_ap_policy_specs",
 ]
