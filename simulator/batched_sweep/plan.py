@@ -34,8 +34,10 @@ SUPPORTED_SCHEDS = {
     "memrise",
     "fixed",
     "fsrs6_adr",
+    "fsrs6_default_adr",
     "fsrs6_ap",
 }
+ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 
 
 @dataclass(frozen=True)
@@ -76,9 +78,9 @@ def build_batched_sweep_plan(
         name, _, _ = parse_scheduler_spec(raw)
         if name not in SUPPORTED_SCHEDS:
             raise ValueError(f"Unsupported scheduler '{name}' in batched run.")
-        if name == "fsrs6_adr" and not _has_fsrs6_adr_source(args):
+        if name in ADR_POLICY_SCHEDULERS and not _has_fsrs6_adr_source(args):
             raise ValueError(
-                "--sched fsrs6_adr requires an FSRS6 ADR policy source "
+                f"--sched {name} requires an FSRS6 ADR policy source "
                 "(--fsrs6-adr-policy, --fsrs6-adr-policy-root, "
                 "--fsrs6-adr-train-run-root, or --fsrs6-adr-policy-manifest)."
             )
@@ -144,7 +146,7 @@ def build_batched_sweep_plan(
     device = torch.device(args.torch_device) if args.torch_device else None
 
     fsrs6_adr_policy_specs = ()
-    if any(parse_scheduler_spec(raw)[0] == "fsrs6_adr" for raw in schedulers):
+    if any(parse_scheduler_spec(raw)[0] in ADR_POLICY_SCHEDULERS for raw in schedulers):
         if _uses_expanded_fsrs6_adr_source(args):
             fsrs6_adr_policy_specs = resolve_fsrs6_adr_policy_specs(
                 user_ids=user_ids,
@@ -351,7 +353,7 @@ def _lane_counts_by_user(
                 continue
             lanes_per_user += len(ctx.dr_values)
             continue
-        if name == "fsrs6_adr" and ctx.fsrs6_adr_policy_specs:
+        if name in ADR_POLICY_SCHEDULERS and ctx.fsrs6_adr_policy_specs:
             for spec in ctx.fsrs6_adr_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
             continue

@@ -84,7 +84,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         sched_help=(
             "Comma-separated schedulers to sweep "
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
-            "anki_sm2, memrise, fixed, fsrs6_adr, fsrs6_ap)."
+            "anki_sm2, memrise, fixed, fsrs6_adr, fsrs6_default_adr, fsrs6_ap)."
         ),
     )
     add_retention_range_args(parser)
@@ -97,7 +97,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--fsrs6-adr-policy",
         type=Path,
         default=None,
-        help="Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr.",
+        help=(
+            "Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr "
+            "or fsrs6_default_adr."
+        ),
     )
     parser.add_argument(
         "--fsrs6-adr-policy-root",

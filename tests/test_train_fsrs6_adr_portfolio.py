@@ -17,6 +17,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.rl_scheduler.policy_search_common import CandidateMetrics
 from experiments.rl_scheduler.policy_search_common import PolicySearchSettings
+from experiments.rl_scheduler.policy_search_common import (
+    SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT,
+)
 from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     ObjectivePoint,
     PortfolioCandidate,
@@ -825,6 +828,79 @@ class FSRS6ADRPortfolioArtifactTests(unittest.TestCase):
         self.assertNotIn("lambda_value", portfolio_payload)
         self.assertNotIn("lambda", metadata["artifact_id"])
         self.assertNotIn("lambda", portfolio_payload["portfolio_id"])
+
+    def test_default_weight_source_writes_default_adr_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = _config(root)
+            config_path = root / "config.toml"
+            config_path.write_text("", encoding="utf-8")
+            command_record_path = root / "commands" / "train.json"
+            command_record_path.parent.mkdir()
+            command_record_path.write_text("{}", encoding="utf-8")
+            settings = PolicySearchSettings.from_mapping(
+                {
+                    **config.training_policy_search,
+                    "scheduler_weight_source": SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT,
+                }
+            )
+            portfolio = PortfolioSettings(portfolio_size=1)
+            candidate = PortfolioCandidate(
+                candidate_id=7,
+                coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                metrics=_metrics(20.0, 2.0),
+            )
+            result = UserPortfolioResult(
+                job=PortfolioTrainJob(
+                    user_id=1,
+                    output_dir=root / "out",
+                    command_record_path=command_record_path,
+                ),
+                baseline_desired_retention_values=(0.52,),
+                baseline_metrics=[_metrics(10.0, 4.0)],
+                baseline_hypervolume=1.0,
+                portfolio_hypervolume=3.0,
+                hypervolume_improvement=2.0,
+                final_population_hypervolume=10.0,
+                final_population_hypervolume_improvement=9.0,
+                reference_point=ObjectivePoint(0.0, -10.0),
+                selected_children=[
+                    SelectedPortfolioChild(
+                        portfolio_index=0,
+                        candidate=candidate,
+                        hypervolume_contribution=2.0,
+                        pareto_rank=0,
+                    )
+                ],
+                final_population=[candidate],
+                history=[],
+                passed=True,
+            )
+
+            artifact_paths = _write_portfolio_artifacts(
+                result=result,
+                config=config,
+                config_path=config_path,
+                settings=settings,
+                portfolio=portfolio,
+                feature_version="fsrs6_adr_log_poly_v1",
+            )
+            metadata = json.loads(artifact_paths[0].read_text(encoding="utf-8"))
+            portfolio_payload = json.loads(
+                (root / "out" / "portfolio.json").read_text(encoding="utf-8")
+            )
+            validated = validate_scheduler_artifact(
+                artifact_paths[0],
+                require_files=True,
+            )
+
+        self.assertEqual(metadata["scheduler_name"], "fsrs6_default_adr")
+        self.assertEqual(
+            metadata["scheduler_weight_source"],
+            SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT,
+        )
+        self.assertEqual(portfolio_payload["scheduler_name"], "fsrs6_default_adr")
+        self.assertEqual(validated.scheduler_name, "fsrs6_default_adr")
 
 
 class FSRS6ADRPortfolioResolverTests(unittest.TestCase):

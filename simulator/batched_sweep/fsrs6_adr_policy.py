@@ -11,6 +11,9 @@ import tomllib
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 
+ADR_SCHEDULER_NAMES = frozenset({"fsrs6_adr", "fsrs6_default_adr"})
+
+
 @dataclass(frozen=True, slots=True)
 class FSRS6ADRPolicySpec:
     user_id: int
@@ -494,10 +497,10 @@ def _load_sibling_metadata(path: Path) -> Mapping[str, Any] | None:
     if not isinstance(raw, Mapping):
         raise ValueError(f"Artifact metadata must be a JSON object: {metadata_path}")
     scheduler_name = raw.get("scheduler_name")
-    if scheduler_name is not None and scheduler_name != "fsrs6_adr":
+    if scheduler_name is not None and scheduler_name not in ADR_SCHEDULER_NAMES:
         raise ValueError(
             f"Artifact metadata {metadata_path} scheduler_name={scheduler_name!r}; "
-            "expected 'fsrs6_adr'."
+            "expected an FSRS6 ADR-family scheduler."
         )
     policy_path_raw = raw.get("policy_path")
     if isinstance(policy_path_raw, str) and policy_path_raw.strip():

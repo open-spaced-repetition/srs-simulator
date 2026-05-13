@@ -59,8 +59,10 @@ COMMAND_TIMEOUT_EXIT_CODE = 124
 TRAIN_OVERFIT_GATE_PASS_FRACTION = 0.8
 RUN_ID_SCOPED_SWEEP_SCHEDULERS = {
     "fsrs6_adr",
+    "fsrs6_default_adr",
     "fsrs6_ap",
 }
+FSRS6_ADR_POLICY_SOURCE_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 PORTFOLIO_CHILD_ACTION_SPACES = {
     "sd_retention_function_portfolio_child",
     "fsrs6_ap_weight_delta_portfolio_child",
@@ -4655,19 +4657,24 @@ def _run_batched_sweep_jobs(
         {
             job.scheduler_name
             for job in jobs
-            if job.scheduler_name not in {"fsrs6", "fsrs6_adr"}
+            if job.scheduler_name not in {"fsrs6", *FSRS6_ADR_POLICY_SOURCE_SCHEDULERS}
         }
     )
     if unsupported:
         raise ValueError(
-            "Batched sweep currently supports fsrs6 and fsrs6_adr lanes, "
+            "Batched sweep currently supports fsrs6 and FSRS6 ADR-family lanes, "
             f"got {unsupported}."
         )
     for job in jobs:
         if job.scheduler_name == "fsrs6" and job.desired_retention is None:
             raise ValueError("Batched fsrs6 sweep lanes require desired_retention.")
-        if job.scheduler_name == "fsrs6_adr" and job.fsrs6_adr_policy_path is None:
-            raise ValueError("Batched fsrs6_adr sweep lanes require a policy path.")
+        if (
+            job.scheduler_name in FSRS6_ADR_POLICY_SOURCE_SCHEDULERS
+            and job.fsrs6_adr_policy_path is None
+        ):
+            raise ValueError(
+                f"Batched {job.scheduler_name} sweep lanes require a policy path."
+            )
 
     import argparse
 
@@ -4724,22 +4731,35 @@ def _run_batched_sweep_jobs(
     )
 
     lane_user_ids = [job.user_id for job in jobs]
+    lane_index_by_scheduler: dict[str, list[int]] = {}
+    for lane_index, job in enumerate(jobs):
+        lane_index_by_scheduler.setdefault(job.scheduler_name, []).append(lane_index)
+    scheduler_names = set(lane_index_by_scheduler)
     benchmark_root = resolve_benchmark_root(repo_root, None).resolve()
-    fsrs_weights, active_user_ids = load_fsrs6_weights(
-        repo_root=repo_root,
-        user_ids=lane_user_ids,
-        benchmark_root=benchmark_root,
-        benchmark_partition=None,
-        overrides=parse_result_overrides(None),
-        short_term=bool(short_term_source),
-        device=device,
+    needs_fit_fsrs_weights = (
+        config.simulation.environment == "fsrs6"
+        or "fsrs6" in scheduler_names
+        or "fsrs6_adr" in scheduler_names
     )
-    if fsrs_weights is None or active_user_ids != lane_user_ids:
-        raise ValueError(
-            "Batched sweep could not load FSRS-6 weights for all policy lanes."
+    fsrs_weights: torch.Tensor | None = None
+    if needs_fit_fsrs_weights:
+        fsrs_weights, active_user_ids = load_fsrs6_weights(
+            repo_root=repo_root,
+            user_ids=lane_user_ids,
+            benchmark_root=benchmark_root,
+            benchmark_partition=None,
+            overrides=parse_result_overrides(None),
+            short_term=bool(short_term_source),
+            device=device,
         )
+        if fsrs_weights is None or active_user_ids != lane_user_ids:
+            raise ValueError(
+                "Batched sweep could not load FSRS-6 weights for all policy lanes."
+            )
 
     if config.simulation.environment == "fsrs6":
+        if fsrs_weights is None:
+            raise ValueError("Batched fsrs6 environment requires FSRS-6 weights.")
         env_weights = fsrs_weights.to(device)
     else:
         env_weights = build_default_fsrs6_weights(
@@ -4754,12 +4774,11 @@ def _run_batched_sweep_jobs(
     )
 
     scheduler_groups: list[_MixedSchedulerGroup] = []
-    lane_index_by_scheduler: dict[str, list[int]] = {}
-    for lane_index, job in enumerate(jobs):
-        lane_index_by_scheduler.setdefault(job.scheduler_name, []).append(lane_index)
 
-    fsrs_weights = fsrs_weights.to(device)
     if fsrs6_indices := lane_index_by_scheduler.get("fsrs6"):
+        if fsrs_weights is None:
+            raise ValueError("Batched fsrs6 scheduler requires FSRS-6 weights.")
+        fsrs_weights = fsrs_weights.to(device)
         group_indices = torch.tensor(
             fsrs6_indices,
             device=device,
@@ -4790,7 +4809,9 @@ def _run_batched_sweep_jobs(
             )
         )
 
-    if fsrs6_adr_indices := lane_index_by_scheduler.get("fsrs6_adr"):
+    for adr_scheduler_name in sorted(FSRS6_ADR_POLICY_SOURCE_SCHEDULERS):
+        if not (fsrs6_adr_indices := lane_index_by_scheduler.get(adr_scheduler_name)):
+            continue
         group_indices = torch.tensor(
             fsrs6_adr_indices,
             device=device,
@@ -4800,7 +4821,9 @@ def _run_batched_sweep_jobs(
         for index in fsrs6_adr_indices:
             policy_path = jobs[index].fsrs6_adr_policy_path
             if policy_path is None:
-                raise ValueError("Batched fsrs6_adr sweep lanes require a policy path.")
+                raise ValueError(
+                    f"Batched {adr_scheduler_name} sweep lanes require a policy path."
+                )
             adr_policy_paths.append(policy_path)
         policies = [FSRS6ADRPolicy.from_json(path) for path in adr_policy_paths]
         template = policies[0]
@@ -4817,18 +4840,28 @@ def _run_batched_sweep_jobs(
                 abs_tol=1e-9,
             ):
                 raise ValueError(
-                    "Batched fsrs6_adr sweep requires identical policy retention bounds."
+                    f"Batched {adr_scheduler_name} sweep requires identical policy "
+                    "retention bounds."
                 )
         coefficients = torch.tensor(
             [policy.coefficients for policy in policies],
             device=device,
             dtype=torch.float32,
         )
+        if adr_scheduler_name == "fsrs6_default_adr":
+            scheduler_weights = build_default_fsrs6_weights(
+                user_ids=lane_user_ids,
+                device=device,
+            )
+        else:
+            if fsrs_weights is None:
+                raise ValueError("Batched fsrs6_adr scheduler requires FSRS-6 weights.")
+            scheduler_weights = fsrs_weights.to(device)
         scheduler_groups.append(
             _MixedSchedulerGroup(
                 lane_indices=group_indices,
                 ops=FSRS6ADRBatchSchedulerOps(
-                    weights=fsrs_weights.index_select(0, group_indices),
+                    weights=scheduler_weights.index_select(0, group_indices),
                     policy=template,
                     coefficients=coefficients,
                     bounds=Bounds(),
@@ -5051,10 +5084,12 @@ def _run_configured_batched_retention_sweep(
         ),
         fsrs6_adr_policy=None,
         fsrs6_adr_policy_root=None,
-        fsrs6_adr_train_run_root=run_root if "fsrs6_adr" in scheduler_names else None,
+        fsrs6_adr_train_run_root=run_root
+        if scheduler_names & FSRS6_ADR_POLICY_SOURCE_SCHEDULERS
+        else None,
         fsrs6_adr_policy_manifest=None,
         fsrs6_adr_lambda_values=_sweep_policy_lambda_values(config)
-        if "fsrs6_adr" in scheduler_names
+        if scheduler_names & FSRS6_ADR_POLICY_SOURCE_SCHEDULERS
         else None,
         fsrs6_ap_policy=None,
         fsrs6_ap_policy_root=None,

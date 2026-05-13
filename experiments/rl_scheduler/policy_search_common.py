@@ -45,6 +45,14 @@ from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUse
 
 RELATIVE_GAIN_GATE_FLOOR = 0.0
 RELATIVE_GAIN_GATE_PASS_FRACTION = 0.8
+SCHEDULER_WEIGHT_SOURCE_USER_FIT = "user_fit"
+SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT = "fsrs6_default"
+SCHEDULER_WEIGHT_SOURCES = frozenset(
+    {
+        SCHEDULER_WEIGHT_SOURCE_USER_FIT,
+        SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT,
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +65,7 @@ class PolicySearchSettings:
     torch_device: str = "cpu"
     short_term_threshold: float = 0.5
     short_term_loops_limit: int = DEFAULT_SHORT_TERM_LOOPS_LIMIT
+    scheduler_weight_source: str = SCHEDULER_WEIGHT_SOURCE_USER_FIT
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> PolicySearchSettings:
@@ -99,6 +108,12 @@ class PolicySearchSettings:
                 "training.policy_search.short_term_loops_limit",
                 0,
             ),
+            scheduler_weight_source=_scheduler_weight_source(
+                raw.get(
+                    "scheduler_weight_source",
+                    defaults.scheduler_weight_source,
+                )
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -112,6 +127,9 @@ class PolicySearchSettings:
             raise ValueError(
                 "baseline_desired_retention must be inside the retention bounds."
             )
+        if self.scheduler_weight_source not in SCHEDULER_WEIGHT_SOURCES:
+            allowed = ", ".join(sorted(SCHEDULER_WEIGHT_SOURCES))
+            raise ValueError(f"scheduler_weight_source must be one of: {allowed}.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,17 +276,27 @@ def _build_bundle(
         if lanes < 1:
             raise ValueError("lane_user_ids must not be empty.")
     short_term = bool(short_term_source)
-    scheduler_weights, kept_users = load_fsrs6_weights(
-        repo_root=REPO_ROOT,
-        user_ids=user_ids,
-        benchmark_root=benchmark_root,
-        benchmark_partition=benchmark_partition,
-        overrides=overrides,
-        short_term=short_term,
-        device=device,
-    )
-    if scheduler_weights is None or len(kept_users) != lanes:
-        raise SystemExit(f"Missing FSRS-6 scheduler weights for user {user_id}.")
+    if settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_USER_FIT:
+        scheduler_weights, kept_users = load_fsrs6_weights(
+            repo_root=REPO_ROOT,
+            user_ids=user_ids,
+            benchmark_root=benchmark_root,
+            benchmark_partition=benchmark_partition,
+            overrides=overrides,
+            short_term=short_term,
+            device=device,
+        )
+        if scheduler_weights is None or len(kept_users) != lanes:
+            raise SystemExit(f"Missing FSRS-6 scheduler weights for user {user_id}.")
+    elif settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT:
+        scheduler_weights = build_default_fsrs6_weights(
+            user_ids=user_ids,
+            device=device,
+        )
+    else:
+        raise AssertionError(
+            f"Unexpected scheduler_weight_source={settings.scheduler_weight_source!r}."
+        )
 
     environment = config.simulation.environment
     if environment == "lstm":
@@ -859,3 +887,13 @@ def _str(value: Any, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string.")
     return value.strip()
+
+
+def _scheduler_weight_source(value: Any) -> str:
+    source = _str(value, "training.policy_search.scheduler_weight_source")
+    if source not in SCHEDULER_WEIGHT_SOURCES:
+        allowed = ", ".join(sorted(SCHEDULER_WEIGHT_SOURCES))
+        raise ValueError(
+            f"training.policy_search.scheduler_weight_source must be one of: {allowed}."
+        )
+    return source

@@ -25,6 +25,7 @@ EVENT_SCHEDULERS = (
     "memrise",
     "sspmmc",
     "fsrs6_adr",
+    "fsrs6_default_adr",
     "fsrs6_ap",
 )
 BATCHED_ENVS = ("lstm", "fsrs6", "fsrs6_default")
@@ -38,6 +39,7 @@ BATCHED_SCHEDULERS = (
     "anki_sm2",
     "memrise",
     "fsrs6_adr",
+    "fsrs6_default_adr",
     "fsrs6_ap",
 )
 

@@ -200,6 +200,10 @@ Representative profiles:
   `fsrs6_adr` scheduler trained as 23 simplified 3-parameter
   `fsrs6_adr_log_linear_v1` portfolio children per user with SMS-EMOA
   hypervolume optimization.
+- `configs/fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml`: the ADR
+  portfolio scheduler trained with the same pop16/off16/gen20 budget while the
+  ADR scheduler state uses default FSRS-6 weights instead of per-user fitted
+  FSRS-6 weights.
 - `configs/fsrs6_ap_cmaes_users_1_8.toml`: the adaptive-parameter family that
   trains 21 bounded FSRS-6 scheduler weights as deltas from each user's fitted
   baseline, batches both users and DR values, and still emits one artifact per
@@ -248,6 +252,9 @@ Training target:
 For ordinary `fsrs6_adr`, the default policy uses 6 log-polynomial features over
 normalized `S,D`; set `training.policy_search.feature_version = "fsrs6_adr_log_linear_v1"`
 to train the simplified 3-parameter linear variant.
+Set `training.policy_search.scheduler_weight_source = "fsrs6_default"` to train
+and export `fsrs6_default_adr`, which keeps the configured training environment
+unchanged but evaluates ADR scheduler-side state with default FSRS-6 weights.
 CMA-ES profiles keep the same `[training.policy_search]` policy/evaluation settings and put
 optimizer-specific settings such as population size, generations, `sigma0`,
 initial mean, and coefficient bounds in `[training.optimizer]`. AP profiles add

@@ -64,6 +64,7 @@ class BatchedSweepContext:
 
 
 _DR_SCHEDULERS = {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "lstm"}
+_ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 _LOG_LAYOUTS = {"user", "sweep"}
 
 
@@ -165,7 +166,7 @@ def _build_sweep_lanes(
             continue
 
         interval = normalize_fixed_interval(fixed_interval) if name == "fixed" else None
-        if name == "fsrs6_adr" and ctx.fsrs6_adr_policy_specs:
+        if name in _ADR_POLICY_SCHEDULERS and ctx.fsrs6_adr_policy_specs:
             batch_users = set(batch)
             for spec in ctx.fsrs6_adr_policy_specs:
                 if spec.user_id not in batch_users:
@@ -176,10 +177,10 @@ def _build_sweep_lanes(
                         if spec.policy_index is not None
                         else f"policy_{spec.path.parent.name}"
                     )
-                    scheduler_subpath = Path("sched_fsrs6_adr") / policy_token
+                    scheduler_subpath = Path(f"sched_{name}") / policy_token
                 else:
                     dr_token = _format_float_token(spec.baseline_desired_retention)
-                    scheduler_subpath = Path("sched_fsrs6_adr") / f"dr_{dr_token}"
+                    scheduler_subpath = Path(f"sched_{name}") / f"dr_{dr_token}"
                 if spec.lambda_value is not None:
                     scheduler_subpath = scheduler_subpath / (
                         f"lambda_{_format_float_token(spec.lambda_value)}"
@@ -253,14 +254,14 @@ def _build_sweep_lanes(
                 )
             continue
 
-        policy = ctx.fsrs6_adr_policy if name == "fsrs6_adr" else None
+        policy = ctx.fsrs6_adr_policy if name in _ADR_POLICY_SCHEDULERS else None
         ap_policy = ctx.fsrs6_ap_policy if name == "fsrs6_ap" else None
         scheduler_subpath = Path(f"sched_{name}")
         if name == "fixed" and interval is not None:
             scheduler_subpath = scheduler_subpath / (
                 f"ivl_{_format_float_token(interval)}"
             )
-        elif name == "fsrs6_adr" and policy is not None:
+        elif name in _ADR_POLICY_SCHEDULERS and policy is not None:
             scheduler_subpath = scheduler_subpath / f"policy_{policy.stem}"
         elif name == "fsrs6_ap" and ap_policy is not None:
             scheduler_subpath = scheduler_subpath / f"policy_{ap_policy.stem}"
@@ -343,7 +344,7 @@ def _mixed_scheduler_group_key(lane: BatchedSweepLogLane) -> tuple[Any, ...]:
         return (lane.scheduler_name, lane.scheduler_spec)
     if lane.scheduler_name == "fixed":
         return (lane.scheduler_name, lane.scheduler_spec, lane.fixed_interval)
-    if lane.scheduler_name == "fsrs6_adr":
+    if lane.scheduler_name in _ADR_POLICY_SCHEDULERS:
         return (lane.scheduler_name, lane.scheduler_spec)
     return (lane.scheduler_name, lane.scheduler_spec)
 
@@ -612,15 +613,24 @@ def _build_mixed_scheduler_ops(
                 device=device,
                 dtype=torch.float32,
             )
-        elif name == "fsrs6_adr":
-            if fsrs_weights is None:
-                raise ValueError("Expected FSRS-6 weights for fsrs6_adr scheduler.")
+        elif name in _ADR_POLICY_SCHEDULERS:
+            if name == "fsrs6_default_adr":
+                if fsrs_default_weights is None:
+                    raise ValueError(
+                        "Expected default FSRS-6 weights for "
+                        "fsrs6_default_adr scheduler."
+                    )
+                weight_source = fsrs_default_weights
+            else:
+                if fsrs_weights is None:
+                    raise ValueError("Expected FSRS-6 weights for fsrs6_adr scheduler.")
+                weight_source = fsrs_weights
             policy_paths: list[Path] = []
             for lane in group_lanes:
                 policy_path = lane.fsrs6_adr_policy
                 if policy_path is None:
                     raise ValueError(
-                        "--sched fsrs6_adr requires an FSRS6 ADR policy source."
+                        f"--sched {name} requires an FSRS6 ADR policy source."
                     )
                 policy_paths.append(policy_path)
             policies = [
@@ -639,7 +649,7 @@ def _build_mixed_scheduler_ops(
                 dtype=torch.float32,
             )
             scheduler_weights = _repeat_weights_for_lanes(
-                weights=fsrs_weights.to(device),
+                weights=weight_source.to(device),
                 active_batch=active_batch,
                 lanes=group_lanes,
             )
@@ -780,7 +790,9 @@ def run_batch_core(
             or "fsrs6_adr" in scheduler_names
         )
         needs_fsrs_default = (
-            environment == "fsrs6_default" or "fsrs6_default" in scheduler_names
+            environment == "fsrs6_default"
+            or "fsrs6_default" in scheduler_names
+            or "fsrs6_default_adr" in scheduler_names
         )
         needs_fsrs3_weights = "fsrs3" in scheduler_names
         needs_fsrs3_default = "fsrs3_default" in scheduler_names

@@ -30,8 +30,10 @@ from simulator.experiment_infra.baseline_dr_selection import (
 
 RUN_ID_SCOPED_SCHEDULERS = {
     "fsrs6_adr",
+    "fsrs6_default_adr",
     "fsrs6_ap",
 }
+ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
     re.IGNORECASE,
@@ -655,7 +657,7 @@ def _iter_log_entries(
         fsrs6_ap_baseline_dr = None
         if scheduler == "sspmmc":
             title = _resolve_policy_title(meta, base_dirs)
-        elif scheduler == "fsrs6_adr":
+        elif scheduler in ADR_POLICY_SCHEDULERS:
             title, fsrs6_adr_baseline_dr = _resolve_fsrs6_adr_label(meta, base_dirs)
             if fsrs6_adr_baseline_dr is not None and (
                 fsrs6_adr_baseline_dr < min_retention
@@ -719,7 +721,7 @@ def _iter_log_entries(
         }
         if desired_value is not None:
             entry["desired_retention"] = desired_value
-        if scheduler == "fsrs6_adr":
+        if scheduler in ADR_POLICY_SCHEDULERS:
             entry.update(
                 {
                     "fsrs6_adr_policy": meta.get("fsrs6_adr_policy"),
@@ -758,7 +760,7 @@ def _no_desired_dedupe_key(
         return None
 
     title_key = title
-    if scheduler_name == "fsrs6_adr":
+    if scheduler_name in ADR_POLICY_SCHEDULERS:
         policy_path = entry.get("fsrs6_adr_policy")
         if isinstance(policy_path, str) and policy_path:
             title_key = policy_path

@@ -398,6 +398,51 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_adr",))
         self.assertEqual(config.build_pareto.schedulers, ("fsrs6", "fsrs6_adr"))
 
+    def test_checked_in_default_adr_portfolio_config_uses_default_scheduler_weights(
+        self,
+    ) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml"
+        )
+
+        self.assertEqual(
+            config.name,
+            "fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1",
+        )
+        self.assertEqual(
+            config.training_policy_search["scheduler_weight_source"],
+            "fsrs6_default",
+        )
+        self.assertEqual(config.training_portfolio["population_size"], 16)
+        self.assertEqual(config.training_portfolio["offspring_size"], 16)
+        self.assertEqual(config.training_portfolio["generations"], 20)
+        self.assertEqual(config.training_portfolio["portfolio_size"], 16)
+        self.assertEqual(config.sweep_batched.envs, ("fsrs6", "lstm"))
+        self.assertEqual(config.sweep_batched.schedulers, ("fsrs6_default_adr",))
+        self.assertEqual(
+            config.build_pareto.schedulers,
+            ("fsrs6", "fsrs6_default_adr"),
+        )
+        self.assertEqual(
+            config.analyze_pareto.comparisons,
+            ("fsrs6_default_adr:fsrs6",),
+        )
+
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+
+        self.assertEqual(trainer, "fsrs6_adr_portfolio")
+        self.assertEqual(estimate_lanes_per_job(trainer=trainer, config=config), 16)
+
     def test_checked_in_fsrs3_scheduler_eval_config_uses_native_sweep(
         self,
     ) -> None:
@@ -863,6 +908,71 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertIn("Loaded 2 records", report)
         self.assertIn("| fsrs6 | fsrs6 | 1 | 1-1 | 1 |", report)
         self.assertIn("| fsrs6 | fsrs6_adr | 1 | 1-1 | 0 |", report)
+
+    def test_analyze_scheduler_comparison_keeps_default_adr_policy_points(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "pareto"
+            log_dir.mkdir()
+            (log_dir / "simulation_results_retention_sweep_user_1.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 1,
+                            "title": "DR=50%",
+                            "desired_retention": 0.5,
+                            "memorized_average": 100.0,
+                            "time_average": 1.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 100.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_default_adr",
+                            "user_id": 1,
+                            "desired_retention": None,
+                            "fsrs6_adr_baseline_desired_retention": None,
+                            "fsrs6_adr_policy": "policies/policy_0/policy.json",
+                            "memorized_average": 110.0,
+                            "time_average": 1.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 110.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            args = parse_analyze_args(
+                [
+                    "--log-dir",
+                    str(log_dir),
+                    "--env",
+                    "fsrs6",
+                    "--sched",
+                    "fsrs6,fsrs6_default_adr",
+                    "--comparisons",
+                    "fsrs6_default_adr:fsrs6",
+                    "--start-user",
+                    "1",
+                    "--end-user",
+                    "1",
+                ]
+            )
+            report = render_report(args)
+
+        self.assertIn("Loaded 2 records", report)
+        self.assertIn("| fsrs6 | fsrs6_default_adr | 1 | 1-1 | 0 |", report)
+        self.assertIn("fsrs6_default_adr", report)
 
     def test_analyze_scheduler_comparison_reports_no_dr_ap_hypervolume(
         self,

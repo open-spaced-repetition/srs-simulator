@@ -732,6 +732,64 @@ class FSRS6ADRPolicyExpansionTests(unittest.TestCase):
             ],
         )
 
+    def test_default_adr_uses_adr_policy_source_and_scheduler_log_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            for index in range(2):
+                policy_dir = root / "user_1" / "policies" / f"policy_{index}"
+                policy_dir.mkdir(parents=True)
+                FSRS6ADRPolicy(
+                    coefficients=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+                    baseline_desired_retention=None,
+                ).write_json(policy_dir / "policy.json")
+                (policy_dir / "metadata.json").write_text(
+                    json.dumps(
+                        {
+                            "scheduler_name": "fsrs6_default_adr",
+                            "training_user_ids": [1],
+                            "policy_path": "policy.json",
+                            "baseline_desired_retention": None,
+                            "portfolio_index": index,
+                            "action_space": "sd_retention_function_portfolio_child",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            specs = resolve_fsrs6_adr_policy_specs(
+                user_ids=[1],
+                dr_values=[0.50, 0.52],
+                policy_root=root,
+            )
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6_default_adr"],
+                dr_values=[0.50, 0.52],
+                fsrs6_adr_policy_specs=specs,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1], ctx=ctx, environment="fsrs6")
+
+        self.assertEqual(len(specs), 2)
+        self.assertEqual(
+            [
+                lane.final_log_dir.relative_to(Path(tmp) / "logs").as_posix()
+                for lane in lanes
+            ],
+            [
+                "user_1/sched_fsrs6_default_adr/policy_0",
+                "user_1/sched_fsrs6_default_adr/policy_1",
+            ],
+        )
+        self.assertTrue(
+            all(lane.scheduler_name == "fsrs6_default_adr" for lane in lanes)
+        )
+
     def test_policy_manifest_resolves_relative_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -983,6 +1041,44 @@ path = "policy.json"
         self.assertEqual(len(ops._groups), 1)
         group = ops._groups[0]
         self.assertEqual(int(group.lane_indices.numel()), 2)
+
+    def test_default_adr_scheduler_group_uses_default_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy_path = root / "policy.json"
+            _write_policy(policy_path, dr=0.50)
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "logs" / "default",
+                    environment="lstm",
+                    scheduler_name="fsrs6_default_adr",
+                    scheduler_spec="fsrs6_default_adr",
+                    desired_retention=None,
+                    fixed_interval=None,
+                    fsrs6_adr_policy=policy_path,
+                )
+            ]
+
+            ops = _build_mixed_scheduler_ops(
+                args=argparse.Namespace(scheduler_priority="low_retrievability"),
+                active_batch=[1],
+                lanes=lanes,
+                fsrs_weights=None,
+                fsrs_default_weights=torch.tensor(
+                    [DEFAULT_FSRS6_WEIGHTS],
+                    dtype=torch.float32,
+                ),
+                fsrs3_weights=None,
+                fsrs3_default_weights=None,
+                lstm_packed=None,
+                short_term_source=None,
+                device=torch.device("cpu"),
+            )
+
+        self.assertEqual(len(ops._groups), 1)
+        group = ops._groups[0]
+        self.assertEqual(int(group.lane_indices.numel()), 1)
 
 
 class FSRS6APPolicyExpansionTests(unittest.TestCase):

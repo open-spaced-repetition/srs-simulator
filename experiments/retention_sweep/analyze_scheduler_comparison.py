@@ -39,6 +39,7 @@ DEFAULT_METRIC = "avg_accum_memorized_per_hour"
 USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$")
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
 DR_TOKEN_RE = re.compile(r"(?:^|[_\W])dr[_=-]([01]?(?:\.\d+)?)", re.IGNORECASE)
+ADR_POLICY_SCHEDULERS = {"fsrs6_adr", "fsrs6_default_adr"}
 
 
 @dataclass(frozen=True)
@@ -354,7 +355,7 @@ def row_from_item(
 ) -> SweepRow | None:
     desired_retention = parse_desired_retention(item)
     if desired_retention is None and item.get("scheduler") not in {
-        "fsrs6_adr",
+        *ADR_POLICY_SCHEDULERS,
         "fsrs6_ap",
     }:
         return None
@@ -374,7 +375,7 @@ def row_from_item(
 
 
 def _row_series_identity(item: dict[str, Any]) -> str | None:
-    if item.get("scheduler") == "fsrs6_adr":
+    if item.get("scheduler") in ADR_POLICY_SCHEDULERS:
         policy = item.get("fsrs6_adr_policy")
         if isinstance(policy, str) and policy.strip():
             return policy
@@ -438,7 +439,7 @@ def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
                 if (
                     baseline_dr_manifest is not None
                     and row.desired_retention is not None
-                    and row.scheduler in {"fsrs6", "fsrs6_adr", "fsrs6_ap"}
+                    and row.scheduler in {"fsrs6", *ADR_POLICY_SCHEDULERS, "fsrs6_ap"}
                     and not baseline_dr_manifest.contains_value(
                         row.user_id,
                         row.desired_retention,

@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
     PolicySearchSettings,
+    SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT,
     _float,
     _git_commit,
     _int,
@@ -597,7 +598,6 @@ def _write_portfolio_artifacts(
 ) -> list[Path]:
     output_dir = result.job.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    portfolio_id = _portfolio_id(user_id=result.job.user_id, seed=config.seed)
     effective_feature_version = (
         family_context.feature_version
         if family_context is not None
@@ -605,6 +605,12 @@ def _write_portfolio_artifacts(
     )
     if effective_feature_version is None:
         raise ValueError("feature_version is required for ADR portfolio artifacts.")
+    scheduler_name = _scheduler_name_for_settings(settings)
+    portfolio_id = _portfolio_id(
+        user_id=result.job.user_id,
+        seed=config.seed,
+        scheduler_name=scheduler_name,
+    )
     artifact_paths: list[Path] = []
     child_summaries: list[dict[str, Any]] = []
     for child in result.selected_children:
@@ -617,7 +623,7 @@ def _write_portfolio_artifacts(
             baseline_desired_retention=None,
             feature_version=effective_feature_version,
             title=(
-                f"fsrs6_adr_portfolio_u{result.job.user_id}_"
+                f"{scheduler_name}_portfolio_u{result.job.user_id}_"
                 f"policy_{child.portfolio_index}"
             ),
         )
@@ -645,7 +651,8 @@ def _write_portfolio_artifacts(
                 "artifact_kind": "scheduler-policy",
                 "artifact_id": f"{portfolio_id}-policy-{child.portfolio_index}",
                 "family": config.family,
-                "scheduler_name": "fsrs6_adr",
+                "scheduler_name": scheduler_name,
+                "scheduler_weight_source": settings.scheduler_weight_source,
                 "environment": config.simulation.environment,
                 "engine": config.simulation.engine,
                 "training_user_ids": [result.job.user_id],
@@ -697,7 +704,8 @@ def _write_portfolio_artifacts(
         {
             "schema_version": SCHEMA_VERSION,
             "portfolio_id": portfolio_id,
-            "scheduler_name": "fsrs6_adr",
+            "scheduler_name": scheduler_name,
+            "scheduler_weight_source": settings.scheduler_weight_source,
             "training_user_ids": [result.job.user_id],
             "baseline_desired_retention": None,
             "algorithm": portfolio.algorithm,
@@ -813,8 +821,17 @@ def _generator_for_job(
     return generator_for_job(device=device, seed=seed, user_id=user_id)
 
 
-def _portfolio_id(*, user_id: int, seed: int) -> str:
-    return f"fsrs6-adr-portfolio-user-{user_id}-seed-{seed}"
+def _portfolio_id(*, user_id: int, seed: int, scheduler_name: str = "fsrs6_adr") -> str:
+    prefix = (
+        "fsrs6-default-adr" if scheduler_name == "fsrs6_default_adr" else "fsrs6-adr"
+    )
+    return f"{prefix}-portfolio-user-{user_id}-seed-{seed}"
+
+
+def _scheduler_name_for_settings(settings: PolicySearchSettings) -> str:
+    if settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT:
+        return "fsrs6_default_adr"
+    return "fsrs6_adr"
 
 
 def _zero_metrics() -> CandidateMetrics:
