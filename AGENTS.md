@@ -37,7 +37,7 @@ The commit contains the following structural elements, to communicate intent to 
 4. *types* other than `fix:` and `feat:` are allowed, for example [@commitlint/config-conventional](https://github.com/conventional-changelog/commitlint/tree/master/@commitlint/config-conventional) (based on the [Angular convention](https://github.com/angular/angular/blob/22b96b9/CONTRIBUTING.md#-commit-message-guidelines)) recommends `build:`, `chore:`, `ci:`, `docs:`, `style:`, `refactor:`, `perf:`, `test:`, and others.
 5. *footers* other than `BREAKING CHANGE: <description>` may be provided and follow a convention similar to [git trailer format](https://git-scm.com/docs/git-interpret-trailers).
 
-Additional types are not mandated by the Conventional Commits specification, and have no implicit effect in Semantic Versioning (unless they include a BREAKING CHANGE). A scope may be provided to a commit’s type, to provide additional contextual information and is contained within parenthesis, e.g., `feat(parser): add ability to parse arrays`.
+Additional types are not mandated by the Conventional Commits specification, and have no implicit effect in Semantic Versioning (unless they include a BREAKING CHANGE). A scope may be provided to a commit's type, to provide additional contextual information and is contained within parenthesis, e.g., `feat(parser): add ability to parse arrays`.
 
 ## Project Structure & Module Organization
 Core simulator types and event plumbing live in `simulator/core.py`, while `simulator/behavior.py`, `simulator/cost.py`, `simulator/models/`, and `simulator/schedulers/` host pluggable user, workload, environment, and scheduler implementations. The CLI entry point is `simulate.py` for Matplotlib dashboards that write JSON logs into `logs/`.
@@ -69,6 +69,32 @@ Overall style: layered, plug-in architecture with explicit separation of concern
 - **Vectorized integration**: new models/schedulers should provide corresponding vectorized ops to hook into the shared vectorized engine. Avoid hardcoding logic in `simulator/vectorized/engine.py`.
 - **Priority plumbing**: scheduler priority hints live in `Card.metadata["scheduler_priority"]` and are consumed by behavior priority rules (review-first/new-first).
 - **Retention sweep log scanning**: any code that recursively scans `logs/retention_sweep` or another shared simulation log root must use `simulator.retention_sweep.log_filter.LogFilenameFilter` before opening JSONL files. Apply it for env, scheduler, engine, retention range, short-term, priority, and fixed scheduler-specific DR filters whenever those dimensions are known. If a command has `--user-id` and `--log-dir` points at a shared root, scan `log_dir/user_<id>` first when it exists. Keep metadata validation after filename filtering; the filename filter is a performance and stale-log guard, not a replacement for metadata checks.
+
+## Workflow: Adding A Scheduler / Variant
+This repo intentionally avoids "hardcoded registration points" scattered across the simulator, sweep runners, and experiment scripts. The canonical workflow is:
+
+1. Implement the scheduler itself:
+   - Add the implementation under `simulator/schedulers/` and ensure it implements the `Scheduler` interface from `simulator/core.py`.
+2. Register the scheduler factory for the CLI + event engine:
+   - Add the scheduler to `simulate.SCHEDULER_FACTORIES`. This is the canonical list of scheduler names that the CLI and experiment infrastructure can reference.
+3. Register the scheduler descriptor (single source of truth for capabilities):
+   - Add/update the entry in `simulator/scheduler_catalog.py` (`SCHEDULER_DESCRIPTORS`).
+   - Fill out:
+     - `supports_event`: should be `True` for any scheduler reachable from `simulate.py`.
+     - `supports_batched`: `True` only if the scheduler works with the batched/mixed engine.
+     - `uses_desired_retention`: `True` for schedulers that interpret a numeric desired retention target; `False` for policy-based schedulers or fixed-interval schedulers.
+     - `policy_source`: set for policy-based schedulers (RL artifacts).
+     - `run_id_scoped_sweep`: set `True` when sweeps should resolve artifacts from the current experiment run root (typical for policy schedulers).
+   - Do not introduce new "supported scheduler" sets elsewhere; derive them via catalog helper functions.
+4. Variants (policy feature/action-space variants):
+   - If you add a new FSRS6 ADR feature variant, update the mapping in `simulator/scheduler_catalog.py` (`_FSRS6_ADR_VARIANTS`) so training metadata derives `scheduler_name` and `action_space` from `feature_version`.
+   - If you introduce a new portfolio child action space, add it to `PORTFOLIO_CHILD_ACTION_SPACES`.
+5. Vectorized/batched integration:
+   - If the scheduler is meant to run in vectorized/batched mode, implement/plug the corresponding vectorized scheduler ops and ensure `simulator/vectorized/registry.py` can resolve them for the scheduler instance.
+6. Tests and checks:
+   - Update/add invariants in `tests/test_scheduler_catalog.py` (this catches "forgot to register" failures early).
+   - Run focused tests with `uv run python -m unittest tests.test_scheduler_catalog` (plus any scheduler-specific tests you add).
+   - Before committing: `uv run ruff format`. For changes that affect type surfaces: `uv run pyright`.
 
 ## Security & Configuration Tips
 No secrets are needed; configuration is driven via CLI flags. Always pass explicit `--seed`/RNG seeds when sharing repro steps, keep large log dumps in `logs/` but out of git, and guard optional visualization dependencies with clear import errors. Document any new third-party packages in `README.md` to preserve the dependency-light promise.
