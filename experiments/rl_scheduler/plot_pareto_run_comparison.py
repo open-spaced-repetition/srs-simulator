@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 class RunSeries:
     label: str
     results_dir: Path
+    scheduler: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +45,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         required=True,
         help=(
             "Series to plot, formatted as LABEL=PATH. PATH may be a formal run "
-            "root or a build-pareto/build_pareto_outputs directory."
+            "root or a build-pareto/build_pareto_outputs directory. Append "
+            "::SCHEDULER to override the scheduler for this series."
         ),
     )
     parser.add_argument(
@@ -133,12 +135,23 @@ def _parse_series(raw_values: Sequence[str]) -> list[RunSeries]:
             raise SystemExit(f"--series must be formatted LABEL=PATH, got {raw!r}.")
         label, path_text = raw.split("=", 1)
         label = label.strip()
-        path = Path(path_text.strip())
+        scheduler = None
+        raw_path_text = path_text.strip()
+        if "::" in raw_path_text:
+            raw_path_text, scheduler = raw_path_text.rsplit("::", 1)
+            scheduler = scheduler.strip() or None
+        path = Path(raw_path_text)
         if not label:
             raise SystemExit(f"--series label must be non-empty: {raw!r}.")
-        if not path_text.strip():
+        if not raw_path_text:
             raise SystemExit(f"--series path must be non-empty: {raw!r}.")
-        series.append(RunSeries(label=label, results_dir=_resolve_results_dir(path)))
+        series.append(
+            RunSeries(
+                label=label,
+                results_dir=_resolve_results_dir(path),
+                scheduler=scheduler,
+            )
+        )
     return series
 
 
@@ -259,7 +272,7 @@ def _plot_user(
     series_points: Sequence[tuple[RunSeries, list[Point]]],
     baseline_points: list[Point],
     environment: str,
-    scheduler: str,
+    scheduler_label: str,
     baseline_scheduler: str,
     x_field: str,
     y_field: str,
@@ -337,7 +350,7 @@ def _plot_user(
             label=f"{series.label} Pareto",
         )
 
-    title = title_prefix or f"{environment} {scheduler} Pareto comparison"
+    title = title_prefix or f"{environment} {scheduler_label} Pareto comparison"
     ax.set_title(f"{title} - user {user_id}", fontsize=22)
     ax.set_xlabel(_axis_label(x_field), fontsize=18, color="black")
     ax.set_ylabel(_axis_label(y_field), fontsize=18, color="black")
@@ -354,9 +367,9 @@ def _plot_user(
 
     fig.tight_layout()
     out_dir.mkdir(parents=True, exist_ok=True)
-    output_path = (
-        out_dir
-        / f"user_{user_id}_{_safe_token(environment)}_{_safe_token(scheduler)}_pareto_comparison.png"
+    output_path = out_dir / (
+        f"user_{user_id}_{_safe_token(environment)}_"
+        f"{_safe_token(scheduler_label)}_pareto_comparison.png"
     )
     fig.savefig(output_path, dpi=dpi)
     plt.close(fig)
@@ -400,23 +413,36 @@ def main(argv: list[str] | None = None) -> int:
     series = _parse_series(args.series)
     users = _parse_csv_ints(args.users) or _discover_users(series)
     out_dir = args.out_dir if args.out_dir.is_absolute() else REPO_ROOT / args.out_dir
+    series_scheduler_names = tuple(
+        item.scheduler if item.scheduler is not None else args.scheduler
+        for item in series
+    )
+    unique_schedulers = tuple(dict.fromkeys(series_scheduler_names))
+    scheduler_label = (
+        unique_schedulers[0]
+        if len(unique_schedulers) == 1
+        else " vs ".join(unique_schedulers)
+    )
 
     output_paths: list[Path] = []
     for user_id in users:
         series_points: list[tuple[RunSeries, list[Point]]] = []
         for item in series:
+            scheduler_name = (
+                item.scheduler if item.scheduler is not None else args.scheduler
+            )
             records = _read_user_records(item.results_dir, user_id)
             points = _points_for(
                 records,
                 user_id=user_id,
                 environment=args.env,
-                scheduler=args.scheduler,
+                scheduler=scheduler_name,
                 x_field=args.x_field,
                 y_field=args.y_field,
             )
             if not points:
                 raise SystemExit(
-                    f"No {args.scheduler!r} records for user {user_id}, "
+                    f"No {scheduler_name!r} records for user {user_id}, "
                     f"env {args.env!r}, series {item.label!r}."
                 )
             series_points.append((item, points))
@@ -444,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
                 series_points=series_points,
                 baseline_points=baseline_points,
                 environment=args.env,
-                scheduler=args.scheduler,
+                scheduler_label=scheduler_label,
                 baseline_scheduler=args.baseline_scheduler,
                 x_field=args.x_field,
                 y_field=args.y_field,
