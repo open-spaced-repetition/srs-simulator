@@ -1047,6 +1047,54 @@ def min_time_for_memory_target(rows: list[SweepRow], target: float) -> float | N
     return min(feasible) if feasible else None
 
 
+def interpolated_memorized_under_budget(
+    rows: list[SweepRow], budget: float
+) -> float | None:
+    frontier = sorted_frontier(rows, sort_key="time")
+    if not frontier:
+        return None
+    if budget < frontier[0].time_average:
+        return None
+    if budget >= frontier[-1].time_average:
+        return frontier[-1].memorized_average
+
+    for left, right in zip(frontier[:-1], frontier[1:]):
+        left_time = left.time_average
+        right_time = right.time_average
+        if not (left_time <= budget <= right_time):
+            continue
+        if math.isclose(left_time, right_time):
+            return max(left.memorized_average, right.memorized_average)
+        ratio = (budget - left_time) / (right_time - left_time)
+        return left.memorized_average + ratio * (
+            right.memorized_average - left.memorized_average
+        )
+    return None
+
+
+def interpolated_min_time_for_memory_target(
+    rows: list[SweepRow], target: float
+) -> float | None:
+    frontier = sorted_frontier(rows, sort_key="memory")
+    if not frontier:
+        return None
+    if target <= frontier[0].memorized_average:
+        return frontier[0].time_average
+    if target > frontier[-1].memorized_average:
+        return None
+
+    for left, right in zip(frontier[:-1], frontier[1:]):
+        left_memory = left.memorized_average
+        right_memory = right.memorized_average
+        if not (left_memory <= target <= right_memory):
+            continue
+        if math.isclose(left_memory, right_memory):
+            return min(left.time_average, right.time_average)
+        ratio = (target - left_memory) / (right_memory - left_memory)
+        return left.time_average + ratio * (right.time_average - left.time_average)
+    return None
+
+
 def budget_memory_gain_auc_user_summaries(
     rows: list[SweepRow],
     env: str,
@@ -1074,12 +1122,12 @@ def budget_memory_gain_auc_user_summaries(
         baseline_memories: list[float] = []
         target_memories: list[float | None] = []
         for budget in sorted({row.time_average for row in baseline_frontier}):
-            baseline_memory = best_memorized_under_budget(baseline_rows, budget)
+            baseline_memory = interpolated_memorized_under_budget(baseline_rows, budget)
             if baseline_memory is None:
                 continue
             budgets.append(budget)
             baseline_memories.append(baseline_memory)
-            target_memory = best_memorized_under_budget(target_rows, budget)
+            target_memory = interpolated_memorized_under_budget(target_rows, budget)
             target_memories.append(target_memory)
 
         if not budgets:
@@ -1218,12 +1266,14 @@ def memory_target_regret_auc_user_summaries(
         baseline_times: list[float] = []
         target_times: list[float | None] = []
         for target in sorted({row.memorized_average for row in baseline_frontier}):
-            baseline_time = min_time_for_memory_target(baseline_rows, target)
+            baseline_time = interpolated_min_time_for_memory_target(
+                baseline_rows, target
+            )
             if baseline_time is None:
                 continue
             targets.append(target)
             baseline_times.append(baseline_time)
-            target_time = min_time_for_memory_target(target_rows, target)
+            target_time = interpolated_min_time_for_memory_target(target_rows, target)
             target_times.append(target_time)
 
         if not targets:
@@ -1392,11 +1442,12 @@ def print_env_report(
 
             print("\n### Budget-memory gain AUC vs FSRS6 baseline\n")
             print(
-                "Gain AUC integrates max-memorized gain over all FSRS6-baseline "
-                "frontier time budgets per user. Positive values mean the "
-                "scheduler remembers more cards at the same budget. Relative "
-                "gain divides mean memory gain AUC by mean covered baseline "
-                "memory AUC.\n"
+                "Gain AUC integrates memorized-card gain over all FSRS6-baseline "
+                "frontier time budgets per user, using linear interpolation "
+                "between each scheduler's Pareto frontier points. Positive "
+                "values mean the scheduler remembers more cards at the same "
+                "budget. Relative gain divides mean memory gain AUC by mean "
+                "covered baseline memory AUC.\n"
             )
             print(
                 budget_memory_gain_auc_table(
@@ -1409,11 +1460,12 @@ def print_env_report(
 
             print("\n### Memory-target regret AUC vs FSRS6 baseline\n")
             print(
-                "Regret AUC integrates min-time regret over all FSRS6-baseline "
-                "frontier memory targets per user. Negative values mean the "
-                "scheduler reaches the same memorized-card targets faster. "
-                "Relative regret divides mean time regret AUC by mean covered "
-                "baseline time AUC.\n"
+                "Regret AUC integrates time regret over all FSRS6-baseline "
+                "frontier memory targets per user, using linear interpolation "
+                "between each scheduler's Pareto frontier points. Negative "
+                "values mean the scheduler reaches the same memorized-card "
+                "targets faster. Relative regret divides mean time regret AUC "
+                "by mean covered baseline time AUC.\n"
             )
             print(
                 memory_target_regret_auc_table(
@@ -1523,8 +1575,8 @@ def render_report(args: argparse.Namespace) -> str:
             f"users={args.start_user}-{args.end_user}, "
             f"retention={args.start_retention:.2f}-{args.end_retention:.2f}, "
             f"engine={args.engine}, short_term={args.short_term}, fuzz={args.fuzz}, "
-            "budget_gain_auc=baseline_frontier, "
-            "memory_target_regret_auc=baseline_frontier"
+            "budget_gain_auc=interpolated_baseline_frontier, "
+            "memory_target_regret_auc=interpolated_baseline_frontier"
         )
         print(
             f"Loaded {len(rows)} records"

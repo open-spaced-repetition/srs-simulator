@@ -56,28 +56,30 @@ baseline manifest. Average memorized/time/efficiency are now diagnostic-only in
 | LSTM | AP pop16 | 45,380 | 1.597% | 2,786 | 18,515 | 127 |
 | LSTM | ADR pop16 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
 
-Target LSTM budget-memory gain AUC, target scheduler rows only. Positive values
+Target LSTM budget-memory gain AUC, target scheduler rows only. It uses linear
+interpolation between each scheduler's Pareto frontier points. Positive values
 mean the scheduler remembers more cards at the same budget.
 
 | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| AP pop16 | 8/8 | 96/111 | 98.692% | -3.4 | -0.051% |
-| ADR pop16 | 8/8 | 92/111 | 98.428% | -2.6 | -0.038% |
+| AP pop16 | 8/8 | 96/111 | 98.692% | +36.9 | +0.546% |
+| ADR pop16 | 8/8 | 92/111 | 98.428% | +28.1 | +0.414% |
 
 Target LSTM memory-target regret AUC, target scheduler rows only. Negative
-values mean the scheduler reaches the same memorized-card targets faster.
+values mean the scheduler reaches the same memorized-card targets faster. It
+uses linear interpolation between each scheduler's Pareto frontier points.
 
 | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| AP pop16 | 8/8 | 107/111 | 99.177% | +4.19 | +10.652% |
-| ADR pop16 | 8/8 | 102/111 | 97.854% | +2.51 | +6.420% |
+| AP pop16 | 8/8 | 107/111 | 99.177% | +0.38 | +0.956% |
+| ADR pop16 | 8/8 | 102/111 | 97.854% | -1.02 | -2.599% |
 
 AP minus ADR:
 
 | environment | HV delta change | relative change | percent-point change | budget-gain AUC change | target-regret AUC change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | -16,204 | -16.73% | -0.582 pp | -8.4 | +0.93 |
-| LSTM | -10,469 | -18.74% | -0.368 pp | -0.8 | +1.68 |
+| FSRS6 | -16,204 | -16.73% | -0.582 pp | +3.7 | +0.46 |
+| LSTM | -10,469 | -18.74% | -0.368 pp | +8.8 | +1.40 |
 
 Interpretation:
 
@@ -85,9 +87,11 @@ Interpretation:
   environment.
 - The LSTM gap is material: AP is behind ADR by 10.5k HV, or 18.7% relative to
   ADR.
-- On the LSTM envelope AP is also behind ADR: -0.8 memorized cards in
-  budget-gain AUC and +1.68 minutes in target-regret AUC.
-- FSRS6 is also a clear loss for AP: -16.2k HV and -0.582 percentage points.
+- On the LSTM envelope, the interpolated AUCs are mixed: AP has +8.8 more
+  memorized cards in budget-gain AUC, but is +1.40 minutes worse in
+  target-regret AUC.
+- FSRS6 remains an HV loss for AP at -16.2k HV and -0.582 percentage points,
+  even though interpolated budget-gain AUC is slightly higher.
 
 ## AP Policy Parameter Distribution
 

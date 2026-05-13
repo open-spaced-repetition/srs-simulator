@@ -56,40 +56,43 @@ diagnostic-only in `analysis.md`.
 | LSTM | pop16 gen20 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
 | LSTM | pop16 gen30 | 52,781 | 1.858% | 3,924 | 15,470 | 125 |
 
-Target LSTM budget-memory gain AUC, target scheduler rows only. Positive values
+Target LSTM budget-memory gain AUC, target scheduler rows only. It uses linear
+interpolation between each scheduler's Pareto frontier points. Positive values
 mean the scheduler remembers more cards at the same budget.
 
 | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 64/64 gen20 | 8/8 | 104/118 | 98.562% | +3.5 | +0.052% |
-| pop16 gen20 | 8/8 | 92/111 | 98.428% | -2.6 | -0.038% |
-| pop16 gen30 | 8/8 | 92/111 | 98.428% | -6.0 | -0.088% |
+| v3 64/64 gen20 | 8/8 | 94/111 | 98.558% | +30.6 | +0.453% |
+| pop16 gen20 | 8/8 | 92/111 | 98.428% | +28.1 | +0.414% |
+| pop16 gen30 | 8/8 | 92/111 | 98.428% | +29.5 | +0.433% |
 
 Target LSTM memory-target regret AUC, target scheduler rows only. Negative
-values mean the scheduler reaches the same memorized-card targets faster.
+values mean the scheduler reaches the same memorized-card targets faster. It
+uses linear interpolation between each scheduler's Pareto frontier points.
 
 | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 64/64 gen20 | 8/8 | 110/118 | 98.266% | +2.00 | +5.090% |
-| pop16 gen20 | 8/8 | 102/111 | 97.854% | +2.51 | +6.420% |
-| pop16 gen30 | 8/8 | 105/111 | 98.222% | +2.78 | +7.077% |
+| v3 64/64 gen20 | 8/8 | 104/111 | 98.197% | -0.46 | -1.171% |
+| pop16 gen20 | 8/8 | 102/111 | 97.854% | -1.02 | -2.599% |
+| pop16 gen30 | 8/8 | 105/111 | 98.222% | -0.62 | -1.569% |
 
 Delta from pop16 gen20 to pop16 gen30:
 
 | environment | HV delta sum change | HV delta percent change | budget-gain AUC change | target-regret AUC change | scheduler frontier point change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | +7,480 | +7.72% | +9.5 | -0.40 | 0 |
-| LSTM | -3,068 | -5.49% | -3.4 | +0.27 | 0 |
+| FSRS6 | +7,480 | +7.72% | +3.7 | -0.33 | 0 |
+| LSTM | -3,068 | -5.49% | +1.4 | +0.40 | 0 |
 
 Interpretation:
 
 - Increasing pop16 from 20 to 30 generations improved the FSRS6 external Pareto
-  HV and improved the FSRS6 budget-gain AUC.
+  HV and improved the FSRS6 interpolated AUCs.
 - The same change hurt the LSTM external Pareto HV, which is the metric we care
-  about most for this decision; LSTM budget-gain AUC dropped by 3.4 memorized
-  cards and target-regret AUC worsened by 0.27 minutes.
+  about most for this decision. Under interpolation, LSTM budget-gain AUC
+  improves slightly by +1.4 memorized cards, while target-regret AUC worsens by
+  0.40 minutes.
 - The LSTM result for pop16 gen30 remains above the 64/64 v3 run, but it loses
-  much of the advantage that pop16 gen20 had.
+  much of the HV and target-regret advantage that pop16 gen20 had.
 
 ## Training HV by Generation
 

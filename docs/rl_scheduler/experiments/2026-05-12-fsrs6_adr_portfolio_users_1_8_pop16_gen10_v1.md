@@ -59,38 +59,40 @@ diagnostic-only in `analysis.md`.
 | LSTM | pop16 gen20 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
 | LSTM | pop16 gen30 | 52,781 | 1.858% | 3,924 | 15,470 | 125 |
 
-Target LSTM budget-memory gain AUC, target scheduler rows only. Positive values
+Target LSTM budget-memory gain AUC, target scheduler rows only. It uses linear
+interpolation between each scheduler's Pareto frontier points. Positive values
 mean the scheduler remembers more cards at the same budget.
 
 | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 64/64 gen20 | 8/8 | 104/118 | 98.562% | +3.5 | +0.052% |
-| pop16 gen10 | 8/8 | 94/111 | 98.558% | -21.8 | -0.322% |
-| pop16 gen20 | 8/8 | 92/111 | 98.428% | -2.6 | -0.038% |
-| pop16 gen30 | 8/8 | 92/111 | 98.428% | -6.0 | -0.088% |
+| v3 64/64 gen20 | 8/8 | 94/111 | 98.558% | +30.6 | +0.453% |
+| pop16 gen10 | 8/8 | 94/111 | 98.558% | +16.3 | +0.241% |
+| pop16 gen20 | 8/8 | 92/111 | 98.428% | +28.1 | +0.414% |
+| pop16 gen30 | 8/8 | 92/111 | 98.428% | +29.5 | +0.433% |
 
 Target LSTM memory-target regret AUC, target scheduler rows only. Negative
-values mean the scheduler reaches the same memorized-card targets faster.
+values mean the scheduler reaches the same memorized-card targets faster. It
+uses linear interpolation between each scheduler's Pareto frontier points.
 
 | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 64/64 gen20 | 8/8 | 110/118 | 98.266% | +2.00 | +5.090% |
-| pop16 gen10 | 8/8 | 101/111 | 97.767% | +4.48 | +11.651% |
-| pop16 gen20 | 8/8 | 102/111 | 97.854% | +2.51 | +6.420% |
-| pop16 gen30 | 8/8 | 105/111 | 98.222% | +2.78 | +7.077% |
+| v3 64/64 gen20 | 8/8 | 104/111 | 98.197% | -0.46 | -1.171% |
+| pop16 gen10 | 8/8 | 101/111 | 97.767% | +0.48 | +1.235% |
+| pop16 gen20 | 8/8 | 102/111 | 97.854% | -1.02 | -2.599% |
+| pop16 gen30 | 8/8 | 105/111 | 98.222% | -0.62 | -1.569% |
 
 Delta from pop16 gen10 to pop16 gen20:
 
 | environment | HV delta sum change | HV delta percent-point change | budget-gain AUC change | target-regret AUC change |
 | --- | ---: | ---: | ---: | ---: |
-| FSRS6 | +21,998 | +0.791 pp | +24.5 | -1.32 |
-| LSTM | +13,131 | +0.462 pp | +19.2 | -1.97 |
+| FSRS6 | +21,998 | +0.791 pp | +18.9 | -0.84 |
+| LSTM | +13,131 | +0.462 pp | +11.8 | -1.50 |
 
 Interpretation:
 
 - Gen10 is materially undertrained versus gen20 on the target LSTM metric.
 - The earlier average-efficiency comparison was a policy-point diagnostic; the
-  more relevant LSTM budget-gain AUC also favors gen20 by +19.2 memorized cards.
+  more relevant LSTM budget-gain AUC also favors gen20 by +11.8 memorized cards.
 - Gen10 also falls below the comparable 64/64 v3 run on LSTM HV, while gen20
   and gen30 both remain above it.
 

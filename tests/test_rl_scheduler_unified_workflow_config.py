@@ -13,6 +13,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from experiments.retention_sweep.analyze_scheduler_comparison import (
+    SweepRow,
+    interpolated_memorized_under_budget,
+    interpolated_min_time_for_memory_target,
     parse_args as parse_analyze_args,
     render_report,
 )
@@ -732,9 +735,46 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
         self.assertIn("### Memory-target regret AUC vs FSRS6 baseline", report)
         self.assertIn(
-            "| fsrs6_adr | 2/2 | 5/6 | 81.250% | 5.66 | 26.618% |",
+            "| fsrs6_adr | 2/2 | 5/6 | 81.250% | 4.69 | 22.059% |",
             report,
         )
+
+    def test_interpolated_auc_helpers_do_not_extrapolate_outside_frontier(
+        self,
+    ) -> None:
+        rows = [
+            SweepRow(
+                environment="fsrs6",
+                scheduler="fsrs6_adr",
+                user_id=1,
+                desired_retention=None,
+                memorized_average=100.0,
+                time_average=10.0,
+                reviews_average=10.0,
+                efficiency=10.0,
+                path=Path("policy-a.json"),
+                mtime_ns=0,
+            ),
+            SweepRow(
+                environment="fsrs6",
+                scheduler="fsrs6_adr",
+                user_id=1,
+                desired_retention=None,
+                memorized_average=200.0,
+                time_average=20.0,
+                reviews_average=20.0,
+                efficiency=10.0,
+                path=Path("policy-b.json"),
+                mtime_ns=0,
+            ),
+        ]
+
+        self.assertIsNone(interpolated_memorized_under_budget(rows, 9.0))
+        self.assertEqual(interpolated_memorized_under_budget(rows, 15.0), 150.0)
+        self.assertEqual(interpolated_memorized_under_budget(rows, 25.0), 200.0)
+        self.assertEqual(interpolated_min_time_for_memory_target(rows, 90.0), 10.0)
+        self.assertEqual(interpolated_min_time_for_memory_target(rows, 150.0), 15.0)
+        self.assertIsNone(interpolated_min_time_for_memory_target(rows, 250.0))
 
     def test_analyze_scheduler_comparison_manifest_keeps_exact_baseline_dr(
         self,
