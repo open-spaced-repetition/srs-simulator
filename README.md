@@ -94,6 +94,14 @@ After training a policy, include it in the standard single-card Pareto sweep wit
 uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
+Estimate a finite-horizon FSRS-6 grid oracle frontier:
+
+```bash
+uv run experiments/fsrs_oracle_frontier.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128
+```
+
+The oracle script uses expected Bellman backups over a `(log stability, difficulty)` grid and discrete desired-retention actions. It writes a single-card CSV/plot under `logs/single_card_tradeoff/` and, by default, includes static-FSRS reference rows evaluated with Monte Carlo particles.
+
 By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
 
 Short-term scheduling (event or vectorized engines):
