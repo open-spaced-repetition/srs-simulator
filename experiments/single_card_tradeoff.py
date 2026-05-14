@@ -1064,36 +1064,80 @@ def _oracle_d_to_idx(oracle: Any, d: torch.Tensor) -> torch.Tensor:
 
 
 @torch.inference_mode()
-def _evaluate_fsrs6_oracle_policy(
+def _evaluate_fsrs6_oracle_policies(
     *,
     args: argparse.Namespace,
     device: torch.device,
     oracle: Any,
-    policy: torch.Tensor,
+    policies: torch.Tensor,
     action_retentions: Sequence[float],
-    cost_weight: float,
+    cost_weights: Sequence[float],
     seed: int,
-) -> Any:
-    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+) -> list[Any]:
+    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch, SimMetrics
+
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
 
     env = FSRS6SingleCardBatch(
         days=args.days,
-        env_count=args.particles,
-        cost_weights=[cost_weight],
+        env_count=env_count,
+        cost_weights=cost_weights,
         action_retentions=action_retentions,
         device=device,
         dtype=torch.float64,
         seed=seed,
         exact_memory=True,
     )
-    policy = policy.to(device=device)
+    goal_indices = torch.repeat_interleave(
+        torch.arange(weight_count, device=device, dtype=torch.int64),
+        args.particles,
+    )
+    for weight_idx, cost_weight in enumerate(cost_weights):
+        start = weight_idx * args.particles
+        stop = start + args.particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        env.reset_indices(idx, goal_weight=cost_weight)
+
+    policies = policies.to(device=device)
     while not bool(env.done.all().item()):
         remaining = torch.clamp((env.days - 1) - env.day, min=0, max=oracle.horizon)
         s_idx = _oracle_s_to_idx(oracle, env.s)
         d_idx = _oracle_d_to_idx(oracle, env.d)
-        action = policy[remaining, s_idx, d_idx]
+        action = policies[goal_indices, remaining, s_idx, d_idx]
         env.step(action)
-    return env.metrics()
+
+    metrics: list[SimMetrics] = []
+    day_count = float(env.days)
+    for weight_idx in range(weight_count):
+        start = weight_idx * args.particles
+        stop = start + args.particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        particle_count = float(idx.numel())
+        total_memorized = env.total_memorized.index_select(0, idx).sum().item()
+        total_cost_seconds = env.total_cost_seconds.index_select(0, idx).sum().item()
+        total_reviews = float(env.total_reviews.index_select(0, idx).sum().item())
+        total_lapses = float(env.total_lapses.index_select(0, idx).sum().item())
+        observed_retention = (
+            1.0 - total_lapses / total_reviews if total_reviews > 0.0 else None
+        )
+        metrics.append(
+            SimMetrics(
+                card_expected_retrievability=total_memorized
+                / day_count
+                / particle_count,
+                card_minutes_per_day=total_cost_seconds
+                / day_count
+                / 60.0
+                / particle_count,
+                card_reviews_per_day=total_reviews / day_count / particle_count,
+                card_total_reviews=total_reviews / particle_count,
+                card_total_lapses=total_lapses / particle_count,
+                card_total_cost_seconds=total_cost_seconds / particle_count,
+                observed_retention=observed_retention,
+            )
+        )
+    return metrics
 
 
 def _run_fsrs6_oracle(
@@ -1126,26 +1170,21 @@ def _run_fsrs6_oracle(
         d_grid_size=args.oracle_d_grid_size,
     )
 
+    start = time.perf_counter()
+    policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)
+    metrics_by_weight = _evaluate_fsrs6_oracle_policies(
+        args=args,
+        device=device,
+        oracle=oracle,
+        policies=policies,
+        action_retentions=action_retentions,
+        cost_weights=cost_weights,
+        seed=seed + 50_000,
+    )
+    runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
+
     rows: list[dict[str, Any]] = []
-    for cost_weight in cost_weights:
-        start = time.perf_counter()
-        solution = oracle.solve(
-            cost_weight,
-            progress=not args.no_progress,
-            capture_policy=True,
-        )
-        if solution.policy is None:
-            raise RuntimeError("Oracle policy table was not captured.")
-        metrics = _evaluate_fsrs6_oracle_policy(
-            args=args,
-            device=device,
-            oracle=oracle,
-            policy=solution.policy,
-            action_retentions=action_retentions,
-            cost_weight=cost_weight,
-            seed=seed + 50_000 + int(round(cost_weight * 10.0)),
-        )
-        runtime_s = time.perf_counter() - start
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
         rows.append(
             _row_from_uvfa_metrics(
                 args,

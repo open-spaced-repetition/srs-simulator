@@ -308,6 +308,106 @@ class FSRS6GridOracle:
             policy=policy,
         )
 
+    def solve_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        weight_tensor = torch.tensor(list(cost_weights), dtype=self.dtype)
+        weight_count = int(weight_tensor.numel())
+        shape = (
+            self.horizon + 1,
+            self.s_grid.numel(),
+            self.d_grid.numel(),
+            weight_count,
+        )
+        value = torch.zeros(shape, dtype=self.dtype)
+        policy = torch.zeros(shape, dtype=torch.int64)
+        weights = weight_tensor.view(1, 1, weight_count)
+
+        progress_bar = None
+        if progress:
+            from tqdm import tqdm
+
+            progress_bar = tqdm(
+                total=self.horizon,
+                desc=f"Oracle w batch={weight_count}",
+                unit="day",
+                leave=False,
+            )
+        try:
+            for rem in range(1, self.horizon + 1):
+                best_value = torch.full_like(value[rem], -math.inf)
+                best_action = torch.zeros_like(policy[rem])
+
+                for action_idx, transition in enumerate(self.transitions):
+                    candidate_value = self._candidate_value_batch(
+                        transition=transition,
+                        rem=rem,
+                        cost_weights=weights,
+                        value=value,
+                    )
+                    better = candidate_value > best_value
+                    best_value = torch.where(better, candidate_value, best_value)
+                    best_action = torch.where(
+                        better,
+                        torch.full_like(best_action, action_idx),
+                        best_action,
+                    )
+
+                value[rem] = best_value
+                policy[rem] = best_action
+                if progress_bar is not None:
+                    progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        return policy.permute(3, 0, 1, 2).contiguous()
+
+    def _candidate_value_batch(
+        self,
+        *,
+        transition: TransitionCache,
+        rem: int,
+        cost_weights: torch.Tensor,
+        value: torch.Tensor,
+    ) -> torch.Tensor:
+        interval = transition.interval
+        cont_mask = interval <= rem
+        future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
+        active_days = torch.minimum(interval, torch.full_like(interval, rem))
+        immediate_mem = self._memorized_sum(self.s_grid, active_days)[:, None]
+        candidate_value = (
+            immediate_mem.expand_as(self.s_mesh)
+            .unsqueeze(2)
+            .expand(
+                -1,
+                -1,
+                int(cost_weights.numel()),
+            )
+        )
+        candidate_value = candidate_value.clone()
+
+        if not cont_mask.any():
+            return candidate_value
+
+        rem_idx = future_rem[:, None].expand_as(self.s_mesh)
+        cont_2d = cont_mask[:, None].expand_as(self.s_mesh)
+        for rating_idx, rating in enumerate(range(1, 5)):
+            prob = transition.prob[rating_idx][:, None].expand_as(self.s_mesh)
+            s_idx = transition.next_s_idx[rating_idx]
+            d_idx = transition.next_d_idx[rating_idx]
+            future_value = value[rem_idx, s_idx, d_idx]
+            review_minutes = self.review_cost_minutes[rating - 1]
+            weighted = torch.where(cont_2d, prob, torch.zeros_like(prob)).unsqueeze(2)
+            candidate_value += weighted * (future_value - cost_weights * review_minutes)
+
+        return candidate_value
+
     def _candidate_tables(
         self,
         *,
