@@ -80,6 +80,14 @@ uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_def
 
 For supported FSRS-6 sweeps, desired-retention targets are batched in one vectorized run by default. The default targets are `0.1,0.2,0.3,0.4,0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98,0.99`; override with `--target-retentions`, or pass `--target-retentions ""` to use the range flags. Fixed-interval sweeps are batched the same way. Plain `--sched fixed` runs intervals `8,16,32,64,128,256,512` by default; override with `--fixed-intervals`. Mixed scheduler families are run as one batch per family. Pass `--target-batch-size 1` to run targets/intervals sequentially.
 
+UVFA PPO single-card experiment (goal-conditioned policy over FSRS-6 target-retention actions):
+
+```bash
+uv run experiments/uvfa_ppo_single_card.py --days 1825 --eval-particles 10000 --deck-scale 10000
+```
+
+The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default goal weights `16,32,64,128`. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
+
 By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
 
 Short-term scheduling (event or vectorized engines):
