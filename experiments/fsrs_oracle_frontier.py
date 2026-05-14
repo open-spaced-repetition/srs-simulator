@@ -23,18 +23,14 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff import DEFAULT_TARGET_RETENTIONS
-from experiments.uvfa_ppo_single_card import (
-    DEFAULT_COST_WEIGHTS,
-    evaluate_static_fsrs,
-    parse_csv_floats,
-    scalar_objective,
-)
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
 from simulator.math.fsrs import Bounds
 from simulator.scheduler_spec import format_float
+
+DEFAULT_COST_WEIGHTS = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0]
 
 
 @dataclass(frozen=True)
@@ -56,6 +52,36 @@ class TransitionCache:
     prob: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
     next_s_idx: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
     next_d_idx: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+
+
+@dataclass(frozen=True)
+class OracleSolution:
+    metrics: OracleMetrics
+    policy: torch.Tensor | None
+
+
+def parse_csv_floats(value: str, *, name: str) -> list[float]:
+    values: list[float] = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            parsed = float(item)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid {name} value '{item}'.") from exc
+        if not math.isfinite(parsed):
+            raise SystemExit(f"{name} values must be finite.")
+        values.append(parsed)
+    if not values:
+        raise SystemExit(f"{name} must contain at least one value.")
+    return values
+
+
+def scalar_objective(metrics: Any, cost_weight: float) -> float:
+    return float(metrics.card_expected_retrievability) - cost_weight * float(
+        metrics.card_minutes_per_day
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -163,6 +189,19 @@ class FSRS6GridOracle:
         self.transitions = self._precompute_transitions()
 
     def estimate(self, cost_weight: float, *, progress: bool = False) -> OracleMetrics:
+        return self.solve(
+            cost_weight,
+            progress=progress,
+            capture_policy=False,
+        ).metrics
+
+    def solve(
+        self,
+        cost_weight: float,
+        *,
+        progress: bool = False,
+        capture_policy: bool = False,
+    ) -> OracleSolution:
         start = time.perf_counter()
         shape = (self.horizon + 1, self.s_grid.numel(), self.d_grid.numel())
         value = torch.zeros(shape, dtype=self.dtype)
@@ -170,6 +209,7 @@ class FSRS6GridOracle:
         minutes = torch.zeros_like(value)
         reviews = torch.zeros_like(value)
         lapses = torch.zeros_like(value)
+        policy = torch.zeros(shape, dtype=torch.int64) if capture_policy else None
 
         progress_bar = None
         if progress:
@@ -188,8 +228,9 @@ class FSRS6GridOracle:
                 best_minutes = torch.zeros_like(best_value)
                 best_reviews = torch.zeros_like(best_value)
                 best_lapses = torch.zeros_like(best_value)
+                best_action = torch.zeros_like(best_value, dtype=torch.int64)
 
-                for transition in self.transitions:
+                for action_idx, transition in enumerate(self.transitions):
                     candidate = self._candidate_tables(
                         transition=transition,
                         rem=rem,
@@ -208,12 +249,19 @@ class FSRS6GridOracle:
                     best_minutes = torch.where(better, candidate_minutes, best_minutes)
                     best_reviews = torch.where(better, candidate_reviews, best_reviews)
                     best_lapses = torch.where(better, candidate_lapses, best_lapses)
+                    best_action = torch.where(
+                        better,
+                        torch.full_like(best_action, action_idx),
+                        best_action,
+                    )
 
                 value[rem] = best_value
                 memorized[rem] = best_mem
                 minutes[rem] = best_minutes
                 reviews[rem] = best_reviews
                 lapses[rem] = best_lapses
+                if policy is not None:
+                    policy[rem] = best_action
                 if progress_bar is not None:
                     progress_bar.update(1)
         finally:
@@ -245,16 +293,19 @@ class FSRS6GridOracle:
         )
         mem_per_day = float(total_mem.item() / day_count)
         minutes_per_day = float(total_minutes.item() / day_count)
-        return OracleMetrics(
-            card_expected_retrievability=mem_per_day,
-            card_minutes_per_day=minutes_per_day,
-            card_reviews_per_day=reviews_float / day_count,
-            card_total_reviews=reviews_float,
-            card_total_lapses=lapses_float,
-            card_total_cost_seconds=float(total_minutes.item() * 60.0),
-            observed_retention=observed_retention,
-            scalar_objective=mem_per_day - cost_weight * minutes_per_day,
-            runtime_s=time.perf_counter() - start,
+        return OracleSolution(
+            metrics=OracleMetrics(
+                card_expected_retrievability=mem_per_day,
+                card_minutes_per_day=minutes_per_day,
+                card_reviews_per_day=reviews_float / day_count,
+                card_total_reviews=reviews_float,
+                card_total_lapses=lapses_float,
+                card_total_cost_seconds=float(total_minutes.item() * 60.0),
+                observed_retention=observed_retention,
+                scalar_objective=mem_per_day - cost_weight * minutes_per_day,
+                runtime_s=time.perf_counter() - start,
+            ),
+            policy=policy,
         )
 
     def _candidate_tables(
@@ -565,6 +616,8 @@ def write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> None:
+    from experiments.uvfa_ppo_single_card import evaluate_static_fsrs
+
     args = parse_args()
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")

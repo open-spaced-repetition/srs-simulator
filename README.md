@@ -86,7 +86,7 @@ UVFA PPO single-card experiment (goal-conditioned policy over FSRS-6 target-rete
 uv run experiments/uvfa_ppo_single_card.py --days 1825 --eval-particles 10000 --deck-scale 10000
 ```
 
-The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default goal weights `16,32,64,128`. It normalizes advantages per goal and keeps a small goal-conditioned static-FSRS prior during PPO updates so nearby goals do not collapse to the same action. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
+The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default goal weights `16,32,64,128,256,512,1024`. It normalizes advantages per goal, uses rich state features and a residual policy/value network by default, and uses a finite-horizon FSRS grid oracle as the default warmup/regularization guide. Pass `--guide-policy static` for the older static-FSRS target prior, or `--guide-policy none` for plain PPO. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
 
 After training a policy, include it in the standard single-card Pareto sweep with `--sched uvfa_ppo`:
 
@@ -97,7 +97,7 @@ uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_def
 Estimate a finite-horizon FSRS-6 grid oracle frontier:
 
 ```bash
-uv run experiments/fsrs_oracle_frontier.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128
+uv run experiments/fsrs_oracle_frontier.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
 ```
 
 The oracle script uses expected Bellman backups over a `(log stability, difficulty)` grid and discrete desired-retention actions. It writes a single-card CSV/plot under `logs/single_card_tradeoff/` and, by default, includes static-FSRS reference rows evaluated with Monte Carlo particles.

@@ -776,7 +776,7 @@ def _load_uvfa_ppo_policy(
     args: argparse.Namespace,
     *,
     device: torch.device,
-) -> tuple[Any, list[float], list[float], float]:
+) -> tuple[Any, list[float], list[float], float, str]:
     if not args.uvfa_ppo_policy.exists():
         raise SystemExit(
             "UVFA PPO policy not found: "
@@ -800,17 +800,28 @@ def _load_uvfa_ppo_policy(
     policy_cost_weights = [float(value) for value in raw_cost_weights]
     obs_dim = int(checkpoint.get("obs_dim", 7))
     hidden_size = int(checkpoint.get("hidden_size", 96))
+    network = str(checkpoint.get("network", "mlp"))
+    network_depth = int(checkpoint.get("network_depth", 3))
+    obs_mode = str(checkpoint.get("obs_mode", "basic"))
     model = PolicyValueNet(
         obs_dim=obs_dim,
         action_count=len(action_retentions),
         hidden_size=hidden_size,
+        architecture=network,
+        depth=network_depth,
     ).to(device)
     state_dict = checkpoint.get("model_state_dict")
     if not isinstance(state_dict, dict):
         raise SystemExit("UVFA PPO checkpoint is missing model_state_dict.")
     model.load_state_dict(state_dict)
     model.eval()
-    return model, action_retentions, policy_cost_weights, max(policy_cost_weights)
+    return (
+        model,
+        action_retentions,
+        policy_cost_weights,
+        max(policy_cost_weights),
+        obs_mode,
+    )
 
 
 def _uvfa_ppo_cost_weights(
@@ -891,7 +902,7 @@ def _run_uvfa_ppo(
     device = (
         torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
     )
-    model, action_retentions, policy_cost_weights, goal_norm_max = (
+    model, action_retentions, policy_cost_weights, goal_norm_max, obs_mode = (
         _load_uvfa_ppo_policy(
             args,
             device=device,
@@ -914,6 +925,7 @@ def _run_uvfa_ppo(
             particles=args.particles,
             seed=seed + 30_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=goal_norm_max,
+            obs_mode=obs_mode,
         )
         runtime_s = time.perf_counter() - start
         rows.append(

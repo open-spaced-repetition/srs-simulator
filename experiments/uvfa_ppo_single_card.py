@@ -28,6 +28,7 @@ from experiments.single_card_tradeoff import (  # noqa: E402
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.fsrs_oracle_frontier import FSRS6GridOracle  # noqa: E402
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
@@ -35,7 +36,7 @@ from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
 from simulator.math.fsrs import Bounds
 from simulator.scheduler_spec import format_float
 
-DEFAULT_COST_WEIGHTS = [16.0, 32.0, 64.0, 128.0]
+DEFAULT_COST_WEIGHTS = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0]
 
 
 def parse_csv_floats(value: str, *, name: str) -> list[float]:
@@ -102,15 +103,55 @@ def parse_args() -> argparse.Namespace:
             "goal. Per-goal normalization keeps one goal from dominating updates."
         ),
     )
+    parser.add_argument(
+        "--obs-mode",
+        choices=["basic", "rich"],
+        default="rich",
+        help="Observation features for the UVFA policy. 'rich' adds remaining-horizon and rating one-hot features.",
+    )
+    parser.add_argument(
+        "--network",
+        choices=["mlp", "residual"],
+        default="residual",
+        help="Policy/value architecture.",
+    )
+    parser.add_argument(
+        "--network-depth",
+        type=int,
+        default=3,
+        help="Hidden blocks for --network residual; ignored by the legacy MLP.",
+    )
+    parser.add_argument(
+        "--guide-policy",
+        choices=["oracle", "static", "none"],
+        default="oracle",
+        help=(
+            "Teacher used for actor warmup and policy regularization. "
+            "'oracle' uses a finite-horizon FSRS grid oracle; 'static' uses the "
+            "previous static-FSRS target prior."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-s-grid-size",
+        type=int,
+        default=64,
+        help="Stability grid size for --guide-policy oracle.",
+    )
+    parser.add_argument(
+        "--oracle-d-grid-size",
+        type=int,
+        default=32,
+        help="Difficulty grid size for --guide-policy oracle.",
+    )
     parser.add_argument("--clip-coef", type=float, default=0.2)
     parser.add_argument(
         "--prior-coef",
         type=float,
-        default=0.03,
+        default=0.05,
         help=(
-            "Small supervised regularization toward the goal-conditioned static-FSRS "
-            "retention prior during PPO updates. This keeps nearby UVFA goals from "
-            "collapsing to the same action while PPO still optimizes returns."
+            "Small supervised regularization toward --guide-policy during PPO "
+            "updates. This keeps nearby UVFA goals separated while PPO still "
+            "optimizes returns."
         ),
     )
     parser.add_argument("--entropy-coef", type=float, default=0.01)
@@ -120,10 +161,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--warmup-epochs",
         type=int,
-        default=8,
+        default=16,
         help=(
-            "Actor-only supervised warmup epochs from a static-FSRS target prior. "
-            "The PPO phase still optimizes the policy after this initialization."
+            "Actor-only supervised warmup epochs from --guide-policy. The PPO "
+            "phase still optimizes the policy after this initialization."
         ),
     )
     parser.add_argument(
@@ -188,6 +229,7 @@ class FSRS6SingleCardBatch:
         seed: int,
         exact_memory: bool,
         goal_norm_max: float | None = None,
+        obs_mode: str = "basic",
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -197,12 +239,15 @@ class FSRS6SingleCardBatch:
             raise ValueError("cost weights must be >= 0.")
         if any(retention <= 0.0 or retention >= 1.0 for retention in action_retentions):
             raise ValueError("action retentions must be within (0, 1).")
+        if obs_mode not in {"basic", "rich"}:
+            raise ValueError("obs_mode must be 'basic' or 'rich'.")
 
         self.days = int(days)
         self.env_count = int(env_count)
         self.device = device
         self.dtype = dtype
         self.exact_memory = exact_memory
+        self.obs_mode = obs_mode
         self.bounds = Bounds()
         self.generator = torch.Generator(device=device)
         self.generator.manual_seed(seed)
@@ -262,7 +307,7 @@ class FSRS6SingleCardBatch:
 
     @property
     def obs_dim(self) -> int:
-        return 7
+        return 7 if self.obs_mode == "basic" else 13
 
     @property
     def action_count(self) -> int:
@@ -332,21 +377,46 @@ class FSRS6SingleCardBatch:
         s_norm = (log_s - log_s_min) / (log_s_max - log_s_min)
         d_norm = (self.d - self.bounds.d_min) / (self.bounds.d_max - self.bounds.d_min)
         day_norm = self.day.to(dtype=self.dtype) / float(self.days - 1)
+        remaining = torch.clamp((self.days - 1) - self.day, min=0).to(dtype=self.dtype)
+        remaining_norm = remaining / float(self.days - 1)
+        log_remaining_norm = torch.log1p(remaining) / math.log1p(float(self.days - 1))
         interval_norm = torch.log1p(
             torch.clamp(self.last_interval, min=0.0)
         ) / math.log1p(float(self.days * 4))
         rating_norm = (self.last_rating.to(dtype=self.dtype) - 1.0) / 3.0
         max_goal = max(1.0, self.max_goal_weight)
         goal_norm = torch.log1p(self.goal_weight) / math.log1p(max_goal)
+        goal_linear = self.goal_weight / max_goal
         pending_norm = self.pending_cost_seconds / 60.0
+        if self.obs_mode == "basic":
+            return torch.stack(
+                [
+                    s_norm,
+                    d_norm,
+                    day_norm,
+                    interval_norm,
+                    rating_norm,
+                    goal_norm,
+                    pending_norm,
+                ],
+                dim=1,
+            )
+
+        rating = self.last_rating.to(dtype=self.dtype)
         return torch.stack(
             [
                 s_norm,
                 d_norm,
                 day_norm,
+                remaining_norm,
+                log_remaining_norm,
                 interval_norm,
-                rating_norm,
+                (rating == 1.0).to(dtype=self.dtype),
+                (rating == 2.0).to(dtype=self.dtype),
+                (rating == 3.0).to(dtype=self.dtype),
+                (rating == 4.0).to(dtype=self.dtype),
                 goal_norm,
+                goal_linear,
                 pending_norm,
             ],
             dim=1,
@@ -605,15 +675,50 @@ class FSRS6SingleCardBatch:
         return torch.minimum(new_s, new_min)
 
 
-class PolicyValueNet(nn.Module):
-    def __init__(self, obs_dim: int, action_count: int, hidden_size: int) -> None:
+class ResidualBlock(nn.Module):
+    def __init__(self, hidden_size: int) -> None:
         super().__init__()
-        self.body = nn.Sequential(
-            nn.Linear(obs_dim, hidden_size),
-            nn.Tanh(),
+        self.net = nn.Sequential(
+            nn.LayerNorm(hidden_size),
             nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
+            nn.SiLU(),
+            nn.Linear(hidden_size, hidden_size),
         )
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        return hidden + 0.5 * self.net(hidden)
+
+
+class PolicyValueNet(nn.Module):
+    def __init__(
+        self,
+        obs_dim: int,
+        action_count: int,
+        hidden_size: int,
+        architecture: str = "mlp",
+        depth: int = 3,
+    ) -> None:
+        super().__init__()
+        if architecture not in {"mlp", "residual"}:
+            raise ValueError("architecture must be 'mlp' or 'residual'.")
+        if depth <= 0:
+            raise ValueError("depth must be > 0.")
+        self.obs_dim = obs_dim
+        self.architecture = architecture
+        if architecture == "mlp":
+            self.body = nn.Sequential(
+                nn.Linear(obs_dim, hidden_size),
+                nn.Tanh(),
+                nn.Linear(hidden_size, hidden_size),
+                nn.Tanh(),
+            )
+        else:
+            self.body = nn.Sequential(
+                nn.Linear(obs_dim, hidden_size),
+                nn.SiLU(),
+                *[ResidualBlock(hidden_size) for _ in range(depth)],
+                nn.LayerNorm(hidden_size),
+            )
         self.policy = nn.Linear(hidden_size, action_count)
         self.value = nn.Linear(hidden_size, 1)
         self._init_weights()
@@ -688,6 +793,126 @@ def nearest_retention_action(
     return torch.argmin(distance, dim=1)
 
 
+class PolicyGuide:
+    def labels(self, env: FSRS6SingleCardBatch) -> torch.Tensor:
+        raise NotImplementedError
+
+
+class StaticRetentionGuide(PolicyGuide):
+    def labels(self, env: FSRS6SingleCardBatch) -> torch.Tensor:
+        return nearest_retention_action(
+            target_retention=static_retention_prior(env.goal_weight),
+            action_retentions=env.action_retentions,
+        )
+
+
+class OracleGridGuide(PolicyGuide):
+    def __init__(
+        self,
+        *,
+        days: int,
+        cost_weights: Sequence[float],
+        action_retentions: Sequence[float],
+        s_grid_size: int,
+        d_grid_size: int,
+        device: torch.device,
+        progress: bool,
+    ) -> None:
+        self.days = int(days)
+        self.horizon = int(days - 1)
+        self.device = device
+        self.cost_weights = torch.tensor(
+            list(cost_weights), device=device, dtype=torch.float32
+        )
+        self.oracle = FSRS6GridOracle(
+            days=days,
+            action_retentions=action_retentions,
+            s_grid_size=s_grid_size,
+            d_grid_size=d_grid_size,
+        )
+        self.policy_tables: list[torch.Tensor] = []
+        self.metrics_by_weight: dict[float, float] = {}
+        for cost_weight in cost_weights:
+            solution = self.oracle.solve(
+                float(cost_weight),
+                progress=progress,
+                capture_policy=True,
+            )
+            if solution.policy is None:
+                raise RuntimeError("Oracle policy table was not captured.")
+            self.policy_tables.append(solution.policy.to(device=device))
+            self.metrics_by_weight[float(cost_weight)] = (
+                solution.metrics.scalar_objective
+            )
+
+    def labels(self, env: FSRS6SingleCardBatch) -> torch.Tensor:
+        remaining = torch.clamp((env.days - 1) - env.day, min=0, max=self.horizon)
+        s_idx = self._s_to_idx(env.s)
+        d_idx = self._d_to_idx(env.d)
+        goal_idx = torch.argmin(
+            torch.abs(
+                env.goal_weight.to(dtype=self.cost_weights.dtype)[:, None]
+                - self.cost_weights[None, :]
+            ),
+            dim=1,
+        )
+        labels = torch.empty(env.env_count, device=env.device, dtype=torch.int64)
+        for idx in torch.unique(goal_idx).tolist():
+            goal_mask = goal_idx == int(idx)
+            labels[goal_mask] = self.policy_tables[int(idx)][
+                remaining[goal_mask],
+                s_idx[goal_mask],
+                d_idx[goal_mask],
+            ]
+        return labels
+
+    def _s_to_idx(self, s: torch.Tensor) -> torch.Tensor:
+        log_s = torch.log(
+            torch.clamp(s, self.oracle.bounds.s_min, self.oracle.bounds.s_max)
+        )
+        ratio = (log_s - self.oracle.log_s_min) / (
+            self.oracle.log_s_max - self.oracle.log_s_min
+        )
+        return torch.clamp(
+            torch.round(ratio * float(self.oracle.s_grid.numel() - 1)),
+            min=0,
+            max=self.oracle.s_grid.numel() - 1,
+        ).to(torch.int64)
+
+    def _d_to_idx(self, d: torch.Tensor) -> torch.Tensor:
+        ratio = torch.clamp(d, self.oracle.bounds.d_min, self.oracle.bounds.d_max)
+        ratio = (ratio - self.oracle.bounds.d_min) / (
+            self.oracle.bounds.d_max - self.oracle.bounds.d_min
+        )
+        return torch.clamp(
+            torch.round(ratio * float(self.oracle.d_grid.numel() - 1)),
+            min=0,
+            max=self.oracle.d_grid.numel() - 1,
+        ).to(torch.int64)
+
+
+def build_policy_guide(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+) -> PolicyGuide | None:
+    if args.guide_policy == "none":
+        return None
+    if args.guide_policy == "static":
+        return StaticRetentionGuide()
+    return OracleGridGuide(
+        days=args.days,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        device=device,
+        progress=not args.no_progress,
+    )
+
+
 def warmup_policy(
     *,
     args: argparse.Namespace,
@@ -695,15 +920,13 @@ def warmup_policy(
     optimizer: torch.optim.Optimizer,
     env: FSRS6SingleCardBatch,
     obs: torch.Tensor,
+    guide: PolicyGuide | None,
 ) -> torch.Tensor:
-    if args.warmup_epochs <= 0:
+    if args.warmup_epochs <= 0 or guide is None:
         return obs
     for _ in range(args.warmup_epochs):
         for _ in range(args.warmup_steps):
-            label = nearest_retention_action(
-                target_retention=static_retention_prior(env.goal_weight),
-                action_retentions=env.action_retentions,
-            )
+            label = guide.labels(env)
             logits, _ = model(obs)
             loss = nn.functional.cross_entropy(logits, label)
             optimizer.zero_grad(set_to_none=True)
@@ -738,12 +961,32 @@ def train_policy(
         seed=args.seed,
         exact_memory=False,
         goal_norm_max=max(cost_weights),
+        obs_mode=args.obs_mode,
     )
-    model = PolicyValueNet(env.obs_dim, env.action_count, args.hidden_size).to(device)
+    model = PolicyValueNet(
+        env.obs_dim,
+        env.action_count,
+        args.hidden_size,
+        architecture=args.network,
+        depth=args.network_depth,
+    ).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
     obs = env.obs()
     start = time.perf_counter()
-    obs = warmup_policy(args=args, model=model, optimizer=optimizer, env=env, obs=obs)
+    guide = build_policy_guide(
+        args=args,
+        device=device,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+    )
+    obs = warmup_policy(
+        args=args,
+        model=model,
+        optimizer=optimizer,
+        env=env,
+        obs=obs,
+        guide=guide,
+    )
 
     for update in range(args.updates):
         obs_buf = torch.empty(
@@ -757,12 +1000,20 @@ def train_policy(
         logprob_buf = torch.empty(
             (args.rollout_steps, args.train_envs), device=device, dtype=dtype
         )
+        guide_label_buf = torch.empty(
+            (args.rollout_steps, args.train_envs), device=device, dtype=torch.int64
+        )
         goal_buf = torch.empty_like(logprob_buf)
         reward_buf = torch.empty_like(logprob_buf)
         done_buf = torch.empty_like(logprob_buf)
         value_buf = torch.empty_like(logprob_buf)
 
         for step in range(args.rollout_steps):
+            guide_label = (
+                guide.labels(env)
+                if guide is not None
+                else torch.zeros(args.train_envs, device=device, dtype=torch.int64)
+            )
             with torch.no_grad():
                 logits, value = model(obs)
                 dist = Categorical(logits=logits)
@@ -772,6 +1023,7 @@ def train_policy(
             obs_buf[step] = obs
             action_buf[step] = action
             logprob_buf[step] = logprob
+            guide_label_buf[step] = guide_label
             goal_buf[step] = env.goal_weight
             reward_buf[step] = reward
             done_buf[step] = done.to(dtype=dtype)
@@ -806,6 +1058,7 @@ def train_policy(
         flat_obs = obs_buf.reshape((-1, env.obs_dim))
         flat_actions = action_buf.reshape(-1)
         flat_logprobs = logprob_buf.reshape(-1)
+        flat_guide_labels = guide_label_buf.reshape(-1)
         flat_advantages = advantages.reshape(-1)
         flat_goals = goal_buf.reshape(-1)
         flat_returns = returns.reshape(-1)
@@ -826,13 +1079,8 @@ def train_policy(
                 new_logprob = dist.log_prob(flat_actions.index_select(0, mb_idx))
                 entropy = dist.entropy().mean()
                 prior_loss = torch.tensor(0.0, device=device, dtype=dtype)
-                if args.prior_coef > 0.0:
-                    prior_label = nearest_retention_action(
-                        target_retention=static_retention_prior(
-                            flat_goals.index_select(0, mb_idx)
-                        ),
-                        action_retentions=env.action_retentions,
-                    )
+                if args.prior_coef > 0.0 and guide is not None:
+                    prior_label = flat_guide_labels.index_select(0, mb_idx)
                     prior_loss = nn.functional.cross_entropy(logits, prior_label)
                 old_logprob = flat_logprobs.index_select(0, mb_idx)
                 logratio = new_logprob - old_logprob
@@ -896,7 +1144,9 @@ def evaluate_policy(
     particles: int,
     seed: int,
     goal_norm_max: float,
+    obs_mode: str | None = None,
 ) -> SimMetrics:
+    resolved_obs_mode = obs_mode or getattr(args, "obs_mode", "basic")
     env = FSRS6SingleCardBatch(
         days=args.days,
         env_count=particles,
@@ -907,6 +1157,7 @@ def evaluate_policy(
         seed=seed,
         exact_memory=True,
         goal_norm_max=goal_norm_max,
+        obs_mode=resolved_obs_mode,
     )
     model.eval()
     while not bool(env.done.all().item()):
@@ -1207,8 +1458,14 @@ def save_model(
             "cost_weights": list(cost_weights),
             "action_retentions": list(action_retentions),
             "days": args.days,
-            "obs_dim": 7,
+            "obs_dim": model.obs_dim,
+            "obs_mode": args.obs_mode,
             "hidden_size": args.hidden_size,
+            "network": args.network,
+            "network_depth": args.network_depth,
+            "guide_policy": args.guide_policy,
+            "oracle_s_grid_size": args.oracle_s_grid_size,
+            "oracle_d_grid_size": args.oracle_d_grid_size,
             "train_updates": train_stats.updates,
             "train_transitions": train_stats.transitions,
             "train_runtime_s": train_stats.runtime_s,
@@ -1245,6 +1502,10 @@ def main() -> None:
         raise SystemExit("--updates must be >= 0.")
     if args.rollout_steps <= 0:
         raise SystemExit("--rollout-steps must be > 0.")
+    if args.network_depth <= 0:
+        raise SystemExit("--network-depth must be > 0.")
+    if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
+        raise SystemExit("--oracle grid sizes must be >= 8.")
 
     device = (
         torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
