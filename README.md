@@ -108,6 +108,15 @@ After training a policy, include it in the standard single-card Pareto sweep wit
 uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
+Train a pure FSRS-6 oracle distillation baseline, then compare it directly with the DP oracle and UVFA PPO:
+
+```bash
+uv run experiments/fsrs_oracle_distill.py --days 1825 --eval-particles 10000 --deck-scale 10000
+uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_distill,uvfa_ppo --oracle-distill-policy logs/single_card_tradeoff/fsrs6_oracle_distill_policy.pt --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
+```
+
+Use `--obs-mode oracle` with `fsrs_oracle_distill.py` to train the 4-feature distilled policy over only stability, difficulty, remaining horizon, and goal cost weight.
+
 Search UVFA PPO model-scale hyperparameters:
 
 ```bash

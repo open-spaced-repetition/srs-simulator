@@ -95,10 +95,14 @@ DEFAULT_UVFA_PPO_COST_WEIGHTS = [
     1024,
 ]
 DEFAULT_UVFA_PPO_POLICY = Path("logs/single_card_tradeoff/uvfa_ppo_policy.pt")
+DEFAULT_FSRS6_ORACLE_DISTILL_POLICY = Path(
+    "logs/single_card_tradeoff/fsrs6_oracle_distill_policy.pt"
+)
 DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
     "logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"
 )
 FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
+FSRS6_ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_distill"
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
 UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
 
@@ -199,6 +203,28 @@ def parse_args() -> argparse.Namespace:
             "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024. "
             "Pass an empty string to use the cost_weights saved in "
             "--uvfa-ppo-policy."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-distill-policy",
+        type=Path,
+        default=DEFAULT_FSRS6_ORACLE_DISTILL_POLICY,
+        help=(
+            "Path to an FSRS-6 oracle-distilled policy checkpoint when --sched "
+            "contains fsrs6_oracle_distill. Create one with "
+            "experiments/fsrs_oracle_distill.py."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-distill-cost-weights",
+        default=",".join(
+            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+        ),
+        help=(
+            "Comma-separated scalarization weights for fsrs6_oracle_distill. "
+            "Defaults to 0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024. "
+            "Pass an empty string to use the cost_weights saved in "
+            "--oracle-distill-policy."
         ),
     )
     parser.add_argument(
@@ -373,6 +399,7 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             raise SystemExit(str(exc)) from exc
         custom_schedulers = {
             FSRS6_ORACLE_SCHEDULER,
+            FSRS6_ORACLE_DISTILL_SCHEDULER,
             UVFA_PPO_SCHEDULER,
             UVFA_PPO_RNN_INTERVAL_SCHEDULER,
         }
@@ -884,30 +911,29 @@ def _run_fixed_batch(
     ]
 
 
-def _load_uvfa_ppo_policy(
-    args: argparse.Namespace,
+def _load_policy_checkpoint(
+    policy_path: Path,
     *,
     device: torch.device,
+    policy_label: str,
+    train_hint: str,
 ) -> tuple[Any, list[float], list[float], float, str]:
-    if not args.uvfa_ppo_policy.exists():
+    if not policy_path.exists():
         raise SystemExit(
-            "UVFA PPO policy not found: "
-            f"{args.uvfa_ppo_policy}. Train one with "
-            "`uv run experiments/uvfa_ppo_single_card.py --model-out "
-            f"{args.uvfa_ppo_policy}` or pass --uvfa-ppo-policy."
+            f"{policy_label} policy not found: {policy_path}. {train_hint}"
         )
 
     from experiments.uvfa_ppo_single_card import PolicyValueNet
 
-    checkpoint = torch.load(args.uvfa_ppo_policy, map_location=device)
+    checkpoint = torch.load(policy_path, map_location=device)
     if not isinstance(checkpoint, dict):
-        raise SystemExit(f"Invalid UVFA PPO checkpoint: {args.uvfa_ppo_policy}")
+        raise SystemExit(f"Invalid {policy_label} checkpoint: {policy_path}")
     raw_actions = checkpoint.get("action_retentions")
     if not isinstance(raw_actions, list) or not raw_actions:
-        raise SystemExit("UVFA PPO checkpoint is missing action_retentions.")
+        raise SystemExit(f"{policy_label} checkpoint is missing action_retentions.")
     raw_cost_weights = checkpoint.get("cost_weights")
     if not isinstance(raw_cost_weights, list) or not raw_cost_weights:
-        raise SystemExit("UVFA PPO checkpoint is missing cost_weights.")
+        raise SystemExit(f"{policy_label} checkpoint is missing cost_weights.")
     action_retentions = [float(value) for value in raw_actions]
     policy_cost_weights = [float(value) for value in raw_cost_weights]
     obs_dim = int(checkpoint.get("obs_dim", 7))
@@ -924,7 +950,7 @@ def _load_uvfa_ppo_policy(
     ).to(device)
     state_dict = checkpoint.get("model_state_dict")
     if not isinstance(state_dict, dict):
-        raise SystemExit("UVFA PPO checkpoint is missing model_state_dict.")
+        raise SystemExit(f"{policy_label} checkpoint is missing model_state_dict.")
     model.load_state_dict(state_dict)
     model.eval()
     return (
@@ -933,6 +959,22 @@ def _load_uvfa_ppo_policy(
         policy_cost_weights,
         max(policy_cost_weights),
         obs_mode,
+    )
+
+
+def _load_uvfa_ppo_policy(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], list[float], float, str]:
+    return _load_policy_checkpoint(
+        args.uvfa_ppo_policy,
+        device=device,
+        policy_label="UVFA PPO",
+        train_hint=(
+            "Train one with `uv run experiments/uvfa_ppo_single_card.py "
+            f"--model-out {args.uvfa_ppo_policy}` or pass --uvfa-ppo-policy."
+        ),
     )
 
 
@@ -947,6 +989,37 @@ def _uvfa_ppo_cost_weights(
     values = _parse_float_list(raw, label="UVFA PPO cost weight")
     if any(value < 0.0 for value in values):
         raise SystemExit("UVFA PPO cost weights must be >= 0.")
+    return values
+
+
+def _load_fsrs6_oracle_distill_policy(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], list[float], float, str]:
+    return _load_policy_checkpoint(
+        args.oracle_distill_policy,
+        device=device,
+        policy_label="FSRS-6 oracle-distilled",
+        train_hint=(
+            "Train one with `uv run experiments/fsrs_oracle_distill.py "
+            f"--model-out {args.oracle_distill_policy}` or pass "
+            "--oracle-distill-policy."
+        ),
+    )
+
+
+def _oracle_distill_cost_weights(
+    args: argparse.Namespace,
+    *,
+    policy_cost_weights: Sequence[float],
+) -> list[float]:
+    raw = getattr(args, "oracle_distill_cost_weights", None)
+    if raw is None or not raw.strip():
+        return [float(value) for value in policy_cost_weights]
+    values = _parse_float_list(raw, label="Oracle-distilled cost weight")
+    if any(value < 0.0 for value in values):
+        raise SystemExit("Oracle-distilled cost weights must be >= 0.")
     return values
 
 
@@ -1282,6 +1355,70 @@ def _run_uvfa_ppo(
                 args,
                 environment_name=environment_name,
                 scheduler_name=UVFA_PPO_SCHEDULER,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
+def _run_fsrs6_oracle_distill(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name != "fsrs6_default":
+        raise SystemExit(
+            "fsrs6_oracle_distill currently supports only --env fsrs6_default."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            "fsrs6_oracle_distill is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit("fsrs6_oracle_distill does not support --fuzz.")
+
+    from experiments.uvfa_ppo_single_card import evaluate_policy
+
+    device = (
+        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
+    )
+    model, action_retentions, policy_cost_weights, goal_norm_max, obs_mode = (
+        _load_fsrs6_oracle_distill_policy(
+            args,
+            device=device,
+        )
+    )
+    cost_weights = _oracle_distill_cost_weights(
+        args,
+        policy_cost_weights=policy_cost_weights,
+    )
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight in cost_weights:
+        start = time.perf_counter()
+        metrics = evaluate_policy(
+            model,
+            args=args,
+            device=device,
+            cost_weight=cost_weight,
+            action_retentions=action_retentions,
+            particles=args.particles,
+            seed=seed + 35_000 + int(round(cost_weight * 10.0)),
+            goal_norm_max=goal_norm_max,
+            obs_mode=obs_mode,
+        )
+        runtime_s = time.perf_counter() - start
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=FSRS6_ORACLE_DISTILL_SCHEDULER,
                 scheduler_spec=scheduler_spec,
                 goal_cost_weight=cost_weight,
                 seed=seed,
@@ -1952,6 +2089,16 @@ def main() -> None:
             if scheduler_name == UVFA_PPO_SCHEDULER:
                 rows.extend(
                     _run_uvfa_ppo(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
+                continue
+            if scheduler_name == FSRS6_ORACLE_DISTILL_SCHEDULER:
+                rows.extend(
+                    _run_fsrs6_oracle_distill(
                         args,
                         environment_name=environment,
                         scheduler_spec=scheduler_spec,

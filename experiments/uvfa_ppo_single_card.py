@@ -128,9 +128,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--obs-mode",
-        choices=["basic", "rich"],
+        choices=["basic", "rich", "oracle"],
         default=DEFAULT_OBS_MODE,
-        help="Observation features for the UVFA policy. 'rich' adds remaining-horizon and rating one-hot features.",
+        help=(
+            "Observation features for the UVFA policy. 'oracle' uses only "
+            "stability, difficulty, remaining horizon, and goal cost weight."
+        ),
     )
     parser.add_argument(
         "--network",
@@ -263,8 +266,8 @@ class FSRS6SingleCardBatch:
             raise ValueError("cost weights must be >= 0.")
         if any(retention <= 0.0 or retention >= 1.0 for retention in action_retentions):
             raise ValueError("action retentions must be within (0, 1).")
-        if obs_mode not in {"basic", "rich", "belief"}:
-            raise ValueError("obs_mode must be 'basic', 'rich', or 'belief'.")
+        if obs_mode not in {"basic", "rich", "belief", "oracle"}:
+            raise ValueError("obs_mode must be 'basic', 'rich', 'belief', or 'oracle'.")
 
         self.days = int(days)
         self.env_count = int(env_count)
@@ -338,6 +341,8 @@ class FSRS6SingleCardBatch:
     def obs_dim(self) -> int:
         if self.obs_mode == "basic":
             return 7
+        if self.obs_mode == "oracle":
+            return 4
         if self.obs_mode == "rich":
             return 13
         return 10
@@ -432,6 +437,17 @@ class FSRS6SingleCardBatch:
                     rating_norm,
                     goal_norm,
                     pending_norm,
+                ],
+                dim=1,
+            )
+
+        if self.obs_mode == "oracle":
+            return torch.stack(
+                [
+                    s_norm,
+                    d_norm,
+                    log_remaining_norm,
+                    goal_norm,
                 ],
                 dim=1,
             )
