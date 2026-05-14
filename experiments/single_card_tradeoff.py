@@ -56,7 +56,25 @@ from simulator.vectorized import simulate as simulate_vectorized
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 
-DEFAULT_FIXED_INTERVALS = [
+DEFAULT_FIXED_INTERVALS = [8, 16, 32, 64, 128, 256, 512]
+DEFAULT_TARGET_RETENTIONS = [
+    0.10,
+    0.20,
+    0.30,
+    0.40,
+    0.50,
+    0.60,
+    0.65,
+    0.70,
+    0.75,
+    0.80,
+    0.85,
+    0.90,
+    0.93,
+    0.96,
+    0.98,
+]
+DEFAULT_UVFA_PPO_COST_WEIGHTS = [
     0,
     1,
     2,
@@ -74,23 +92,6 @@ DEFAULT_FIXED_INTERVALS = [
     384,
     512,
     1024,
-]
-DEFAULT_TARGET_RETENTIONS = [
-    0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.60,
-    0.65,
-    0.70,
-    0.75,
-    0.80,
-    0.85,
-    0.90,
-    0.93,
-    0.96,
-    0.98,
 ]
 DEFAULT_UVFA_PPO_POLICY = Path("logs/single_card_tradeoff/uvfa_ppo_policy.pt")
 DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
@@ -171,10 +172,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--uvfa-ppo-cost-weights",
-        default=None,
+        default=",".join(
+            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+        ),
         help=(
             "Comma-separated scalarization weights for uvfa_ppo. Defaults to "
-            "the cost_weights saved in --uvfa-ppo-policy."
+            "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024. "
+            "Pass an empty string to use the cost_weights saved in "
+            "--uvfa-ppo-policy."
         ),
     )
     parser.add_argument(
@@ -1224,7 +1229,6 @@ def _write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
         groups.setdefault(key, []).append(row)
 
     frontier = _pareto_frontier(rows)
-    frontier_ids = {id(row) for row in frontier}
     label_rows: list[dict[str, Any]] = []
 
     fig, ax = plt.subplots(figsize=(9, 6))
@@ -1240,9 +1244,7 @@ def _write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
             alpha=0.45,
             label=f"{environment}/{scheduler_label}",
         )
-        for row in group:
-            if row["scheduler"] == "fixed" or id(row) in frontier_ids:
-                label_rows.append(row)
+        label_rows.extend(group)
 
     if frontier:
         ax.plot(

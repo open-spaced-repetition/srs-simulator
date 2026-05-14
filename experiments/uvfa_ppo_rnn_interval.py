@@ -22,7 +22,11 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.single_card_tradeoff import DEFAULT_FIXED_INTERVALS
+from experiments.fsrs_oracle_frontier import FSRS6GridOracle
+from experiments.single_card_tradeoff import (
+    DEFAULT_FIXED_INTERVALS,
+    DEFAULT_TARGET_RETENTIONS,
+)
 from experiments.uvfa_ppo_single_card import (
     DEFAULT_COST_WEIGHTS,
     FSRS6SingleCardBatch,
@@ -66,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         default=",".join(format_float(value) for value in DEFAULT_FIXED_INTERVALS),
         help="Fixed-interval baseline points.",
     )
+    parser.add_argument(
+        "--action-retentions",
+        default=",".join(format_float(value) for value in DEFAULT_TARGET_RETENTIONS),
+        help="Discrete desired-retention actions used by the oracle guide.",
+    )
     parser.add_argument("--train-envs", type=int, default=1024)
     parser.add_argument("--updates", type=int, default=36)
     parser.add_argument("--rollout-steps", type=int, default=64)
@@ -81,8 +90,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clip-coef", type=float, default=0.2)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
     parser.add_argument("--value-coef", type=float, default=0.5)
+    parser.add_argument(
+        "--prior-coef",
+        type=float,
+        default=1.0,
+        help="Smooth-L1 regularization from policy mean log interval to --guide-policy.",
+    )
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--hidden-size", type=int, default=128)
+    parser.add_argument(
+        "--guide-policy",
+        choices=["oracle", "static", "none"],
+        default="oracle",
+        help=(
+            "Teacher for warmup and PPO regularization. 'oracle' uses a "
+            "finite-horizon FSRS grid oracle and converts its action to a log "
+            "physical interval."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-s-grid-size",
+        type=int,
+        default=64,
+        help="Stability grid size for --guide-policy oracle.",
+    )
+    parser.add_argument(
+        "--oracle-d-grid-size",
+        type=int,
+        default=32,
+        help="Difficulty grid size for --guide-policy oracle.",
+    )
+    parser.add_argument("--warmup-epochs", type=int, default=96)
+    parser.add_argument("--warmup-steps", type=int, default=16)
     parser.add_argument(
         "--initial-mean-interval",
         type=float,
@@ -246,11 +285,217 @@ def recurrent_forward_sequence(
     return Normal(mean, std), torch.stack(values)
 
 
+class IntervalGuide:
+    def log_intervals(self, env: FSRS6SingleCardBatch) -> torch.Tensor:
+        raise NotImplementedError
+
+    @staticmethod
+    def _retentions_to_log_intervals(
+        env: FSRS6SingleCardBatch,
+        retentions: torch.Tensor,
+    ) -> torch.Tensor:
+        retention_factor = torch.pow(retentions.to(dtype=env.dtype), 1.0 / env.decay)
+        retention_factor = retention_factor - 1.0
+        interval = env.s / env.factor * retention_factor
+        interval = torch.clamp(
+            torch.round(interval),
+            min=1.0,
+            max=float(env.max_interval_days),
+        )
+        return torch.log(interval)
+
+
+class StaticIntervalGuide(IntervalGuide):
+    def log_intervals(self, env: FSRS6SingleCardBatch) -> torch.Tensor:
+        retention = static_retention_prior(env.goal_weight)
+        return self._retentions_to_log_intervals(env, retention)
+
+
+class OracleIntervalGuide(IntervalGuide):
+    def __init__(
+        self,
+        *,
+        days: int,
+        cost_weights: Sequence[float],
+        action_retentions: Sequence[float],
+        s_grid_size: int,
+        d_grid_size: int,
+        device: torch.device,
+        progress: bool,
+    ) -> None:
+        self.horizon = int(days - 1)
+        self.device = device
+        self.cost_weights = torch.tensor(
+            list(cost_weights),
+            device=device,
+            dtype=torch.float32,
+        )
+        self.action_retentions = torch.tensor(
+            list(action_retentions),
+            device=device,
+            dtype=torch.float32,
+        )
+        self.oracle = FSRS6GridOracle(
+            days=days,
+            action_retentions=action_retentions,
+            s_grid_size=s_grid_size,
+            d_grid_size=d_grid_size,
+        )
+        self.policy_tables: list[torch.Tensor] = []
+        for cost_weight in cost_weights:
+            solution = self.oracle.solve(
+                float(cost_weight),
+                progress=progress,
+                capture_policy=True,
+            )
+            if solution.policy is None:
+                raise RuntimeError("Oracle policy table was not captured.")
+            self.policy_tables.append(solution.policy.to(device=device))
+
+    def log_intervals(self, env: FSRS6SingleCardBatch) -> torch.Tensor:
+        remaining = torch.clamp((env.days - 1) - env.day, min=0, max=self.horizon)
+        s_idx = self._s_to_idx(env.s)
+        d_idx = self._d_to_idx(env.d)
+        goal_idx = torch.argmin(
+            torch.abs(
+                env.goal_weight.to(dtype=self.cost_weights.dtype)[:, None]
+                - self.cost_weights[None, :]
+            ),
+            dim=1,
+        )
+        action_idx = torch.empty(env.env_count, device=env.device, dtype=torch.int64)
+        for idx in torch.unique(goal_idx).tolist():
+            goal_mask = goal_idx == int(idx)
+            action_idx[goal_mask] = self.policy_tables[int(idx)][
+                remaining[goal_mask],
+                s_idx[goal_mask],
+                d_idx[goal_mask],
+            ]
+        retention = self.action_retentions.index_select(0, action_idx)
+        return self._retentions_to_log_intervals(env, retention)
+
+    def _s_to_idx(self, s: torch.Tensor) -> torch.Tensor:
+        log_s = torch.log(
+            torch.clamp(s, self.oracle.bounds.s_min, self.oracle.bounds.s_max)
+        )
+        ratio = (log_s - self.oracle.log_s_min) / (
+            self.oracle.log_s_max - self.oracle.log_s_min
+        )
+        return torch.clamp(
+            torch.round(ratio * float(self.oracle.s_grid.numel() - 1)),
+            min=0,
+            max=self.oracle.s_grid.numel() - 1,
+        ).to(torch.int64)
+
+    def _d_to_idx(self, d: torch.Tensor) -> torch.Tensor:
+        ratio = torch.clamp(d, self.oracle.bounds.d_min, self.oracle.bounds.d_max)
+        ratio = (ratio - self.oracle.bounds.d_min) / (
+            self.oracle.bounds.d_max - self.oracle.bounds.d_min
+        )
+        return torch.clamp(
+            torch.round(ratio * float(self.oracle.d_grid.numel() - 1)),
+            min=0,
+            max=self.oracle.d_grid.numel() - 1,
+        ).to(torch.int64)
+
+
+def static_retention_prior(goal_weight: torch.Tensor) -> torch.Tensor:
+    retention = torch.full_like(goal_weight, 0.70)
+    retention = torch.where(
+        goal_weight <= 768.0,
+        torch.full_like(retention, 0.75),
+        retention,
+    )
+    retention = torch.where(
+        goal_weight <= 384.0,
+        torch.full_like(retention, 0.85),
+        retention,
+    )
+    retention = torch.where(
+        goal_weight <= 192.0,
+        torch.full_like(retention, 0.90),
+        retention,
+    )
+    retention = torch.where(
+        goal_weight <= 48.0,
+        torch.full_like(retention, 0.93),
+        retention,
+    )
+    retention = torch.where(
+        goal_weight <= 20.0,
+        torch.full_like(retention, 0.96),
+        retention,
+    )
+    return retention
+
+
+def build_interval_guide(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+) -> IntervalGuide | None:
+    if args.guide_policy == "none":
+        return None
+    if args.guide_policy == "static":
+        return StaticIntervalGuide()
+    return OracleIntervalGuide(
+        days=args.days,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        device=device,
+        progress=not args.no_progress,
+    )
+
+
+def warmup_policy(
+    *,
+    args: argparse.Namespace,
+    model: RecurrentIntervalPolicyValueNet,
+    optimizer: torch.optim.Optimizer,
+    env: FSRS6SingleCardBatch,
+    obs: torch.Tensor,
+    hidden_state: torch.Tensor,
+    guide: IntervalGuide | None,
+    max_goal_weight: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if guide is None or args.warmup_epochs <= 0:
+        return obs, hidden_state
+    for _ in range(args.warmup_epochs):
+        for _ in range(args.warmup_steps):
+            teacher = guide.log_intervals(env).to(dtype=obs.dtype)
+            hidden = model.encode(obs, hidden_state)
+            dist, _ = model.dist_value(
+                hidden,
+                env.goal_weight,
+                max_goal_weight=max_goal_weight,
+            )
+            loss = nn.functional.smooth_l1_loss(dist.mean.squeeze(1), teacher)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            optimizer.step()
+            with torch.no_grad():
+                next_obs, _, done = env.step_log_interval(teacher)
+                hidden_state = hidden.detach()
+                if done.any():
+                    done_idx = done.nonzero(as_tuple=False).squeeze(1)
+                    env.reset_indices(done_idx)
+                    hidden_state[done_idx] = 0.0
+                    next_obs = env.obs()
+                obs = next_obs
+    return obs, hidden_state
+
+
 def train_policy(
     args: argparse.Namespace,
     *,
     device: torch.device,
     cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
 ) -> tuple[RecurrentIntervalPolicyValueNet, TrainStats]:
     torch.manual_seed(args.seed)
     dtype = torch.float32
@@ -282,6 +527,22 @@ def train_policy(
         dtype=dtype,
     )
     start = time.perf_counter()
+    guide = build_interval_guide(
+        args=args,
+        device=device,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+    )
+    obs, hidden_state = warmup_policy(
+        args=args,
+        model=model,
+        optimizer=optimizer,
+        env=env,
+        obs=obs,
+        hidden_state=hidden_state,
+        guide=guide,
+        max_goal_weight=max(cost_weights),
+    )
 
     for update in range(args.updates):
         rollout_initial_hidden = hidden_state.detach().clone()
@@ -298,8 +559,14 @@ def train_policy(
         reward_buf = torch.empty_like(action_buf)
         done_buf = torch.empty_like(action_buf)
         value_buf = torch.empty_like(action_buf)
+        teacher_buf = torch.empty_like(action_buf)
 
         for step in range(args.rollout_steps):
+            teacher = (
+                guide.log_intervals(env).to(dtype=dtype)
+                if guide is not None
+                else torch.zeros(args.train_envs, device=device, dtype=dtype)
+            )
             with torch.no_grad():
                 hidden = model.encode(obs, hidden_state)
                 dist, value = model.dist_value(
@@ -317,6 +584,7 @@ def train_policy(
             reward_buf[step] = reward
             done_buf[step] = done.to(dtype=dtype)
             value_buf[step] = value
+            teacher_buf[step] = teacher
 
             hidden_state = hidden.detach()
             if done.any():
@@ -370,6 +638,9 @@ def train_policy(
             )
             new_logprob = dist.log_prob(action_buf)
             entropy = dist.entropy().mean()
+            prior_loss = torch.tensor(0.0, device=device, dtype=dtype)
+            if guide is not None and args.prior_coef > 0.0:
+                prior_loss = nn.functional.smooth_l1_loss(dist.mean, teacher_buf)
             logratio = new_logprob - logprob_buf
             ratio = logratio.exp()
             pg_loss_1 = -flat_advantages * ratio
@@ -393,7 +664,10 @@ def train_policy(
                 ).mean()
             )
             loss = (
-                policy_loss + args.value_coef * value_loss - args.entropy_coef * entropy
+                policy_loss
+                + args.value_coef * value_loss
+                + args.prior_coef * prior_loss
+                - args.entropy_coef * entropy
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -521,6 +795,13 @@ def save_model(
             "initial_mean_interval": args.initial_mean_interval,
             "initial_log_std": args.initial_log_std,
             "max_interval_days": args.max_interval_days or args.days * 4,
+            "guide_policy": args.guide_policy,
+            "action_retentions": list(getattr(args, "action_retentions_values", [])),
+            "oracle_s_grid_size": args.oracle_s_grid_size,
+            "oracle_d_grid_size": args.oracle_d_grid_size,
+            "warmup_epochs": args.warmup_epochs,
+            "warmup_steps": args.warmup_steps,
+            "prior_coef": args.prior_coef,
             "train_updates": train_stats.updates,
             "train_transitions": train_stats.transitions,
             "train_runtime_s": train_stats.runtime_s,
@@ -547,15 +828,29 @@ def main() -> None:
         raise SystemExit("--initial-mean-interval must be > 0.")
     if args.max_interval_days is not None and args.max_interval_days < 1:
         raise SystemExit("--max-interval-days must be >= 1.")
+    if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
+        raise SystemExit("--oracle grid sizes must be >= 8.")
+    if args.warmup_epochs < 0 or args.warmup_steps < 0:
+        raise SystemExit("--warmup-epochs and --warmup-steps must be >= 0.")
 
     device = (
         torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
     )
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
+    action_retentions = parse_csv_floats(
+        args.action_retentions,
+        name="--action-retentions",
+    )
+    setattr(args, "action_retentions_values", action_retentions)
     fixed_intervals = parse_csv_floats(args.fixed_intervals, name="--fixed-intervals")
     baseline_particles = args.baseline_particles or args.eval_particles
 
-    model, train_stats = train_policy(args, device=device, cost_weights=cost_weights)
+    model, train_stats = train_policy(
+        args,
+        device=device,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+    )
     save_model(
         args.model_out,
         model=model,
@@ -591,8 +886,7 @@ def main() -> None:
             )
         )
 
-    static_reference_retentions = [0.5, 0.7, 0.85, 0.9, 0.93, 0.96, 0.98, 0.99]
-    for retention in static_reference_retentions:
+    for retention in action_retentions:
         start = time.perf_counter()
         metrics = evaluate_static_fsrs(
             args=args,
