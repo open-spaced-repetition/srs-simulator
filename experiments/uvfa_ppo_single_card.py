@@ -93,7 +93,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument(
+        "--advantage-normalization",
+        choices=["global", "goal"],
+        default="goal",
+        help=(
+            "Normalize PPO advantages globally or separately per UVFA cost-weight "
+            "goal. Per-goal normalization keeps one goal from dominating updates."
+        ),
+    )
     parser.add_argument("--clip-coef", type=float, default=0.2)
+    parser.add_argument(
+        "--prior-coef",
+        type=float,
+        default=0.03,
+        help=(
+            "Small supervised regularization toward the goal-conditioned static-FSRS "
+            "retention prior during PPO updates. This keeps nearby UVFA goals from "
+            "collapsing to the same action while PPO still optimizes returns."
+        ),
+    )
     parser.add_argument("--entropy-coef", type=float, default=0.01)
     parser.add_argument("--value-coef", type=float, default=0.5)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
@@ -619,6 +638,29 @@ class TrainStats:
     runtime_s: float
 
 
+def normalize_advantages(
+    advantages: torch.Tensor,
+    goals: torch.Tensor,
+    *,
+    mode: str,
+) -> torch.Tensor:
+    if mode == "global":
+        return (advantages - advantages.mean()) / (
+            advantages.std(unbiased=False) + 1e-8
+        )
+    if mode != "goal":
+        raise ValueError("advantage normalization mode must be 'global' or 'goal'.")
+
+    normalized = torch.empty_like(advantages)
+    for goal in torch.unique(goals):
+        mask = goals == goal
+        goal_advantages = advantages[mask]
+        normalized[mask] = (goal_advantages - goal_advantages.mean()) / (
+            goal_advantages.std(unbiased=False) + 1e-8
+        )
+    return normalized
+
+
 def static_retention_prior(goal_weight: torch.Tensor) -> torch.Tensor:
     """Map scalarization weights to a strong static-FSRS retention prior."""
     retention = torch.full_like(goal_weight, 0.85)
@@ -715,6 +757,7 @@ def train_policy(
         logprob_buf = torch.empty(
             (args.rollout_steps, args.train_envs), device=device, dtype=dtype
         )
+        goal_buf = torch.empty_like(logprob_buf)
         reward_buf = torch.empty_like(logprob_buf)
         done_buf = torch.empty_like(logprob_buf)
         value_buf = torch.empty_like(logprob_buf)
@@ -729,6 +772,7 @@ def train_policy(
             obs_buf[step] = obs
             action_buf[step] = action
             logprob_buf[step] = logprob
+            goal_buf[step] = env.goal_weight
             reward_buf[step] = reward
             done_buf[step] = done.to(dtype=dtype)
             value_buf[step] = value
@@ -763,10 +807,13 @@ def train_policy(
         flat_actions = action_buf.reshape(-1)
         flat_logprobs = logprob_buf.reshape(-1)
         flat_advantages = advantages.reshape(-1)
+        flat_goals = goal_buf.reshape(-1)
         flat_returns = returns.reshape(-1)
         flat_values = value_buf.reshape(-1)
-        flat_advantages = (flat_advantages - flat_advantages.mean()) / (
-            flat_advantages.std(unbiased=False) + 1e-8
+        flat_advantages = normalize_advantages(
+            flat_advantages,
+            flat_goals,
+            mode=args.advantage_normalization,
         )
 
         batch_size = int(flat_obs.shape[0])
@@ -778,6 +825,15 @@ def train_policy(
                 dist = Categorical(logits=logits)
                 new_logprob = dist.log_prob(flat_actions.index_select(0, mb_idx))
                 entropy = dist.entropy().mean()
+                prior_loss = torch.tensor(0.0, device=device, dtype=dtype)
+                if args.prior_coef > 0.0:
+                    prior_label = nearest_retention_action(
+                        target_retention=static_retention_prior(
+                            flat_goals.index_select(0, mb_idx)
+                        ),
+                        action_retentions=env.action_retentions,
+                    )
+                    prior_loss = nn.functional.cross_entropy(logits, prior_label)
                 old_logprob = flat_logprobs.index_select(0, mb_idx)
                 logratio = new_logprob - old_logprob
                 ratio = logratio.exp()
@@ -805,6 +861,7 @@ def train_policy(
                 loss = (
                     policy_loss
                     + args.value_coef * value_loss
+                    + args.prior_coef * prior_loss
                     - args.entropy_coef * entropy
                 )
                 optimizer.zero_grad(set_to_none=True)

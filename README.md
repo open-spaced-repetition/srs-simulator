@@ -86,7 +86,7 @@ UVFA PPO single-card experiment (goal-conditioned policy over FSRS-6 target-rete
 uv run experiments/uvfa_ppo_single_card.py --days 1825 --eval-particles 10000 --deck-scale 10000
 ```
 
-The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default goal weights `16,32,64,128`. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
+The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default goal weights `16,32,64,128`. It normalizes advantages per goal and keeps a small goal-conditioned static-FSRS prior during PPO updates so nearby goals do not collapse to the same action. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
 
 After training a policy, include it in the standard single-card Pareto sweep with `--sched uvfa_ppo`:
 
