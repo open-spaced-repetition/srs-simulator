@@ -57,7 +57,7 @@ DEFAULT_PRIOR_COEF = 0.05
 DEFAULT_ENTROPY_COEF = 0.01
 DEFAULT_VALUE_COEF = 0.5
 DEFAULT_MAX_GRAD_NORM = 0.5
-DEFAULT_HIDDEN_SIZE = 96
+DEFAULT_HIDDEN_SIZE = 64
 DEFAULT_WARMUP_EPOCHS = 16
 DEFAULT_WARMUP_STEPS = 8
 
@@ -1031,6 +1031,8 @@ def train_policy(
     device: torch.device,
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    policy_guide: PolicyGuide | None = None,
+    build_guide_if_missing: bool = True,
 ) -> tuple[PolicyValueNet, TrainStats]:
     torch.manual_seed(args.seed)
     dtype = torch.float32
@@ -1056,12 +1058,14 @@ def train_policy(
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, eps=1e-5)
     obs = env.obs()
     start = time.perf_counter()
-    guide = build_policy_guide(
-        args=args,
-        device=device,
-        cost_weights=cost_weights,
-        action_retentions=action_retentions,
-    )
+    guide = policy_guide
+    if guide is None and build_guide_if_missing:
+        guide = build_policy_guide(
+            args=args,
+            device=device,
+            cost_weights=cost_weights,
+            action_retentions=action_retentions,
+        )
     obs = warmup_policy(
         args=args,
         model=model,

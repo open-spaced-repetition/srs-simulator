@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 import csv
+from dataclasses import dataclass
 import math
 import os
 from pathlib import Path
@@ -100,6 +101,23 @@ DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
 FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
 UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
+
+
+@dataclass(frozen=True)
+class MemoryTargetRegretAucSummary:
+    environment: str
+    baseline_scheduler: str
+    scheduler: str
+    baseline_point_count: int
+    scheduler_point_count: int
+    baseline_frontier_count: int
+    scheduler_frontier_count: int
+    target_count: int
+    covered_target_count: int
+    total_span: float
+    covered_span: float
+    time_regret_auc: float | None
+    baseline_time_auc: float | None
 
 
 def parse_args() -> argparse.Namespace:
@@ -291,6 +309,20 @@ def parse_args() -> argparse.Namespace:
         "--no-plot",
         action="store_true",
         help="Skip writing the Pareto-style PNG plot.",
+    )
+    parser.add_argument(
+        "--regret-auc-out",
+        type=Path,
+        default=None,
+        help=(
+            "CSV output path for pairwise memory-target time regret AUC. "
+            "Defaults to the main CSV path with _regret_auc before the suffix."
+        ),
+    )
+    parser.add_argument(
+        "--no-regret-auc",
+        action="store_true",
+        help="Skip writing the pairwise memory-target regret AUC CSV.",
     )
     parser.add_argument(
         "--no-progress",
@@ -1406,6 +1438,288 @@ def _pareto_frontier(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
+def _regret_auc_group_key(row: dict[str, Any]) -> tuple[str, str]:
+    scheduler = str(row["scheduler"])
+    scheduler_label = "fixed" if scheduler == "fixed" else str(row["scheduler_spec"])
+    return str(row["environment"]), scheduler_label
+
+
+def _frontier_memory_time_points(
+    rows: list[dict[str, Any]],
+) -> list[tuple[float, float]]:
+    min_time_by_memory: dict[float, float] = {}
+    for row in _pareto_frontier(rows):
+        memory = float(row["deck_expected_memorized"])
+        minutes = float(row["deck_minutes_per_day"])
+        if not (math.isfinite(memory) and math.isfinite(minutes)):
+            continue
+        previous = min_time_by_memory.get(memory)
+        if previous is None or minutes < previous:
+            min_time_by_memory[memory] = minutes
+    return sorted(min_time_by_memory.items())
+
+
+def _common_interval(
+    left_min: float,
+    left_max: float,
+    right_min: float,
+    right_max: float,
+) -> tuple[float, float] | None:
+    start = max(left_min, right_min)
+    end = min(left_max, right_max)
+    if end <= start:
+        return None
+    return start, end
+
+
+def _values_in_interval(
+    values: Sequence[float], start: float, end: float
+) -> list[float]:
+    return sorted(
+        {
+            value
+            for value in values
+            if (start < value < end)
+            or math.isclose(value, start)
+            or math.isclose(value, end)
+        }
+    )
+
+
+def _integration_grid(
+    baseline_values: Sequence[float],
+    target_values: Sequence[float],
+    start: float,
+    end: float,
+) -> list[float]:
+    return sorted(
+        {
+            start,
+            end,
+            *_values_in_interval(baseline_values, start, end),
+            *_values_in_interval(target_values, start, end),
+        }
+    )
+
+
+def _interpolated_time_for_memory_target(
+    points: Sequence[tuple[float, float]],
+    target: float,
+) -> float | None:
+    if not points:
+        return None
+    if target < points[0][0] and not math.isclose(target, points[0][0]):
+        return None
+    if math.isclose(target, points[0][0]):
+        return points[0][1]
+    if target > points[-1][0] and not math.isclose(target, points[-1][0]):
+        return None
+    if math.isclose(target, points[-1][0]):
+        return points[-1][1]
+
+    for (left_memory, left_minutes), (
+        right_memory,
+        right_minutes,
+    ) in zip(points[:-1], points[1:]):
+        if not (left_memory <= target <= right_memory):
+            continue
+        if math.isclose(left_memory, right_memory):
+            return min(left_minutes, right_minutes)
+        ratio = (target - left_memory) / (right_memory - left_memory)
+        return left_minutes + ratio * (right_minutes - left_minutes)
+    return None
+
+
+def _memory_target_regret_auc_summary(
+    *,
+    environment: str,
+    baseline_scheduler: str,
+    baseline_rows: list[dict[str, Any]],
+    scheduler: str,
+    scheduler_rows: list[dict[str, Any]],
+) -> MemoryTargetRegretAucSummary | None:
+    baseline_frontier = _frontier_memory_time_points(baseline_rows)
+    scheduler_frontier = _frontier_memory_time_points(scheduler_rows)
+    if not baseline_frontier:
+        return None
+
+    baseline_targets = [memory for memory, _ in baseline_frontier]
+    total_span = (
+        max(baseline_targets) - min(baseline_targets)
+        if len(baseline_targets) > 1
+        else 0.0
+    )
+    covered_span = 0.0
+    time_regret_area = 0.0
+    baseline_time_area = 0.0
+    covered_target_count = 0
+
+    if scheduler_frontier:
+        interval = _common_interval(
+            baseline_frontier[0][0],
+            baseline_frontier[-1][0],
+            scheduler_frontier[0][0],
+            scheduler_frontier[-1][0],
+        )
+        if interval is not None:
+            start, end = interval
+            covered_target_count = len(
+                _values_in_interval(baseline_targets, start, end)
+            )
+            scheduler_targets = [memory for memory, _ in scheduler_frontier]
+            targets = _integration_grid(baseline_targets, scheduler_targets, start, end)
+            for left_target, right_target in zip(targets[:-1], targets[1:]):
+                width = right_target - left_target
+                if width <= 0.0:
+                    continue
+                left_baseline_time = _interpolated_time_for_memory_target(
+                    baseline_frontier,
+                    left_target,
+                )
+                right_baseline_time = _interpolated_time_for_memory_target(
+                    baseline_frontier,
+                    right_target,
+                )
+                left_scheduler_time = _interpolated_time_for_memory_target(
+                    scheduler_frontier,
+                    left_target,
+                )
+                right_scheduler_time = _interpolated_time_for_memory_target(
+                    scheduler_frontier,
+                    right_target,
+                )
+                if (
+                    left_baseline_time is None
+                    or right_baseline_time is None
+                    or left_scheduler_time is None
+                    or right_scheduler_time is None
+                ):
+                    continue
+                left_regret = left_scheduler_time - left_baseline_time
+                right_regret = right_scheduler_time - right_baseline_time
+                time_regret_area += width * ((left_regret + right_regret) / 2.0)
+                baseline_time_area += width * (
+                    (left_baseline_time + right_baseline_time) / 2.0
+                )
+                covered_span += width
+
+    return MemoryTargetRegretAucSummary(
+        environment=environment,
+        baseline_scheduler=baseline_scheduler,
+        scheduler=scheduler,
+        baseline_point_count=len(baseline_rows),
+        scheduler_point_count=len(scheduler_rows),
+        baseline_frontier_count=len(baseline_frontier),
+        scheduler_frontier_count=len(scheduler_frontier),
+        target_count=len(baseline_targets),
+        covered_target_count=covered_target_count,
+        total_span=total_span,
+        covered_span=covered_span,
+        time_regret_auc=(time_regret_area / covered_span) if covered_span else None,
+        baseline_time_auc=(baseline_time_area / covered_span) if covered_span else None,
+    )
+
+
+def _finite_float(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return value
+
+
+def _summary_to_regret_auc_row(
+    summary: MemoryTargetRegretAucSummary,
+) -> dict[str, Any]:
+    span_coverage_percent = (
+        (summary.covered_span / summary.total_span) * 100.0
+        if summary.total_span
+        else 0.0
+    )
+    relative_regret_auc_percent = (
+        (summary.time_regret_auc / summary.baseline_time_auc) * 100.0
+        if summary.time_regret_auc is not None
+        and summary.baseline_time_auc is not None
+        and summary.baseline_time_auc
+        else None
+    )
+    return {
+        "environment": summary.environment,
+        "baseline_scheduler": summary.baseline_scheduler,
+        "scheduler": summary.scheduler,
+        "baseline_point_count": summary.baseline_point_count,
+        "scheduler_point_count": summary.scheduler_point_count,
+        "baseline_frontier_count": summary.baseline_frontier_count,
+        "scheduler_frontier_count": summary.scheduler_frontier_count,
+        "target_count": summary.target_count,
+        "covered_target_count": summary.covered_target_count,
+        "total_span": _finite_float(summary.total_span),
+        "covered_span": _finite_float(summary.covered_span),
+        "span_coverage_percent": _finite_float(span_coverage_percent),
+        "time_regret_auc": _finite_float(summary.time_regret_auc),
+        "baseline_time_auc": _finite_float(summary.baseline_time_auc),
+        "relative_regret_auc_percent": _finite_float(relative_regret_auc_percent),
+    }
+
+
+def _build_regret_auc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = _regret_auc_group_key(row)
+        groups.setdefault(key, []).append(row)
+
+    output_rows: list[dict[str, Any]] = []
+    environments = sorted({environment for environment, _ in groups})
+    for environment in environments:
+        scheduler_labels = sorted(
+            scheduler for group_env, scheduler in groups if group_env == environment
+        )
+        for baseline_scheduler in scheduler_labels:
+            baseline_rows = groups[(environment, baseline_scheduler)]
+            for scheduler in scheduler_labels:
+                summary = _memory_target_regret_auc_summary(
+                    environment=environment,
+                    baseline_scheduler=baseline_scheduler,
+                    baseline_rows=baseline_rows,
+                    scheduler=scheduler,
+                    scheduler_rows=groups[(environment, scheduler)],
+                )
+                if summary is not None:
+                    output_rows.append(_summary_to_regret_auc_row(summary))
+    return output_rows
+
+
+def _write_regret_auc_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "environment",
+        "baseline_scheduler",
+        "scheduler",
+        "baseline_point_count",
+        "scheduler_point_count",
+        "baseline_frontier_count",
+        "scheduler_frontier_count",
+        "target_count",
+        "covered_target_count",
+        "total_span",
+        "covered_span",
+        "span_coverage_percent",
+        "time_regret_auc",
+        "baseline_time_auc",
+        "relative_regret_auc_percent",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def _regret_auc_path(args: argparse.Namespace) -> Path:
+    if args.regret_auc_out is not None:
+        return args.regret_auc_out
+    suffix = args.out.suffix or ".csv"
+    return args.out.with_name(f"{args.out.stem}_regret_auc{suffix}")
+
+
 def _plot_group_key(row: dict[str, Any]) -> tuple[str, str]:
     scheduler = str(row["scheduler"])
     scheduler_label = "fixed" if scheduler == "fixed" else str(row["scheduler_spec"])
@@ -1542,6 +1856,47 @@ def _print_summary(rows: list[dict[str, Any]]) -> None:
         )
 
 
+def _print_regret_auc_summary(rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    preferred_baselines = {"fsrs6_default", "fsrs6"}
+    filtered = [
+        row
+        for row in rows
+        if row["baseline_scheduler"] in preferred_baselines
+        and row["scheduler"] != row["baseline_scheduler"]
+    ]
+    if not filtered:
+        filtered = [
+            row for row in rows if row["scheduler"] != row["baseline_scheduler"]
+        ]
+    for row in filtered:
+        time_regret_auc = row["time_regret_auc"]
+        relative_regret_auc_percent = row["relative_regret_auc_percent"]
+        time_text = (
+            f"{time_regret_auc:.4f}"
+            if isinstance(time_regret_auc, (int, float))
+            else "n/a"
+        )
+        relative_text = (
+            f"{relative_regret_auc_percent:.2f}%"
+            if isinstance(relative_regret_auc_percent, (int, float))
+            else "n/a"
+        )
+        print(
+            " ".join(
+                [
+                    "regret_auc",
+                    f"{row['environment']}/{row['scheduler']}",
+                    f"vs={row['baseline_scheduler']}",
+                    f"time={time_text}",
+                    f"relative={relative_text}",
+                    f"span={row['span_coverage_percent']:.1f}%",
+                ]
+            )
+        )
+
+
 def main() -> None:
     args = parse_args()
     if args.days <= 0:
@@ -1663,6 +2018,12 @@ def main() -> None:
         _write_plot(plot_path, rows)
         print(f"Wrote plot: {plot_path}")
     print(f"Wrote CSV: {args.out}")
+    if not args.no_regret_auc:
+        regret_auc_rows = _build_regret_auc_rows(rows)
+        regret_auc_path = _regret_auc_path(args)
+        _write_regret_auc_csv(regret_auc_path, regret_auc_rows)
+        print(f"Wrote regret AUC CSV: {regret_auc_path}")
+        _print_regret_auc_summary(regret_auc_rows)
     _print_summary(rows)
 
 

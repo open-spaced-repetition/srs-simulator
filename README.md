@@ -78,7 +78,7 @@ Single-card lifecycle tradeoff (no daily budget constraints; iid card metrics ar
 uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_default --particles 10000 --deck-scale 10000
 ```
 
-For supported FSRS-6 sweeps, desired-retention targets are batched in one vectorized run by default. The default targets are `0.1,0.2,0.3,0.4,0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98`; override with `--target-retentions`, or pass `--target-retentions ""` to use the range flags. Fixed-interval sweeps are batched the same way. Plain `--sched fixed` runs intervals `8,16,32,64,128,256,512` by default; override with `--fixed-intervals`. Mixed scheduler families are run as one batch per family. Pass `--target-batch-size 1` to run targets/intervals sequentially.
+For supported FSRS-6 sweeps, desired-retention targets are batched in one vectorized run by default. The default targets are `0.1,0.2,0.3,0.4,0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98`; override with `--target-retentions`, or pass `--target-retentions ""` to use the range flags. Fixed-interval sweeps are batched the same way. Plain `--sched fixed` runs intervals `8,16,32,64,128,256,512` by default; override with `--fixed-intervals`. Mixed scheduler families are run as one batch per family. Pass `--target-batch-size 1` to run targets/intervals sequentially. By default, the script also writes a pairwise memory-target regret AUC CSV next to the main CSV. `time_regret_auc` is the average extra deck-scaled minutes/day needed by the scheduler versus the baseline over their common covered memory-target interval, and `relative_regret_auc_percent` divides that by the baseline time AUC.
 
 UVFA PPO single-card experiment (goal-conditioned policy over FSRS-6 target-retention actions):
 
@@ -86,7 +86,7 @@ UVFA PPO single-card experiment (goal-conditioned policy over FSRS-6 target-rete
 uv run experiments/uvfa_ppo_single_card.py --days 1825 --eval-particles 10000 --deck-scale 10000
 ```
 
-The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default training goal weights `16,32,64,128,256,512,1024`; the standard tradeoff sweep evaluates UVFA PPO checkpoints at `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024` by default. It normalizes advantages per goal, uses rich state features and a residual policy/value network by default, and uses a finite-horizon FSRS grid oracle as the default warmup/regularization guide. Pass `--guide-policy static` for the older static-FSRS target prior, or `--guide-policy none` for plain PPO. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
+The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default training goal weights `16,32,64,128,256,512,1024`; the standard tradeoff sweep evaluates UVFA PPO checkpoints at `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024` by default. It normalizes advantages per goal, uses rich state features and a residual policy/value network with hidden size 64 and depth 3 by default, and uses a finite-horizon FSRS grid oracle as the default warmup/regularization guide. Pass `--guide-policy static` for the older static-FSRS target prior, or `--guide-policy none` for plain PPO. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
 
 Recurrent UVFA PPO over continuous log-interval actions:
 
@@ -106,6 +106,12 @@ After training a policy, include it in the standard single-card Pareto sweep wit
 
 ```bash
 uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
+```
+
+Search UVFA PPO model-scale hyperparameters:
+
+```bash
+uv run experiments/uvfa_ppo_hparam_search.py --days 1825 --eval-particles 3000 --save-models
 ```
 
 Estimate a finite-horizon FSRS-6 grid oracle frontier:
