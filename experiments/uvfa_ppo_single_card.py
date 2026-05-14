@@ -37,6 +37,29 @@ from simulator.math.fsrs import Bounds
 from simulator.scheduler_spec import format_float
 
 DEFAULT_COST_WEIGHTS = [16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1024.0]
+DEFAULT_TRAIN_ENVS = 1024
+DEFAULT_UPDATES = 36
+DEFAULT_ROLLOUT_STEPS = 64
+DEFAULT_PPO_EPOCHS = 4
+DEFAULT_MINIBATCH_SIZE = 4096
+DEFAULT_LEARNING_RATE = 3e-4
+DEFAULT_GAMMA = 1.0
+DEFAULT_GAE_LAMBDA = 0.95
+DEFAULT_ADVANTAGE_NORMALIZATION = "goal"
+DEFAULT_OBS_MODE = "rich"
+DEFAULT_NETWORK = "residual"
+DEFAULT_NETWORK_DEPTH = 3
+DEFAULT_GUIDE_POLICY = "oracle"
+DEFAULT_ORACLE_S_GRID_SIZE = 64
+DEFAULT_ORACLE_D_GRID_SIZE = 32
+DEFAULT_CLIP_COEF = 0.2
+DEFAULT_PRIOR_COEF = 0.05
+DEFAULT_ENTROPY_COEF = 0.01
+DEFAULT_VALUE_COEF = 0.5
+DEFAULT_MAX_GRAD_NORM = 0.5
+DEFAULT_HIDDEN_SIZE = 96
+DEFAULT_WARMUP_EPOCHS = 16
+DEFAULT_WARMUP_STEPS = 8
 
 
 def parse_csv_floats(value: str, *, name: str) -> list[float]:
@@ -86,18 +109,18 @@ def parse_args() -> argparse.Namespace:
         default=",".join(format_float(value) for value in DEFAULT_FIXED_INTERVALS),
         help="Fixed-interval baseline points.",
     )
-    parser.add_argument("--train-envs", type=int, default=1024)
-    parser.add_argument("--updates", type=int, default=36)
-    parser.add_argument("--rollout-steps", type=int, default=64)
-    parser.add_argument("--ppo-epochs", type=int, default=4)
-    parser.add_argument("--minibatch-size", type=int, default=4096)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
-    parser.add_argument("--gamma", type=float, default=1.0)
-    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--train-envs", type=int, default=DEFAULT_TRAIN_ENVS)
+    parser.add_argument("--updates", type=int, default=DEFAULT_UPDATES)
+    parser.add_argument("--rollout-steps", type=int, default=DEFAULT_ROLLOUT_STEPS)
+    parser.add_argument("--ppo-epochs", type=int, default=DEFAULT_PPO_EPOCHS)
+    parser.add_argument("--minibatch-size", type=int, default=DEFAULT_MINIBATCH_SIZE)
+    parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
+    parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
+    parser.add_argument("--gae-lambda", type=float, default=DEFAULT_GAE_LAMBDA)
     parser.add_argument(
         "--advantage-normalization",
         choices=["global", "goal"],
-        default="goal",
+        default=DEFAULT_ADVANTAGE_NORMALIZATION,
         help=(
             "Normalize PPO advantages globally or separately per UVFA cost-weight "
             "goal. Per-goal normalization keeps one goal from dominating updates."
@@ -106,25 +129,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--obs-mode",
         choices=["basic", "rich"],
-        default="rich",
+        default=DEFAULT_OBS_MODE,
         help="Observation features for the UVFA policy. 'rich' adds remaining-horizon and rating one-hot features.",
     )
     parser.add_argument(
         "--network",
         choices=["mlp", "residual"],
-        default="residual",
+        default=DEFAULT_NETWORK,
         help="Policy/value architecture.",
     )
     parser.add_argument(
         "--network-depth",
         type=int,
-        default=3,
+        default=DEFAULT_NETWORK_DEPTH,
         help="Hidden blocks for --network residual; ignored by the legacy MLP.",
     )
     parser.add_argument(
         "--guide-policy",
         choices=["oracle", "static", "none"],
-        default="oracle",
+        default=DEFAULT_GUIDE_POLICY,
         help=(
             "Teacher used for actor warmup and policy regularization. "
             "'oracle' uses a finite-horizon FSRS grid oracle; 'static' uses the "
@@ -134,34 +157,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--oracle-s-grid-size",
         type=int,
-        default=64,
+        default=DEFAULT_ORACLE_S_GRID_SIZE,
         help="Stability grid size for --guide-policy oracle.",
     )
     parser.add_argument(
         "--oracle-d-grid-size",
         type=int,
-        default=32,
+        default=DEFAULT_ORACLE_D_GRID_SIZE,
         help="Difficulty grid size for --guide-policy oracle.",
     )
-    parser.add_argument("--clip-coef", type=float, default=0.2)
+    parser.add_argument("--clip-coef", type=float, default=DEFAULT_CLIP_COEF)
     parser.add_argument(
         "--prior-coef",
         type=float,
-        default=0.05,
+        default=DEFAULT_PRIOR_COEF,
         help=(
             "Small supervised regularization toward --guide-policy during PPO "
             "updates. This keeps nearby UVFA goals separated while PPO still "
             "optimizes returns."
         ),
     )
-    parser.add_argument("--entropy-coef", type=float, default=0.01)
-    parser.add_argument("--value-coef", type=float, default=0.5)
-    parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--hidden-size", type=int, default=96)
+    parser.add_argument("--entropy-coef", type=float, default=DEFAULT_ENTROPY_COEF)
+    parser.add_argument("--value-coef", type=float, default=DEFAULT_VALUE_COEF)
+    parser.add_argument("--max-grad-norm", type=float, default=DEFAULT_MAX_GRAD_NORM)
+    parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
     parser.add_argument(
         "--warmup-epochs",
         type=int,
-        default=16,
+        default=DEFAULT_WARMUP_EPOCHS,
         help=(
             "Actor-only supervised warmup epochs from --guide-policy. The PPO "
             "phase still optimizes the policy after this initialization."
@@ -170,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--warmup-steps",
         type=int,
-        default=8,
+        default=DEFAULT_WARMUP_STEPS,
         help="Event steps sampled per warmup epoch.",
     )
     parser.add_argument("--eval-particles", type=int, default=10_000)

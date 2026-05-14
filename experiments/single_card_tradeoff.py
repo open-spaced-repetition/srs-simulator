@@ -97,6 +97,7 @@ DEFAULT_UVFA_PPO_POLICY = Path("logs/single_card_tradeoff/uvfa_ppo_policy.pt")
 DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
     "logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"
 )
+FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
 UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
 
@@ -199,6 +200,33 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated scalarization weights for uvfa_ppo_rnn_interval. "
             "Defaults to the cost_weights saved in --uvfa-ppo-rnn-interval-policy."
         ),
+    )
+    parser.add_argument(
+        "--oracle-cost-weights",
+        default=",".join(
+            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+        ),
+        help=(
+            "Comma-separated scalarization weights for fsrs6_oracle. Defaults to "
+            "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-action-retentions",
+        default=",".join(format_float(value) for value in DEFAULT_TARGET_RETENTIONS),
+        help="Discrete desired-retention actions available to fsrs6_oracle.",
+    )
+    parser.add_argument(
+        "--oracle-s-grid-size",
+        type=int,
+        default=64,
+        help="Stability grid size for fsrs6_oracle.",
+    )
+    parser.add_argument(
+        "--oracle-d-grid-size",
+        type=int,
+        default=32,
+        help="Difficulty grid size for fsrs6_oracle.",
     )
     parser.add_argument(
         "--seed",
@@ -311,7 +339,11 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             name, fixed_interval, raw_spec = parse_scheduler_spec(raw)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        custom_schedulers = {UVFA_PPO_SCHEDULER, UVFA_PPO_RNN_INTERVAL_SCHEDULER}
+        custom_schedulers = {
+            FSRS6_ORACLE_SCHEDULER,
+            UVFA_PPO_SCHEDULER,
+            UVFA_PPO_RNN_INTERVAL_SCHEDULER,
+        }
         if (
             name not in simulate_cli.SCHEDULER_FACTORIES
             and name not in custom_schedulers
@@ -994,6 +1026,141 @@ def _row_from_uvfa_metrics(
     }
 
 
+def _oracle_cost_weights(args: argparse.Namespace) -> list[float]:
+    values = _parse_float_list(args.oracle_cost_weights, label="Oracle cost weight")
+    if any(value < 0.0 for value in values):
+        raise SystemExit("Oracle cost weights must be >= 0.")
+    return values
+
+
+def _oracle_action_retentions(args: argparse.Namespace) -> list[float]:
+    values = _parse_float_list(
+        args.oracle_action_retentions,
+        label="Oracle action retention",
+    )
+    if any(value <= 0.0 or value >= 1.0 for value in values):
+        raise SystemExit("Oracle action retentions must be within (0, 1).")
+    return values
+
+
+def _oracle_s_to_idx(oracle: Any, s: torch.Tensor) -> torch.Tensor:
+    log_s = torch.log(torch.clamp(s, oracle.bounds.s_min, oracle.bounds.s_max))
+    ratio = (log_s - oracle.log_s_min) / (oracle.log_s_max - oracle.log_s_min)
+    return torch.clamp(
+        torch.round(ratio * float(oracle.s_grid.numel() - 1)),
+        min=0,
+        max=oracle.s_grid.numel() - 1,
+    ).to(torch.int64)
+
+
+def _oracle_d_to_idx(oracle: Any, d: torch.Tensor) -> torch.Tensor:
+    ratio = torch.clamp(d, oracle.bounds.d_min, oracle.bounds.d_max)
+    ratio = (ratio - oracle.bounds.d_min) / (oracle.bounds.d_max - oracle.bounds.d_min)
+    return torch.clamp(
+        torch.round(ratio * float(oracle.d_grid.numel() - 1)),
+        min=0,
+        max=oracle.d_grid.numel() - 1,
+    ).to(torch.int64)
+
+
+@torch.inference_mode()
+def _evaluate_fsrs6_oracle_policy(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    oracle: Any,
+    policy: torch.Tensor,
+    action_retentions: Sequence[float],
+    cost_weight: float,
+    seed: int,
+) -> Any:
+    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=args.particles,
+        cost_weights=[cost_weight],
+        action_retentions=action_retentions,
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+    )
+    policy = policy.to(device=device)
+    while not bool(env.done.all().item()):
+        remaining = torch.clamp((env.days - 1) - env.day, min=0, max=oracle.horizon)
+        s_idx = _oracle_s_to_idx(oracle, env.s)
+        d_idx = _oracle_d_to_idx(oracle, env.d)
+        action = policy[remaining, s_idx, d_idx]
+        env.step(action)
+    return env.metrics()
+
+
+def _run_fsrs6_oracle(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name != "fsrs6_default":
+        raise SystemExit("fsrs6_oracle currently supports only --env fsrs6_default.")
+    if args.engine != "vectorized":
+        raise SystemExit("fsrs6_oracle is supported only with --engine vectorized.")
+    if args.fuzz:
+        raise SystemExit("fsrs6_oracle does not support --fuzz.")
+    if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
+        raise SystemExit("--oracle grid sizes must be >= 8.")
+
+    from experiments.fsrs_oracle_frontier import FSRS6GridOracle
+
+    device = (
+        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
+    )
+    cost_weights = _oracle_cost_weights(args)
+    action_retentions = _oracle_action_retentions(args)
+    oracle = FSRS6GridOracle(
+        days=args.days,
+        action_retentions=action_retentions,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+    )
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight in cost_weights:
+        start = time.perf_counter()
+        solution = oracle.solve(
+            cost_weight,
+            progress=not args.no_progress,
+            capture_policy=True,
+        )
+        if solution.policy is None:
+            raise RuntimeError("Oracle policy table was not captured.")
+        metrics = _evaluate_fsrs6_oracle_policy(
+            args=args,
+            device=device,
+            oracle=oracle,
+            policy=solution.policy,
+            action_retentions=action_retentions,
+            cost_weight=cost_weight,
+            seed=seed + 50_000 + int(round(cost_weight * 10.0)),
+        )
+        runtime_s = time.perf_counter() - start
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=FSRS6_ORACLE_SCHEDULER,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
 def _run_uvfa_ppo(
     args: argparse.Namespace,
     *,
@@ -1377,6 +1544,16 @@ def main() -> None:
 
         for scheduler_name, scheduler_spec, fixed_interval in scheduler_specs:
             if scheduler_name == "fixed" and scheduler_spec in batched_fixed_specs:
+                continue
+            if scheduler_name == FSRS6_ORACLE_SCHEDULER:
+                rows.extend(
+                    _run_fsrs6_oracle(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
                 continue
             if scheduler_name == UVFA_PPO_SCHEDULER:
                 rows.extend(
