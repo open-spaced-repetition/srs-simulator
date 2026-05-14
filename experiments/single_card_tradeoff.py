@@ -75,6 +75,8 @@ DEFAULT_TARGET_RETENTIONS = [
     0.98,
     0.99,
 ]
+DEFAULT_UVFA_PPO_POLICY = Path("logs/single_card_tradeoff/uvfa_ppo_policy.pt")
+UVFA_PPO_SCHEDULER = "uvfa_ppo"
 
 
 def parse_args() -> argparse.Namespace:
@@ -135,6 +137,23 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated fixed intervals to run when --sched contains plain "
             "'fixed'. Defaults to 8,16,32,64,128,256,512. "
             "Ignored for fixed@<days> specs."
+        ),
+    )
+    parser.add_argument(
+        "--uvfa-ppo-policy",
+        type=Path,
+        default=DEFAULT_UVFA_PPO_POLICY,
+        help=(
+            "Path to a UVFA PPO policy checkpoint when --sched contains uvfa_ppo. "
+            "Create one with experiments/uvfa_ppo_single_card.py."
+        ),
+    )
+    parser.add_argument(
+        "--uvfa-ppo-cost-weights",
+        default=None,
+        help=(
+            "Comma-separated scalarization weights for uvfa_ppo. Defaults to "
+            "the cost_weights saved in --uvfa-ppo-policy."
         ),
     )
     parser.add_argument(
@@ -226,6 +245,21 @@ def _fixed_intervals(value: str | None) -> list[float]:
     return intervals
 
 
+def _parse_float_list(value: str, *, label: str) -> list[float]:
+    values: list[float] = []
+    for item in parse_csv(value):
+        try:
+            parsed = float(item)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid {label} '{item}'.") from exc
+        if not math.isfinite(parsed):
+            raise SystemExit(f"{label} values must be finite.")
+        values.append(parsed)
+    if not values:
+        raise SystemExit(f"{label} must include at least one value.")
+    return values
+
+
 def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
     specs: list[tuple[str, str, float | None]] = []
     for raw in parse_csv(args.sched) or ["fsrs6_default"]:
@@ -233,7 +267,7 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             name, fixed_interval, raw_spec = parse_scheduler_spec(raw)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        if name not in simulate_cli.SCHEDULER_FACTORIES:
+        if name not in simulate_cli.SCHEDULER_FACTORIES and name != UVFA_PPO_SCHEDULER:
             raise SystemExit(f"Unknown scheduler '{name}'.")
         if name == "fixed" and fixed_interval is None:
             for interval in _fixed_intervals(args.fixed_intervals):
@@ -329,6 +363,7 @@ def _row_from_stats(
         "scheduler_spec": scheduler_spec,
         "desired_retention": desired_retention,
         "fixed_interval": fixed_interval,
+        "goal_cost_weight": None,
         "seed": seed,
         "days": args.days,
         "particles": args.particles,
@@ -737,6 +772,164 @@ def _run_fixed_batch(
     ]
 
 
+def _load_uvfa_ppo_policy(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], list[float], float]:
+    if not args.uvfa_ppo_policy.exists():
+        raise SystemExit(
+            "UVFA PPO policy not found: "
+            f"{args.uvfa_ppo_policy}. Train one with "
+            "`uv run experiments/uvfa_ppo_single_card.py --model-out "
+            f"{args.uvfa_ppo_policy}` or pass --uvfa-ppo-policy."
+        )
+
+    from experiments.uvfa_ppo_single_card import PolicyValueNet
+
+    checkpoint = torch.load(args.uvfa_ppo_policy, map_location=device)
+    if not isinstance(checkpoint, dict):
+        raise SystemExit(f"Invalid UVFA PPO checkpoint: {args.uvfa_ppo_policy}")
+    raw_actions = checkpoint.get("action_retentions")
+    if not isinstance(raw_actions, list) or not raw_actions:
+        raise SystemExit("UVFA PPO checkpoint is missing action_retentions.")
+    raw_cost_weights = checkpoint.get("cost_weights")
+    if not isinstance(raw_cost_weights, list) or not raw_cost_weights:
+        raise SystemExit("UVFA PPO checkpoint is missing cost_weights.")
+    action_retentions = [float(value) for value in raw_actions]
+    policy_cost_weights = [float(value) for value in raw_cost_weights]
+    obs_dim = int(checkpoint.get("obs_dim", 7))
+    hidden_size = int(checkpoint.get("hidden_size", 96))
+    model = PolicyValueNet(
+        obs_dim=obs_dim,
+        action_count=len(action_retentions),
+        hidden_size=hidden_size,
+    ).to(device)
+    state_dict = checkpoint.get("model_state_dict")
+    if not isinstance(state_dict, dict):
+        raise SystemExit("UVFA PPO checkpoint is missing model_state_dict.")
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model, action_retentions, policy_cost_weights, max(policy_cost_weights)
+
+
+def _uvfa_ppo_cost_weights(
+    args: argparse.Namespace,
+    *,
+    policy_cost_weights: Sequence[float],
+) -> list[float]:
+    raw = getattr(args, "uvfa_ppo_cost_weights", None)
+    if raw is None or not raw.strip():
+        return [float(value) for value in policy_cost_weights]
+    values = _parse_float_list(raw, label="UVFA PPO cost weight")
+    if any(value < 0.0 for value in values):
+        raise SystemExit("UVFA PPO cost weights must be >= 0.")
+    return values
+
+
+def _row_from_uvfa_metrics(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    goal_cost_weight: float,
+    seed: int,
+    metrics: Any,
+    runtime_s: float,
+) -> dict[str, Any]:
+    deck_scale = float(args.deck_scale)
+    total_reviews = metrics.card_total_reviews * args.particles
+    total_lapses = metrics.card_total_lapses * args.particles
+    total_cost_seconds = metrics.card_total_cost_seconds * args.particles
+    return {
+        "environment": environment_name,
+        "scheduler": UVFA_PPO_SCHEDULER,
+        "scheduler_spec": scheduler_spec,
+        "desired_retention": None,
+        "fixed_interval": None,
+        "goal_cost_weight": goal_cost_weight,
+        "seed": seed,
+        "days": args.days,
+        "particles": args.particles,
+        "deck_scale": args.deck_scale,
+        "card_expected_retrievability": metrics.card_expected_retrievability,
+        "card_minutes_per_day": metrics.card_minutes_per_day,
+        "card_reviews_per_day": metrics.card_reviews_per_day,
+        "card_total_reviews": metrics.card_total_reviews,
+        "card_total_lapses": metrics.card_total_lapses,
+        "card_total_cost_seconds": metrics.card_total_cost_seconds,
+        "card_final_projected_retrievability": None,
+        "observed_retention": metrics.observed_retention,
+        "deck_expected_memorized": metrics.card_expected_retrievability * deck_scale,
+        "deck_minutes_per_day": metrics.card_minutes_per_day * deck_scale,
+        "deck_reviews_per_day": metrics.card_reviews_per_day * deck_scale,
+        "total_reviews": total_reviews,
+        "total_lapses": total_lapses,
+        "total_cost_seconds": total_cost_seconds,
+        "runtime_s": runtime_s,
+        "engine": UVFA_PPO_SCHEDULER,
+        "fuzz": False,
+    }
+
+
+def _run_uvfa_ppo(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name != "fsrs6_default":
+        raise SystemExit("uvfa_ppo currently supports only --env fsrs6_default.")
+    if args.engine != "vectorized":
+        raise SystemExit("uvfa_ppo is supported only with --engine vectorized.")
+    if args.fuzz:
+        raise SystemExit("uvfa_ppo does not support --fuzz.")
+
+    from experiments.uvfa_ppo_single_card import evaluate_policy
+
+    device = (
+        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
+    )
+    model, action_retentions, policy_cost_weights, goal_norm_max = (
+        _load_uvfa_ppo_policy(
+            args,
+            device=device,
+        )
+    )
+    cost_weights = _uvfa_ppo_cost_weights(
+        args,
+        policy_cost_weights=policy_cost_weights,
+    )
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight in cost_weights:
+        start = time.perf_counter()
+        metrics = evaluate_policy(
+            model,
+            args=args,
+            device=device,
+            cost_weight=cost_weight,
+            action_retentions=action_retentions,
+            particles=args.particles,
+            seed=seed + 30_000 + int(round(cost_weight * 10.0)),
+            goal_norm_max=goal_norm_max,
+        )
+        runtime_s = time.perf_counter() - start
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -745,6 +938,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "scheduler_spec",
         "desired_retention",
         "fixed_interval",
+        "goal_cost_weight",
         "seed",
         "days",
         "particles",
@@ -775,6 +969,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _point_label(row: dict[str, Any]) -> str:
+    goal_cost_weight = row.get("goal_cost_weight")
+    if goal_cost_weight is not None and goal_cost_weight != "":
+        return f"w={format_float(float(goal_cost_weight))}"
     desired_retention = row["desired_retention"]
     if desired_retention is not None:
         return format_float(float(desired_retention))
@@ -820,6 +1017,9 @@ def _plot_group_key(row: dict[str, Any]) -> tuple[str, str]:
 
 
 def _plot_sort_key(row: dict[str, Any]) -> tuple[float, float]:
+    goal_cost_weight = row.get("goal_cost_weight")
+    if goal_cost_weight is not None and goal_cost_weight != "":
+        return 0.5, float(goal_cost_weight)
     fixed_interval = row["fixed_interval"]
     if fixed_interval is not None:
         return 1.0, float(fixed_interval)
@@ -990,6 +1190,16 @@ def main() -> None:
 
         for scheduler_name, scheduler_spec, fixed_interval in scheduler_specs:
             if scheduler_name == "fixed" and scheduler_spec in batched_fixed_specs:
+                continue
+            if scheduler_name == UVFA_PPO_SCHEDULER:
+                rows.extend(
+                    _run_uvfa_ppo(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
                 continue
             desired_values: Sequence[float | None]
             if scheduler_uses_desired_retention(scheduler_name):
