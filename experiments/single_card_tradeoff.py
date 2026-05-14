@@ -299,11 +299,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--oracle-interval-distill-cost-weights",
-        default=None,
+        default=",".join(
+            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+        ),
         help=(
             "Comma-separated scalarization weights for "
-            "fsrs6_oracle_interval_distill. Defaults to the cost_weights saved "
-            "in --oracle-interval-distill-policy."
+            "fsrs6_oracle_interval_distill. Defaults to "
+            "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024. "
+            "Pass an empty string to use the cost_weights saved in "
+            "--oracle-interval-distill-policy."
         ),
     )
     parser.add_argument(
@@ -1219,7 +1223,9 @@ def _oracle_interval_distill_cost_weights(
     policy_cost_weights: Sequence[float],
 ) -> list[float]:
     raw = getattr(args, "oracle_interval_distill_cost_weights", None)
-    if raw is None or not raw.strip():
+    if raw is None:
+        return [float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS]
+    if not raw.strip():
         return [float(value) for value in policy_cost_weights]
     values = _parse_float_list(raw, label="FSRS6 oracle interval distill cost weight")
     if any(value < 0.0 for value in values):
