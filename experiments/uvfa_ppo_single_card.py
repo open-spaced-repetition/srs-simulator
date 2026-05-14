@@ -230,6 +230,7 @@ class FSRS6SingleCardBatch:
         exact_memory: bool,
         goal_norm_max: float | None = None,
         obs_mode: str = "basic",
+        max_interval_days: int | None = None,
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -239,8 +240,8 @@ class FSRS6SingleCardBatch:
             raise ValueError("cost weights must be >= 0.")
         if any(retention <= 0.0 or retention >= 1.0 for retention in action_retentions):
             raise ValueError("action retentions must be within (0, 1).")
-        if obs_mode not in {"basic", "rich"}:
-            raise ValueError("obs_mode must be 'basic' or 'rich'.")
+        if obs_mode not in {"basic", "rich", "belief"}:
+            raise ValueError("obs_mode must be 'basic', 'rich', or 'belief'.")
 
         self.days = int(days)
         self.env_count = int(env_count)
@@ -248,6 +249,11 @@ class FSRS6SingleCardBatch:
         self.dtype = dtype
         self.exact_memory = exact_memory
         self.obs_mode = obs_mode
+        self.max_interval_days = (
+            int(max_interval_days) if max_interval_days is not None else self.days * 4
+        )
+        if self.max_interval_days < 1:
+            raise ValueError("max_interval_days must be >= 1.")
         self.bounds = Bounds()
         self.generator = torch.Generator(device=device)
         self.generator.manual_seed(seed)
@@ -307,7 +313,11 @@ class FSRS6SingleCardBatch:
 
     @property
     def obs_dim(self) -> int:
-        return 7 if self.obs_mode == "basic" else 13
+        if self.obs_mode == "basic":
+            return 7
+        if self.obs_mode == "rich":
+            return 13
+        return 10
 
     @property
     def action_count(self) -> int:
@@ -388,6 +398,7 @@ class FSRS6SingleCardBatch:
         goal_norm = torch.log1p(self.goal_weight) / math.log1p(max_goal)
         goal_linear = self.goal_weight / max_goal
         pending_norm = self.pending_cost_seconds / 60.0
+        review_count_norm = self.total_reviews.to(dtype=self.dtype) / float(self.days)
         if self.obs_mode == "basic":
             return torch.stack(
                 [
@@ -403,6 +414,23 @@ class FSRS6SingleCardBatch:
             )
 
         rating = self.last_rating.to(dtype=self.dtype)
+        if self.obs_mode == "belief":
+            return torch.stack(
+                [
+                    day_norm,
+                    remaining_norm,
+                    log_remaining_norm,
+                    interval_norm,
+                    review_count_norm,
+                    (rating == 1.0).to(dtype=self.dtype),
+                    (rating == 2.0).to(dtype=self.dtype),
+                    (rating == 3.0).to(dtype=self.dtype),
+                    (rating == 4.0).to(dtype=self.dtype),
+                    pending_norm,
+                ],
+                dim=1,
+            )
+
         return torch.stack(
             [
                 s_norm,
@@ -425,15 +453,35 @@ class FSRS6SingleCardBatch:
     def step(
         self, action: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
         active = (~self.done).nonzero(as_tuple=False).squeeze(1)
         if active.numel() == 0:
+            reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
             return self.obs(), reward, self.done.clone()
 
         active_action = action.index_select(0, active).to(torch.int64)
         intervals = self._intervals_for_action(
             self.s.index_select(0, active), active_action
         )
+        return self._step_active_intervals(active, intervals)
+
+    def step_log_interval(
+        self, log_interval: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        active = (~self.done).nonzero(as_tuple=False).squeeze(1)
+        if active.numel() == 0:
+            reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
+            return self.obs(), reward, self.done.clone()
+
+        active_log_interval = log_interval.index_select(0, active).to(dtype=self.dtype)
+        intervals = self._intervals_for_log_interval(active_log_interval)
+        return self._step_active_intervals(active, intervals)
+
+    def _step_active_intervals(
+        self,
+        active: torch.Tensor,
+        intervals: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
         remaining = (self.days - 1) - self.day.index_select(0, active)
         memorized_days = torch.minimum(intervals, remaining)
         memorized = self._memorized_sum(self.s.index_select(0, active), memorized_days)
@@ -537,6 +585,18 @@ class FSRS6SingleCardBatch:
         retention_factor = torch.pow(retention_tensor, 1.0 / self.decay) - 1.0
         interval = s / self.factor * retention_factor
         return torch.clamp(torch.round(interval), min=1.0).to(torch.int64)
+
+    def _intervals_for_log_interval(self, log_interval: torch.Tensor) -> torch.Tensor:
+        clipped = torch.clamp(
+            log_interval,
+            min=0.0,
+            max=math.log(float(self.max_interval_days)),
+        )
+        return torch.clamp(
+            torch.round(torch.exp(clipped)),
+            min=1.0,
+            max=float(self.max_interval_days),
+        ).to(torch.int64)
 
     def _memorized_sum(self, s: torch.Tensor, days: torch.Tensor) -> torch.Tensor:
         if self.exact_memory:

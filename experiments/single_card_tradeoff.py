@@ -56,7 +56,25 @@ from simulator.vectorized import simulate as simulate_vectorized
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 
-DEFAULT_FIXED_INTERVALS = [8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0]
+DEFAULT_FIXED_INTERVALS = [
+    0,
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    48,
+    64,
+    96,
+    128,
+    192,
+    256,
+    320,
+    384,
+    512,
+    1024,
+]
 DEFAULT_TARGET_RETENTIONS = [
     0.10,
     0.20,
@@ -73,10 +91,13 @@ DEFAULT_TARGET_RETENTIONS = [
     0.93,
     0.96,
     0.98,
-    0.99,
 ]
 DEFAULT_UVFA_PPO_POLICY = Path("logs/single_card_tradeoff/uvfa_ppo_policy.pt")
+DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
+    "logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"
+)
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
+UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,6 +175,24 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Comma-separated scalarization weights for uvfa_ppo. Defaults to "
             "the cost_weights saved in --uvfa-ppo-policy."
+        ),
+    )
+    parser.add_argument(
+        "--uvfa-ppo-rnn-interval-policy",
+        type=Path,
+        default=DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY,
+        help=(
+            "Path to a recurrent UVFA PPO log-interval checkpoint when --sched "
+            "contains uvfa_ppo_rnn_interval. Create one with "
+            "experiments/uvfa_ppo_rnn_interval.py."
+        ),
+    )
+    parser.add_argument(
+        "--uvfa-ppo-rnn-interval-cost-weights",
+        default=None,
+        help=(
+            "Comma-separated scalarization weights for uvfa_ppo_rnn_interval. "
+            "Defaults to the cost_weights saved in --uvfa-ppo-rnn-interval-policy."
         ),
     )
     parser.add_argument(
@@ -267,7 +306,11 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             name, fixed_interval, raw_spec = parse_scheduler_spec(raw)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        if name not in simulate_cli.SCHEDULER_FACTORIES and name != UVFA_PPO_SCHEDULER:
+        custom_schedulers = {UVFA_PPO_SCHEDULER, UVFA_PPO_RNN_INTERVAL_SCHEDULER}
+        if (
+            name not in simulate_cli.SCHEDULER_FACTORIES
+            and name not in custom_schedulers
+        ):
             raise SystemExit(f"Unknown scheduler '{name}'.")
         if name == "fixed" and fixed_interval is None:
             for interval in _fixed_intervals(args.fixed_intervals):
@@ -838,10 +881,73 @@ def _uvfa_ppo_cost_weights(
     return values
 
 
+def _load_uvfa_ppo_rnn_interval_policy(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], float, int | None]:
+    if not args.uvfa_ppo_rnn_interval_policy.exists():
+        raise SystemExit(
+            "Recurrent UVFA PPO interval policy not found: "
+            f"{args.uvfa_ppo_rnn_interval_policy}. Train one with "
+            "`uv run experiments/uvfa_ppo_rnn_interval.py --model-out "
+            f"{args.uvfa_ppo_rnn_interval_policy}` or pass "
+            "--uvfa-ppo-rnn-interval-policy."
+        )
+
+    from experiments.uvfa_ppo_rnn_interval import RecurrentIntervalPolicyValueNet
+
+    checkpoint = torch.load(args.uvfa_ppo_rnn_interval_policy, map_location=device)
+    if not isinstance(checkpoint, dict):
+        raise SystemExit(
+            f"Invalid recurrent UVFA PPO checkpoint: "
+            f"{args.uvfa_ppo_rnn_interval_policy}"
+        )
+    raw_cost_weights = checkpoint.get("cost_weights")
+    if not isinstance(raw_cost_weights, list) or not raw_cost_weights:
+        raise SystemExit("Recurrent UVFA PPO checkpoint is missing cost_weights.")
+    policy_cost_weights = [float(value) for value in raw_cost_weights]
+    obs_dim = int(checkpoint.get("obs_dim", 10))
+    hidden_size = int(checkpoint.get("hidden_size", 128))
+    initial_mean_interval = float(checkpoint.get("initial_mean_interval", 32.0))
+    initial_log_std = float(checkpoint.get("initial_log_std", 0.7))
+    max_interval_days_raw = checkpoint.get("max_interval_days")
+    max_interval_days = (
+        int(max_interval_days_raw) if max_interval_days_raw is not None else None
+    )
+    model = RecurrentIntervalPolicyValueNet(
+        obs_dim=obs_dim,
+        hidden_size=hidden_size,
+        initial_mean_interval=initial_mean_interval,
+        initial_log_std=initial_log_std,
+    ).to(device)
+    state_dict = checkpoint.get("model_state_dict")
+    if not isinstance(state_dict, dict):
+        raise SystemExit("Recurrent UVFA PPO checkpoint is missing model_state_dict.")
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model, policy_cost_weights, max(policy_cost_weights), max_interval_days
+
+
+def _uvfa_ppo_rnn_interval_cost_weights(
+    args: argparse.Namespace,
+    *,
+    policy_cost_weights: Sequence[float],
+) -> list[float]:
+    raw = getattr(args, "uvfa_ppo_rnn_interval_cost_weights", None)
+    if raw is None or not raw.strip():
+        return [float(value) for value in policy_cost_weights]
+    values = _parse_float_list(raw, label="Recurrent UVFA PPO cost weight")
+    if any(value < 0.0 for value in values):
+        raise SystemExit("Recurrent UVFA PPO cost weights must be >= 0.")
+    return values
+
+
 def _row_from_uvfa_metrics(
     args: argparse.Namespace,
     *,
     environment_name: str,
+    scheduler_name: str,
     scheduler_spec: str,
     goal_cost_weight: float,
     seed: int,
@@ -854,7 +960,7 @@ def _row_from_uvfa_metrics(
     total_cost_seconds = metrics.card_total_cost_seconds * args.particles
     return {
         "environment": environment_name,
-        "scheduler": UVFA_PPO_SCHEDULER,
+        "scheduler": scheduler_name,
         "scheduler_spec": scheduler_spec,
         "desired_retention": None,
         "fixed_interval": None,
@@ -878,7 +984,7 @@ def _row_from_uvfa_metrics(
         "total_lapses": total_lapses,
         "total_cost_seconds": total_cost_seconds,
         "runtime_s": runtime_s,
-        "engine": UVFA_PPO_SCHEDULER,
+        "engine": scheduler_name,
         "fuzz": False,
     }
 
@@ -932,6 +1038,73 @@ def _run_uvfa_ppo(
             _row_from_uvfa_metrics(
                 args,
                 environment_name=environment_name,
+                scheduler_name=UVFA_PPO_SCHEDULER,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
+def _run_uvfa_ppo_rnn_interval(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name != "fsrs6_default":
+        raise SystemExit(
+            "uvfa_ppo_rnn_interval currently supports only --env fsrs6_default."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            "uvfa_ppo_rnn_interval is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit("uvfa_ppo_rnn_interval does not support --fuzz.")
+
+    from experiments.uvfa_ppo_rnn_interval import evaluate_policy
+
+    device = (
+        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
+    )
+    model, policy_cost_weights, goal_norm_max, max_interval_days = (
+        _load_uvfa_ppo_rnn_interval_policy(
+            args,
+            device=device,
+        )
+    )
+    cost_weights = _uvfa_ppo_rnn_interval_cost_weights(
+        args,
+        policy_cost_weights=policy_cost_weights,
+    )
+    eval_args = argparse.Namespace(
+        days=args.days,
+        max_interval_days=max_interval_days,
+    )
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight in cost_weights:
+        start = time.perf_counter()
+        metrics = evaluate_policy(
+            model,
+            args=eval_args,
+            device=device,
+            cost_weight=cost_weight,
+            particles=args.particles,
+            seed=seed + 40_000 + int(round(cost_weight * 10.0)),
+            goal_norm_max=goal_norm_max,
+        )
+        runtime_s = time.perf_counter() - start
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=UVFA_PPO_RNN_INTERVAL_SCHEDULER,
                 scheduler_spec=scheduler_spec,
                 goal_cost_weight=cost_weight,
                 seed=seed,
@@ -1206,6 +1379,16 @@ def main() -> None:
             if scheduler_name == UVFA_PPO_SCHEDULER:
                 rows.extend(
                     _run_uvfa_ppo(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
+                continue
+            if scheduler_name == UVFA_PPO_RNN_INTERVAL_SCHEDULER:
+                rows.extend(
+                    _run_uvfa_ppo_rnn_interval(
                         args,
                         environment_name=environment,
                         scheduler_spec=scheduler_spec,
