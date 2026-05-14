@@ -21,14 +21,17 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff import DEFAULT_TARGET_RETENTIONS
+from experiments.single_card_config import (
+    add_single_card_fsrs6_config_args,
+    load_single_card_fsrs6_config,
+    SingleCardFSRS6Config,
+)
 from experiments.uvfa_ppo_single_card import (
     DEFAULT_COST_WEIGHTS,
-    DEFAULT_HIDDEN_SIZE,
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_NETWORK,
     DEFAULT_NETWORK_DEPTH,
-    DEFAULT_OBS_MODE,
     DEFAULT_ORACLE_D_GRID_SIZE,
     DEFAULT_ORACLE_S_GRID_SIZE,
     DEFAULT_TRAIN_ENVS,
@@ -36,6 +39,7 @@ from experiments.uvfa_ppo_single_card import (
     OracleGridGuide,
     PolicyValueNet,
     evaluate_policy,
+    fsrs_config_kwargs,
     parse_csv_floats,
     row_from_metrics,
     scalar_objective,
@@ -49,6 +53,8 @@ DEFAULT_STEPS_PER_EPOCH = 64
 DEFAULT_EVAL_PARTICLES = 10_000
 DEFAULT_AGREEMENT_ENVS = 4096
 DEFAULT_AGREEMENT_STEPS = 256
+DEFAULT_DISTILL_OBS_MODE = "oracle"
+DEFAULT_DISTILL_HIDDEN_SIZE = 96
 
 
 @dataclass(frozen=True)
@@ -66,6 +72,7 @@ def parse_args() -> argparse.Namespace:
         description="Distill the finite-horizon FSRS-6 grid oracle into a UVFA policy.",
         allow_abbrev=False,
     )
+    add_single_card_fsrs6_config_args(parser)
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--deck-scale", type=int, default=DEFAULT_DECK_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -87,7 +94,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--obs-mode",
         choices=["basic", "rich", "belief", "oracle"],
-        default=DEFAULT_OBS_MODE,
+        default=DEFAULT_DISTILL_OBS_MODE,
         help=(
             "Observation features for the distilled policy. 'oracle' is the 4D "
             "teacher-state input: stability, difficulty, remaining horizon, and goal."
@@ -100,7 +107,7 @@ def parse_args() -> argparse.Namespace:
         help="Policy/value architecture.",
     )
     parser.add_argument("--network-depth", type=int, default=DEFAULT_NETWORK_DEPTH)
-    parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
+    parser.add_argument("--hidden-size", type=int, default=DEFAULT_DISTILL_HIDDEN_SIZE)
     parser.add_argument(
         "--oracle-s-grid-size",
         type=int,
@@ -131,6 +138,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_torch_device(raw: str | None) -> torch.device:
+    if raw:
+        return torch.device(raw)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
 def _build_env(
     args: argparse.Namespace,
     *,
@@ -139,6 +154,7 @@ def _build_env(
     action_retentions: Sequence[float],
     env_count: int,
     seed: int,
+    fsrs_config: SingleCardFSRS6Config | None,
 ) -> FSRS6SingleCardBatch:
     return FSRS6SingleCardBatch(
         days=args.days,
@@ -151,6 +167,7 @@ def _build_env(
         exact_memory=False,
         goal_norm_max=max(cost_weights),
         obs_mode=args.obs_mode,
+        **fsrs_config_kwargs(fsrs_config),
     )
 
 
@@ -160,6 +177,7 @@ def train_distilled_policy(
     device: torch.device,
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    fsrs_config: SingleCardFSRS6Config | None,
 ) -> tuple[PolicyValueNet, OracleGridGuide, DistillStats]:
     torch.manual_seed(args.seed)
     start = time.perf_counter()
@@ -170,6 +188,7 @@ def train_distilled_policy(
         action_retentions=action_retentions,
         env_count=args.train_envs,
         seed=args.seed,
+        fsrs_config=fsrs_config,
     )
     model = PolicyValueNet(
         env.obs_dim,
@@ -187,6 +206,7 @@ def train_distilled_policy(
         d_grid_size=args.oracle_d_grid_size,
         device=device,
         progress=not args.no_progress,
+        fsrs_config=fsrs_config,
     )
 
     obs = env.obs()
@@ -251,6 +271,7 @@ def estimate_teacher_action_agreement(
     device: torch.device,
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    fsrs_config: SingleCardFSRS6Config | None,
 ) -> float:
     if args.agreement_steps <= 0:
         return 0.0
@@ -261,6 +282,7 @@ def estimate_teacher_action_agreement(
         action_retentions=action_retentions,
         env_count=args.agreement_envs,
         seed=args.seed + 60_000,
+        fsrs_config=fsrs_config,
     )
     correct = 0
     total = 0
@@ -289,6 +311,7 @@ def save_model(
     action_retentions: Sequence[float],
     stats: DistillStats,
     eval_teacher_action_agreement: float,
+    fsrs_config: SingleCardFSRS6Config,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -306,6 +329,7 @@ def save_model(
             "guide_policy": "oracle",
             "oracle_s_grid_size": args.oracle_s_grid_size,
             "oracle_d_grid_size": args.oracle_d_grid_size,
+            **fsrs_config.checkpoint_payload(),
             "distill_epochs": stats.epochs,
             "distill_steps_per_epoch": stats.steps_per_epoch,
             "train_updates": 0,
@@ -340,9 +364,7 @@ def main() -> None:
     if args.agreement_steps < 0:
         raise SystemExit("--agreement-steps must be >= 0.")
 
-    device = (
-        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
-    )
+    device = resolve_torch_device(args.torch_device)
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
     if any(value < 0.0 for value in cost_weights):
         raise SystemExit("--cost-weights must be >= 0.")
@@ -350,12 +372,14 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
+    fsrs_config = load_single_card_fsrs6_config(args)
 
     model, guide, stats = train_distilled_policy(
         args,
         device=device,
         cost_weights=cost_weights,
         action_retentions=action_retentions,
+        fsrs_config=fsrs_config,
     )
     agreement = estimate_teacher_action_agreement(
         model,
@@ -364,6 +388,7 @@ def main() -> None:
         device=device,
         cost_weights=cost_weights,
         action_retentions=action_retentions,
+        fsrs_config=fsrs_config,
     )
     save_model(
         args.model_out,
@@ -373,6 +398,7 @@ def main() -> None:
         action_retentions=action_retentions,
         stats=stats,
         eval_teacher_action_agreement=agreement,
+        fsrs_config=fsrs_config,
     )
 
     rows = []
@@ -388,6 +414,7 @@ def main() -> None:
             seed=args.seed + 70_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=max(cost_weights),
             obs_mode=args.obs_mode,
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         rows.append(
@@ -410,6 +437,7 @@ def main() -> None:
     print(
         f"Distill: epochs={stats.epochs} steps_per_epoch={stats.steps_per_epoch} "
         f"transitions={stats.transitions} runtime_s={stats.runtime_s:.2f} "
+        f"device={device} "
         f"final_ce={stats.final_loss:.5f} train_agreement="
         f"{stats.final_action_agreement:.4f} eval_agreement={agreement:.4f}"
     )

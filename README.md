@@ -119,7 +119,7 @@ uv run experiments/fsrs_oracle_distill.py --days 1825 --eval-particles 10000 --d
 uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_distill,uvfa_ppo --oracle-distill-policy logs/single_card_tradeoff/fsrs6_oracle_distill_policy.pt --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
-Use `--obs-mode oracle` with `fsrs_oracle_distill.py` to train the 4-feature distilled policy over only stability, difficulty, remaining horizon, and goal cost weight.
+`fsrs_oracle_distill.py` defaults to the 4-feature oracle observation (`stability`, `difficulty`, remaining horizon, and goal cost weight), hidden size 96, and CUDA when available. Pass `--obs-mode rich` to train on the larger rollout observation instead. The script also accepts the same `--env fsrs6 --user-id <id>` and `--button-usage` options as the single-card tradeoff runner.
 
 Search UVFA PPO model-scale hyperparameters:
 
@@ -153,6 +153,8 @@ Train the 4D log-interval distillation policy, then include it in the same sweep
 uv run experiments/fsrs_oracle_interval_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
 uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval_distill --oracle-interval-distill-policy logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
 ```
+
+The interval distillation model keeps the same 4D scalar-output network, but its default training loss weights underpredicted intervals more heavily for high cost weights, mixes in student-rollout states after warmup, and snaps predicted intervals near the remaining horizon to the terminal no-more-review action. These are fixed training/inference rules and do not add learned parameters.
 
 By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
 

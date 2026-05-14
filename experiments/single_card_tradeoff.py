@@ -1161,7 +1161,7 @@ def _load_fsrs6_oracle_interval_distill_policy(
     args: argparse.Namespace,
     *,
     device: torch.device,
-) -> tuple[Any, list[float], float]:
+) -> tuple[Any, list[float], float, float, float]:
     if not args.oracle_interval_distill_policy.exists():
         raise SystemExit(
             "FSRS6 oracle interval distill policy not found: "
@@ -1214,7 +1214,15 @@ def _load_fsrs6_oracle_interval_distill_policy(
         )
     model.load_state_dict(state_dict)
     model.eval()
-    return model, policy_cost_weights, max(policy_cost_weights)
+    log_interval_bias = float(checkpoint.get("log_interval_bias", 0.0))
+    terminal_snap_ratio = float(checkpoint.get("terminal_snap_ratio", 0.0))
+    return (
+        model,
+        policy_cost_weights,
+        max(policy_cost_weights),
+        log_interval_bias,
+        terminal_snap_ratio,
+    )
 
 
 def _oracle_interval_distill_cost_weights(
@@ -1675,9 +1683,10 @@ def _run_fsrs6_oracle_distill(
     scheduler_spec: str,
     seed: int,
 ) -> list[dict[str, Any]]:
-    if environment_name != "fsrs6_default":
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise SystemExit(
-            "fsrs6_oracle_distill currently supports only --env fsrs6_default."
+            "fsrs6_oracle_distill currently supports only "
+            "--env fsrs6_default or --env fsrs6."
         )
     if args.engine != "vectorized":
         raise SystemExit(
@@ -1688,9 +1697,7 @@ def _run_fsrs6_oracle_distill(
 
     from experiments.uvfa_ppo_single_card import evaluate_policy
 
-    device = (
-        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
-    )
+    device = _resolve_torch_device(args, prefer_cuda=True)
     model, action_retentions, policy_cost_weights, goal_norm_max, obs_mode = (
         _load_fsrs6_oracle_distill_policy(
             args,
@@ -1701,6 +1708,7 @@ def _run_fsrs6_oracle_distill(
         args,
         policy_cost_weights=policy_cost_weights,
     )
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
     for cost_weight in cost_weights:
@@ -1715,6 +1723,7 @@ def _run_fsrs6_oracle_distill(
             seed=seed + 35_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=goal_norm_max,
             obs_mode=obs_mode,
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         rows.append(
@@ -1821,17 +1830,25 @@ def _run_fsrs6_oracle_interval_distill(
     from experiments.fsrs_oracle_interval_distill import evaluate_policy
 
     device = _resolve_torch_device(args, prefer_cuda=True)
-    model, policy_cost_weights, goal_norm_max = (
-        _load_fsrs6_oracle_interval_distill_policy(
-            args,
-            device=device,
-        )
+    (
+        model,
+        policy_cost_weights,
+        goal_norm_max,
+        log_interval_bias,
+        terminal_snap_ratio,
+    ) = _load_fsrs6_oracle_interval_distill_policy(
+        args,
+        device=device,
     )
     cost_weights = _oracle_interval_distill_cost_weights(
         args,
         policy_cost_weights=policy_cost_weights,
     )
-    eval_args = argparse.Namespace(days=args.days)
+    eval_args = argparse.Namespace(
+        days=args.days,
+        log_interval_bias=log_interval_bias,
+        terminal_snap_ratio=terminal_snap_ratio,
+    )
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []

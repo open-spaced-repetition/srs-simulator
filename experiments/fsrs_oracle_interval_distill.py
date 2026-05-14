@@ -41,6 +41,13 @@ from experiments.uvfa_ppo_single_card import (
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
 from simulator.scheduler_spec import format_float
 
+DEFAULT_UNDERPREDICTION_LOSS_WEIGHT = 2.0
+DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT = 4.0
+DEFAULT_STUDENT_ROLLOUT_PROB = 0.5
+DEFAULT_STUDENT_ROLLOUT_WARMUP_EPOCHS = 8
+DEFAULT_TERMINAL_SNAP_RATIO = 0.85
+DEFAULT_LOG_INTERVAL_BIAS = 0.0
+
 
 @dataclass(frozen=True)
 class DistillTrainStats:
@@ -78,6 +85,57 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--hidden-size", type=int, default=96)
+    parser.add_argument(
+        "--underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_UNDERPREDICTION_LOSS_WEIGHT,
+        help=(
+            "Extra SmoothL1 multiplier for log-interval underprediction, scaled "
+            "by normalized cost weight. This biases errors toward fewer extra reviews."
+        ),
+    )
+    parser.add_argument(
+        "--terminal-underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT,
+        help=(
+            "Extra multiplier when the teacher chose remaining+1 and the model "
+            "predicts a shorter interval."
+        ),
+    )
+    parser.add_argument(
+        "--student-rollout-prob",
+        type=float,
+        default=DEFAULT_STUDENT_ROLLOUT_PROB,
+        help=(
+            "Probability of stepping the training environment with the student's "
+            "rounded interval after warmup. The oracle still labels visited states."
+        ),
+    )
+    parser.add_argument(
+        "--student-rollout-warmup-epochs",
+        type=int,
+        default=DEFAULT_STUDENT_ROLLOUT_WARMUP_EPOCHS,
+        help="Teacher-forced warmup epochs before student-rollout sampling.",
+    )
+    parser.add_argument(
+        "--terminal-snap-ratio",
+        type=float,
+        default=DEFAULT_TERMINAL_SNAP_RATIO,
+        help=(
+            "When a rounded predicted interval is at least this fraction of the "
+            "remaining horizon, execute remaining+1 instead. Use 0 to disable."
+        ),
+    )
+    parser.add_argument(
+        "--log-interval-bias",
+        type=float,
+        default=DEFAULT_LOG_INTERVAL_BIAS,
+        help=(
+            "Inference-time additive log-interval bias scaled by normalized cost "
+            "weight. This is a fixed calibration, not a learned parameter."
+        ),
+    )
     parser.add_argument(
         "--network",
         choices=["mlp", "residual"],
@@ -232,6 +290,69 @@ def interval_oracle_labels(
     return labels
 
 
+def _goal_norm(env: FSRS6SingleCardBatch) -> torch.Tensor:
+    return torch.log1p(env.goal_weight) / math.log1p(max(1.0, env.max_goal_weight))
+
+
+def predicted_intervals(
+    *,
+    env: FSRS6SingleCardBatch,
+    log_interval: torch.Tensor,
+    log_interval_bias: float,
+    terminal_snap_ratio: float,
+) -> torch.Tensor:
+    adjusted = log_interval.to(dtype=env.dtype)
+    if log_interval_bias:
+        adjusted = adjusted + float(log_interval_bias) * _goal_norm(env)
+    clipped = torch.clamp(
+        adjusted,
+        min=0.0,
+        max=math.log(float(env.max_interval_days)),
+    )
+    intervals = torch.clamp(
+        torch.round(torch.exp(clipped)),
+        min=1.0,
+        max=float(env.max_interval_days),
+    ).to(torch.int64)
+    if terminal_snap_ratio > 0.0:
+        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
+        snap = intervals.to(dtype=env.dtype) >= (
+            remaining.to(dtype=env.dtype) * float(terminal_snap_ratio)
+        )
+        intervals = torch.where(snap, remaining + 1, intervals)
+    return intervals
+
+
+def interval_distill_loss(
+    *,
+    pred_log_interval: torch.Tensor,
+    target_log_interval: torch.Tensor,
+    labels: torch.Tensor,
+    env: FSRS6SingleCardBatch,
+    underprediction_loss_weight: float,
+    terminal_underprediction_loss_weight: float,
+) -> torch.Tensor:
+    abs_error = torch.abs(pred_log_interval - target_log_interval)
+    smooth_l1 = torch.where(
+        abs_error < 1.0,
+        0.5 * torch.square(abs_error),
+        abs_error - 0.5,
+    )
+    under = (pred_log_interval < target_log_interval).to(dtype=smooth_l1.dtype)
+    weights = torch.ones_like(smooth_l1)
+    if underprediction_loss_weight:
+        weights = weights + (
+            float(underprediction_loss_weight) * _goal_norm(env) * under
+        )
+    if terminal_underprediction_loss_weight:
+        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
+        terminal = (labels == (remaining + 1)).to(dtype=smooth_l1.dtype)
+        weights = weights + (
+            float(terminal_underprediction_loss_weight) * terminal * under
+        )
+    return torch.mean(smooth_l1 * weights)
+
+
 def train_model(
     args: argparse.Namespace,
     *,
@@ -280,7 +401,16 @@ def train_model(
             )
             target = torch.log(labels.to(dtype=dtype))
             pred = model(obs)
-            loss = nn.functional.smooth_l1_loss(pred, target)
+            loss = interval_distill_loss(
+                pred_log_interval=pred,
+                target_log_interval=target,
+                labels=labels,
+                env=env,
+                underprediction_loss_weight=args.underprediction_loss_weight,
+                terminal_underprediction_loss_weight=(
+                    args.terminal_underprediction_loss_weight
+                ),
+            )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
@@ -289,7 +419,35 @@ def train_model(
             losses.append(loss_value)
             epoch_loss += loss_value
             with torch.no_grad():
-                next_obs, _, done = env.step_intervals(labels)
+                rollout_prob = (
+                    args.student_rollout_prob
+                    if epoch >= args.student_rollout_warmup_epochs
+                    else 0.0
+                )
+                if rollout_prob > 0.0:
+                    student_log_interval = model(obs)
+                    student_intervals = predicted_intervals(
+                        env=env,
+                        log_interval=student_log_interval,
+                        log_interval_bias=args.log_interval_bias,
+                        terminal_snap_ratio=args.terminal_snap_ratio,
+                    )
+                    use_student = (
+                        torch.rand(
+                            (env.env_count,),
+                            device=device,
+                            generator=env.generator,
+                        )
+                        < rollout_prob
+                    )
+                    step_intervals = torch.where(
+                        use_student,
+                        student_intervals,
+                        labels,
+                    )
+                else:
+                    step_intervals = labels
+                next_obs, _, done = env.step_intervals(step_intervals)
                 if done.any():
                     env.reset_indices(done.nonzero(as_tuple=False).squeeze(1))
                     next_obs = env.obs()
@@ -374,16 +532,12 @@ def evaluate_interval_agreement(
         active_target = target_log.index_select(0, active)
         active_labels = labels.index_select(0, active)
         log_error = active_pred - active_target
-        clipped_pred = torch.clamp(
-            active_pred,
-            min=0.0,
-            max=math.log(float(env.max_interval_days)),
-        )
-        pred_interval = torch.clamp(
-            torch.round(torch.exp(clipped_pred)),
-            min=1.0,
-            max=float(env.max_interval_days),
-        ).to(torch.int64)
+        pred_interval = predicted_intervals(
+            env=env,
+            log_interval=pred_log,
+            log_interval_bias=args.log_interval_bias,
+            terminal_snap_ratio=args.terminal_snap_ratio,
+        ).index_select(0, active)
         count = float(active.numel())
         total_count += count
         total_loss += nn.functional.smooth_l1_loss(
@@ -440,7 +594,13 @@ def evaluate_policy(
     while not bool(env.done.all().item()):
         obs = env.obs().to(dtype=model_dtype)
         pred_log_interval = model(obs)
-        env.step_log_interval(pred_log_interval.to(dtype=env.dtype))
+        intervals = predicted_intervals(
+            env=env,
+            log_interval=pred_log_interval,
+            log_interval_bias=float(getattr(args, "log_interval_bias", 0.0)),
+            terminal_snap_ratio=float(getattr(args, "terminal_snap_ratio", 0.0)),
+        )
+        env.step_intervals(intervals)
     return env.metrics()
 
 
@@ -547,6 +707,14 @@ def save_model(
             "oracle_s_grid_size": args.oracle_s_grid_size,
             "oracle_d_grid_size": args.oracle_d_grid_size,
             "oracle_interval_chunk_size": args.oracle_interval_chunk_size,
+            "underprediction_loss_weight": args.underprediction_loss_weight,
+            "terminal_underprediction_loss_weight": (
+                args.terminal_underprediction_loss_weight
+            ),
+            "student_rollout_prob": args.student_rollout_prob,
+            "student_rollout_warmup_epochs": args.student_rollout_warmup_epochs,
+            "terminal_snap_ratio": args.terminal_snap_ratio,
+            "log_interval_bias": args.log_interval_bias,
             **fsrs_config.checkpoint_payload(),
             "train_epochs": train_stats.epochs,
             "train_steps_per_epoch": train_stats.steps_per_epoch,
@@ -581,6 +749,16 @@ def main() -> None:
         raise SystemExit("--oracle grid sizes must be >= 8.")
     if args.oracle_interval_chunk_size <= 0:
         raise SystemExit("--oracle-interval-chunk-size must be > 0.")
+    if args.underprediction_loss_weight < 0.0:
+        raise SystemExit("--underprediction-loss-weight must be >= 0.")
+    if args.terminal_underprediction_loss_weight < 0.0:
+        raise SystemExit("--terminal-underprediction-loss-weight must be >= 0.")
+    if not 0.0 <= args.student_rollout_prob <= 1.0:
+        raise SystemExit("--student-rollout-prob must be within [0, 1].")
+    if args.student_rollout_warmup_epochs < 0:
+        raise SystemExit("--student-rollout-warmup-epochs must be >= 0.")
+    if args.terminal_snap_ratio < 0.0:
+        raise SystemExit("--terminal-snap-ratio must be >= 0.")
 
     device = resolve_torch_device(args.torch_device)
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
