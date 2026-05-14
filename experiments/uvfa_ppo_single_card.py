@@ -345,6 +345,8 @@ class FSRS6SingleCardBatch:
             return 4
         if self.obs_mode == "rich":
             return 13
+        if self.obs_mode == "oracle":
+            return 4
         return 10
 
     @property
@@ -469,6 +471,16 @@ class FSRS6SingleCardBatch:
                 ],
                 dim=1,
             )
+        if self.obs_mode == "oracle":
+            return torch.stack(
+                [
+                    s_norm,
+                    d_norm,
+                    log_remaining_norm,
+                    goal_norm,
+                ],
+                dim=1,
+            )
 
         return torch.stack(
             [
@@ -514,6 +526,22 @@ class FSRS6SingleCardBatch:
         active_log_interval = log_interval.index_select(0, active).to(dtype=self.dtype)
         intervals = self._intervals_for_log_interval(active_log_interval)
         return self._step_active_intervals(active, intervals)
+
+    def step_intervals(
+        self, intervals: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        active = (~self.done).nonzero(as_tuple=False).squeeze(1)
+        if active.numel() == 0:
+            reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
+            return self.obs(), reward, self.done.clone()
+
+        active_intervals = intervals.index_select(0, active).to(torch.int64)
+        active_intervals = torch.clamp(
+            active_intervals,
+            min=1,
+            max=self.max_interval_days,
+        )
+        return self._step_active_intervals(active, active_intervals)
 
     def _step_active_intervals(
         self,

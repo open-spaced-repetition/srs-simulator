@@ -140,6 +140,7 @@ class FSRS6GridOracle:
         s_grid_size: int,
         d_grid_size: int,
         dtype: torch.dtype = torch.float64,
+        device: torch.device | str | None = None,
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -151,37 +152,71 @@ class FSRS6GridOracle:
         self.days = int(days)
         self.horizon = int(days - 1)
         self.dtype = dtype
+        self.device = (
+            torch.device(device) if device is not None else torch.device("cpu")
+        )
         self.bounds = Bounds()
-        self.weights = torch.tensor(DEFAULT_FSRS6_WEIGHTS, dtype=dtype)
+        self.weights = torch.tensor(
+            DEFAULT_FSRS6_WEIGHTS, device=self.device, dtype=dtype
+        )
         self.decay = -self.weights[20]
-        self.factor = torch.pow(torch.tensor(0.9, dtype=dtype), 1.0 / self.decay) - 1.0
+        self.factor = (
+            torch.pow(
+                torch.tensor(0.9, device=self.device, dtype=dtype),
+                1.0 / self.decay,
+            )
+            - 1.0
+        )
         self.init_d = torch.clamp(
             self.weights[4] - torch.exp(self.weights[5] * 3.0) + 1.0,
             self.bounds.d_min,
             self.bounds.d_max,
         )
-        self.action_retentions = torch.tensor(list(action_retentions), dtype=dtype)
+        self.action_retentions = torch.tensor(
+            list(action_retentions), device=self.device, dtype=dtype
+        )
         self.action_retention_factor = (
             torch.pow(self.action_retentions, 1.0 / self.decay) - 1.0
         )
-        self.first_rating_prob = torch.tensor(DEFAULT_FIRST_RATING_PROB, dtype=dtype)
-        self.review_rating_prob = torch.tensor(DEFAULT_REVIEW_RATING_PROB, dtype=dtype)
+        self.first_rating_prob = torch.tensor(
+            DEFAULT_FIRST_RATING_PROB, device=self.device, dtype=dtype
+        )
+        self.review_rating_prob = torch.tensor(
+            DEFAULT_REVIEW_RATING_PROB, device=self.device, dtype=dtype
+        )
         self.learning_cost_minutes = (
-            torch.tensor(DEFAULT_STATE_RATING_COSTS.learning, dtype=dtype) / 60.0
+            torch.tensor(
+                DEFAULT_STATE_RATING_COSTS.learning,
+                device=self.device,
+                dtype=dtype,
+            )
+            / 60.0
         )
         self.review_cost_minutes = (
-            torch.tensor(DEFAULT_STATE_RATING_COSTS.review, dtype=dtype) / 60.0
+            torch.tensor(
+                DEFAULT_STATE_RATING_COSTS.review,
+                device=self.device,
+                dtype=dtype,
+            )
+            / 60.0
         )
 
         self.log_s_min = math.log(self.bounds.s_min)
         self.log_s_max = math.log(self.bounds.s_max)
         self.s_grid = torch.exp(
-            torch.linspace(self.log_s_min, self.log_s_max, s_grid_size, dtype=dtype)
+            torch.linspace(
+                self.log_s_min,
+                self.log_s_max,
+                s_grid_size,
+                device=self.device,
+                dtype=dtype,
+            )
         )
         self.d_grid = torch.linspace(
             self.bounds.d_min,
             self.bounds.d_max,
             d_grid_size,
+            device=self.device,
             dtype=dtype,
         )
         self.s_mesh = self.s_grid[:, None].expand(s_grid_size, d_grid_size)
@@ -204,12 +239,16 @@ class FSRS6GridOracle:
     ) -> OracleSolution:
         start = time.perf_counter()
         shape = (self.horizon + 1, self.s_grid.numel(), self.d_grid.numel())
-        value = torch.zeros(shape, dtype=self.dtype)
+        value = torch.zeros(shape, device=self.device, dtype=self.dtype)
         memorized = torch.zeros_like(value)
         minutes = torch.zeros_like(value)
         reviews = torch.zeros_like(value)
         lapses = torch.zeros_like(value)
-        policy = torch.zeros(shape, dtype=torch.int64) if capture_policy else None
+        policy = (
+            torch.zeros(shape, device=self.device, dtype=torch.int64)
+            if capture_policy
+            else None
+        )
 
         progress_bar = None
         if progress:
@@ -268,10 +307,10 @@ class FSRS6GridOracle:
             if progress_bar is not None:
                 progress_bar.close()
 
-        total_mem = torch.tensor(0.0, dtype=self.dtype)
-        total_minutes = torch.tensor(0.0, dtype=self.dtype)
-        total_reviews = torch.tensor(0.0, dtype=self.dtype)
-        total_lapses = torch.tensor(0.0, dtype=self.dtype)
+        total_mem = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+        total_minutes = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+        total_reviews = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+        total_lapses = torch.tensor(0.0, device=self.device, dtype=self.dtype)
         for rating in range(1, 5):
             prob = self.first_rating_prob[rating - 1]
             s0, d0 = self._init_state_scalar(rating)
@@ -316,7 +355,9 @@ class FSRS6GridOracle:
     ) -> torch.Tensor:
         if not cost_weights:
             raise ValueError("cost_weights must contain at least one value.")
-        weight_tensor = torch.tensor(list(cost_weights), dtype=self.dtype)
+        weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
         weight_count = int(weight_tensor.numel())
         shape = (
             self.horizon + 1,
@@ -324,8 +365,8 @@ class FSRS6GridOracle:
             self.d_grid.numel(),
             weight_count,
         )
-        value = torch.zeros(shape, dtype=self.dtype)
-        policy = torch.zeros(shape, dtype=torch.int64)
+        value = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        policy = torch.zeros(shape, device=self.device, dtype=torch.int64)
         weights = weight_tensor.view(1, 1, weight_count)
 
         progress_bar = None
@@ -526,7 +567,7 @@ class FSRS6GridOracle:
         )
 
     def _init_state_scalar(self, rating: int) -> tuple[torch.Tensor, torch.Tensor]:
-        rating_f = torch.tensor(float(rating), dtype=self.dtype)
+        rating_f = torch.tensor(float(rating), device=self.device, dtype=self.dtype)
         s = self.weights[rating - 1]
         d = self.weights[4] - torch.exp(self.weights[5] * (rating_f - 1.0)) + 1.0
         return s, torch.clamp(d, self.bounds.d_min, self.bounds.d_max)
@@ -544,7 +585,12 @@ class FSRS6GridOracle:
             if day_int <= 0:
                 continue
             idx = (days == day_int).nonzero(as_tuple=False).squeeze(1)
-            times = torch.arange(1, day_int + 1, dtype=self.dtype)
+            times = torch.arange(
+                1,
+                day_int + 1,
+                device=self.device,
+                dtype=self.dtype,
+            )
             out[idx] = self._forgetting_curve(
                 times.unsqueeze(0),
                 s.index_select(0, idx).unsqueeze(1),
@@ -607,6 +653,223 @@ class FSRS6GridOracle:
             min=0,
             max=self.d_grid.numel() - 1,
         ).to(torch.int64)
+
+
+class FSRS6IntervalOracle(FSRS6GridOracle):
+    def __init__(
+        self,
+        *,
+        days: int,
+        s_grid_size: int,
+        d_grid_size: int,
+        interval_chunk_size: int = 64,
+        dtype: torch.dtype = torch.float64,
+        device: torch.device | str | None = None,
+    ) -> None:
+        if interval_chunk_size <= 0:
+            raise ValueError("interval_chunk_size must be > 0.")
+        super().__init__(
+            days=days,
+            action_retentions=[0.9],
+            s_grid_size=s_grid_size,
+            d_grid_size=d_grid_size,
+            dtype=dtype,
+            device=device,
+        )
+        self.interval_chunk_size = int(interval_chunk_size)
+        self.memorized_by_day = self._precompute_memorized_by_day()
+
+    def solve_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
+        weight_count = int(weight_tensor.numel())
+        shape = (
+            self.horizon + 1,
+            self.s_grid.numel(),
+            self.d_grid.numel(),
+            weight_count,
+        )
+        value = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        policy = torch.ones(shape, device=self.device, dtype=torch.int64)
+        weights = weight_tensor.view(1, 1, 1, weight_count)
+
+        progress_bar = None
+        if progress:
+            from tqdm import tqdm
+
+            progress_bar = tqdm(
+                total=self.horizon,
+                desc=f"Interval oracle w batch={weight_count}",
+                unit="day",
+                leave=False,
+            )
+        try:
+            for rem in range(1, self.horizon + 1):
+                best_value = torch.full_like(value[rem], -math.inf)
+                best_interval = torch.ones_like(policy[rem])
+
+                for start in range(1, rem + 2, self.interval_chunk_size):
+                    stop = min(rem + 2, start + self.interval_chunk_size)
+                    intervals = torch.arange(
+                        start,
+                        stop,
+                        device=self.device,
+                        dtype=torch.int64,
+                    )
+                    candidate_value = self._candidate_interval_value_batch(
+                        intervals=intervals,
+                        rem=rem,
+                        cost_weights=weights,
+                        value=value,
+                    )
+                    chunk_best_value, chunk_best_idx = candidate_value.max(dim=0)
+                    chunk_best_interval = intervals.index_select(
+                        0,
+                        chunk_best_idx.reshape(-1),
+                    ).reshape_as(chunk_best_idx)
+                    better = chunk_best_value > best_value
+                    best_value = torch.where(better, chunk_best_value, best_value)
+                    best_interval = torch.where(
+                        better,
+                        chunk_best_interval,
+                        best_interval,
+                    )
+
+                value[rem] = best_value
+                policy[rem] = best_interval
+                if progress_bar is not None:
+                    progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        return policy.permute(3, 0, 1, 2).contiguous()
+
+    def _candidate_interval_value_batch(
+        self,
+        *,
+        intervals: torch.Tensor,
+        rem: int,
+        cost_weights: torch.Tensor,
+        value: torch.Tensor,
+    ) -> torch.Tensor:
+        weight_count = int(cost_weights.numel())
+        s_count = int(self.s_grid.numel())
+        d_count = int(self.d_grid.numel())
+        interval_count = int(intervals.numel())
+        active_days = torch.minimum(intervals, torch.full_like(intervals, rem))
+        immediate_mem = self._memorized_sum_for_interval_candidates(active_days)
+        candidate_value = (
+            immediate_mem[:, :, None, None]
+            .expand(interval_count, s_count, d_count, weight_count)
+            .clone()
+        )
+
+        cont_mask = intervals <= rem
+        if not bool(cont_mask.any().item()):
+            return candidate_value
+
+        elapsed = intervals.to(dtype=self.dtype)
+        retrievability = self._forgetting_curve(
+            elapsed[:, None],
+            self.s_grid[None, :],
+        )
+        future_rem = torch.clamp(rem - intervals, min=0).to(torch.int64)
+        future_rem_idx = future_rem[:, None, None].expand(
+            interval_count,
+            s_count,
+            d_count,
+        )
+        cont_weight = cont_mask.to(dtype=self.dtype)[:, None]
+
+        for rating_idx, rating in enumerate(range(1, 5)):
+            if rating == 1:
+                prob = 1.0 - retrievability
+            else:
+                prob = retrievability * self.review_rating_prob[rating_idx - 1]
+            s_idx, d_idx = self._next_state_interval_candidates(
+                elapsed=elapsed,
+                retrievability=retrievability,
+                rating=rating,
+            )
+            future_value = value[future_rem_idx, s_idx, d_idx]
+            review_minutes = self.review_cost_minutes[rating - 1]
+            weighted = (prob * cont_weight)[:, :, None, None]
+            candidate_value += weighted * (future_value - cost_weights * review_minutes)
+
+        return candidate_value
+
+    def _memorized_sum_for_interval_candidates(
+        self,
+        days: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.memorized_by_day.index_select(0, days.to(torch.int64))
+
+    def _precompute_memorized_by_day(self) -> torch.Tensor:
+        table = torch.zeros(
+            (self.horizon + 1, int(self.s_grid.numel())),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        if self.horizon <= 0:
+            return table
+        elapsed = torch.arange(
+            1,
+            self.horizon + 1,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        retrievability = self._forgetting_curve(
+            elapsed[:, None],
+            self.s_grid[None, :],
+        )
+        table[1:] = torch.cumsum(retrievability, dim=0)
+        return table
+
+    def _next_state_interval_candidates(
+        self,
+        *,
+        elapsed: torch.Tensor,
+        retrievability: torch.Tensor,
+        rating: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        interval_count = int(elapsed.numel())
+        s_count = int(self.s_grid.numel())
+        d_count = int(self.d_grid.numel())
+        s = self.s_grid.view(1, s_count, 1).expand(
+            interval_count,
+            s_count,
+            d_count,
+        )
+        d = self.d_grid.view(1, 1, d_count).expand(
+            interval_count,
+            s_count,
+            d_count,
+        )
+        r = retrievability[:, :, None].expand(interval_count, s_count, d_count)
+        rating_tensor = torch.full(
+            (interval_count, s_count, d_count),
+            rating,
+            device=self.device,
+            dtype=torch.int64,
+        )
+        if rating > 1:
+            new_s = self._stability_after_success(s, r, d, rating_tensor)
+        else:
+            new_s = self._stability_after_failure(s, r, d)
+        new_d = self._next_d(d, rating_tensor)
+        return (
+            self._s_to_idx(torch.clamp(new_s, self.bounds.s_min, self.bounds.s_max)),
+            self._d_to_idx(torch.clamp(new_d, self.bounds.d_min, self.bounds.d_max)),
+        )
 
 
 def row_from_metrics(

@@ -47,8 +47,10 @@ def scheduler_uses_desired_retention(scheduler: str) -> bool:
         "fixed",
         "anki_sm2",
         "memrise",
-        "fsrs6_oracle",
-        "fsrs6_oracle_distill",
         "uvfa_ppo",
         "uvfa_ppo_rnn_interval",
+        "fsrs6_oracle",
+        "fsrs6_oracle_distill",
+        "fsrs6_oracle_interval",
+        "fsrs6_oracle_interval_distill",
     }

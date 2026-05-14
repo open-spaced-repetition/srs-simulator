@@ -101,8 +101,13 @@ DEFAULT_FSRS6_ORACLE_DISTILL_POLICY = Path(
 DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
     "logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"
 )
+DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY = Path(
+    "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt"
+)
 FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
 FSRS6_ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_distill"
+FSRS6_ORACLE_INTERVAL_SCHEDULER = "fsrs6_oracle_interval"
+FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER = "fsrs6_oracle_interval_distill"
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
 UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
 
@@ -273,6 +278,30 @@ def parse_args() -> argparse.Namespace:
         help="Difficulty grid size for fsrs6_oracle.",
     )
     parser.add_argument(
+        "--oracle-interval-chunk-size",
+        type=int,
+        default=64,
+        help="Interval candidates per Bellman-backup chunk for fsrs6_oracle_interval.",
+    )
+    parser.add_argument(
+        "--oracle-interval-distill-policy",
+        type=Path,
+        default=DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY,
+        help=(
+            "Path to an FSRS6 oracle interval distillation checkpoint when --sched "
+            "contains fsrs6_oracle_interval_distill."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-interval-distill-cost-weights",
+        default=None,
+        help=(
+            "Comma-separated scalarization weights for "
+            "fsrs6_oracle_interval_distill. Defaults to the cost_weights saved "
+            "in --oracle-interval-distill-policy."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=DEFAULT_SEED,
@@ -390,6 +419,18 @@ def _parse_float_list(value: str, *, label: str) -> list[float]:
     return values
 
 
+def _resolve_torch_device(
+    args: argparse.Namespace,
+    *,
+    prefer_cuda: bool = False,
+) -> torch.device:
+    if args.torch_device:
+        return torch.device(args.torch_device)
+    if prefer_cuda and torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+
 def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
     specs: list[tuple[str, str, float | None]] = []
     for raw in parse_csv(args.sched) or ["fsrs6_default"]:
@@ -400,6 +441,8 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
         custom_schedulers = {
             FSRS6_ORACLE_SCHEDULER,
             FSRS6_ORACLE_DISTILL_SCHEDULER,
+            FSRS6_ORACLE_INTERVAL_SCHEDULER,
+            FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER,
             UVFA_PPO_SCHEDULER,
             UVFA_PPO_RNN_INTERVAL_SCHEDULER,
         }
@@ -1085,6 +1128,80 @@ def _uvfa_ppo_rnn_interval_cost_weights(
     return values
 
 
+def _load_fsrs6_oracle_interval_distill_policy(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], float]:
+    if not args.oracle_interval_distill_policy.exists():
+        raise SystemExit(
+            "FSRS6 oracle interval distill policy not found: "
+            f"{args.oracle_interval_distill_policy}. Train one with "
+            "`uv run experiments/fsrs_oracle_interval_distill.py --model-out "
+            f"{args.oracle_interval_distill_policy}` or pass "
+            "--oracle-interval-distill-policy."
+        )
+
+    from experiments.fsrs_oracle_interval_distill import IntervalDistillNet
+
+    checkpoint = torch.load(args.oracle_interval_distill_policy, map_location=device)
+    if not isinstance(checkpoint, dict):
+        raise SystemExit(
+            f"Invalid FSRS6 oracle interval distill checkpoint: "
+            f"{args.oracle_interval_distill_policy}"
+        )
+    if checkpoint.get("policy_type") != "fsrs6_oracle_interval_distill":
+        raise SystemExit(
+            "FSRS6 oracle interval distill checkpoint has unexpected policy_type."
+        )
+    if checkpoint.get("action_mode") != "log_interval":
+        raise SystemExit(
+            "FSRS6 oracle interval distill checkpoint must use action_mode=log_interval."
+        )
+    if checkpoint.get("obs_mode") != "oracle":
+        raise SystemExit(
+            "FSRS6 oracle interval distill checkpoint must use obs_mode=oracle."
+        )
+    raw_cost_weights = checkpoint.get("cost_weights")
+    if not isinstance(raw_cost_weights, list) or not raw_cost_weights:
+        raise SystemExit(
+            "FSRS6 oracle interval distill checkpoint is missing cost_weights."
+        )
+    policy_cost_weights = [float(value) for value in raw_cost_weights]
+    obs_dim = int(checkpoint.get("obs_dim", 4))
+    hidden_size = int(checkpoint.get("hidden_size", 96))
+    network = str(checkpoint.get("network", "residual"))
+    network_depth = int(checkpoint.get("network_depth", 3))
+    model = IntervalDistillNet(
+        obs_dim=obs_dim,
+        hidden_size=hidden_size,
+        architecture=network,
+        depth=network_depth,
+    ).to(device)
+    state_dict = checkpoint.get("model_state_dict")
+    if not isinstance(state_dict, dict):
+        raise SystemExit(
+            "FSRS6 oracle interval distill checkpoint is missing model_state_dict."
+        )
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model, policy_cost_weights, max(policy_cost_weights)
+
+
+def _oracle_interval_distill_cost_weights(
+    args: argparse.Namespace,
+    *,
+    policy_cost_weights: Sequence[float],
+) -> list[float]:
+    raw = getattr(args, "oracle_interval_distill_cost_weights", None)
+    if raw is None or not raw.strip():
+        return [float(value) for value in policy_cost_weights]
+    values = _parse_float_list(raw, label="FSRS6 oracle interval distill cost weight")
+    if any(value < 0.0 for value in values):
+        raise SystemExit("FSRS6 oracle interval distill cost weights must be >= 0.")
+    return values
+
+
 def _row_from_uvfa_metrics(
     args: argparse.Namespace,
     *,
@@ -1245,6 +1362,82 @@ def _evaluate_fsrs6_oracle_policies(
     return metrics
 
 
+@torch.inference_mode()
+def _evaluate_fsrs6_oracle_interval_policies(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    oracle: Any,
+    policies: torch.Tensor,
+    cost_weights: Sequence[float],
+    seed: int,
+) -> list[Any]:
+    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch, SimMetrics
+
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
+
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=env_count,
+        cost_weights=cost_weights,
+        action_retentions=[0.9],
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+    )
+    goal_indices = torch.repeat_interleave(
+        torch.arange(weight_count, device=device, dtype=torch.int64),
+        args.particles,
+    )
+    for weight_idx, cost_weight in enumerate(cost_weights):
+        start = weight_idx * args.particles
+        stop = start + args.particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        env.reset_indices(idx, goal_weight=cost_weight)
+
+    policies = policies.to(device=device)
+    while not bool(env.done.all().item()):
+        remaining = torch.clamp((env.days - 1) - env.day, min=0, max=oracle.horizon)
+        s_idx = _oracle_s_to_idx(oracle, env.s)
+        d_idx = _oracle_d_to_idx(oracle, env.d)
+        intervals = policies[goal_indices, remaining, s_idx, d_idx]
+        env.step_intervals(intervals)
+
+    metrics: list[SimMetrics] = []
+    day_count = float(env.days)
+    for weight_idx in range(weight_count):
+        start = weight_idx * args.particles
+        stop = start + args.particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        particle_count = float(idx.numel())
+        total_memorized = env.total_memorized.index_select(0, idx).sum().item()
+        total_cost_seconds = env.total_cost_seconds.index_select(0, idx).sum().item()
+        total_reviews = float(env.total_reviews.index_select(0, idx).sum().item())
+        total_lapses = float(env.total_lapses.index_select(0, idx).sum().item())
+        observed_retention = (
+            1.0 - total_lapses / total_reviews if total_reviews > 0.0 else None
+        )
+        metrics.append(
+            SimMetrics(
+                card_expected_retrievability=total_memorized
+                / day_count
+                / particle_count,
+                card_minutes_per_day=total_cost_seconds
+                / day_count
+                / 60.0
+                / particle_count,
+                card_reviews_per_day=total_reviews / day_count / particle_count,
+                card_total_reviews=total_reviews / particle_count,
+                card_total_lapses=total_lapses / particle_count,
+                card_total_cost_seconds=total_cost_seconds / particle_count,
+                observed_retention=observed_retention,
+            )
+        )
+    return metrics
+
+
 def _run_fsrs6_oracle(
     args: argparse.Namespace,
     *,
@@ -1295,6 +1488,69 @@ def _run_fsrs6_oracle(
                 args,
                 environment_name=environment_name,
                 scheduler_name=FSRS6_ORACLE_SCHEDULER,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
+def _run_fsrs6_oracle_interval(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name != "fsrs6_default":
+        raise SystemExit(
+            "fsrs6_oracle_interval currently supports only --env fsrs6_default."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            "fsrs6_oracle_interval is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit("fsrs6_oracle_interval does not support --fuzz.")
+    if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
+        raise SystemExit("--oracle grid sizes must be >= 8.")
+    if args.oracle_interval_chunk_size <= 0:
+        raise SystemExit("--oracle-interval-chunk-size must be > 0.")
+
+    from experiments.fsrs_oracle_frontier import FSRS6IntervalOracle
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    cost_weights = _oracle_cost_weights(args)
+    oracle = FSRS6IntervalOracle(
+        days=args.days,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        interval_chunk_size=args.oracle_interval_chunk_size,
+        device=device,
+    )
+
+    start = time.perf_counter()
+    policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)
+    metrics_by_weight = _evaluate_fsrs6_oracle_interval_policies(
+        args=args,
+        device=device,
+        oracle=oracle,
+        policies=policies,
+        cost_weights=cost_weights,
+        seed=seed + 60_000,
+    )
+    runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=FSRS6_ORACLE_INTERVAL_SCHEDULER,
                 scheduler_spec=scheduler_spec,
                 goal_cost_weight=cost_weight,
                 seed=seed,
@@ -1485,6 +1741,67 @@ def _run_uvfa_ppo_rnn_interval(
                 args,
                 environment_name=environment_name,
                 scheduler_name=UVFA_PPO_RNN_INTERVAL_SCHEDULER,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
+def _run_fsrs6_oracle_interval_distill(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name != "fsrs6_default":
+        raise SystemExit(
+            "fsrs6_oracle_interval_distill currently supports only --env fsrs6_default."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            "fsrs6_oracle_interval_distill is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit("fsrs6_oracle_interval_distill does not support --fuzz.")
+
+    from experiments.fsrs_oracle_interval_distill import evaluate_policy
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    model, policy_cost_weights, goal_norm_max = (
+        _load_fsrs6_oracle_interval_distill_policy(
+            args,
+            device=device,
+        )
+    )
+    cost_weights = _oracle_interval_distill_cost_weights(
+        args,
+        policy_cost_weights=policy_cost_weights,
+    )
+    eval_args = argparse.Namespace(days=args.days)
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight in cost_weights:
+        start = time.perf_counter()
+        metrics = evaluate_policy(
+            model,
+            args=eval_args,
+            device=device,
+            cost_weight=cost_weight,
+            particles=args.particles,
+            seed=seed + 70_000 + int(round(cost_weight * 10.0)),
+            goal_norm_max=goal_norm_max,
+        )
+        runtime_s = time.perf_counter() - start
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER,
                 scheduler_spec=scheduler_spec,
                 goal_cost_weight=cost_weight,
                 seed=seed,
@@ -2079,6 +2396,26 @@ def main() -> None:
             if scheduler_name == FSRS6_ORACLE_SCHEDULER:
                 rows.extend(
                     _run_fsrs6_oracle(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
+                continue
+            if scheduler_name == FSRS6_ORACLE_INTERVAL_SCHEDULER:
+                rows.extend(
+                    _run_fsrs6_oracle_interval(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
+                continue
+            if scheduler_name == FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER:
+                rows.extend(
+                    _run_fsrs6_oracle_interval_distill(
                         args,
                         environment_name=environment,
                         scheduler_spec=scheduler_spec,

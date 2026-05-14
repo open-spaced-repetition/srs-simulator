@@ -347,7 +347,7 @@ class FSRS6BatchSchedulerOps:
         self,
         *,
         weights: "torch.Tensor",
-        desired_retention: float | "torch.Tensor",
+        desired_retention: "float | torch.Tensor",
         bounds: Bounds,
         priority_mode: str,
         device: "torch.device",
