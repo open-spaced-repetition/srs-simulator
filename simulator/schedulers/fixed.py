@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# pyright: reportPrivateImportUsage=false
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -82,14 +84,14 @@ class FixedVectorizedSchedulerOps:
 
 @dataclass
 class FixedBatchState:
-    interval_days: float
+    interval_days: "torch.Tensor"
 
 
 class FixedBatchSchedulerOps:
     def __init__(
         self,
         *,
-        interval: float,
+        interval: "float | torch.Tensor",
         device: "torch.device",
         dtype: "torch.dtype",
     ) -> None:
@@ -98,11 +100,17 @@ class FixedBatchSchedulerOps:
         self._torch = torch
         self.device = device
         self.dtype = dtype
-        self._interval = float(interval)
-        self._interval_days = max(1, int(round(self._interval)))
+        self._interval = torch.as_tensor(interval, device=device, dtype=dtype)
+        self._interval_days = torch.clamp(torch.round(self._interval), min=1.0)
 
     def init_state(self, user_count: int, deck_size: int) -> FixedBatchState:
-        return FixedBatchState(interval_days=float(self._interval_days))
+        if self._interval_days.ndim == 0:
+            interval_days = self._interval_days.expand(user_count)
+        else:
+            interval_days = self._interval_days
+            if int(interval_days.numel()) != user_count:
+                raise ValueError("interval must be scalar or match the user dimension.")
+        return FixedBatchState(interval_days=interval_days.to(dtype=self.dtype))
 
     def review_priority(
         self, state: FixedBatchState, elapsed: "torch.Tensor"
@@ -120,12 +128,7 @@ class FixedBatchSchedulerOps:
     ) -> "torch.Tensor":
         if user_idx.numel() == 0:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
-        return self._torch.full(
-            (user_idx.numel(),),
-            state.interval_days,
-            device=self.device,
-            dtype=self.dtype,
-        )
+        return state.interval_days.index_select(0, user_idx).to(dtype=self.dtype)
 
     def update_learn(
         self,
@@ -136,9 +139,4 @@ class FixedBatchSchedulerOps:
     ) -> "torch.Tensor":
         if user_idx.numel() == 0:
             return self._torch.zeros(0, device=self.device, dtype=self.dtype)
-        return self._torch.full(
-            (user_idx.numel(),),
-            state.interval_days,
-            device=self.device,
-            dtype=self.dtype,
-        )
+        return state.interval_days.index_select(0, user_idx).to(dtype=self.dtype)
