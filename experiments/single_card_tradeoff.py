@@ -431,6 +431,12 @@ def _resolve_torch_device(
     return torch.device("cpu")
 
 
+def _default_torch_device() -> str | None:
+    if torch.cuda.is_available():
+        return "cuda"
+    return None
+
+
 def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
     specs: list[tuple[str, str, float | None]] = []
     for raw in parse_csv(args.sched) or ["fsrs6_default"]:
@@ -1466,6 +1472,7 @@ def _run_fsrs6_oracle(
         action_retentions=action_retentions,
         s_grid_size=args.oracle_s_grid_size,
         d_grid_size=args.oracle_d_grid_size,
+        device=device,
     )
 
     start = time.perf_counter()
@@ -2361,6 +2368,8 @@ def main() -> None:
         raise SystemExit("--deck-scale must be > 0.")
     if args.target_batch_size < 0:
         raise SystemExit("--target-batch-size must be >= 0.")
+    if args.torch_device is None:
+        args.torch_device = _default_torch_device()
 
     environments = parse_csv(args.env) or ["fsrs6_default"]
     for environment in environments:
