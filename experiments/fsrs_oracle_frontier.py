@@ -22,6 +22,10 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
+from experiments.single_card_config import (  # noqa: E402
+    add_single_card_fsrs6_config_args,
+    load_single_card_fsrs6_config,
+)
 from experiments.single_card_tradeoff import DEFAULT_TARGET_RETENTIONS
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
@@ -89,6 +93,7 @@ def parse_args() -> argparse.Namespace:
         description="Estimate a single-card FSRS6 oracle frontier with grid DP.",
         allow_abbrev=False,
     )
+    add_single_card_fsrs6_config_args(parser)
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--deck-scale", type=int, default=DEFAULT_DECK_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -141,6 +146,11 @@ class FSRS6GridOracle:
         d_grid_size: int,
         dtype: torch.dtype = torch.float64,
         device: torch.device | str | None = None,
+        fsrs_weights: Sequence[float] | None = None,
+        first_rating_prob: Sequence[float] | None = None,
+        review_rating_prob: Sequence[float] | None = None,
+        learning_costs: Sequence[float] | None = None,
+        review_costs: Sequence[float] | None = None,
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -156,9 +166,12 @@ class FSRS6GridOracle:
             torch.device(device) if device is not None else torch.device("cpu")
         )
         self.bounds = Bounds()
-        self.weights = torch.tensor(
-            DEFAULT_FSRS6_WEIGHTS, device=self.device, dtype=dtype
+        resolved_weights = (
+            DEFAULT_FSRS6_WEIGHTS if fsrs_weights is None else tuple(fsrs_weights)
         )
+        if len(resolved_weights) != 21:
+            raise ValueError("FSRS6 weights must contain 21 values.")
+        self.weights = torch.tensor(resolved_weights, device=self.device, dtype=dtype)
         self.decay = -self.weights[20]
         self.factor = (
             torch.pow(
@@ -178,15 +191,41 @@ class FSRS6GridOracle:
         self.action_retention_factor = (
             torch.pow(self.action_retentions, 1.0 / self.decay) - 1.0
         )
+        resolved_first_prob = (
+            DEFAULT_FIRST_RATING_PROB
+            if first_rating_prob is None
+            else tuple(first_rating_prob)
+        )
+        resolved_review_prob = (
+            DEFAULT_REVIEW_RATING_PROB
+            if review_rating_prob is None
+            else tuple(review_rating_prob)
+        )
+        if len(resolved_first_prob) != 4:
+            raise ValueError("first_rating_prob must contain 4 values.")
+        if len(resolved_review_prob) != 3:
+            raise ValueError("review_rating_prob must contain 3 values.")
         self.first_rating_prob = torch.tensor(
-            DEFAULT_FIRST_RATING_PROB, device=self.device, dtype=dtype
+            resolved_first_prob, device=self.device, dtype=dtype
         )
         self.review_rating_prob = torch.tensor(
-            DEFAULT_REVIEW_RATING_PROB, device=self.device, dtype=dtype
+            resolved_review_prob, device=self.device, dtype=dtype
         )
+        resolved_learning_costs = (
+            DEFAULT_STATE_RATING_COSTS.learning
+            if learning_costs is None
+            else tuple(learning_costs)
+        )
+        resolved_review_costs = (
+            DEFAULT_STATE_RATING_COSTS.review
+            if review_costs is None
+            else tuple(review_costs)
+        )
+        if len(resolved_learning_costs) != 4 or len(resolved_review_costs) != 4:
+            raise ValueError("learning_costs and review_costs must contain 4 values.")
         self.learning_cost_minutes = (
             torch.tensor(
-                DEFAULT_STATE_RATING_COSTS.learning,
+                resolved_learning_costs,
                 device=self.device,
                 dtype=dtype,
             )
@@ -194,7 +233,7 @@ class FSRS6GridOracle:
         )
         self.review_cost_minutes = (
             torch.tensor(
-                DEFAULT_STATE_RATING_COSTS.review,
+                resolved_review_costs,
                 device=self.device,
                 dtype=dtype,
             )
@@ -665,6 +704,11 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
         interval_chunk_size: int = 64,
         dtype: torch.dtype = torch.float64,
         device: torch.device | str | None = None,
+        fsrs_weights: Sequence[float] | None = None,
+        first_rating_prob: Sequence[float] | None = None,
+        review_rating_prob: Sequence[float] | None = None,
+        learning_costs: Sequence[float] | None = None,
+        review_costs: Sequence[float] | None = None,
     ) -> None:
         if interval_chunk_size <= 0:
             raise ValueError("interval_chunk_size must be > 0.")
@@ -675,6 +719,11 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
             d_grid_size=d_grid_size,
             dtype=dtype,
             device=device,
+            fsrs_weights=fsrs_weights,
+            first_rating_prob=first_rating_prob,
+            review_rating_prob=review_rating_prob,
+            learning_costs=learning_costs,
+            review_costs=review_costs,
         )
         self.interval_chunk_size = int(interval_chunk_size)
         self.memorized_by_day = self._precompute_memorized_by_day()
@@ -886,7 +935,7 @@ def row_from_metrics(
 ) -> dict[str, Any]:
     deck_scale = float(args.deck_scale)
     return {
-        "environment": "fsrs6_default",
+        "environment": args.env,
         "scheduler": scheduler,
         "scheduler_spec": scheduler_spec,
         "goal_cost_weight": goal_cost_weight,
@@ -993,11 +1042,17 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
+    fsrs_config = load_single_card_fsrs6_config(args)
     oracle = FSRS6GridOracle(
         days=args.days,
         action_retentions=action_retentions,
         s_grid_size=args.s_grid_size,
         d_grid_size=args.d_grid_size,
+        fsrs_weights=fsrs_config.fsrs_weights,
+        first_rating_prob=fsrs_config.first_rating_prob,
+        review_rating_prob=fsrs_config.review_rating_prob,
+        learning_costs=fsrs_config.learning_costs,
+        review_costs=fsrs_config.review_costs,
     )
     rows: list[dict[str, Any]] = []
     fsrs_metrics_by_weight: dict[float, float] = {}
@@ -1011,6 +1066,7 @@ def main() -> None:
                 retention=retention,
                 particles=args.baseline_particles,
                 seed=args.seed + 10_000 + int(round(retention * 10_000)),
+                fsrs_config=fsrs_config,
             )
             for cost_weight in cost_weights:
                 scalar = scalar_objective(metrics, cost_weight)

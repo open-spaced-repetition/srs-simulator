@@ -28,6 +28,11 @@ from experiments.single_card_tradeoff import (  # noqa: E402
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_config import (  # noqa: E402
+    add_single_card_fsrs6_config_args,
+    load_single_card_fsrs6_config,
+    SingleCardFSRS6Config,
+)
 from experiments.fsrs_oracle_frontier import FSRS6GridOracle  # noqa: E402
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
@@ -87,6 +92,7 @@ def parse_args() -> argparse.Namespace:
         ),
         allow_abbrev=False,
     )
+    add_single_card_fsrs6_config_args(parser)
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--deck-scale", type=int, default=DEFAULT_DECK_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -242,6 +248,20 @@ class SimMetrics:
     observed_retention: float | None
 
 
+def fsrs_config_kwargs(
+    fsrs_config: SingleCardFSRS6Config | None,
+) -> dict[str, Any]:
+    if fsrs_config is None:
+        return {}
+    return {
+        "fsrs_weights": fsrs_config.fsrs_weights,
+        "first_rating_prob": fsrs_config.first_rating_prob,
+        "review_rating_prob": fsrs_config.review_rating_prob,
+        "learning_costs": fsrs_config.learning_costs,
+        "review_costs": fsrs_config.review_costs,
+    }
+
+
 class FSRS6SingleCardBatch:
     def __init__(
         self,
@@ -257,6 +277,11 @@ class FSRS6SingleCardBatch:
         goal_norm_max: float | None = None,
         obs_mode: str = "basic",
         max_interval_days: int | None = None,
+        fsrs_weights: Sequence[float] | None = None,
+        first_rating_prob: Sequence[float] | None = None,
+        review_rating_prob: Sequence[float] | None = None,
+        learning_costs: Sequence[float] | None = None,
+        review_costs: Sequence[float] | None = None,
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -284,7 +309,12 @@ class FSRS6SingleCardBatch:
         self.generator = torch.Generator(device=device)
         self.generator.manual_seed(seed)
 
-        self.weights = torch.tensor(DEFAULT_FSRS6_WEIGHTS, device=device, dtype=dtype)
+        resolved_weights = (
+            DEFAULT_FSRS6_WEIGHTS if fsrs_weights is None else tuple(fsrs_weights)
+        )
+        if len(resolved_weights) != 21:
+            raise ValueError("FSRS6 weights must contain 21 values.")
+        self.weights = torch.tensor(resolved_weights, device=device, dtype=dtype)
         self.decay = -self.weights[20]
         self.factor = (
             torch.pow(torch.tensor(0.9, device=device, dtype=dtype), 1.0 / self.decay)
@@ -310,17 +340,43 @@ class FSRS6SingleCardBatch:
         self.action_retention_factor = (
             torch.pow(self.action_retentions, 1.0 / self.decay) - 1.0
         )
+        resolved_first_prob = (
+            DEFAULT_FIRST_RATING_PROB
+            if first_rating_prob is None
+            else tuple(first_rating_prob)
+        )
+        resolved_review_prob = (
+            DEFAULT_REVIEW_RATING_PROB
+            if review_rating_prob is None
+            else tuple(review_rating_prob)
+        )
+        if len(resolved_first_prob) != 4:
+            raise ValueError("first_rating_prob must contain 4 values.")
+        if len(resolved_review_prob) != 3:
+            raise ValueError("review_rating_prob must contain 3 values.")
         self.first_rating_prob = torch.tensor(
-            DEFAULT_FIRST_RATING_PROB, device=device, dtype=dtype
+            resolved_first_prob, device=device, dtype=dtype
         )
         self.review_rating_prob = torch.tensor(
-            DEFAULT_REVIEW_RATING_PROB, device=device, dtype=dtype
+            resolved_review_prob, device=device, dtype=dtype
         )
+        resolved_learning_costs = (
+            DEFAULT_STATE_RATING_COSTS.learning
+            if learning_costs is None
+            else tuple(learning_costs)
+        )
+        resolved_review_costs = (
+            DEFAULT_STATE_RATING_COSTS.review
+            if review_costs is None
+            else tuple(review_costs)
+        )
+        if len(resolved_learning_costs) != 4 or len(resolved_review_costs) != 4:
+            raise ValueError("learning_costs and review_costs must contain 4 values.")
         self.learning_costs = torch.tensor(
-            DEFAULT_STATE_RATING_COSTS.learning, device=device, dtype=dtype
+            resolved_learning_costs, device=device, dtype=dtype
         )
         self.review_costs = torch.tensor(
-            DEFAULT_STATE_RATING_COSTS.review, device=device, dtype=dtype
+            resolved_review_costs, device=device, dtype=dtype
         )
 
         self.s = torch.empty(env_count, device=device, dtype=dtype)
@@ -944,6 +1000,7 @@ class OracleGridGuide(PolicyGuide):
         d_grid_size: int,
         device: torch.device,
         progress: bool,
+        fsrs_config: SingleCardFSRS6Config | None = None,
     ) -> None:
         self.days = int(days)
         self.horizon = int(days - 1)
@@ -956,6 +1013,7 @@ class OracleGridGuide(PolicyGuide):
             action_retentions=action_retentions,
             s_grid_size=s_grid_size,
             d_grid_size=d_grid_size,
+            **fsrs_config_kwargs(fsrs_config),
         )
         self.policy_tables: list[torch.Tensor] = []
         self.metrics_by_weight: dict[float, float] = {}
@@ -1024,6 +1082,7 @@ def build_policy_guide(
     device: torch.device,
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> PolicyGuide | None:
     if args.guide_policy == "none":
         return None
@@ -1037,6 +1096,7 @@ def build_policy_guide(
         d_grid_size=args.oracle_d_grid_size,
         device=device,
         progress=not args.no_progress,
+        fsrs_config=fsrs_config,
     )
 
 
@@ -1077,6 +1137,7 @@ def train_policy(
     action_retentions: Sequence[float],
     policy_guide: PolicyGuide | None = None,
     build_guide_if_missing: bool = True,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> tuple[PolicyValueNet, TrainStats]:
     torch.manual_seed(args.seed)
     dtype = torch.float32
@@ -1091,6 +1152,7 @@ def train_policy(
         exact_memory=False,
         goal_norm_max=max(cost_weights),
         obs_mode=args.obs_mode,
+        **fsrs_config_kwargs(fsrs_config),
     )
     model = PolicyValueNet(
         env.obs_dim,
@@ -1109,6 +1171,7 @@ def train_policy(
             device=device,
             cost_weights=cost_weights,
             action_retentions=action_retentions,
+            fsrs_config=fsrs_config,
         )
     obs = warmup_policy(
         args=args,
@@ -1276,6 +1339,7 @@ def evaluate_policy(
     seed: int,
     goal_norm_max: float,
     obs_mode: str | None = None,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> SimMetrics:
     resolved_obs_mode = obs_mode or getattr(args, "obs_mode", "basic")
     env = FSRS6SingleCardBatch(
@@ -1289,6 +1353,7 @@ def evaluate_policy(
         exact_memory=True,
         goal_norm_max=goal_norm_max,
         obs_mode=resolved_obs_mode,
+        **fsrs_config_kwargs(fsrs_config),
     )
     model.eval()
     while not bool(env.done.all().item()):
@@ -1307,6 +1372,7 @@ def evaluate_static_fsrs(
     retention: float,
     particles: int,
     seed: int,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> SimMetrics:
     env = FSRS6SingleCardBatch(
         days=args.days,
@@ -1317,6 +1383,7 @@ def evaluate_static_fsrs(
         dtype=torch.float64,
         seed=seed,
         exact_memory=True,
+        **fsrs_config_kwargs(fsrs_config),
     )
     while not bool(env.done.all().item()):
         active = (~env.done).nonzero(as_tuple=False).squeeze(1)
@@ -1335,6 +1402,7 @@ def evaluate_fixed_interval(
     interval: float,
     particles: int,
     seed: int,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> SimMetrics:
     env = FSRS6SingleCardBatch(
         days=args.days,
@@ -1345,6 +1413,7 @@ def evaluate_fixed_interval(
         dtype=torch.float64,
         seed=seed,
         exact_memory=True,
+        **fsrs_config_kwargs(fsrs_config),
     )
     interval_days = max(1, int(round(interval)))
     while not bool(env.done.all().item()):
@@ -1431,7 +1500,7 @@ def row_from_metrics(
 ) -> dict[str, Any]:
     deck_scale = float(args.deck_scale)
     return {
-        "environment": "fsrs6_default",
+        "environment": getattr(args, "env", "fsrs6_default"),
         "scheduler": scheduler,
         "scheduler_spec": scheduler_spec,
         "goal_cost_weight": goal_cost_weight,
@@ -1581,7 +1650,9 @@ def save_model(
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     train_stats: TrainStats,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> None:
+    config_payload = fsrs_config.checkpoint_payload() if fsrs_config is not None else {}
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -1600,6 +1671,7 @@ def save_model(
             "train_updates": train_stats.updates,
             "train_transitions": train_stats.transitions,
             "train_runtime_s": train_stats.runtime_s,
+            **config_payload,
         },
         path,
     )
@@ -1648,12 +1720,14 @@ def main() -> None:
     )
     fixed_intervals = parse_csv_floats(args.fixed_intervals, name="--fixed-intervals")
     baseline_particles = args.baseline_particles or args.eval_particles
+    fsrs_config = load_single_card_fsrs6_config(args)
 
     model, train_stats = train_policy(
         args,
         device=device,
         cost_weights=cost_weights,
         action_retentions=action_retentions,
+        fsrs_config=fsrs_config,
     )
     save_model(
         args.model_out,
@@ -1662,6 +1736,7 @@ def main() -> None:
         cost_weights=cost_weights,
         action_retentions=action_retentions,
         train_stats=train_stats,
+        fsrs_config=fsrs_config,
     )
 
     rows: list[dict[str, Any]] = []
@@ -1675,6 +1750,7 @@ def main() -> None:
             retention=retention,
             particles=baseline_particles,
             seed=args.seed + 10_000 + int(round(retention * 10_000)),
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         name = f"fsrs@{format_float(retention)}"
@@ -1700,6 +1776,7 @@ def main() -> None:
             interval=interval,
             particles=baseline_particles,
             seed=args.seed + 20_000 + int(round(interval)),
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         name = f"fixed@{format_float(interval)}"
@@ -1729,6 +1806,7 @@ def main() -> None:
             particles=args.eval_particles,
             seed=args.seed + 30_000 + int(round(cost_weight * 10)),
             goal_norm_max=max(cost_weights),
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         ppo_scalar = scalar_objective(metrics, cost_weight)

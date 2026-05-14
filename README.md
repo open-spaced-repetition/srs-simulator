@@ -80,6 +80,8 @@ uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_def
 
 When CUDA is available, `single_card_tradeoff.py` uses `cuda` by default; pass `--torch-device cpu` to force CPU.
 
+Pass `--env fsrs6 --user-id <id>` to load per-user FSRS-6 weights from `../srs-benchmark`; add `--button-usage ../Anki-button-usage/button_usage.jsonl` to use that user's first/review rating probabilities and learning/review costs in the single-card oracle, PPO, and distillation rollouts. `--env fsrs6_default` keeps the built-in FSRS-6 parameters and default costs.
+
 For supported FSRS-6 sweeps, desired-retention targets are batched in one vectorized run by default. The default targets are `0.1,0.2,0.3,0.4,0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98`; override with `--target-retentions`, or pass `--target-retentions ""` to use the range flags. Fixed-interval sweeps are batched the same way. Plain `--sched fixed` runs intervals `8,16,32,64,128,256,512` by default; override with `--fixed-intervals`. Mixed scheduler families are run as one batch per family. Pass `--target-batch-size 1` to run targets/intervals sequentially. By default, the script also writes a pairwise memory-target regret AUC CSV next to the main CSV. `time_regret_auc` is the average extra deck-scaled minutes/day needed by the scheduler versus the baseline over their common covered memory-target interval, and `relative_regret_auc_percent` divides that by the baseline time AUC.
 
 UVFA PPO single-card experiment (goal-conditioned policy over FSRS-6 target-retention actions):

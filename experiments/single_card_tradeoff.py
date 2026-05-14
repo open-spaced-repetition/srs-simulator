@@ -31,6 +31,11 @@ from experiments.retention_sweep.cli_utils import (
     add_torch_device_arg,
     parse_csv,
 )
+from experiments.single_card_config import (
+    load_single_card_fsrs6_config,
+    SingleCardFSRS6Config,
+    SUPPORTED_SINGLE_CARD_ENVS,
+)
 from simulator import simulate as simulate_event
 from simulator.behavior import StochasticBehavior
 from simulator.button_usage import load_button_usage_config, normalize_button_usage
@@ -435,6 +440,20 @@ def _default_torch_device() -> str | None:
     if torch.cuda.is_available():
         return "cuda"
     return None
+
+
+def _fsrs_config_kwargs(
+    fsrs_config: SingleCardFSRS6Config | None,
+) -> dict[str, Any]:
+    if fsrs_config is None:
+        return {}
+    return {
+        "fsrs_weights": fsrs_config.fsrs_weights,
+        "first_rating_prob": fsrs_config.first_rating_prob,
+        "review_rating_prob": fsrs_config.review_rating_prob,
+        "learning_costs": fsrs_config.learning_costs,
+        "review_costs": fsrs_config.review_costs,
+    }
 
 
 def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
@@ -1301,6 +1320,7 @@ def _evaluate_fsrs6_oracle_policies(
     action_retentions: Sequence[float],
     cost_weights: Sequence[float],
     seed: int,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
     from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch, SimMetrics
 
@@ -1316,6 +1336,7 @@ def _evaluate_fsrs6_oracle_policies(
         dtype=torch.float64,
         seed=seed,
         exact_memory=True,
+        **_fsrs_config_kwargs(fsrs_config),
     )
     goal_indices = torch.repeat_interleave(
         torch.arange(weight_count, device=device, dtype=torch.int64),
@@ -1377,6 +1398,7 @@ def _evaluate_fsrs6_oracle_interval_policies(
     policies: torch.Tensor,
     cost_weights: Sequence[float],
     seed: int,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
     from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch, SimMetrics
 
@@ -1392,6 +1414,7 @@ def _evaluate_fsrs6_oracle_interval_policies(
         dtype=torch.float64,
         seed=seed,
         exact_memory=True,
+        **_fsrs_config_kwargs(fsrs_config),
     )
     goal_indices = torch.repeat_interleave(
         torch.arange(weight_count, device=device, dtype=torch.int64),
@@ -1451,8 +1474,10 @@ def _run_fsrs6_oracle(
     scheduler_spec: str,
     seed: int,
 ) -> list[dict[str, Any]]:
-    if environment_name != "fsrs6_default":
-        raise SystemExit("fsrs6_oracle currently supports only --env fsrs6_default.")
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            "fsrs6_oracle currently supports only --env fsrs6_default or --env fsrs6."
+        )
     if args.engine != "vectorized":
         raise SystemExit("fsrs6_oracle is supported only with --engine vectorized.")
     if args.fuzz:
@@ -1462,17 +1487,17 @@ def _run_fsrs6_oracle(
 
     from experiments.fsrs_oracle_frontier import FSRS6GridOracle
 
-    device = (
-        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
-    )
+    device = _resolve_torch_device(args, prefer_cuda=True)
     cost_weights = _oracle_cost_weights(args)
     action_retentions = _oracle_action_retentions(args)
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
     oracle = FSRS6GridOracle(
         days=args.days,
         action_retentions=action_retentions,
         s_grid_size=args.oracle_s_grid_size,
         d_grid_size=args.oracle_d_grid_size,
         device=device,
+        **_fsrs_config_kwargs(fsrs_config),
     )
 
     start = time.perf_counter()
@@ -1485,6 +1510,7 @@ def _run_fsrs6_oracle(
         action_retentions=action_retentions,
         cost_weights=cost_weights,
         seed=seed + 50_000,
+        fsrs_config=fsrs_config,
     )
     runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
 
@@ -1512,9 +1538,10 @@ def _run_fsrs6_oracle_interval(
     scheduler_spec: str,
     seed: int,
 ) -> list[dict[str, Any]]:
-    if environment_name != "fsrs6_default":
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise SystemExit(
-            "fsrs6_oracle_interval currently supports only --env fsrs6_default."
+            "fsrs6_oracle_interval currently supports only --env fsrs6_default "
+            "or --env fsrs6."
         )
     if args.engine != "vectorized":
         raise SystemExit(
@@ -1531,12 +1558,14 @@ def _run_fsrs6_oracle_interval(
 
     device = _resolve_torch_device(args, prefer_cuda=True)
     cost_weights = _oracle_cost_weights(args)
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
     oracle = FSRS6IntervalOracle(
         days=args.days,
         s_grid_size=args.oracle_s_grid_size,
         d_grid_size=args.oracle_d_grid_size,
         interval_chunk_size=args.oracle_interval_chunk_size,
         device=device,
+        **_fsrs_config_kwargs(fsrs_config),
     )
 
     start = time.perf_counter()
@@ -1548,6 +1577,7 @@ def _run_fsrs6_oracle_interval(
         policies=policies,
         cost_weights=cost_weights,
         seed=seed + 60_000,
+        fsrs_config=fsrs_config,
     )
     runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
 
@@ -1575,8 +1605,10 @@ def _run_uvfa_ppo(
     scheduler_spec: str,
     seed: int,
 ) -> list[dict[str, Any]]:
-    if environment_name != "fsrs6_default":
-        raise SystemExit("uvfa_ppo currently supports only --env fsrs6_default.")
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            "uvfa_ppo currently supports only --env fsrs6_default or --env fsrs6."
+        )
     if args.engine != "vectorized":
         raise SystemExit("uvfa_ppo is supported only with --engine vectorized.")
     if args.fuzz:
@@ -1597,6 +1629,7 @@ def _run_uvfa_ppo(
         args,
         policy_cost_weights=policy_cost_weights,
     )
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
     for cost_weight in cost_weights:
@@ -1611,6 +1644,7 @@ def _run_uvfa_ppo(
             seed=seed + 30_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=goal_norm_max,
             obs_mode=obs_mode,
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         rows.append(
@@ -1699,9 +1733,10 @@ def _run_uvfa_ppo_rnn_interval(
     scheduler_spec: str,
     seed: int,
 ) -> list[dict[str, Any]]:
-    if environment_name != "fsrs6_default":
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise SystemExit(
-            "uvfa_ppo_rnn_interval currently supports only --env fsrs6_default."
+            "uvfa_ppo_rnn_interval currently supports only --env fsrs6_default "
+            "or --env fsrs6."
         )
     if args.engine != "vectorized":
         raise SystemExit(
@@ -1712,9 +1747,7 @@ def _run_uvfa_ppo_rnn_interval(
 
     from experiments.uvfa_ppo_rnn_interval import evaluate_policy
 
-    device = (
-        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
-    )
+    device = _resolve_torch_device(args, prefer_cuda=True)
     model, policy_cost_weights, goal_norm_max, max_interval_days = (
         _load_uvfa_ppo_rnn_interval_policy(
             args,
@@ -1729,6 +1762,7 @@ def _run_uvfa_ppo_rnn_interval(
         days=args.days,
         max_interval_days=max_interval_days,
     )
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
     for cost_weight in cost_weights:
@@ -1741,6 +1775,7 @@ def _run_uvfa_ppo_rnn_interval(
             particles=args.particles,
             seed=seed + 40_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=goal_norm_max,
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         rows.append(
@@ -1765,9 +1800,10 @@ def _run_fsrs6_oracle_interval_distill(
     scheduler_spec: str,
     seed: int,
 ) -> list[dict[str, Any]]:
-    if environment_name != "fsrs6_default":
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise SystemExit(
-            "fsrs6_oracle_interval_distill currently supports only --env fsrs6_default."
+            "fsrs6_oracle_interval_distill currently supports only "
+            "--env fsrs6_default or --env fsrs6."
         )
     if args.engine != "vectorized":
         raise SystemExit(
@@ -1790,6 +1826,7 @@ def _run_fsrs6_oracle_interval_distill(
         policy_cost_weights=policy_cost_weights,
     )
     eval_args = argparse.Namespace(days=args.days)
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
     for cost_weight in cost_weights:
@@ -1802,6 +1839,7 @@ def _run_fsrs6_oracle_interval_distill(
             particles=args.particles,
             seed=seed + 70_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=goal_norm_max,
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         rows.append(

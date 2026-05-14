@@ -24,11 +24,17 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.fsrs_oracle_frontier import FSRS6IntervalOracle
+from experiments.single_card_config import (
+    add_single_card_fsrs6_config_args,
+    load_single_card_fsrs6_config,
+    SingleCardFSRS6Config,
+)
 from experiments.uvfa_ppo_single_card import (
     DEFAULT_COST_WEIGHTS,
     FSRS6SingleCardBatch,
     ResidualBlock,
     SimMetrics,
+    fsrs_config_kwargs,
     parse_csv_floats,
     scalar_objective,
 )
@@ -53,6 +59,7 @@ def parse_args() -> argparse.Namespace:
         ),
         allow_abbrev=False,
     )
+    add_single_card_fsrs6_config_args(parser)
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--deck-scale", type=int, default=DEFAULT_DECK_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -232,6 +239,7 @@ def train_model(
     oracle: FSRS6IntervalOracle,
     policies: torch.Tensor,
     cost_weights: Sequence[float],
+    fsrs_config: SingleCardFSRS6Config | None,
 ) -> tuple[IntervalDistillNet, DistillTrainStats]:
     torch.manual_seed(args.seed)
     dtype = torch.float32
@@ -246,6 +254,7 @@ def train_model(
         exact_memory=False,
         goal_norm_max=max(cost_weights),
         obs_mode="oracle",
+        **fsrs_config_kwargs(fsrs_config),
     )
     model = IntervalDistillNet(
         obs_dim=env.obs_dim,
@@ -313,6 +322,7 @@ def evaluate_interval_agreement(
     policies: torch.Tensor,
     cost_weights: Sequence[float],
     seed: int,
+    fsrs_config: SingleCardFSRS6Config | None,
 ) -> dict[str, float]:
     dtype = torch.float64
     weight_count = len(cost_weights)
@@ -328,6 +338,7 @@ def evaluate_interval_agreement(
         exact_memory=True,
         goal_norm_max=max(cost_weights),
         obs_mode="oracle",
+        **fsrs_config_kwargs(fsrs_config),
     )
     for weight_idx, cost_weight in enumerate(cost_weights):
         start = weight_idx * args.eval_particles
@@ -409,6 +420,7 @@ def evaluate_policy(
     particles: int,
     seed: int,
     goal_norm_max: float,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> SimMetrics:
     model_dtype = next(model.parameters()).dtype
     env = FSRS6SingleCardBatch(
@@ -422,6 +434,7 @@ def evaluate_policy(
         exact_memory=True,
         goal_norm_max=goal_norm_max,
         obs_mode="oracle",
+        **fsrs_config_kwargs(fsrs_config),
     )
     model.eval()
     while not bool(env.done.all().item()):
@@ -516,6 +529,7 @@ def save_model(
     train_stats: DistillTrainStats,
     eval_stats: dict[str, float],
     oracle_solve_runtime_s: float,
+    fsrs_config: SingleCardFSRS6Config,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
@@ -533,6 +547,7 @@ def save_model(
             "oracle_s_grid_size": args.oracle_s_grid_size,
             "oracle_d_grid_size": args.oracle_d_grid_size,
             "oracle_interval_chunk_size": args.oracle_interval_chunk_size,
+            **fsrs_config.checkpoint_payload(),
             "train_epochs": train_stats.epochs,
             "train_steps_per_epoch": train_stats.steps_per_epoch,
             "train_transitions": train_stats.transitions,
@@ -571,6 +586,7 @@ def main() -> None:
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
     if any(weight < 0.0 for weight in cost_weights):
         raise SystemExit("--cost-weights must be >= 0.")
+    fsrs_config = load_single_card_fsrs6_config(args)
 
     oracle = FSRS6IntervalOracle(
         days=args.days,
@@ -578,6 +594,7 @@ def main() -> None:
         d_grid_size=args.oracle_d_grid_size,
         interval_chunk_size=args.oracle_interval_chunk_size,
         device=device,
+        **fsrs_config_kwargs(fsrs_config),
     )
     oracle_start = time.perf_counter()
     policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)
@@ -589,6 +606,7 @@ def main() -> None:
         oracle=oracle,
         policies=policies,
         cost_weights=cost_weights,
+        fsrs_config=fsrs_config,
     )
     eval_stats = evaluate_interval_agreement(
         args=args,
@@ -598,6 +616,7 @@ def main() -> None:
         policies=policies,
         cost_weights=cost_weights,
         seed=args.seed + 70_000,
+        fsrs_config=fsrs_config,
     )
     save_model(
         args.model_out,
@@ -607,6 +626,7 @@ def main() -> None:
         train_stats=train_stats,
         eval_stats=eval_stats,
         oracle_solve_runtime_s=oracle_solve_runtime_s,
+        fsrs_config=fsrs_config,
     )
 
     rows: list[dict[str, Any]] = []
@@ -620,6 +640,7 @@ def main() -> None:
             particles=args.eval_particles,
             seed=args.seed + 80_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=max(cost_weights),
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         scalar = scalar_objective(metrics, cost_weight)

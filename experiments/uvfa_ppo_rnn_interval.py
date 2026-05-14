@@ -23,6 +23,11 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.fsrs_oracle_frontier import FSRS6GridOracle
+from experiments.single_card_config import (
+    add_single_card_fsrs6_config_args,
+    load_single_card_fsrs6_config,
+    SingleCardFSRS6Config,
+)
 from experiments.single_card_tradeoff import (
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
@@ -35,6 +40,7 @@ from experiments.uvfa_ppo_single_card import (
     best_objective,
     evaluate_fixed_interval,
     evaluate_static_fsrs,
+    fsrs_config_kwargs,
     normalize_advantages,
     parse_csv_floats,
     row_from_metrics,
@@ -53,6 +59,7 @@ def parse_args() -> argparse.Namespace:
         ),
         allow_abbrev=False,
     )
+    add_single_card_fsrs6_config_args(parser)
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
     parser.add_argument("--deck-scale", type=int, default=DEFAULT_DECK_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -322,6 +329,7 @@ class OracleIntervalGuide(IntervalGuide):
         d_grid_size: int,
         device: torch.device,
         progress: bool,
+        fsrs_config: SingleCardFSRS6Config | None = None,
     ) -> None:
         self.horizon = int(days - 1)
         self.device = device
@@ -340,6 +348,7 @@ class OracleIntervalGuide(IntervalGuide):
             action_retentions=action_retentions,
             s_grid_size=s_grid_size,
             d_grid_size=d_grid_size,
+            **fsrs_config_kwargs(fsrs_config),
         )
         self.policy_tables: list[torch.Tensor] = []
         for cost_weight in cost_weights:
@@ -435,6 +444,7 @@ def build_interval_guide(
     device: torch.device,
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> IntervalGuide | None:
     if args.guide_policy == "none":
         return None
@@ -448,6 +458,7 @@ def build_interval_guide(
         d_grid_size=args.oracle_d_grid_size,
         device=device,
         progress=not args.no_progress,
+        fsrs_config=fsrs_config,
     )
 
 
@@ -496,6 +507,7 @@ def train_policy(
     device: torch.device,
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> tuple[RecurrentIntervalPolicyValueNet, TrainStats]:
     torch.manual_seed(args.seed)
     dtype = torch.float32
@@ -512,6 +524,7 @@ def train_policy(
         goal_norm_max=max(cost_weights),
         obs_mode="belief",
         max_interval_days=max_interval_days,
+        **fsrs_config_kwargs(fsrs_config),
     )
     model = RecurrentIntervalPolicyValueNet(
         obs_dim=env.obs_dim,
@@ -532,6 +545,7 @@ def train_policy(
         device=device,
         cost_weights=cost_weights,
         action_retentions=action_retentions,
+        fsrs_config=fsrs_config,
     )
     obs, hidden_state = warmup_policy(
         args=args,
@@ -700,6 +714,7 @@ def evaluate_policy(
     particles: int,
     seed: int,
     goal_norm_max: float,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> SimMetrics:
     model_dtype = next(model.parameters()).dtype
     max_interval_days = args.max_interval_days or args.days * 4
@@ -715,6 +730,7 @@ def evaluate_policy(
         goal_norm_max=goal_norm_max,
         obs_mode="belief",
         max_interval_days=max_interval_days,
+        **fsrs_config_kwargs(fsrs_config),
     )
     hidden_state = model.initial_state(
         particles,
@@ -779,7 +795,9 @@ def save_model(
     args: argparse.Namespace,
     cost_weights: Sequence[float],
     train_stats: TrainStats,
+    fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> None:
+    config_payload = fsrs_config.checkpoint_payload() if fsrs_config is not None else {}
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -805,6 +823,7 @@ def save_model(
             "train_updates": train_stats.updates,
             "train_transitions": train_stats.transitions,
             "train_runtime_s": train_stats.runtime_s,
+            **config_payload,
         },
         path,
     )
@@ -844,12 +863,14 @@ def main() -> None:
     setattr(args, "action_retentions_values", action_retentions)
     fixed_intervals = parse_csv_floats(args.fixed_intervals, name="--fixed-intervals")
     baseline_particles = args.baseline_particles or args.eval_particles
+    fsrs_config = load_single_card_fsrs6_config(args)
 
     model, train_stats = train_policy(
         args,
         device=device,
         cost_weights=cost_weights,
         action_retentions=action_retentions,
+        fsrs_config=fsrs_config,
     )
     save_model(
         args.model_out,
@@ -857,6 +878,7 @@ def main() -> None:
         args=args,
         cost_weights=cost_weights,
         train_stats=train_stats,
+        fsrs_config=fsrs_config,
     )
 
     rows: list[dict[str, Any]] = []
@@ -869,6 +891,7 @@ def main() -> None:
             interval=interval,
             particles=baseline_particles,
             seed=args.seed + 20_000 + int(round(interval)),
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         name = f"fixed@{format_float(interval)}"
@@ -894,6 +917,7 @@ def main() -> None:
             retention=retention,
             particles=baseline_particles,
             seed=args.seed + 10_000 + int(round(retention * 10_000)),
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         name = f"fsrs@{format_float(retention)}"
@@ -922,6 +946,7 @@ def main() -> None:
             particles=args.eval_particles,
             seed=args.seed + 30_000 + int(round(cost_weight * 10.0)),
             goal_norm_max=max(cost_weights),
+            fsrs_config=fsrs_config,
         )
         runtime_s = time.perf_counter() - start
         ppo_scalar = scalar_objective(metrics, cost_weight)
