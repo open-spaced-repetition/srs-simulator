@@ -217,6 +217,7 @@ __marimo__/
 
 # Log files
 logs/
+artifacts/
 
 # Generated images
 *.png

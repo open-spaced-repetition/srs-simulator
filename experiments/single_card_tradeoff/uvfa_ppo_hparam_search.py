@@ -174,17 +174,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--summary-out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_hparam_search_summary.csv"),
+        default=Path(
+            "artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_summary.csv"
+        ),
     )
     parser.add_argument(
         "--detail-out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_hparam_search_detail.csv"),
+        default=Path(
+            "artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_detail.csv"
+        ),
     )
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_hparam_search_models"),
+        default=Path("artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_models"),
     )
     parser.add_argument("--save-models", action="store_true")
     parser.add_argument("--no-progress", action="store_true")

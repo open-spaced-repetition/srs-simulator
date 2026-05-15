@@ -135,12 +135,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/fsrs6_oracle_distill_results.csv"),
+        default=Path("artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv"),
     )
     parser.add_argument(
         "--model-out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/fsrs6_oracle_distill_policy.pt"),
+        default=Path("artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt"),
     )
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()

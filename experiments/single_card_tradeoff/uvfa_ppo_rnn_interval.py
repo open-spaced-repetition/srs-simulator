@@ -162,12 +162,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_rnn_interval_results.csv"),
+        default=Path(
+            "artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_results.csv"
+        ),
     )
     parser.add_argument(
         "--model-out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"),
+        default=Path("artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"),
     )
     parser.add_argument("--plot-path", type=Path, default=None)
     parser.add_argument("--no-plot", action="store_true")

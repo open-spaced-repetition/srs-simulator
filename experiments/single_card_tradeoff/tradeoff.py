@@ -117,15 +117,15 @@ DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS = [
     512,
     1024,
 ]
-DEFAULT_UVFA_PPO_POLICY = Path("logs/single_card_tradeoff/uvfa_ppo_policy.pt")
+DEFAULT_UVFA_PPO_POLICY = Path("artifacts/single_card_tradeoff/uvfa_ppo_policy.pt")
 DEFAULT_FSRS6_ORACLE_DISTILL_POLICY = Path(
-    "logs/single_card_tradeoff/fsrs6_oracle_distill_policy.pt"
+    "artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt"
 )
 DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
-    "logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"
+    "artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"
 )
 DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY = Path(
-    "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt"
+    "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt"
 )
 FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
 FSRS6_ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_distill"
@@ -378,7 +378,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/results.csv"),
+        default=Path("artifacts/single_card_tradeoff/results.csv"),
         help="CSV output path.",
     )
     parser.add_argument(

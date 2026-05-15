@@ -128,7 +128,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/oracle_frontier.csv"),
+        default=Path("artifacts/single_card_tradeoff/oracle_frontier.csv"),
     )
     parser.add_argument("--plot-path", type=Path, default=None)
     parser.add_argument("--no-plot", action="store_true")

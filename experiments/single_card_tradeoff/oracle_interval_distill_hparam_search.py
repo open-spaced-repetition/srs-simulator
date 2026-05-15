@@ -197,21 +197,21 @@ def parse_args() -> argparse.Namespace:
         "--summary-out",
         type=Path,
         default=Path(
-            "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_summary.csv"
+            "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_summary.csv"
         ),
     )
     parser.add_argument(
         "--detail-out",
         type=Path,
         default=Path(
-            "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_detail.csv"
+            "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_detail.csv"
         ),
     )
     parser.add_argument(
         "--model-dir",
         type=Path,
         default=Path(
-            "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_models"
+            "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_models"
         ),
     )
     parser.add_argument("--save-models", action="store_true")

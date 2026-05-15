@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/fsrs6_oracle_policy_outputs.csv"),
+        default=Path("artifacts/single_card_tradeoff/fsrs6_oracle_policy_outputs.csv"),
         help="CSV output path.",
     )
     parser.add_argument(
