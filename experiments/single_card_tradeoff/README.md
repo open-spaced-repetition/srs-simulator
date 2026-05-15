@@ -102,6 +102,21 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 
 The infinite oracle optimizes long-run average `retrievability - goal_cost_weight * minutes` and reports its stationary gain, policy-iteration count, and residual to stdout. The tradeoff CSV still reports the existing finite lifecycle metrics so it remains comparable with the finite-horizon oracle and distilled policies.
 
+For a stationary policy optimized against the finite 1825-day new-card lifecycle, use `fsrs6_oracle_stationary_finite`. It keeps the same `(stability, difficulty, goal cost weight)` policy input as the infinite oracle, initializes from the finite-horizon oracle's visited-state actions, then runs occupancy-weighted policy iteration on the finite lifecycle objective:
+
+```bash
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_stationary_finite --oracle-cost-weights 16,32,64,128,256,512,1024
+```
+
+Train and compare the corresponding distilled stationary finite-lifecycle policy:
+
+```bash
+uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_stationary_finite,fsrs6_oracle_stationary_finite_distill --oracle-stationary-finite-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
+```
+
+The stationary finite oracle reports finite-lifecycle objective, policy-iteration count, and residual to stdout. The distilled checkpoint uses `policy_type=fsrs6_oracle_stationary_finite_distill` and defaults to the `oracle_stationary` observation (`stability`, `difficulty`, and goal cost weight only).
+
 Visualize the solved oracle policy's output distribution over states visited by the policy rollout:
 
 ```bash
