@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 import csv
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
@@ -91,6 +92,34 @@ def parse_args() -> argparse.Namespace:
         help="CSV output path.",
     )
     parser.add_argument(
+        "--detail-out",
+        type=Path,
+        default=None,
+        help=(
+            "Detailed binned CSV output path. Defaults to the summary CSV stem "
+            "with _detail appended."
+        ),
+    )
+    parser.add_argument(
+        "--remaining-bins",
+        type=int,
+        default=8,
+        help="Number of remaining-horizon bins for the detailed CSV.",
+    )
+    parser.add_argument(
+        "--s-bins",
+        type=int,
+        default=8,
+        help="Number of stability bins for the detailed CSV.",
+    )
+    parser.add_argument(
+        "--d-bins",
+        type=int,
+        default=8,
+        help="Number of difficulty bins for the detailed CSV.",
+    )
+    parser.add_argument("--no-detail", action="store_true")
+    parser.add_argument(
         "--plot-path",
         type=Path,
         default=None,
@@ -99,6 +128,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-plot", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
+
+
+@dataclass(frozen=True)
+class BinSpec:
+    indices: torch.Tensor
+    min_values: tuple[float, ...]
+    max_values: tuple[float, ...]
+
+    @property
+    def count(self) -> int:
+        return len(self.min_values)
+
+
+@dataclass(frozen=True)
+class DetailBinSpecs:
+    remaining: BinSpec
+    stability: BinSpec
+    difficulty: BinSpec
+
+
+@dataclass(frozen=True)
+class RolloutCounts:
+    summary: torch.Tensor
+    detail: torch.Tensor | None
+
+
+def _default_detail_path(path: Path) -> Path:
+    suffix = path.suffix or ".csv"
+    return path.with_name(f"{path.stem}_detail{suffix}")
 
 
 def _resolve_device(args: argparse.Namespace) -> torch.device:
@@ -117,6 +175,76 @@ def _fsrs_config_kwargs(config: SingleCardFSRS6Config) -> dict[str, Any]:
         "learning_costs": config.learning_costs,
         "review_costs": config.review_costs,
     }
+
+
+def _build_bin_spec(values: torch.Tensor, requested_bins: int) -> BinSpec:
+    if requested_bins <= 0:
+        raise ValueError("bin counts must be > 0.")
+    flat_values = values.reshape(-1)
+    if flat_values.numel() <= 0:
+        raise ValueError("cannot build bins for an empty tensor.")
+
+    count = min(int(requested_bins), int(flat_values.numel()))
+    positions = torch.arange(
+        int(flat_values.numel()),
+        device=flat_values.device,
+        dtype=torch.int64,
+    )
+    indices = torch.div(
+        positions * count,
+        int(flat_values.numel()),
+        rounding_mode="floor",
+    ).clamp(max=count - 1)
+
+    cpu_values = flat_values.detach().to(device="cpu")
+    cpu_indices = indices.detach().to(device="cpu")
+    min_values: list[float] = []
+    max_values: list[float] = []
+    for bin_idx in range(count):
+        members = cpu_values[cpu_indices == bin_idx]
+        min_values.append(float(members.min().item()))
+        max_values.append(float(members.max().item()))
+    return BinSpec(
+        indices=indices,
+        min_values=tuple(min_values),
+        max_values=tuple(max_values),
+    )
+
+
+def _build_table_detail_specs(
+    *,
+    args: argparse.Namespace,
+    oracle: FSRS6GridOracle,
+) -> DetailBinSpecs:
+    remaining_values = torch.arange(
+        1,
+        oracle.horizon + 1,
+        device=oracle.device,
+        dtype=oracle.dtype,
+    )
+    return DetailBinSpecs(
+        remaining=_build_bin_spec(remaining_values, args.remaining_bins),
+        stability=_build_bin_spec(oracle.s_grid, args.s_bins),
+        difficulty=_build_bin_spec(oracle.d_grid, args.d_bins),
+    )
+
+
+def _build_rollout_detail_specs(
+    *,
+    args: argparse.Namespace,
+    oracle: FSRS6GridOracle,
+) -> DetailBinSpecs:
+    remaining_values = torch.arange(
+        0,
+        oracle.horizon + 1,
+        device=oracle.device,
+        dtype=oracle.dtype,
+    )
+    return DetailBinSpecs(
+        remaining=_build_bin_spec(remaining_values, args.remaining_bins),
+        stability=_build_bin_spec(oracle.s_grid, args.s_bins),
+        difficulty=_build_bin_spec(oracle.d_grid, args.d_bins),
+    )
 
 
 def _rows_from_counts(
@@ -154,6 +282,92 @@ def _rows_from_counts(
     return rows
 
 
+def _detail_rows_from_counts(
+    *,
+    args: argparse.Namespace,
+    fsrs_config: SingleCardFSRS6Config,
+    source: str,
+    cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+    counts: torch.Tensor,
+    specs: DetailBinSpecs,
+) -> list[dict[str, Any]]:
+    counts = counts.to(device="cpu")
+    rows: list[dict[str, Any]] = []
+    weight_totals = counts.sum(dim=(1, 2, 3, 4))
+    bin_totals = counts.sum(dim=4)
+    for weight_idx, cost_weight in enumerate(cost_weights):
+        weight_total = int(weight_totals[weight_idx].item())
+        for remaining_bin in range(specs.remaining.count):
+            for stability_bin in range(specs.stability.count):
+                for difficulty_bin in range(specs.difficulty.count):
+                    bin_total = int(
+                        bin_totals[
+                            weight_idx,
+                            remaining_bin,
+                            stability_bin,
+                            difficulty_bin,
+                        ].item()
+                    )
+                    if bin_total <= 0:
+                        continue
+                    for action_idx, retention in enumerate(action_retentions):
+                        count = int(
+                            counts[
+                                weight_idx,
+                                remaining_bin,
+                                stability_bin,
+                                difficulty_bin,
+                                action_idx,
+                            ].item()
+                        )
+                        rows.append(
+                            {
+                                "environment": fsrs_config.environment,
+                                "source": source,
+                                "days": args.days,
+                                "particles": (
+                                    args.particles if source == "rollout" else ""
+                                ),
+                                "seed": args.seed if source == "rollout" else "",
+                                "s_grid_size": args.s_grid_size,
+                                "d_grid_size": args.d_grid_size,
+                                "goal_cost_weight": cost_weight,
+                                "remaining_bin": remaining_bin,
+                                "remaining_days_min": specs.remaining.min_values[
+                                    remaining_bin
+                                ],
+                                "remaining_days_max": specs.remaining.max_values[
+                                    remaining_bin
+                                ],
+                                "stability_bin": stability_bin,
+                                "stability_min": specs.stability.min_values[
+                                    stability_bin
+                                ],
+                                "stability_max": specs.stability.max_values[
+                                    stability_bin
+                                ],
+                                "difficulty_bin": difficulty_bin,
+                                "difficulty_min": specs.difficulty.min_values[
+                                    difficulty_bin
+                                ],
+                                "difficulty_max": specs.difficulty.max_values[
+                                    difficulty_bin
+                                ],
+                                "action_index": action_idx,
+                                "action_retention": retention,
+                                "decision_count": count,
+                                "bin_decision_share": count / bin_total,
+                                "weight_decision_share": (
+                                    count / weight_total if weight_total > 0 else 0.0
+                                ),
+                                "bin_total_decisions": bin_total,
+                                "weight_total_decisions": weight_total,
+                            }
+                        )
+    return rows
+
+
 def _count_table_outputs(
     *,
     policies: torch.Tensor,
@@ -173,6 +387,48 @@ def _count_table_outputs(
     return counts
 
 
+def _count_table_detail_outputs(
+    *,
+    policies: torch.Tensor,
+    action_count: int,
+    specs: DetailBinSpecs,
+) -> torch.Tensor:
+    nonterminal = policies[:, 1:, :, :]
+    weight_count = int(nonterminal.shape[0])
+    counts = torch.zeros(
+        (
+            weight_count,
+            specs.remaining.count,
+            specs.stability.count,
+            specs.difficulty.count,
+            action_count,
+        ),
+        device=policies.device,
+        dtype=torch.int64,
+    )
+    remaining_code = specs.remaining.indices[:, None, None]
+    stability_code = specs.stability.indices[None, :, None]
+    difficulty_code = specs.difficulty.indices[None, None, :]
+    bin_code = (
+        (remaining_code * specs.stability.count + stability_code)
+        * specs.difficulty.count
+        + difficulty_code
+    ).reshape(-1)
+    bin_count = specs.remaining.count * specs.stability.count * specs.difficulty.count
+    for weight_idx in range(weight_count):
+        flat = bin_code * action_count + nonterminal[weight_idx].reshape(-1)
+        counts[weight_idx] = torch.bincount(
+            flat,
+            minlength=bin_count * action_count,
+        ).reshape(
+            specs.remaining.count,
+            specs.stability.count,
+            specs.difficulty.count,
+            action_count,
+        )
+    return counts
+
+
 @torch.inference_mode()
 def _count_rollout_outputs(
     *,
@@ -183,7 +439,8 @@ def _count_rollout_outputs(
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     fsrs_config: SingleCardFSRS6Config,
-) -> torch.Tensor:
+    detail_specs: DetailBinSpecs | None,
+) -> RolloutCounts:
     from tqdm import tqdm
 
     weight_count = len(cost_weights)
@@ -217,6 +474,21 @@ def _count_rollout_outputs(
         device=device,
         dtype=torch.int64,
     )
+    detail_counts = (
+        torch.zeros(
+            (
+                weight_count,
+                detail_specs.remaining.count,
+                detail_specs.stability.count,
+                detail_specs.difficulty.count,
+                action_count,
+            ),
+            device=device,
+            dtype=torch.int64,
+        )
+        if detail_specs is not None
+        else None
+    )
     progress_bar = None
     completed = 0
     if not args.no_progress:
@@ -240,6 +512,49 @@ def _count_rollout_outputs(
                 minlength=weight_count * action_count,
             ).reshape(weight_count, action_count)
 
+            if detail_specs is not None and detail_counts is not None:
+                active_remaining = remaining[active].to(torch.int64)
+                remaining_bin = detail_specs.remaining.indices.index_select(
+                    0,
+                    active_remaining,
+                )
+                stability_bin = detail_specs.stability.indices.index_select(
+                    0,
+                    s_idx[active],
+                )
+                difficulty_bin = detail_specs.difficulty.indices.index_select(
+                    0,
+                    d_idx[active],
+                )
+                detail_flat = (
+                    (
+                        (
+                            goal_indices[active] * detail_specs.remaining.count
+                            + remaining_bin
+                        )
+                        * detail_specs.stability.count
+                        + stability_bin
+                    )
+                    * detail_specs.difficulty.count
+                    + difficulty_bin
+                ) * action_count + action[active]
+                detail_counts += torch.bincount(
+                    detail_flat,
+                    minlength=(
+                        weight_count
+                        * detail_specs.remaining.count
+                        * detail_specs.stability.count
+                        * detail_specs.difficulty.count
+                        * action_count
+                    ),
+                ).reshape(
+                    weight_count,
+                    detail_specs.remaining.count,
+                    detail_specs.stability.count,
+                    detail_specs.difficulty.count,
+                    action_count,
+                )
+
             env.step(action)
             if progress_bar is not None:
                 next_completed = int(env.done.sum().item())
@@ -249,7 +564,7 @@ def _count_rollout_outputs(
         if progress_bar is not None:
             progress_bar.close()
 
-    return counts
+    return RolloutCounts(summary=counts, detail=detail_counts)
 
 
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -268,6 +583,41 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "decision_count",
         "decision_share",
         "total_decisions",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def write_detail_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "environment",
+        "source",
+        "days",
+        "particles",
+        "seed",
+        "s_grid_size",
+        "d_grid_size",
+        "goal_cost_weight",
+        "remaining_bin",
+        "remaining_days_min",
+        "remaining_days_max",
+        "stability_bin",
+        "stability_min",
+        "stability_max",
+        "difficulty_bin",
+        "difficulty_min",
+        "difficulty_max",
+        "action_index",
+        "action_retention",
+        "decision_count",
+        "bin_decision_share",
+        "weight_decision_share",
+        "bin_total_decisions",
+        "weight_total_decisions",
     ]
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -369,6 +719,28 @@ def _print_summary(rows: Sequence[dict[str, Any]]) -> None:
         )
 
 
+def _print_detail_summary(counts: torch.Tensor) -> None:
+    counts = counts.to(device="cpu")
+    bin_totals = counts.sum(dim=4)
+    nonempty = bin_totals > 0
+    if not bool(nonempty.any().item()):
+        print("detail_bins=0")
+        return
+    modal = counts.max(dim=4).values
+    modal_share = modal[nonempty].to(dtype=torch.float64) / bin_totals[nonempty].to(
+        dtype=torch.float64
+    )
+    print(
+        " ".join(
+            [
+                f"detail_bins={int(nonempty.sum().item())}",
+                f"median_modal_share={float(torch.median(modal_share).item()):.3f}",
+                f"p10_modal_share={float(torch.quantile(modal_share, 0.10).item()):.3f}",
+            ]
+        )
+    )
+
+
 def main() -> None:
     args = parse_args()
     if args.days <= 1:
@@ -377,6 +749,8 @@ def main() -> None:
         raise SystemExit("--particles must be > 0.")
     if args.s_grid_size < 8 or args.d_grid_size < 8:
         raise SystemExit("--oracle grid sizes must be >= 8.")
+    if args.remaining_bins <= 0 or args.s_bins <= 0 or args.d_bins <= 0:
+        raise SystemExit("--remaining-bins, --s-bins, and --d-bins must be > 0.")
 
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
     if any(value < 0.0 for value in cost_weights):
@@ -399,14 +773,30 @@ def main() -> None:
         **_fsrs_config_kwargs(fsrs_config),
     )
     policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)
+    detail_specs = None
+    if not args.no_detail:
+        detail_specs = (
+            _build_table_detail_specs(args=args, oracle=oracle)
+            if args.source == "table"
+            else _build_rollout_detail_specs(args=args, oracle=oracle)
+        )
 
     if args.source == "table":
         counts = _count_table_outputs(
             policies=policies,
             action_count=len(action_retentions),
         )
+        detail_counts = (
+            _count_table_detail_outputs(
+                policies=policies,
+                action_count=len(action_retentions),
+                specs=detail_specs,
+            )
+            if detail_specs is not None
+            else None
+        )
     else:
-        counts = _count_rollout_outputs(
+        rollout_counts = _count_rollout_outputs(
             args=args,
             device=device,
             oracle=oracle,
@@ -414,7 +804,10 @@ def main() -> None:
             cost_weights=cost_weights,
             action_retentions=action_retentions,
             fsrs_config=fsrs_config,
+            detail_specs=detail_specs,
         )
+        counts = rollout_counts.summary
+        detail_counts = rollout_counts.detail
 
     rows = _rows_from_counts(
         args=args,
@@ -425,6 +818,22 @@ def main() -> None:
         counts=counts,
     )
     write_csv(args.out, rows)
+    detail_out: Path | None = None
+    if detail_specs is not None and detail_counts is not None:
+        resolved_detail_out = _default_detail_path(args.out)
+        if args.detail_out is not None:
+            resolved_detail_out = Path(args.detail_out)
+        detail_out = resolved_detail_out
+        detail_rows = _detail_rows_from_counts(
+            args=args,
+            fsrs_config=fsrs_config,
+            source=args.source,
+            cost_weights=cost_weights,
+            action_retentions=action_retentions,
+            counts=detail_counts,
+            specs=detail_specs,
+        )
+        write_detail_csv(resolved_detail_out, detail_rows)
     if not args.no_plot:
         plot_path = args.plot_path or args.out.with_suffix(".png")
         write_plot(
@@ -436,6 +845,13 @@ def main() -> None:
         )
         print(f"Wrote plot: {plot_path}")
     print(f"Wrote CSV: {args.out}")
+    if (
+        detail_specs is not None
+        and detail_counts is not None
+        and detail_out is not None
+    ):
+        print(f"Wrote detail CSV: {detail_out}")
+        _print_detail_summary(detail_counts)
     _print_summary(rows)
 
 

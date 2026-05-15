@@ -68,6 +68,7 @@ DEFAULT_CANDIDATES = (
     "res48d3=residual:48:3,"
     "res48d2=residual:48:2,"
     "res32d2=residual:32:2,"
+    "res16d2=residual:16:2,"
     "mlp96=mlp:96:1,"
     "mlp64=mlp:64:1"
 )
@@ -175,7 +176,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-grad-norm", type=float, default=DEFAULT_MAX_GRAD_NORM)
     parser.add_argument(
         "--obs-mode",
-        choices=["basic", "rich", "belief", "oracle"],
+        choices=[
+            "basic",
+            "rich",
+            "belief",
+            "oracle",
+            "oracle_rho",
+            "oracle_rho4",
+            "oracle_rho3",
+        ],
         default=DEFAULT_DISTILL_OBS_MODE,
     )
     parser.add_argument(

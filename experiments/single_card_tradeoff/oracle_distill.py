@@ -54,8 +54,8 @@ DEFAULT_STEPS_PER_EPOCH = 64
 DEFAULT_EVAL_PARTICLES = 10_000
 DEFAULT_AGREEMENT_ENVS = 4096
 DEFAULT_AGREEMENT_STEPS = 256
-DEFAULT_DISTILL_OBS_MODE = "oracle"
-DEFAULT_DISTILL_HIDDEN_SIZE = 32
+DEFAULT_DISTILL_OBS_MODE = "oracle_rho4"
+DEFAULT_DISTILL_HIDDEN_SIZE = 16
 DEFAULT_DISTILL_NETWORK_DEPTH = 2
 
 
@@ -97,11 +97,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument(
         "--obs-mode",
-        choices=["basic", "rich", "belief", "oracle"],
+        choices=[
+            "basic",
+            "rich",
+            "belief",
+            "oracle",
+            "oracle_rho",
+            "oracle_rho4",
+            "oracle_rho3",
+        ],
         default=DEFAULT_DISTILL_OBS_MODE,
         help=(
             "Observation features for the distilled policy. 'oracle' is the 4D "
-            "teacher-state input: stability, difficulty, remaining horizon, and goal."
+            "teacher-state input; oracle_rho variants add or substitute the "
+            "log remaining/stability ratio feature."
         ),
     )
     parser.add_argument(

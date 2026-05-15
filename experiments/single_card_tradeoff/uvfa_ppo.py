@@ -134,11 +134,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--obs-mode",
-        choices=["basic", "rich", "oracle"],
+        choices=[
+            "basic",
+            "rich",
+            "oracle",
+            "oracle_rho",
+            "oracle_rho4",
+            "oracle_rho3",
+        ],
         default=DEFAULT_OBS_MODE,
         help=(
             "Observation features for the UVFA policy. 'oracle' uses only "
-            "stability, difficulty, remaining horizon, and goal cost weight."
+            "stability, difficulty, remaining horizon, and goal cost weight; "
+            "oracle_rho variants add or substitute the log remaining/stability ratio."
         ),
     )
     parser.add_argument(
@@ -291,8 +299,19 @@ class FSRS6SingleCardBatch:
             raise ValueError("cost weights must be >= 0.")
         if any(retention <= 0.0 or retention >= 1.0 for retention in action_retentions):
             raise ValueError("action retentions must be within (0, 1).")
-        if obs_mode not in {"basic", "rich", "belief", "oracle"}:
-            raise ValueError("obs_mode must be 'basic', 'rich', 'belief', or 'oracle'.")
+        if obs_mode not in {
+            "basic",
+            "rich",
+            "belief",
+            "oracle",
+            "oracle_rho",
+            "oracle_rho4",
+            "oracle_rho3",
+        }:
+            raise ValueError(
+                "obs_mode must be 'basic', 'rich', 'belief', 'oracle', "
+                "'oracle_rho', 'oracle_rho4', or 'oracle_rho3'."
+            )
 
         self.days = int(days)
         self.env_count = int(env_count)
@@ -399,10 +418,14 @@ class FSRS6SingleCardBatch:
             return 7
         if self.obs_mode == "oracle":
             return 4
+        if self.obs_mode == "oracle_rho":
+            return 5
+        if self.obs_mode == "oracle_rho4":
+            return 4
+        if self.obs_mode == "oracle_rho3":
+            return 3
         if self.obs_mode == "rich":
             return 13
-        if self.obs_mode == "oracle":
-            return 4
         return 10
 
     @property
@@ -476,6 +499,10 @@ class FSRS6SingleCardBatch:
         remaining = torch.clamp((self.days - 1) - self.day, min=0).to(dtype=self.dtype)
         remaining_norm = remaining / float(self.days - 1)
         log_remaining_norm = torch.log1p(remaining) / math.log1p(float(self.days - 1))
+        rho = torch.log1p(remaining) - log_s
+        rho_min = -log_s_max
+        rho_max = math.log1p(float(self.days - 1)) - log_s_min
+        rho_norm = (rho - rho_min) / (rho_max - rho_min)
         interval_norm = torch.log1p(
             torch.clamp(self.last_interval, min=0.0)
         ) / math.log1p(float(self.days * 4))
@@ -510,6 +537,39 @@ class FSRS6SingleCardBatch:
                 dim=1,
             )
 
+        if self.obs_mode == "oracle_rho":
+            return torch.stack(
+                [
+                    s_norm,
+                    d_norm,
+                    log_remaining_norm,
+                    goal_norm,
+                    rho_norm,
+                ],
+                dim=1,
+            )
+
+        if self.obs_mode == "oracle_rho4":
+            return torch.stack(
+                [
+                    rho_norm,
+                    d_norm,
+                    goal_norm,
+                    s_norm,
+                ],
+                dim=1,
+            )
+
+        if self.obs_mode == "oracle_rho3":
+            return torch.stack(
+                [
+                    rho_norm,
+                    d_norm,
+                    goal_norm,
+                ],
+                dim=1,
+            )
+
         rating = self.last_rating.to(dtype=self.dtype)
         if self.obs_mode == "belief":
             return torch.stack(
@@ -524,16 +584,6 @@ class FSRS6SingleCardBatch:
                     (rating == 3.0).to(dtype=self.dtype),
                     (rating == 4.0).to(dtype=self.dtype),
                     pending_norm,
-                ],
-                dim=1,
-            )
-        if self.obs_mode == "oracle":
-            return torch.stack(
-                [
-                    s_norm,
-                    d_norm,
-                    log_remaining_norm,
-                    goal_norm,
                 ],
                 dim=1,
             )
