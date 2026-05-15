@@ -176,6 +176,13 @@ To rerun the model-size search:
 uv run experiments/single_card_tradeoff/oracle_interval_distill_hparam_search.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --eval-particles 3000 --save-models
 ```
 
+The same integer-interval oracle can also be distilled into a continuous desired-retention policy. This keeps the compact `oracle_rho4` residual `16x2` default and executes by converting the predicted retention into the nearest integer review interval inside the day-level simulator:
+
+```bash
+uv run experiments/single_card_tradeoff/oracle_retention_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_distill,fsrs6_oracle_retention_distill --oracle-retention-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt
+```
+
 By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.
 
 Short-term scheduling (event or vectorized engines):

@@ -649,6 +649,21 @@ class FSRS6SingleCardBatch:
         )
         return self._step_active_intervals(active, active_intervals)
 
+    def step_retentions(
+        self, retentions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        active = (~self.done).nonzero(as_tuple=False).squeeze(1)
+        if active.numel() == 0:
+            reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
+            return self.obs(), reward, self.done.clone()
+
+        active_retentions = retentions.index_select(0, active).to(dtype=self.dtype)
+        intervals = self._intervals_for_retentions(
+            self.s.index_select(0, active),
+            active_retentions,
+        )
+        return self._step_active_intervals(active, intervals)
+
     def _step_active_intervals(
         self,
         active: torch.Tensor,
@@ -751,13 +766,23 @@ class FSRS6SingleCardBatch:
         interval = s / self.factor * retention_factor
         return torch.clamp(torch.round(interval), min=1.0).to(torch.int64)
 
+    def _intervals_for_retentions(
+        self, s: torch.Tensor, retention: torch.Tensor
+    ) -> torch.Tensor:
+        clipped_retention = torch.clamp(retention, min=1e-7, max=1.0 - 1e-7)
+        retention_factor = torch.pow(clipped_retention, 1.0 / self.decay) - 1.0
+        interval = s / self.factor * retention_factor
+        return torch.clamp(
+            torch.round(interval),
+            min=1.0,
+            max=float(self.max_interval_days),
+        ).to(torch.int64)
+
     def intervals_for_retention(
         self, s: torch.Tensor, retention: float
     ) -> torch.Tensor:
         retention_tensor = torch.tensor(retention, device=self.device, dtype=self.dtype)
-        retention_factor = torch.pow(retention_tensor, 1.0 / self.decay) - 1.0
-        interval = s / self.factor * retention_factor
-        return torch.clamp(torch.round(interval), min=1.0).to(torch.int64)
+        return self._intervals_for_retentions(s, retention_tensor.expand_as(s))
 
     def _intervals_for_log_interval(self, log_interval: torch.Tensor) -> torch.Tensor:
         clipped = torch.clamp(
