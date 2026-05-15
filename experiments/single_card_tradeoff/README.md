@@ -144,6 +144,21 @@ The repaired continuous desired-retention distill now covers the frontier about 
 
 Before the interval-aware repair, `fsrs6_oracle_retention_distill` looked deceptively strong against `fsrs6_default` (`time_regret_auc=-5.2367`) but had only `15.1%` coverage. Its points were concentrated in the high-memory region, so the AUC was computed over too narrow a memory span. The repaired version expands coverage to `80.4%` and moves the high-cost end from `card_mem≈0.900` to `card_mem≈0.518` at `w=1024`.
 
+PPO oracle-guide ablation results are in `artifacts/single_card_tradeoff/ppo_ablation/ppo_oracle_warmup_ablation_summary.csv`. These runs use the same 10k-particle FSRS-6 default evaluation grid as the PPO comparison above.
+
+| scheduler | ablation | warmup labels | PPO transitions | vs `fsrs6_default` `time_regret_auc` | coverage |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `uvfa_ppo` | default oracle guide | 131,072 | 2,359,296 | -3.6769 | 79.0% |
+| `uvfa_ppo` | no guide | 0 | 2,359,296 | -2.9455 | 80.2% |
+| `uvfa_ppo` | oracle warmup only | 131,072 | 0 | -2.4558 | 27.3% |
+| `uvfa_ppo` | static guide | 131,072 | 2,359,296 | -2.4375 | 73.6% |
+| `uvfa_ppo_rnn_interval` | default oracle guide | 1,572,864 | 2,359,296 | -3.6857 | 78.0% |
+| `uvfa_ppo_rnn_interval` | no guide | 0 | 2,359,296 | -0.1692 | 85.8% |
+| `uvfa_ppo_rnn_interval` | oracle warmup only | 1,572,864 | 0 | -3.6098 | 78.1% |
+| `uvfa_ppo_rnn_interval` | static guide | 1,572,864 | 2,359,296 | +6.8610 | 30.0% |
+
+The UVFA PPO result is not purely inherited from oracle warmup: removing the guide still keeps a useful frontier (`time_regret_auc=-2.9455`), while oracle warmup alone covers only the high-memory portion of the frontier. The RNN interval result is much more oracle-imitation dominated: its oracle-warmup-only checkpoint is within `0.0759` deck-minutes/day of the default oracle-guided checkpoint against `fsrs6_default`, and the no-guide run is nearly flat against the baseline. The static-guide RNN run is unstable at the low-cost edge, spending `1263.13` deck-minutes/day at `w=0`, so its positive AUC should be read as a failed ablation rather than a useful frontier.
+
 ## Lessons
 
 - Coverage is a first-class metric. Always report `time_regret_auc`, `span_coverage_percent`, and enough endpoint rows to show whether the frontier covers both high-memory and low-cost regimes.
@@ -151,6 +166,8 @@ Before the interval-aware repair, `fsrs6_oracle_retention_distill` looked decept
 - For continuous desired-retention distillation, train on the implied interval, not just the retention value. The repaired default keeps retention as the action output but supervises `log(interval(retention))`.
 - Underpredicting intervals is worse than overpredicting intervals at high cost weights. The effective training recipe weights high-cost underprediction and terminal-action underprediction more heavily.
 - Student rollout matters. Teacher-forced states alone did not fix coverage; mixing student-rollout states after warmup exposed the model to the states it actually creates.
+- PPO guide ablations need a warmup-only control. A guided PPO checkpoint can look like a reinforcement-learning win even when most of the deployed behavior came from supervised oracle labels, especially for the RNN interval policy.
+- For the RNN interval policy, the current default is best interpreted as an oracle-imitation policy with PPO fine-tuning. The dense AUC barely changes from oracle warmup only to full training, while no-guide PPO does not recover the same frontier.
 - `oracle_rho4` is a strong compact observation. It gives a 1,536-parameter model enough horizon and stability information to cover the frontier when the loss geometry is right.
 - Train cost weights should be sparse but cover scale: use `0 + 2^0..2^10`. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
 - Integer interval actions are the most direct continuous-action target for the finite-horizon oracle. Continuous desired retention can work, but it needs interval-aware loss shaping and coverage validation.
