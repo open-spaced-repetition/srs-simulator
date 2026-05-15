@@ -677,7 +677,7 @@ class LSTMBatchSchedulerOps:
         self,
         weights: PackedLSTMWeights,
         *,
-        desired_retention: float,
+        desired_retention: float | torch.Tensor,
         min_interval: float = 1.0,
         max_interval: float = 3650.0,
         search_steps: int = 24,
@@ -693,7 +693,20 @@ class LSTMBatchSchedulerOps:
         self.weights = weights
         self.device = device
         self.dtype = dtype
-        self.desired_retention = float(desired_retention)
+        target = torch.as_tensor(desired_retention, device=device, dtype=dtype)
+        if target.ndim == 0:
+            target = target.reshape(())
+        elif target.ndim != 1:
+            raise ValueError(
+                "desired_retention must be scalar or match the user dimension."
+            )
+        if target.numel() not in {1, int(weights.n_users)}:
+            raise ValueError(
+                "desired_retention must be scalar or match the user dimension."
+            )
+        if torch.any((target <= 0.0) | (target >= 1.0)):
+            raise ValueError("desired_retention must be in (0, 1).")
+        self.desired_retention = float(target.flatten()[0].item())
         self.min_interval = float(min_interval)
         self.max_interval = float(max_interval)
         self.search_steps = int(search_steps)
@@ -706,7 +719,7 @@ class LSTMBatchSchedulerOps:
             self.duration_value = torch.tensor(
                 default_duration_ms, device=device, dtype=dtype
             )
-        self._target = torch.tensor(self.desired_retention, device=device, dtype=dtype)
+        self._target = target
         self._min_interval = torch.tensor(self.min_interval, device=device, dtype=dtype)
         self._max_interval = torch.tensor(self.max_interval, device=device, dtype=dtype)
 
@@ -846,6 +859,7 @@ class LSTMBatchSchedulerOps:
         weights = state.mem_w[user_idx, card_idx]
         stabilities = state.mem_s[user_idx, card_idx]
         decays = state.mem_d[user_idx, card_idx]
+        target = self._target_for_users(user_idx)
         min_int = max(1, int(math.ceil(self.min_interval)))
         max_int = max(min_int, int(math.floor(self.max_interval)))
         low = torch.full(
@@ -860,19 +874,19 @@ class LSTMBatchSchedulerOps:
             high = torch.maximum(
                 low, torch.ceil(prev_interval.to(self.dtype)).to(torch.int64)
             )
-        t0 = self._effective_initial_guess(weights, stabilities, decays)
+        t0 = self._effective_initial_guess(weights, stabilities, decays, target)
         high = torch.maximum(high, torch.ceil(t0).to(torch.int64))
         high = torch.clamp(high, max=max_int)
 
         pred_low = self._retention_at(low.to(self.dtype), weights, stabilities, decays)
-        active = pred_low > self._target
+        active = pred_low > target
         if active.any():
             max_tensor = torch.full_like(high, max_int)
             while True:
                 pred_high = self._retention_at(
                     high.to(self.dtype), weights, stabilities, decays
                 )
-                still = (pred_high > self._target) & (high < max_tensor) & active
+                still = (pred_high > target) & (high < max_tensor) & active
                 if not still.any():
                     break
                 high = torch.where(still, torch.minimum(high * 2, max_tensor), high)
@@ -884,7 +898,7 @@ class LSTMBatchSchedulerOps:
                 pred_mid = self._retention_at(
                     mid.to(self.dtype), weights, stabilities, decays
                 )
-                go_high = pred_mid <= self._target
+                go_high = pred_mid <= target
                 high = torch.where(active & go_high, mid, high)
                 low = torch.where(active & ~go_high, mid + 1, low)
 
@@ -901,6 +915,7 @@ class LSTMBatchSchedulerOps:
         weights = state.mem_w[user_idx, card_idx]
         stabilities = state.mem_s[user_idx, card_idx]
         decays = state.mem_d[user_idx, card_idx]
+        target = self._target_for_users(user_idx)
         low = torch.full(
             (user_idx.numel(),),
             max(0.0, self.min_interval),
@@ -921,17 +936,17 @@ class LSTMBatchSchedulerOps:
             ),
             high,
         )
-        t0 = self._effective_initial_guess(weights, stabilities, decays)
+        t0 = self._effective_initial_guess(weights, stabilities, decays, target)
         high = torch.maximum(high, t0)
         high = torch.clamp(high, max=self.max_interval)
 
         r_low = self._retention_at(low, weights, stabilities, decays)
         result = torch.full_like(low, float("nan"))
-        done_low = r_low <= self._target
+        done_low = r_low <= target
         result = torch.where(done_low, low, result)
 
         r_high = self._retention_at(high, weights, stabilities, decays)
-        active = (~done_low) & (r_high > self._target) & (high < self._max_interval)
+        active = (~done_low) & (r_high > target) & (high < self._max_interval)
         while active.any():
             high = torch.where(
                 active,
@@ -943,14 +958,14 @@ class LSTMBatchSchedulerOps:
             r_high = torch.where(
                 active, self._retention_at(high, weights, stabilities, decays), r_high
             )
-            active = (~done_low) & (r_high > self._target) & (high < self._max_interval)
+            active = (~done_low) & (r_high > target) & (high < self._max_interval)
 
-        done_high = (~done_low) & (r_high > self._target)
+        done_high = (~done_low) & (r_high > target)
         result = torch.where(done_high, self._max_interval, result)
 
         active = (~done_low) & ~done_high
-        f_low = r_low - self._target
-        f_high = r_high - self._target
+        f_low = r_low - target
+        f_high = r_high - target
         tol = 1e-3
         for _ in range(self.search_steps):
             active_mask = active & (low < high)
@@ -966,7 +981,7 @@ class LSTMBatchSchedulerOps:
             )
             guess = torch.where(invalid, 0.5 * (low + high), guess)
             pred = self._retention_at(guess, weights, stabilities, decays)
-            f_guess = pred - self._target
+            f_guess = pred - target
             done = active_mask & (torch.abs(f_guess) <= tol)
             result = torch.where(done, guess, result)
 
@@ -1016,6 +1031,7 @@ class LSTMBatchSchedulerOps:
         weights: "torch.Tensor",
         stabilities: "torch.Tensor",
         decays: "torch.Tensor",
+        target: "torch.Tensor",
     ) -> "torch.Tensor":
         denom = stabilities + EPS
         a = torch.sum(weights * decays / denom, dim=-1)
@@ -1025,9 +1041,14 @@ class LSTMBatchSchedulerOps:
         ratio = torch.clamp(ratio, min=1.0 + 1e-6)
         d_eff = 1.0 / (ratio - 1.0)
         s_eff = d_eff / a
-        base = torch.pow(self._target, -1.0 / d_eff) - 1.0
+        base = torch.pow(target, -1.0 / d_eff) - 1.0
         t0 = s_eff * base
         return torch.clamp(t0, min=self.min_interval, max=self.max_interval)
+
+    def _target_for_users(self, user_idx: "torch.Tensor") -> "torch.Tensor":
+        if self._target.ndim == 0 or self._target.numel() == 1:
+            return self._target.reshape(()).expand(user_idx.numel())
+        return self._target.index_select(0, user_idx)
 
     @staticmethod
     def _lstm_retention(

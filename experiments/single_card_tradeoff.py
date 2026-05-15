@@ -4,7 +4,7 @@ from __future__ import annotations
 # pyright: reportPrivateImportUsage=false
 
 import argparse
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 import csv
 from dataclasses import dataclass
 import math
@@ -49,6 +49,8 @@ from simulator.defaults import (
 )
 from simulator.math.fsrs import Bounds
 from simulator.models.fsrs import FSRS6BatchEnvOps
+from simulator.models.lstm import _resolve_benchmark_weights as _resolve_lstm_weights
+from simulator.models.lstm_batch import PackedLSTMWeights
 from simulator.retention_sweep.grid import dr_values
 from simulator.scheduler_spec import (
     format_float,
@@ -57,7 +59,9 @@ from simulator.scheduler_spec import (
     scheduler_uses_desired_retention,
 )
 from simulator.schedulers.fixed import FixedBatchSchedulerOps
-from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
+from simulator.schedulers.fsrs import FSRS3BatchSchedulerOps, FSRS6BatchSchedulerOps
+from simulator.schedulers.hlr import HLRBatchSchedulerOps
+from simulator.schedulers.lstm import LSTMBatchSchedulerOps
 from simulator.vectorized import simulate as simulate_vectorized
 from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
@@ -691,20 +695,6 @@ def _chunks(values: Sequence[float], size: int) -> list[list[float]]:
     return [list(values[idx : idx + size]) for idx in range(0, len(values), size)]
 
 
-def _progress_iter(
-    values: Sequence[float],
-    *,
-    enabled: bool,
-    label: str,
-    unit: str,
-) -> Iterable[float]:
-    if not enabled:
-        return values
-    from tqdm import tqdm
-
-    return tqdm(values, desc=label, unit=unit)
-
-
 def _target_batch_supported(
     args: argparse.Namespace,
     *,
@@ -716,7 +706,8 @@ def _target_batch_supported(
         args.engine == "vectorized"
         and args.target_batch_size != 1
         and environment_name in {"fsrs6", "fsrs6_default"}
-        and scheduler_name in {"fsrs6", "fsrs6_default"}
+        and scheduler_name
+        in {"fsrs6", "fsrs6_default", "fsrs3", "fsrs3_default", "hlr", "lstm"}
         and len(desired_values) > 1
         and all(value is not None for value in desired_values)
     )
@@ -742,6 +733,51 @@ def _fsrs6_weights(obj: Any, *, label: str) -> tuple[float, ...]:
     if weights is None or len(weights) != 21:
         raise ValueError(f"{label} must expose FSRS6 params.weights.")
     return tuple(float(weight) for weight in weights)
+
+
+def _fsrs3_weights(obj: Any, *, label: str) -> tuple[float, ...]:
+    params = getattr(obj, "params", None)
+    weights = getattr(params, "weights", None)
+    if weights is None or len(weights) != 13:
+        raise ValueError(f"{label} must expose FSRS3 params.weights.")
+    return tuple(float(weight) for weight in weights)
+
+
+def _hlr_weights(obj: Any, *, label: str) -> tuple[float, ...]:
+    weights = getattr(obj, "w", None)
+    if weights is None or len(weights) != 3:
+        raise ValueError(f"{label} must expose HLR weights.")
+    return tuple(float(weight) for weight in weights)
+
+
+def _lstm_batch_weights(
+    args: argparse.Namespace,
+    *,
+    rows: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> PackedLSTMWeights:
+    benchmark_root = (
+        Path(args.srs_benchmark_root)
+        if args.srs_benchmark_root is not None
+        else REPO_ROOT.parent / "srs-benchmark"
+    )
+    path = _resolve_lstm_weights(
+        args.user_id or 1,
+        benchmark_root,
+        short_term=False,
+    )
+    if path is None:
+        raise FileNotFoundError(
+            f"LSTM weights for user {args.user_id or 1} not found under "
+            f"{benchmark_root / 'weights'}"
+        )
+    return PackedLSTMWeights.from_paths(
+        [path for _ in range(rows)],
+        use_duration_feature=False,
+        device=device,
+        dtype=dtype,
+    )
 
 
 def _repeat_rows(
@@ -867,14 +903,8 @@ def _run_target_batch(
     target_count = len(desired_values)
 
     env = simulate_cli.ENVIRONMENT_FACTORIES[environment_name](run_args)
-    scheduler = simulate_cli.SCHEDULER_FACTORIES[scheduler_name](run_args)
     env_weights = torch.tensor(
         [_fsrs6_weights(env, label=environment_name) for _ in range(target_count)],
-        device=device,
-        dtype=dtype,
-    )
-    sched_weights = torch.tensor(
-        [_fsrs6_weights(scheduler, label=scheduler_name) for _ in range(target_count)],
         device=device,
         dtype=dtype,
     )
@@ -884,14 +914,75 @@ def _run_target_batch(
         device=device,
         dtype=dtype,
     )
-    sched_ops = FSRS6BatchSchedulerOps(
-        weights=sched_weights,
-        desired_retention=torch.tensor(desired_values, device=device, dtype=dtype),
-        bounds=Bounds(),
-        priority_mode=args.scheduler_priority,
-        device=device,
-        dtype=dtype,
-    )
+    desired = torch.tensor(desired_values, device=device, dtype=dtype)
+    if scheduler_name in {"fsrs6", "fsrs6_default"}:
+        scheduler = simulate_cli.SCHEDULER_FACTORIES[scheduler_name](run_args)
+        sched_weights = torch.tensor(
+            [
+                _fsrs6_weights(scheduler, label=scheduler_name)
+                for _ in range(target_count)
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        sched_ops = FSRS6BatchSchedulerOps(
+            weights=sched_weights,
+            desired_retention=desired,
+            bounds=Bounds(),
+            priority_mode=args.scheduler_priority,
+            device=device,
+            dtype=dtype,
+        )
+    elif scheduler_name in {"fsrs3", "fsrs3_default"}:
+        scheduler = simulate_cli.SCHEDULER_FACTORIES[scheduler_name](run_args)
+        sched_weights = torch.tensor(
+            [
+                _fsrs3_weights(scheduler, label=scheduler_name)
+                for _ in range(target_count)
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        sched_ops = FSRS3BatchSchedulerOps(
+            weights=sched_weights,
+            desired_retention=desired,
+            bounds=Bounds(),
+            device=device,
+            dtype=dtype,
+        )
+    elif scheduler_name == "hlr":
+        scheduler = simulate_cli.SCHEDULER_FACTORIES[scheduler_name](run_args)
+        sched_weights = torch.tensor(
+            [
+                _hlr_weights(scheduler, label=scheduler_name)
+                for _ in range(target_count)
+            ],
+            device=device,
+            dtype=dtype,
+        )
+        sched_ops = HLRBatchSchedulerOps(
+            weights=sched_weights,
+            desired_retention=desired,
+            device=device,
+            dtype=dtype,
+        )
+    elif scheduler_name == "lstm":
+        sched_weights = _lstm_batch_weights(
+            args,
+            rows=target_count,
+            device=device,
+            dtype=dtype,
+        )
+        sched_ops = LSTMBatchSchedulerOps(
+            sched_weights,
+            desired_retention=desired,
+            interval_mode="integer",
+            min_interval=1.0,
+            device=device,
+            dtype=dtype,
+        )
+    else:
+        raise ValueError(f"Unsupported target-batched scheduler '{scheduler_name}'.")
     behavior, cost_model = _make_multiuser_behavior_cost(
         args, rows=target_count, device=device, dtype=dtype
     )
@@ -1509,6 +1600,292 @@ def _evaluate_fsrs6_oracle_interval_policies(
     return metrics
 
 
+def _reset_cost_weight_slices(
+    env: Any,
+    *,
+    cost_weights: Sequence[float],
+    particles: int,
+    device: torch.device,
+) -> None:
+    for weight_idx, cost_weight in enumerate(cost_weights):
+        start = weight_idx * particles
+        stop = start + particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        env.reset_indices(idx, goal_weight=cost_weight)
+
+
+def _single_card_metrics_by_weight(
+    env: Any,
+    *,
+    weight_count: int,
+    particles: int,
+    device: torch.device,
+) -> list[Any]:
+    from experiments.uvfa_ppo_single_card import SimMetrics
+
+    metrics: list[SimMetrics] = []
+    day_count = float(env.days)
+    for weight_idx in range(weight_count):
+        start = weight_idx * particles
+        stop = start + particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        particle_count = float(idx.numel())
+        total_memorized = env.total_memorized.index_select(0, idx).sum().item()
+        total_cost_seconds = env.total_cost_seconds.index_select(0, idx).sum().item()
+        total_reviews = float(env.total_reviews.index_select(0, idx).sum().item())
+        total_lapses = float(env.total_lapses.index_select(0, idx).sum().item())
+        observed_retention = (
+            1.0 - total_lapses / total_reviews if total_reviews > 0.0 else None
+        )
+        metrics.append(
+            SimMetrics(
+                card_expected_retrievability=total_memorized
+                / day_count
+                / particle_count,
+                card_minutes_per_day=total_cost_seconds
+                / day_count
+                / 60.0
+                / particle_count,
+                card_reviews_per_day=total_reviews / day_count / particle_count,
+                card_total_reviews=total_reviews / particle_count,
+                card_total_lapses=total_lapses / particle_count,
+                card_total_cost_seconds=total_cost_seconds / particle_count,
+                observed_retention=observed_retention,
+            )
+        )
+    return metrics
+
+
+def _progress_done(
+    *,
+    enabled: bool,
+    total: int,
+    label: str,
+) -> Any:
+    if not enabled:
+        return None
+    from tqdm import tqdm
+
+    return tqdm(total=total, desc=label, unit="env", leave=False)
+
+
+@torch.inference_mode()
+def _evaluate_action_policy_weights(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    model: Any,
+    action_retentions: Sequence[float],
+    cost_weights: Sequence[float],
+    seed: int,
+    goal_norm_max: float,
+    obs_mode: str,
+    progress_label: str,
+    fsrs_config: SingleCardFSRS6Config | None = None,
+) -> list[Any]:
+    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
+    model_dtype = next(model.parameters()).dtype
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=env_count,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+        goal_norm_max=goal_norm_max,
+        obs_mode=obs_mode,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+    _reset_cost_weight_slices(
+        env,
+        cost_weights=cost_weights,
+        particles=args.particles,
+        device=device,
+    )
+    model.eval()
+    progress = _progress_done(
+        enabled=not args.no_progress,
+        total=env_count,
+        label=progress_label,
+    )
+    completed = 0
+    try:
+        while not bool(env.done.all().item()):
+            obs = env.obs().to(dtype=model_dtype)
+            logits, _ = model(obs)
+            action = torch.argmax(logits, dim=1)
+            env.step(action)
+            if progress is not None:
+                next_completed = int(env.done.sum().item())
+                progress.update(next_completed - completed)
+                completed = next_completed
+    finally:
+        if progress is not None:
+            progress.close()
+    return _single_card_metrics_by_weight(
+        env,
+        weight_count=weight_count,
+        particles=args.particles,
+        device=device,
+    )
+
+
+@torch.inference_mode()
+def _evaluate_interval_distill_weights(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    model: Any,
+    cost_weights: Sequence[float],
+    seed: int,
+    goal_norm_max: float,
+    log_interval_bias: float,
+    terminal_snap_ratio: float,
+    progress_label: str,
+    fsrs_config: SingleCardFSRS6Config | None = None,
+) -> list[Any]:
+    from experiments.fsrs_oracle_interval_distill import predicted_intervals
+    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
+    model_dtype = next(model.parameters()).dtype
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=env_count,
+        cost_weights=cost_weights,
+        action_retentions=[0.9],
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+        goal_norm_max=goal_norm_max,
+        obs_mode="oracle",
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+    _reset_cost_weight_slices(
+        env,
+        cost_weights=cost_weights,
+        particles=args.particles,
+        device=device,
+    )
+    model.eval()
+    progress = _progress_done(
+        enabled=not args.no_progress,
+        total=env_count,
+        label=progress_label,
+    )
+    completed = 0
+    try:
+        while not bool(env.done.all().item()):
+            obs = env.obs().to(dtype=model_dtype)
+            pred_log_interval = model(obs)
+            intervals = predicted_intervals(
+                env=env,
+                log_interval=pred_log_interval,
+                log_interval_bias=log_interval_bias,
+                terminal_snap_ratio=terminal_snap_ratio,
+            )
+            env.step_intervals(intervals)
+            if progress is not None:
+                next_completed = int(env.done.sum().item())
+                progress.update(next_completed - completed)
+                completed = next_completed
+    finally:
+        if progress is not None:
+            progress.close()
+    return _single_card_metrics_by_weight(
+        env,
+        weight_count=weight_count,
+        particles=args.particles,
+        device=device,
+    )
+
+
+@torch.inference_mode()
+def _evaluate_recurrent_interval_weights(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    model: Any,
+    cost_weights: Sequence[float],
+    seed: int,
+    goal_norm_max: float,
+    max_interval_days: int | None,
+    progress_label: str,
+    fsrs_config: SingleCardFSRS6Config | None = None,
+) -> list[Any]:
+    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
+    model_dtype = next(model.parameters()).dtype
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=env_count,
+        cost_weights=cost_weights,
+        action_retentions=[0.9],
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+        goal_norm_max=goal_norm_max,
+        obs_mode="belief",
+        max_interval_days=max_interval_days or args.days * 4,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+    _reset_cost_weight_slices(
+        env,
+        cost_weights=cost_weights,
+        particles=args.particles,
+        device=device,
+    )
+    hidden_state = model.initial_state(
+        env_count,
+        device=device,
+        dtype=model_dtype,
+    )
+    model.eval()
+    progress = _progress_done(
+        enabled=not args.no_progress,
+        total=env_count,
+        label=progress_label,
+    )
+    completed = 0
+    try:
+        while not bool(env.done.all().item()):
+            obs = env.obs().to(dtype=model_dtype)
+            hidden = model.encode(obs, hidden_state)
+            dist, _ = model.dist_value(
+                hidden,
+                env.goal_weight.to(dtype=model_dtype),
+                max_goal_weight=goal_norm_max,
+            )
+            action = dist.mean.squeeze(1)
+            _, _, done = env.step_log_interval(action.to(dtype=env.dtype))
+            hidden_state = hidden.detach()
+            if done.any():
+                hidden_state[done.nonzero(as_tuple=False).squeeze(1)] = 0.0
+            if progress is not None:
+                next_completed = int(done.sum().item())
+                progress.update(next_completed - completed)
+                completed = next_completed
+    finally:
+        if progress is not None:
+            progress.close()
+    return _single_card_metrics_by_weight(
+        env,
+        weight_count=weight_count,
+        particles=args.particles,
+        device=device,
+    )
+
+
 def _run_fsrs6_oracle(
     args: argparse.Namespace,
     *,
@@ -1656,8 +2033,6 @@ def _run_uvfa_ppo(
     if args.fuzz:
         raise SystemExit("uvfa_ppo does not support --fuzz.")
 
-    from experiments.uvfa_ppo_single_card import evaluate_policy
-
     device = (
         torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
     )
@@ -1673,27 +2048,23 @@ def _run_uvfa_ppo(
     )
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
+    start = time.perf_counter()
+    metrics_by_weight = _evaluate_action_policy_weights(
+        args=args,
+        device=device,
+        model=model,
+        action_retentions=action_retentions,
+        cost_weights=cost_weights,
+        seed=seed + 30_000,
+        goal_norm_max=goal_norm_max,
+        obs_mode=obs_mode,
+        progress_label=f"{environment_name}/{scheduler_spec}",
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / max(1, len(cost_weights))
+
     rows: list[dict[str, Any]] = []
-    for cost_weight in _progress_iter(
-        cost_weights,
-        enabled=not args.no_progress,
-        label=f"{environment_name}/{scheduler_spec}",
-        unit="weight",
-    ):
-        start = time.perf_counter()
-        metrics = evaluate_policy(
-            model,
-            args=args,
-            device=device,
-            cost_weight=cost_weight,
-            action_retentions=action_retentions,
-            particles=args.particles,
-            seed=seed + 30_000 + int(round(cost_weight * 10.0)),
-            goal_norm_max=goal_norm_max,
-            obs_mode=obs_mode,
-            fsrs_config=fsrs_config,
-        )
-        runtime_s = time.perf_counter() - start
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
         rows.append(
             _row_from_uvfa_metrics(
                 args,
@@ -1728,8 +2099,6 @@ def _run_fsrs6_oracle_distill(
     if args.fuzz:
         raise SystemExit("fsrs6_oracle_distill does not support --fuzz.")
 
-    from experiments.uvfa_ppo_single_card import evaluate_policy
-
     device = _resolve_torch_device(args, prefer_cuda=True)
     model, action_retentions, policy_cost_weights, goal_norm_max, obs_mode = (
         _load_fsrs6_oracle_distill_policy(
@@ -1743,27 +2112,23 @@ def _run_fsrs6_oracle_distill(
     )
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
+    start = time.perf_counter()
+    metrics_by_weight = _evaluate_action_policy_weights(
+        args=args,
+        device=device,
+        model=model,
+        action_retentions=action_retentions,
+        cost_weights=cost_weights,
+        seed=seed + 35_000,
+        goal_norm_max=goal_norm_max,
+        obs_mode=obs_mode,
+        progress_label=f"{environment_name}/{scheduler_spec}",
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / max(1, len(cost_weights))
+
     rows: list[dict[str, Any]] = []
-    for cost_weight in _progress_iter(
-        cost_weights,
-        enabled=not args.no_progress,
-        label=f"{environment_name}/{scheduler_spec}",
-        unit="weight",
-    ):
-        start = time.perf_counter()
-        metrics = evaluate_policy(
-            model,
-            args=args,
-            device=device,
-            cost_weight=cost_weight,
-            action_retentions=action_retentions,
-            particles=args.particles,
-            seed=seed + 35_000 + int(round(cost_weight * 10.0)),
-            goal_norm_max=goal_norm_max,
-            obs_mode=obs_mode,
-            fsrs_config=fsrs_config,
-        )
-        runtime_s = time.perf_counter() - start
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
         rows.append(
             _row_from_uvfa_metrics(
                 args,
@@ -1798,8 +2163,6 @@ def _run_uvfa_ppo_rnn_interval(
     if args.fuzz:
         raise SystemExit("uvfa_ppo_rnn_interval does not support --fuzz.")
 
-    from experiments.uvfa_ppo_rnn_interval import evaluate_policy
-
     device = _resolve_torch_device(args, prefer_cuda=True)
     model, policy_cost_weights, goal_norm_max, max_interval_days = (
         _load_uvfa_ppo_rnn_interval_policy(
@@ -1811,31 +2174,24 @@ def _run_uvfa_ppo_rnn_interval(
         args,
         policy_cost_weights=policy_cost_weights,
     )
-    eval_args = argparse.Namespace(
-        days=args.days,
-        max_interval_days=max_interval_days,
-    )
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
+    start = time.perf_counter()
+    metrics_by_weight = _evaluate_recurrent_interval_weights(
+        args=args,
+        device=device,
+        model=model,
+        cost_weights=cost_weights,
+        seed=seed + 40_000,
+        goal_norm_max=goal_norm_max,
+        max_interval_days=max_interval_days,
+        progress_label=f"{environment_name}/{scheduler_spec}",
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / max(1, len(cost_weights))
+
     rows: list[dict[str, Any]] = []
-    for cost_weight in _progress_iter(
-        cost_weights,
-        enabled=not args.no_progress,
-        label=f"{environment_name}/{scheduler_spec}",
-        unit="weight",
-    ):
-        start = time.perf_counter()
-        metrics = evaluate_policy(
-            model,
-            args=eval_args,
-            device=device,
-            cost_weight=cost_weight,
-            particles=args.particles,
-            seed=seed + 40_000 + int(round(cost_weight * 10.0)),
-            goal_norm_max=goal_norm_max,
-            fsrs_config=fsrs_config,
-        )
-        runtime_s = time.perf_counter() - start
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
         rows.append(
             _row_from_uvfa_metrics(
                 args,
@@ -1870,8 +2226,6 @@ def _run_fsrs6_oracle_interval_distill(
     if args.fuzz:
         raise SystemExit("fsrs6_oracle_interval_distill does not support --fuzz.")
 
-    from experiments.fsrs_oracle_interval_distill import evaluate_policy
-
     device = _resolve_torch_device(args, prefer_cuda=True)
     (
         model,
@@ -1887,32 +2241,25 @@ def _run_fsrs6_oracle_interval_distill(
         args,
         policy_cost_weights=policy_cost_weights,
     )
-    eval_args = argparse.Namespace(
-        days=args.days,
-        log_interval_bias=log_interval_bias,
-        terminal_snap_ratio=terminal_snap_ratio,
-    )
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
+    start = time.perf_counter()
+    metrics_by_weight = _evaluate_interval_distill_weights(
+        args=args,
+        device=device,
+        model=model,
+        cost_weights=cost_weights,
+        seed=seed + 70_000,
+        goal_norm_max=goal_norm_max,
+        log_interval_bias=log_interval_bias,
+        terminal_snap_ratio=terminal_snap_ratio,
+        progress_label=f"{environment_name}/{scheduler_spec}",
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / max(1, len(cost_weights))
+
     rows: list[dict[str, Any]] = []
-    for cost_weight in _progress_iter(
-        cost_weights,
-        enabled=not args.no_progress,
-        label=f"{environment_name}/{scheduler_spec}",
-        unit="weight",
-    ):
-        start = time.perf_counter()
-        metrics = evaluate_policy(
-            model,
-            args=eval_args,
-            device=device,
-            cost_weight=cost_weight,
-            particles=args.particles,
-            seed=seed + 70_000 + int(round(cost_weight * 10.0)),
-            goal_norm_max=goal_norm_max,
-            fsrs_config=fsrs_config,
-        )
-        runtime_s = time.perf_counter() - start
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
         rows.append(
             _row_from_uvfa_metrics(
                 args,

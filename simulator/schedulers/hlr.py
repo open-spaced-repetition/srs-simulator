@@ -119,3 +119,94 @@ class HLRVectorizedSchedulerOps:
             self._w[0] * state.right[idx] + self._w[1] * state.wrong[idx] + self._w[2],
         )
         return half * self._log_factor
+
+
+@dataclass
+class HLRBatchState:
+    right: "torch.Tensor"
+    wrong: "torch.Tensor"
+
+
+class HLRBatchSchedulerOps:
+    def __init__(
+        self,
+        *,
+        weights: "torch.Tensor",
+        desired_retention: "float | torch.Tensor",
+        device: "torch.device",
+        dtype: "torch.dtype",
+    ) -> None:
+        import torch
+
+        if weights.ndim != 2 or int(weights.shape[1]) != 3:
+            raise ValueError("HLRBatchSchedulerOps expects weights shape (users, 3).")
+        self._torch = torch
+        self.device = device
+        self.dtype = dtype
+        self._w = weights.to(device=device, dtype=dtype)
+        desired = torch.as_tensor(desired_retention, device=device, dtype=dtype)
+        if desired.ndim == 0:
+            desired = desired.expand(weights.shape[0])
+        if desired.shape != (weights.shape[0],):
+            raise ValueError(
+                "desired_retention must be scalar or match the user dimension."
+            )
+        if torch.any((desired <= 0.0) | (desired >= 1.0)):
+            raise ValueError("desired_retention must be between 0 and 1.")
+        self._log_factor = torch.log(desired) / math.log(0.5)
+        self._two = torch.tensor(2.0, device=device, dtype=dtype)
+
+    def init_state(self, user_count: int, deck_size: int) -> HLRBatchState:
+        right = self._torch.zeros(
+            (user_count, deck_size), dtype=self.dtype, device=self.device
+        )
+        wrong = self._torch.zeros_like(right)
+        return HLRBatchState(right=right, wrong=wrong)
+
+    def review_priority(
+        self, state: HLRBatchState, elapsed: "torch.Tensor"
+    ) -> "torch.Tensor":
+        return self._torch.zeros_like(elapsed, dtype=self.dtype, device=self.device)
+
+    def update_review(
+        self,
+        state: HLRBatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        elapsed: "torch.Tensor",
+        rating: "torch.Tensor",
+        prev_interval: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        success = (rating > 1).to(self.dtype)
+        state.right[user_idx, card_idx] += success
+        state.wrong[user_idx, card_idx] += 1.0 - success
+        return self._next_interval(state, user_idx, card_idx)
+
+    def update_learn(
+        self,
+        state: HLRBatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+        rating: "torch.Tensor",
+    ) -> "torch.Tensor":
+        if user_idx.numel() == 0:
+            return self._torch.zeros(0, device=self.device, dtype=self.dtype)
+        success = (rating > 1).to(self.dtype)
+        state.right[user_idx, card_idx] = success
+        state.wrong[user_idx, card_idx] = 1.0 - success
+        return self._next_interval(state, user_idx, card_idx)
+
+    def _next_interval(
+        self,
+        state: HLRBatchState,
+        user_idx: "torch.Tensor",
+        card_idx: "torch.Tensor",
+    ) -> "torch.Tensor":
+        w = self._w.index_select(0, user_idx)
+        right = state.right[user_idx, card_idx]
+        wrong = state.wrong[user_idx, card_idx]
+        half = self._torch.pow(self._two, w[:, 0] * right + w[:, 1] * wrong + w[:, 2])
+        factor = self._log_factor.index_select(0, user_idx)
+        return self._torch.clamp(half * factor, min=1.0)

@@ -517,15 +517,13 @@ class FSRS3BatchSchedulerOps:
         self,
         *,
         weights: "torch.Tensor",
-        desired_retention: float,
+        desired_retention: "float | torch.Tensor",
         bounds: Bounds,
         device: "torch.device",
         dtype: "torch.dtype",
     ) -> None:
         import torch
 
-        if not (0.0 < float(desired_retention) < 1.0):
-            raise ValueError("desired_retention must be between 0 and 1.")
         if weights.ndim != 2 or int(weights.shape[1]) != 13:
             raise ValueError(
                 "FSRS3BatchSchedulerOps expects weights shape (users, 13)."
@@ -536,7 +534,16 @@ class FSRS3BatchSchedulerOps:
         self._weights = weights.to(device=device, dtype=dtype)
         self._bounds = bounds
         self._base = torch.tensor(0.9, device=device, dtype=dtype)
-        self._interval_factor = math.log(float(desired_retention)) / math.log(0.9)
+        desired = torch.as_tensor(desired_retention, device=device, dtype=dtype)
+        if desired.ndim == 0:
+            desired = desired.expand(weights.shape[0])
+        if desired.shape != (weights.shape[0],):
+            raise ValueError(
+                "desired_retention must be scalar or match the user dimension."
+            )
+        if torch.any((desired <= 0.0) | (desired >= 1.0)):
+            raise ValueError("desired_retention must be between 0 and 1.")
+        self._interval_factor = torch.log(desired) / math.log(0.9)
 
     def init_state(self, user_count: int, deck_size: int) -> FSRS3BatchState:
         s = self._torch.full(
@@ -609,9 +616,8 @@ class FSRS3BatchSchedulerOps:
         state.d[user_idx, card_idx] = self._torch.clamp(
             new_d, self._bounds.d_min, self._bounds.d_max
         )
-        return self._torch.clamp(
-            state.s[user_idx, card_idx] * self._interval_factor, min=1.0
-        )
+        interval_factor = self._interval_factor.index_select(0, user_idx)
+        return self._torch.clamp(state.s[user_idx, card_idx] * interval_factor, min=1.0)
 
     def update_learn(
         self,
@@ -635,9 +641,8 @@ class FSRS3BatchSchedulerOps:
         state.d[user_idx, card_idx] = self._torch.clamp(
             d_init, self._bounds.d_min, self._bounds.d_max
         )
-        return self._torch.clamp(
-            state.s[user_idx, card_idx] * self._interval_factor, min=1.0
-        )
+        interval_factor = self._interval_factor.index_select(0, user_idx)
+        return self._torch.clamp(state.s[user_idx, card_idx] * interval_factor, min=1.0)
 
 
 class FSRS3VectorizedSchedulerOps:
