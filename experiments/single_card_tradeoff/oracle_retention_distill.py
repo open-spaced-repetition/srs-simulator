@@ -58,7 +58,14 @@ DEFAULT_HIDDEN_SIZE = 16
 DEFAULT_NETWORK_DEPTH = 2
 DEFAULT_RETENTION_MIN = 1e-4
 DEFAULT_RETENTION_MAX = 0.999
+DEFAULT_INTERVAL_LOSS_WEIGHT = 1.0
+DEFAULT_RETENTION_LOGIT_LOSS_WEIGHT = 0.0
 DEFAULT_AUXILIARY_ACTION_LOSS_WEIGHT = 0.05
+DEFAULT_UNDERPREDICTION_LOSS_WEIGHT = 6.0
+DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT = 12.0
+DEFAULT_STUDENT_ROLLOUT_PROB = 0.75
+DEFAULT_STUDENT_ROLLOUT_WARMUP_EPOCHS = 8
+DEFAULT_TERMINAL_SNAP_RATIO = 0.85
 
 
 @dataclass(frozen=True)
@@ -67,9 +74,11 @@ class DistillTrainStats:
     steps_per_epoch: int
     transitions: int
     final_loss: float
+    final_interval_loss: float
     final_retention_loss: float
     final_auxiliary_loss: float
     mean_loss: float
+    mean_interval_loss: float
     runtime_s: float
 
 
@@ -182,9 +191,68 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retention-min", type=float, default=DEFAULT_RETENTION_MIN)
     parser.add_argument("--retention-max", type=float, default=DEFAULT_RETENTION_MAX)
     parser.add_argument(
+        "--interval-loss-weight",
+        type=float,
+        default=DEFAULT_INTERVAL_LOSS_WEIGHT,
+        help=(
+            "Weight for smooth-L1 loss on the log interval implied by the "
+            "predicted desired retention."
+        ),
+    )
+    parser.add_argument(
+        "--retention-logit-loss-weight",
+        type=float,
+        default=DEFAULT_RETENTION_LOGIT_LOSS_WEIGHT,
+        help="Weight for auxiliary smooth-L1 loss on desired-retention logits.",
+    )
+    parser.add_argument(
         "--auxiliary-action-loss-weight",
         type=float,
         default=DEFAULT_AUXILIARY_ACTION_LOSS_WEIGHT,
+    )
+    parser.add_argument(
+        "--underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_UNDERPREDICTION_LOSS_WEIGHT,
+        help=(
+            "Extra log-interval loss multiplier when the predicted retention "
+            "implies an interval shorter than the teacher interval, scaled by "
+            "normalized cost weight."
+        ),
+    )
+    parser.add_argument(
+        "--terminal-underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT,
+        help=(
+            "Extra log-interval loss multiplier when the teacher chose the "
+            "terminal remaining+1 interval and the model predicts shorter."
+        ),
+    )
+    parser.add_argument(
+        "--student-rollout-prob",
+        type=float,
+        default=DEFAULT_STUDENT_ROLLOUT_PROB,
+        help=(
+            "Probability of stepping the training environment with the interval "
+            "implied by the student's retention after warmup."
+        ),
+    )
+    parser.add_argument(
+        "--student-rollout-warmup-epochs",
+        type=int,
+        default=DEFAULT_STUDENT_ROLLOUT_WARMUP_EPOCHS,
+        help="Teacher-forced warmup epochs before student-rollout sampling.",
+    )
+    parser.add_argument(
+        "--terminal-snap-ratio",
+        type=float,
+        default=DEFAULT_TERMINAL_SNAP_RATIO,
+        help=(
+            "When the rounded interval implied by retention is at least this "
+            "fraction of the remaining horizon, execute remaining+1. Use 0 to "
+            "disable."
+        ),
     )
     parser.add_argument("--oracle-s-grid-size", type=int, default=64)
     parser.add_argument("--oracle-d-grid-size", type=int, default=32)
@@ -236,6 +304,72 @@ def _retention_logits(
         float(retention_max) - float(retention_min)
     )
     return torch.logit(torch.clamp(unit, min=1e-6, max=1.0 - 1e-6))
+
+
+def continuous_intervals_for_retentions(
+    *,
+    env: FSRS6SingleCardBatch,
+    s: torch.Tensor,
+    retention: torch.Tensor,
+) -> torch.Tensor:
+    clipped_retention = torch.clamp(retention, min=1e-7, max=1.0 - 1e-7)
+    retention_factor = torch.pow(clipped_retention, 1.0 / env.decay) - 1.0
+    interval = s / env.factor * retention_factor
+    return torch.clamp(
+        interval,
+        min=1.0,
+        max=float(env.max_interval_days),
+    )
+
+
+def _goal_norm(env: FSRS6SingleCardBatch) -> torch.Tensor:
+    return torch.log1p(env.goal_weight) / math.log1p(max(1.0, env.max_goal_weight))
+
+
+def rounded_intervals_for_retentions(
+    *,
+    env: FSRS6SingleCardBatch,
+    retention: torch.Tensor,
+    terminal_snap_ratio: float,
+) -> torch.Tensor:
+    intervals = env._intervals_for_retentions(env.s, retention)
+    if terminal_snap_ratio > 0.0:
+        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
+        snap = intervals.to(dtype=env.dtype) >= (
+            remaining.to(dtype=env.dtype) * float(terminal_snap_ratio)
+        )
+        intervals = torch.where(snap, remaining + 1, intervals)
+    return intervals
+
+
+def interval_aware_retention_loss(
+    *,
+    pred_log_interval: torch.Tensor,
+    target_log_interval: torch.Tensor,
+    labels: torch.Tensor,
+    env: FSRS6SingleCardBatch,
+    underprediction_loss_weight: float,
+    terminal_underprediction_loss_weight: float,
+) -> torch.Tensor:
+    abs_error = torch.abs(pred_log_interval - target_log_interval)
+    smooth_l1 = torch.where(
+        abs_error < 1.0,
+        0.5 * torch.square(abs_error),
+        abs_error - 0.5,
+    )
+    under = (pred_log_interval < target_log_interval).to(dtype=smooth_l1.dtype)
+    weights = torch.ones_like(smooth_l1)
+    if underprediction_loss_weight:
+        weights = weights + (
+            float(underprediction_loss_weight) * _goal_norm(env) * under
+        )
+    if terminal_underprediction_loss_weight:
+        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
+        terminal = (labels == (remaining + 1)).to(dtype=smooth_l1.dtype)
+        weights = weights + (
+            float(terminal_underprediction_loss_weight) * terminal * under
+        )
+    return torch.mean(smooth_l1 * weights)
 
 
 def target_retentions_for_intervals(
@@ -307,6 +441,8 @@ def train_model(
     )
     obs = env.obs()
     losses: list[float] = []
+    interval_losses: list[float] = []
+    final_interval_loss = math.nan
     final_retention_loss = math.nan
     final_auxiliary_loss = math.nan
     start = time.perf_counter()
@@ -331,14 +467,38 @@ def train_model(
                 retention_max=args.retention_max,
             )
             pred_logit, aux_logits = model(obs)
+            pred_retention = predicted_retentions(
+                pred_logit,
+                retention_min=args.retention_min,
+                retention_max=args.retention_max,
+            )
+            pred_interval = continuous_intervals_for_retentions(
+                env=env,
+                s=env.s,
+                retention=pred_retention,
+            )
+            pred_log_interval = torch.log(pred_interval)
+            target_log_interval = torch.log(interval_labels.to(dtype=dtype))
+            interval_loss = interval_aware_retention_loss(
+                pred_log_interval=pred_log_interval,
+                target_log_interval=target_log_interval,
+                labels=interval_labels,
+                env=env,
+                underprediction_loss_weight=args.underprediction_loss_weight,
+                terminal_underprediction_loss_weight=(
+                    args.terminal_underprediction_loss_weight
+                ),
+            )
             retention_loss = nn.functional.smooth_l1_loss(pred_logit, target_logit)
             aux_labels = auxiliary_action_labels(
                 target_retention=target_retention,
                 action_retentions=action_retention_tensor,
             )
             auxiliary_loss = nn.functional.cross_entropy(aux_logits, aux_labels)
-            loss = retention_loss + (
-                float(args.auxiliary_action_loss_weight) * auxiliary_loss
+            loss = (
+                (float(args.interval_loss_weight) * interval_loss)
+                + (float(args.retention_logit_loss_weight) * retention_loss)
+                + (float(args.auxiliary_action_loss_weight) * auxiliary_loss)
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -346,11 +506,45 @@ def train_model(
             optimizer.step()
             loss_value = float(loss.item())
             losses.append(loss_value)
+            interval_losses.append(float(interval_loss.item()))
             epoch_loss += loss_value
+            final_interval_loss = float(interval_loss.item())
             final_retention_loss = float(retention_loss.item())
             final_auxiliary_loss = float(auxiliary_loss.item())
             with torch.no_grad():
-                next_obs, _, done = env.step_intervals(interval_labels)
+                rollout_prob = (
+                    args.student_rollout_prob
+                    if epoch >= args.student_rollout_warmup_epochs
+                    else 0.0
+                )
+                if rollout_prob > 0.0:
+                    student_logit, _ = model(obs)
+                    student_retention = predicted_retentions(
+                        student_logit,
+                        retention_min=args.retention_min,
+                        retention_max=args.retention_max,
+                    )
+                    student_intervals = rounded_intervals_for_retentions(
+                        env=env,
+                        retention=student_retention,
+                        terminal_snap_ratio=args.terminal_snap_ratio,
+                    )
+                    use_student = (
+                        torch.rand(
+                            (env.env_count,),
+                            device=device,
+                            generator=env.generator,
+                        )
+                        < rollout_prob
+                    )
+                    step_intervals = torch.where(
+                        use_student,
+                        student_intervals,
+                        interval_labels,
+                    )
+                else:
+                    step_intervals = interval_labels
+                next_obs, _, done = env.step_intervals(step_intervals)
                 if done.any():
                     env.reset_indices(done.nonzero(as_tuple=False).squeeze(1))
                     next_obs = env.obs()
@@ -366,9 +560,13 @@ def train_model(
         steps_per_epoch=args.steps_per_epoch,
         transitions=args.epochs * args.steps_per_epoch * args.train_envs,
         final_loss=losses[-1] if losses else math.nan,
+        final_interval_loss=final_interval_loss,
         final_retention_loss=final_retention_loss,
         final_auxiliary_loss=final_auxiliary_loss,
         mean_loss=sum(losses) / len(losses) if losses else math.nan,
+        mean_interval_loss=sum(interval_losses) / len(interval_losses)
+        if interval_losses
+        else math.nan,
         runtime_s=time.perf_counter() - start,
     )
 
@@ -412,6 +610,7 @@ def evaluate_retention_agreement(
     model_dtype = next(model.parameters()).dtype
     total_count = 0.0
     total_loss = 0.0
+    total_abs_log_interval = 0.0
     total_abs_retention = 0.0
     total_abs_logit = 0.0
     total_interval_agree = 0.0
@@ -443,11 +642,26 @@ def evaluate_retention_agreement(
             retention_min=args.retention_min,
             retention_max=args.retention_max,
         )
-        pred_intervals = env._intervals_for_retentions(env.s, pred_retention)
+        pred_continuous_interval = continuous_intervals_for_retentions(
+            env=env,
+            s=env.s,
+            retention=pred_retention,
+        )
+        pred_intervals = rounded_intervals_for_retentions(
+            env=env,
+            retention=pred_retention,
+            terminal_snap_ratio=args.terminal_snap_ratio,
+        )
         active_pred_logit = pred_logit.to(dtype=dtype).index_select(0, active)
         active_target_logit = target_logit.index_select(0, active)
         active_pred_retention = pred_retention.index_select(0, active)
         active_target_retention = target_retention.index_select(0, active)
+        active_pred_log_interval = torch.log(
+            pred_continuous_interval.index_select(0, active)
+        )
+        active_target_log_interval = torch.log(
+            interval_labels.to(dtype=dtype).index_select(0, active)
+        )
         active_pred_interval = pred_intervals.index_select(0, active)
         active_label_interval = interval_labels.index_select(0, active)
         count = float(active.numel())
@@ -462,6 +676,11 @@ def evaluate_retention_agreement(
         )
         total_abs_retention += (
             torch.abs(active_pred_retention - active_target_retention).sum().item()
+        )
+        total_abs_log_interval += (
+            torch.abs(active_pred_log_interval - active_target_log_interval)
+            .sum()
+            .item()
         )
         total_interval_abs += (
             torch.abs(active_pred_interval - active_label_interval)
@@ -478,6 +697,7 @@ def evaluate_retention_agreement(
         "eval_retention_smooth_l1_loss": total_loss / denom,
         "eval_retention_logit_mae": total_abs_logit / denom,
         "eval_retention_mae": total_abs_retention / denom,
+        "eval_log_interval_mae": total_abs_log_interval / denom,
         "eval_interval_mae_days": total_interval_abs / denom,
         "eval_rounded_interval_agreement": total_interval_agree / denom,
         "eval_runtime_s": time.perf_counter() - start_time,
@@ -519,7 +739,12 @@ def evaluate_policy(
             retention_min=args.retention_min,
             retention_max=args.retention_max,
         )
-        env.step_retentions(retention)
+        intervals = rounded_intervals_for_retentions(
+            env=env,
+            retention=retention,
+            terminal_snap_ratio=args.terminal_snap_ratio,
+        )
+        env.step_intervals(intervals)
     return env.metrics()
 
 
@@ -554,9 +779,11 @@ def row_from_metrics(
         "scalar_objective": scalar,
         "runtime_s": runtime_s,
         "train_final_loss": train_stats.final_loss,
+        "train_final_interval_loss": train_stats.final_interval_loss,
         "train_final_retention_loss": train_stats.final_retention_loss,
         "train_final_auxiliary_loss": train_stats.final_auxiliary_loss,
         "train_mean_loss": train_stats.mean_loss,
+        "train_mean_interval_loss": train_stats.mean_interval_loss,
         "train_runtime_s": train_stats.runtime_s,
     }
     row.update(eval_stats)
@@ -585,13 +812,16 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "scalar_objective",
         "runtime_s",
         "train_final_loss",
+        "train_final_interval_loss",
         "train_final_retention_loss",
         "train_final_auxiliary_loss",
         "train_mean_loss",
+        "train_mean_interval_loss",
         "train_runtime_s",
         "eval_retention_smooth_l1_loss",
         "eval_retention_logit_mae",
         "eval_retention_mae",
+        "eval_log_interval_mae",
         "eval_interval_mae_days",
         "eval_rounded_interval_agreement",
         "eval_runtime_s",
@@ -631,7 +861,16 @@ def save_model(
             "network_depth": args.network_depth,
             "retention_min": args.retention_min,
             "retention_max": args.retention_max,
+            "interval_loss_weight": args.interval_loss_weight,
+            "retention_logit_loss_weight": args.retention_logit_loss_weight,
             "auxiliary_action_loss_weight": args.auxiliary_action_loss_weight,
+            "underprediction_loss_weight": args.underprediction_loss_weight,
+            "terminal_underprediction_loss_weight": (
+                args.terminal_underprediction_loss_weight
+            ),
+            "student_rollout_prob": args.student_rollout_prob,
+            "student_rollout_warmup_epochs": args.student_rollout_warmup_epochs,
+            "terminal_snap_ratio": args.terminal_snap_ratio,
             "oracle_s_grid_size": args.oracle_s_grid_size,
             "oracle_d_grid_size": args.oracle_d_grid_size,
             "oracle_interval_chunk_size": args.oracle_interval_chunk_size,
@@ -640,9 +879,11 @@ def save_model(
             "train_steps_per_epoch": train_stats.steps_per_epoch,
             "train_transitions": train_stats.transitions,
             "train_final_loss": train_stats.final_loss,
+            "train_final_interval_loss": train_stats.final_interval_loss,
             "train_final_retention_loss": train_stats.final_retention_loss,
             "train_final_auxiliary_loss": train_stats.final_auxiliary_loss,
             "train_mean_loss": train_stats.mean_loss,
+            "train_mean_interval_loss": train_stats.mean_interval_loss,
             "train_runtime_s": train_stats.runtime_s,
             "oracle_solve_runtime_s": oracle_solve_runtime_s,
             **eval_stats,
@@ -669,8 +910,28 @@ def main() -> None:
         raise SystemExit("--network-depth must be > 0.")
     if not 0.0 < args.retention_min < args.retention_max < 1.0:
         raise SystemExit("--retention-min and --retention-max must be within (0, 1).")
+    if args.interval_loss_weight < 0.0:
+        raise SystemExit("--interval-loss-weight must be >= 0.")
+    if args.retention_logit_loss_weight < 0.0:
+        raise SystemExit("--retention-logit-loss-weight must be >= 0.")
     if args.auxiliary_action_loss_weight < 0.0:
         raise SystemExit("--auxiliary-action-loss-weight must be >= 0.")
+    if args.underprediction_loss_weight < 0.0:
+        raise SystemExit("--underprediction-loss-weight must be >= 0.")
+    if args.terminal_underprediction_loss_weight < 0.0:
+        raise SystemExit("--terminal-underprediction-loss-weight must be >= 0.")
+    if not 0.0 <= args.student_rollout_prob <= 1.0:
+        raise SystemExit("--student-rollout-prob must be within [0, 1].")
+    if args.student_rollout_warmup_epochs < 0:
+        raise SystemExit("--student-rollout-warmup-epochs must be >= 0.")
+    if args.terminal_snap_ratio < 0.0:
+        raise SystemExit("--terminal-snap-ratio must be >= 0.")
+    if (
+        args.interval_loss_weight == 0.0
+        and args.retention_logit_loss_weight == 0.0
+        and args.auxiliary_action_loss_weight == 0.0
+    ):
+        raise SystemExit("At least one loss weight must be > 0.")
     if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
         raise SystemExit("--oracle grid sizes must be >= 8.")
     if args.oracle_interval_chunk_size <= 0:
@@ -767,7 +1028,9 @@ def main() -> None:
         " ".join(
             [
                 f"train_final_loss={train_stats.final_loss:.6f}",
+                f"interval_loss={train_stats.final_interval_loss:.6f}",
                 f"retention_mae={eval_stats['eval_retention_mae']:.6f}",
+                f"log_interval_mae={eval_stats['eval_log_interval_mae']:.6f}",
                 "rounded_interval_agreement="
                 f"{eval_stats['eval_rounded_interval_agreement']:.4f}",
             ]

@@ -1245,7 +1245,7 @@ def _load_fsrs6_oracle_retention_distill_policy(
     args: argparse.Namespace,
     *,
     device: torch.device,
-) -> tuple[Any, list[float], list[float], float, str, float, float]:
+) -> tuple[Any, list[float], list[float], float, str, float, float, float]:
     if not args.oracle_retention_distill_policy.exists():
         raise SystemExit(
             "FSRS6 oracle retention distill policy not found: "
@@ -1307,6 +1307,7 @@ def _load_fsrs6_oracle_retention_distill_policy(
     model.eval()
     retention_min = float(checkpoint.get("retention_min", 1e-4))
     retention_max = float(checkpoint.get("retention_max", 0.999))
+    terminal_snap_ratio = float(checkpoint.get("terminal_snap_ratio", 0.0))
     return (
         model,
         action_retentions,
@@ -1315,6 +1316,7 @@ def _load_fsrs6_oracle_retention_distill_policy(
         obs_mode,
         retention_min,
         retention_max,
+        terminal_snap_ratio,
     )
 
 
@@ -1950,11 +1952,13 @@ def _evaluate_retention_distill_weights(
     obs_mode: str,
     retention_min: float,
     retention_max: float,
+    terminal_snap_ratio: float,
     progress_label: str,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
     from experiments.single_card_tradeoff.oracle_retention_distill import (
         predicted_retentions,
+        rounded_intervals_for_retentions,
     )
     from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
 
@@ -1996,7 +2000,12 @@ def _evaluate_retention_distill_weights(
                 retention_min=retention_min,
                 retention_max=retention_max,
             )
-            env.step_retentions(retention)
+            intervals = rounded_intervals_for_retentions(
+                env=env,
+                retention=retention,
+                terminal_snap_ratio=terminal_snap_ratio,
+            )
+            env.step_intervals(intervals)
             if progress is not None:
                 next_completed = int(env.done.sum().item())
                 progress.update(next_completed - completed)
@@ -2377,6 +2386,7 @@ def _run_fsrs6_oracle_retention_distill(
         obs_mode,
         retention_min,
         retention_max,
+        terminal_snap_ratio,
     ) = _load_fsrs6_oracle_retention_distill_policy(
         args,
         device=device,
@@ -2399,6 +2409,7 @@ def _run_fsrs6_oracle_retention_distill(
         obs_mode=obs_mode,
         retention_min=retention_min,
         retention_max=retention_max,
+        terminal_snap_ratio=terminal_snap_ratio,
         progress_label=f"{environment_name}/{scheduler_spec}",
         fsrs_config=fsrs_config,
     )
