@@ -16,17 +16,17 @@ from typing import Any
 
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.single_card_config import (  # noqa: E402
+from experiments.single_card_tradeoff.config import (  # noqa: E402
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
 )
-from experiments.single_card_tradeoff import DEFAULT_TARGET_RETENTIONS
+from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
@@ -1028,7 +1028,7 @@ def write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> None:
-    from experiments.uvfa_ppo_single_card import evaluate_static_fsrs
+    from experiments.single_card_tradeoff.uvfa_ppo import evaluate_static_fsrs
 
     args = parse_args()
     if args.days <= 1:

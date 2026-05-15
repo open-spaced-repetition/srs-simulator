@@ -75,10 +75,10 @@ uv run experiments/retention_sweep/build_pareto.py --env fsrs6,lstm --sched fsrs
 Single-card lifecycle tradeoff (no daily budget constraints; iid card metrics are linearly scaled to a 10,000-card deck):
 
 ```bash
-uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_default --particles 10000 --deck-scale 10000
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_default --particles 10000 --deck-scale 10000
 ```
 
-When CUDA is available, `single_card_tradeoff.py` uses `cuda` by default; pass `--torch-device cpu` to force CPU.
+When CUDA is available, `tradeoff.py` uses `cuda` by default; pass `--torch-device cpu` to force CPU.
 
 Pass `--env fsrs6 --user-id <id>` to load per-user FSRS-6 weights from `../srs-benchmark`; add `--button-usage ../Anki-button-usage/button_usage.jsonl` to use that user's first/review rating probabilities and learning/review costs in the single-card oracle, PPO, and distillation rollouts. `--env fsrs6_default` keeps the built-in FSRS-6 parameters and default costs.
 
@@ -87,7 +87,7 @@ For supported FSRS-6 sweeps, desired-retention targets are batched in one vector
 UVFA PPO single-card experiment (goal-conditioned policy over FSRS-6 target-retention actions):
 
 ```bash
-uv run experiments/uvfa_ppo_single_card.py --days 1825 --eval-particles 10000 --deck-scale 10000
+uv run experiments/single_card_tradeoff/uvfa_ppo.py --days 1825 --eval-particles 10000 --deck-scale 10000
 ```
 
 The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default training goal weights `16,32,64,128,256,512,1024`; the standard tradeoff sweep evaluates scalarized learned policies and oracles at `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024` by default. It normalizes advantages per goal, uses rich state features and a residual policy/value network with hidden size 64 and depth 3 by default, and uses a finite-horizon FSRS grid oracle as the default warmup/regularization guide. Pass `--guide-policy static` for the older static-FSRS target prior, or `--guide-policy none` for plain PPO. The script writes a comparable CSV/plot under `logs/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
@@ -95,7 +95,7 @@ The PPO objective is `card_expected_retrievability - goal_cost_weight * card_min
 Recurrent UVFA PPO over continuous log-interval actions:
 
 ```bash
-uv run experiments/uvfa_ppo_rnn_interval.py --days 1825 --eval-particles 10000 --deck-scale 10000
+uv run experiments/single_card_tradeoff/uvfa_ppo_rnn_interval.py --days 1825 --eval-particles 10000 --deck-scale 10000
 ```
 
 This variant uses a GRU belief-state encoder over the event observation sequence, concatenates the hidden state with the sampled cost-weight preference, and trains Gaussian PPO in log days. The environment exponentiates the sampled action, rounds it to physical review days, and clamps the interval to `--max-interval-days` (default `days * 4`). Its belief observation does not expose the simulator's internal stability or difficulty state. By default, training uses a finite-horizon FSRS grid oracle as a continuous log-interval warmup and PPO regularization guide; pass `--guide-policy static` or `--guide-policy none` to ablate it.
@@ -103,61 +103,69 @@ This variant uses a GRU belief-state encoder over the event observation sequence
 After training a recurrent interval policy, include it in the standard single-card Pareto sweep with `--sched uvfa_ppo_rnn_interval`:
 
 ```bash
-uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo_rnn_interval --uvfa-ppo-rnn-interval-policy logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo_rnn_interval --uvfa-ppo-rnn-interval-policy logs/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt
 ```
 
 After training a policy, include it in the standard single-card Pareto sweep with `--sched uvfa_ppo`:
 
 ```bash
-uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
 Train a pure FSRS-6 oracle distillation baseline, then compare it directly with the DP oracle and UVFA PPO:
 
 ```bash
-uv run experiments/fsrs_oracle_distill.py --days 1825 --eval-particles 10000 --deck-scale 10000
-uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_distill,uvfa_ppo --oracle-distill-policy logs/single_card_tradeoff/fsrs6_oracle_distill_policy.pt --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
+uv run experiments/single_card_tradeoff/oracle_distill.py --days 1825 --eval-particles 10000 --deck-scale 10000
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_distill,uvfa_ppo --oracle-distill-policy logs/single_card_tradeoff/fsrs6_oracle_distill_policy.pt --uvfa-ppo-policy logs/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
-`fsrs_oracle_distill.py` defaults to the 4-feature oracle observation (`stability`, `difficulty`, remaining horizon, and goal cost weight), the `residual:32:2` sweet-spot architecture, and CUDA when available. Its default teacher weights are `0,1,2,4,8,16,32,64,128,256,512,1024`, so the zero-cost edge is trained directly while the standard tradeoff evaluation still probes intermediate weights. This model has 5,104 parameters, about 9% of the earlier `residual:96:3` model, while matching its default FSRS-6 time-regret AUC within Monte Carlo noise in the 10k-particle comparison (`-3.3155` vs `-3.3140`). A more conservative `residual:48:2` candidate has 10,720 parameters and a slightly stronger scalar-search score, but a slightly weaker 10k-particle time-regret AUC (`-3.2755`). Pass `--obs-mode rich` to train on the larger rollout observation instead. The script also accepts the same `--env fsrs6 --user-id <id>` and `--button-usage` options as the single-card tradeoff runner.
+`oracle_distill.py` defaults to the 4-feature oracle observation (`stability`, `difficulty`, remaining horizon, and goal cost weight), the `residual:32:2` sweet-spot architecture, and CUDA when available. Its default teacher weights are `0,1,2,4,8,16,32,64,128,256,512,1024`, so the zero-cost edge is trained directly while the standard tradeoff evaluation still probes intermediate weights. This model has 5,104 parameters, about 9% of the earlier `residual:96:3` model, while matching its default FSRS-6 time-regret AUC within Monte Carlo noise in the 10k-particle comparison (`-3.3155` vs `-3.3140`). A more conservative `residual:48:2` candidate has 10,720 parameters and a slightly stronger scalar-search score, but a slightly weaker 10k-particle time-regret AUC (`-3.2755`). Pass `--obs-mode rich` to train on the larger rollout observation instead. The script also accepts the same `--env fsrs6 --user-id <id>` and `--button-usage` options as the single-card tradeoff runner.
 
 To rerun the discrete oracle distillation model-size search:
 
 ```bash
-uv run experiments/fsrs_oracle_distill_hparam_search.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --eval-particles 3000 --save-models
+uv run experiments/single_card_tradeoff/oracle_distill_hparam_search.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --eval-particles 3000 --save-models
 ```
 
 Search UVFA PPO model-scale hyperparameters:
 
 ```bash
-uv run experiments/uvfa_ppo_hparam_search.py --days 1825 --eval-particles 3000 --save-models
+uv run experiments/single_card_tradeoff/uvfa_ppo_hparam_search.py --days 1825 --eval-particles 3000 --save-models
 ```
 
 Estimate a finite-horizon FSRS-6 grid oracle frontier:
 
 ```bash
-uv run experiments/fsrs_oracle_frontier.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
+uv run experiments/single_card_tradeoff/oracle_frontier.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
 ```
 
 Use the same finite-horizon oracle policy table as a scheduler in the standard single-card sweep:
 
 ```bash
-uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_oracle --oracle-cost-weights 16,32,64,128,256,512,1024
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle --oracle-cost-weights 16,32,64,128,256,512,1024
 ```
 
-The oracle script uses expected Bellman backups over a `(log stability, difficulty)` grid and discrete desired-retention actions. In `single_card_tradeoff.py`, `fsrs6_oracle` solves all requested scalarization weights in one batched DP pass and evaluates them in one batched Monte Carlo rollout. It writes a single-card CSV/plot under `logs/single_card_tradeoff/` and, by default, includes static-FSRS reference rows evaluated with Monte Carlo particles.
+The oracle script uses expected Bellman backups over a `(log stability, difficulty)` grid and discrete desired-retention actions. In `tradeoff.py`, `fsrs6_oracle` solves all requested scalarization weights in one batched DP pass and evaluates them in one batched Monte Carlo rollout. It writes a single-card CSV/plot under `logs/single_card_tradeoff/` and, by default, includes static-FSRS reference rows evaluated with Monte Carlo particles.
+
+Visualize the solved oracle policy's output distribution over states visited by the policy rollout:
+
+```bash
+uv run experiments/single_card_tradeoff/oracle_policy_outputs.py --source rollout --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
+```
+
+Pass `--source table` to count every nonterminal `(remaining, stability, difficulty)` grid cell equally instead of weighting by rollout visits. The script writes `logs/single_card_tradeoff/fsrs6_oracle_policy_outputs.csv` and `.png`.
 
 The single-card sweep also supports an integer-interval FSRS-6 oracle that enumerates every feasible next interval `1..remaining+1`, where `remaining+1` means no further review before the horizon:
 
 ```bash
-uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval --oracle-cost-weights 16,32,64 --oracle-interval-chunk-size 64
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval --oracle-cost-weights 16,32,64 --oracle-interval-chunk-size 64
 ```
 
 Train the 4D log-interval distillation policy, then include it in the same sweep:
 
 ```bash
-uv run experiments/fsrs_oracle_interval_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
-uv run experiments/single_card_tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval_distill --oracle-interval-distill-policy logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
+uv run experiments/single_card_tradeoff/oracle_interval_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
+uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval_distill --oracle-interval-distill-policy logs/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
 ```
 
 The interval distillation model keeps the same 4D scalar-output network. Its default `residual:64:3` sweet-spot architecture has 25,857 parameters, about 45% of the earlier `residual:96:3` model, while preserving the time-regret advantage in the default FSRS-6 comparison. The more aggressive `residual:32:2` candidate has 4,609 parameters, about 8% of the earlier model, but gives up a small amount of pairwise time-regret AUC against `fsrs6_oracle_distill`. The default training loss weights underpredicted intervals more heavily for high cost weights, mixes in student-rollout states after warmup, and snaps predicted intervals near the remaining horizon to the terminal no-more-review action. These are fixed training/inference rules and do not add learned parameters.
@@ -165,7 +173,7 @@ The interval distillation model keeps the same 4D scalar-output network. Its def
 To rerun the model-size search:
 
 ```bash
-uv run experiments/fsrs_oracle_interval_distill_hparam_search.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --eval-particles 3000 --save-models
+uv run experiments/single_card_tradeoff/oracle_interval_distill_hparam_search.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --eval-particles 3000 --save-models
 ```
 
 By default, SSP-MMC policies are loaded from `../SSP-MMC-FSRS/outputs/policies/user_<id>`. Override with `--sspmmc-policy-dir` or `--sspmmc-policies`. Use `--sched` to compare DR sweeps across schedulers; include `sspmmc` to add policy curves. For fixed intervals, pass `fixed@<days>` in `--sched`. Retention sweep logs default to `logs/retention_sweep/user_<id>`. `build_pareto.py` writes results JSON to `logs/retention_sweep/<config>/` and plots to `experiments/retention_sweep/plots/<config>/`, where `<config>` encodes `--short-term`, `--fuzz`, `--engine`, and compare flags; per-user outputs are disambiguated with `_user_<id>` in the filename. `build_pareto.py` annotates points by default; pass `--hide-labels` to disable, `--fuzz on/off` to filter logs, or `--compare-fuzz` to overlay fuzz on/off curves. The retention sweep defaults to the vectorized engine; pass `--engine event` if you need per-event logs.

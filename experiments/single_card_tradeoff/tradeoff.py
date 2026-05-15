@@ -17,7 +17,7 @@ from typing import Any
 
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -31,7 +31,7 @@ from experiments.retention_sweep.cli_utils import (
     add_torch_device_arg,
     parse_csv,
 )
-from experiments.single_card_config import (
+from experiments.single_card_tradeoff.config import (
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
     SUPPORTED_SINGLE_CARD_ENVS,
@@ -218,7 +218,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_UVFA_PPO_POLICY,
         help=(
             "Path to a UVFA PPO policy checkpoint when --sched contains uvfa_ppo. "
-            "Create one with experiments/uvfa_ppo_single_card.py."
+            "Create one with experiments/single_card_tradeoff/uvfa_ppo.py."
         ),
     )
     parser.add_argument(
@@ -240,7 +240,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Path to an FSRS-6 oracle-distilled policy checkpoint when --sched "
             "contains fsrs6_oracle_distill. Create one with "
-            "experiments/fsrs_oracle_distill.py."
+            "experiments/single_card_tradeoff/oracle_distill.py."
         ),
     )
     parser.add_argument(
@@ -262,7 +262,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Path to a recurrent UVFA PPO log-interval checkpoint when --sched "
             "contains uvfa_ppo_rnn_interval. Create one with "
-            "experiments/uvfa_ppo_rnn_interval.py."
+            "experiments/single_card_tradeoff/uvfa_ppo_rnn_interval.py."
         ),
     )
     parser.add_argument(
@@ -1114,7 +1114,7 @@ def _load_policy_checkpoint(
             f"{policy_label} policy not found: {policy_path}. {train_hint}"
         )
 
-    from experiments.uvfa_ppo_single_card import PolicyValueNet
+    from experiments.single_card_tradeoff.uvfa_ppo import PolicyValueNet
 
     checkpoint = torch.load(policy_path, map_location=device)
     if not isinstance(checkpoint, dict):
@@ -1163,7 +1163,7 @@ def _load_uvfa_ppo_policy(
         device=device,
         policy_label="UVFA PPO",
         train_hint=(
-            "Train one with `uv run experiments/uvfa_ppo_single_card.py "
+            "Train one with `uv run experiments/single_card_tradeoff/uvfa_ppo.py "
             f"--model-out {args.uvfa_ppo_policy}` or pass --uvfa-ppo-policy."
         ),
     )
@@ -1193,7 +1193,7 @@ def _load_fsrs6_oracle_distill_policy(
         device=device,
         policy_label="FSRS-6 oracle-distilled",
         train_hint=(
-            "Train one with `uv run experiments/fsrs_oracle_distill.py "
+            "Train one with `uv run experiments/single_card_tradeoff/oracle_distill.py "
             f"--model-out {args.oracle_distill_policy}` or pass "
             "--oracle-distill-policy."
         ),
@@ -1223,12 +1223,14 @@ def _load_uvfa_ppo_rnn_interval_policy(
         raise SystemExit(
             "Recurrent UVFA PPO interval policy not found: "
             f"{args.uvfa_ppo_rnn_interval_policy}. Train one with "
-            "`uv run experiments/uvfa_ppo_rnn_interval.py --model-out "
+            "`uv run experiments/single_card_tradeoff/uvfa_ppo_rnn_interval.py --model-out "
             f"{args.uvfa_ppo_rnn_interval_policy}` or pass "
             "--uvfa-ppo-rnn-interval-policy."
         )
 
-    from experiments.uvfa_ppo_rnn_interval import RecurrentIntervalPolicyValueNet
+    from experiments.single_card_tradeoff.uvfa_ppo_rnn_interval import (
+        RecurrentIntervalPolicyValueNet,
+    )
 
     checkpoint = torch.load(args.uvfa_ppo_rnn_interval_policy, map_location=device)
     if not isinstance(checkpoint, dict):
@@ -1285,12 +1287,14 @@ def _load_fsrs6_oracle_interval_distill_policy(
         raise SystemExit(
             "FSRS6 oracle interval distill policy not found: "
             f"{args.oracle_interval_distill_policy}. Train one with "
-            "`uv run experiments/fsrs_oracle_interval_distill.py --model-out "
+            "`uv run experiments/single_card_tradeoff/oracle_interval_distill.py --model-out "
             f"{args.oracle_interval_distill_policy}` or pass "
             "--oracle-interval-distill-policy."
         )
 
-    from experiments.fsrs_oracle_interval_distill import IntervalDistillNet
+    from experiments.single_card_tradeoff.oracle_interval_distill import (
+        IntervalDistillNet,
+    )
 
     checkpoint = torch.load(args.oracle_interval_distill_policy, map_location=device)
     if not isinstance(checkpoint, dict):
@@ -1455,7 +1459,10 @@ def _evaluate_fsrs6_oracle_policies(
     seed: int,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch, SimMetrics
+    from experiments.single_card_tradeoff.uvfa_ppo import (
+        FSRS6SingleCardBatch,
+        SimMetrics,
+    )
 
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -1533,7 +1540,10 @@ def _evaluate_fsrs6_oracle_interval_policies(
     seed: int,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch, SimMetrics
+    from experiments.single_card_tradeoff.uvfa_ppo import (
+        FSRS6SingleCardBatch,
+        SimMetrics,
+    )
 
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -1621,7 +1631,7 @@ def _single_card_metrics_by_weight(
     particles: int,
     device: torch.device,
 ) -> list[Any]:
-    from experiments.uvfa_ppo_single_card import SimMetrics
+    from experiments.single_card_tradeoff.uvfa_ppo import SimMetrics
 
     metrics: list[SimMetrics] = []
     day_count = float(env.days)
@@ -1683,7 +1693,7 @@ def _evaluate_action_policy_weights(
     progress_label: str,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+    from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
 
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -1749,8 +1759,10 @@ def _evaluate_interval_distill_weights(
     progress_label: str,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.fsrs_oracle_interval_distill import predicted_intervals
-    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+    from experiments.single_card_tradeoff.oracle_interval_distill import (
+        predicted_intervals,
+    )
+    from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
 
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -1820,7 +1832,7 @@ def _evaluate_recurrent_interval_weights(
     progress_label: str,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.uvfa_ppo_single_card import FSRS6SingleCardBatch
+    from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
 
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -1904,7 +1916,7 @@ def _run_fsrs6_oracle(
     if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
         raise SystemExit("--oracle grid sizes must be >= 8.")
 
-    from experiments.fsrs_oracle_frontier import FSRS6GridOracle
+    from experiments.single_card_tradeoff.oracle_frontier import FSRS6GridOracle
 
     device = _resolve_torch_device(args, prefer_cuda=True)
     cost_weights = _oracle_cost_weights(args)
@@ -1973,7 +1985,7 @@ def _run_fsrs6_oracle_interval(
     if args.oracle_interval_chunk_size <= 0:
         raise SystemExit("--oracle-interval-chunk-size must be > 0.")
 
-    from experiments.fsrs_oracle_frontier import FSRS6IntervalOracle
+    from experiments.single_card_tradeoff.oracle_frontier import FSRS6IntervalOracle
 
     device = _resolve_torch_device(args, prefer_cuda=True)
     cost_weights = _oracle_cost_weights(args)

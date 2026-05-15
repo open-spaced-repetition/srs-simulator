@@ -18,13 +18,13 @@ from typing import Any
 import torch
 from torch import nn
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.fsrs_oracle_distill import (
+from experiments.single_card_tradeoff.oracle_distill import (
     DEFAULT_DISTILL_EPOCHS,
     DEFAULT_DISTILL_OBS_MODE,
     DEFAULT_EVAL_PARTICLES,
@@ -40,16 +40,16 @@ from experiments.fsrs_oracle_distill import (
     resolve_torch_device,
     save_model,
 )
-from experiments.single_card_config import (
+from experiments.single_card_tradeoff.config import (
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.single_card_tradeoff import (
+from experiments.single_card_tradeoff.tradeoff import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
-from experiments.uvfa_ppo_single_card import (
+from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_TRAIN_ENVS,
     FSRS6SingleCardBatch,
     fsrs_config_kwargs,

@@ -12,57 +12,54 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Any
 
-import torch
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.uvfa_ppo_single_card import (
-    DEFAULT_ADVANTAGE_NORMALIZATION,
-    DEFAULT_CLIP_COEF,
+from experiments.single_card_tradeoff.oracle_frontier import FSRS6IntervalOracle
+from experiments.single_card_tradeoff.oracle_interval_distill import (
+    DEFAULT_LOG_INTERVAL_BIAS,
+    DEFAULT_STUDENT_ROLLOUT_PROB,
+    DEFAULT_STUDENT_ROLLOUT_WARMUP_EPOCHS,
+    DEFAULT_TERMINAL_SNAP_RATIO,
+    DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT,
+    DEFAULT_UNDERPREDICTION_LOSS_WEIGHT,
+    IntervalDistillNet,
+    evaluate_interval_agreement,
+    evaluate_policy,
+    resolve_torch_device,
+    save_model,
+    train_model,
+)
+from experiments.single_card_tradeoff.config import (
+    add_single_card_fsrs6_config_args,
+    load_single_card_fsrs6_config,
+)
+from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_COST_WEIGHTS,
-    DEFAULT_ENTROPY_COEF,
-    DEFAULT_GAE_LAMBDA,
-    DEFAULT_GAMMA,
-    DEFAULT_GUIDE_POLICY,
-    DEFAULT_HIDDEN_SIZE,
-    DEFAULT_LEARNING_RATE,
-    DEFAULT_MAX_GRAD_NORM,
-    DEFAULT_MINIBATCH_SIZE,
-    DEFAULT_NETWORK,
-    DEFAULT_NETWORK_DEPTH,
     DEFAULT_ORACLE_D_GRID_SIZE,
     DEFAULT_ORACLE_S_GRID_SIZE,
-    DEFAULT_PPO_EPOCHS,
-    DEFAULT_PRIOR_COEF,
-    DEFAULT_ROLLOUT_STEPS,
-    DEFAULT_TRAIN_ENVS,
-    DEFAULT_TARGET_RETENTIONS,
-    DEFAULT_UPDATES,
-    DEFAULT_VALUE_COEF,
-    DEFAULT_WARMUP_EPOCHS,
-    DEFAULT_WARMUP_STEPS,
-    build_policy_guide,
-    evaluate_policy,
+    fsrs_config_kwargs,
     parse_csv_floats,
     scalar_objective,
-    save_model,
-    train_policy,
 )
-from simulator.defaults import DEFAULT_DAYS, DEFAULT_SEED
+from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
 from simulator.scheduler_spec import format_float
 
 DEFAULT_CANDIDATES = (
-    f"default={DEFAULT_NETWORK}:{DEFAULT_HIDDEN_SIZE}:{DEFAULT_NETWORK_DEPTH},"
     "res96d3=residual:96:3,"
+    "res80d2=residual:80:2,"
     "res64d2=residual:64:2,"
+    "res64d1=residual:64:1,"
     "res48d2=residual:48:2,"
+    "res48d1=residual:48:1,"
     "res32d2=residual:32:2,"
+    "mlp96=mlp:96:1,"
     "mlp64=mlp:64:1"
 )
 
@@ -73,6 +70,13 @@ class Candidate:
     network: str
     hidden_size: int
     network_depth: int
+
+
+def sanitize_name(value: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
+    if not name:
+        raise SystemExit("Candidate names must not be empty.")
+    return name
 
 
 def parse_candidates(raw: str) -> list[Candidate]:
@@ -115,129 +119,152 @@ def parse_candidates(raw: str) -> list[Candidate]:
     return candidates
 
 
-def sanitize_name(value: str) -> str:
-    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", value.strip())
-    if not name:
-        raise SystemExit("Candidate names must not be empty.")
-    return name
+def param_count(candidate: Candidate) -> int:
+    model = IntervalDistillNet(
+        obs_dim=4,
+        hidden_size=candidate.hidden_size,
+        architecture=candidate.network,
+        depth=candidate.network_depth,
+    )
+    return sum(parameter.numel() for parameter in model.parameters())
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Search UVFA PPO model-scale hyperparameters.",
+        description="Search FSRS6 interval oracle distillation model sizes.",
         allow_abbrev=False,
     )
+    add_single_card_fsrs6_config_args(parser)
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS)
+    parser.add_argument("--deck-scale", type=int, default=DEFAULT_DECK_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--torch-device", default=None)
     parser.add_argument(
         "--cost-weights",
         default=",".join(format_float(value) for value in DEFAULT_COST_WEIGHTS),
     )
-    parser.add_argument(
-        "--action-retentions",
-        default=",".join(format_float(value) for value in DEFAULT_TARGET_RETENTIONS),
-    )
     parser.add_argument("--candidates", default=DEFAULT_CANDIDATES)
-    parser.add_argument("--train-envs", type=int, default=DEFAULT_TRAIN_ENVS)
-    parser.add_argument("--updates", type=int, default=DEFAULT_UPDATES)
-    parser.add_argument("--rollout-steps", type=int, default=DEFAULT_ROLLOUT_STEPS)
-    parser.add_argument("--ppo-epochs", type=int, default=DEFAULT_PPO_EPOCHS)
-    parser.add_argument("--minibatch-size", type=int, default=DEFAULT_MINIBATCH_SIZE)
-    parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
-    parser.add_argument("--gamma", type=float, default=DEFAULT_GAMMA)
-    parser.add_argument("--gae-lambda", type=float, default=DEFAULT_GAE_LAMBDA)
+    parser.add_argument("--train-envs", type=int, default=4096)
+    parser.add_argument("--epochs", type=int, default=96)
+    parser.add_argument("--steps-per-epoch", type=int, default=32)
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument(
-        "--advantage-normalization",
-        choices=["global", "goal"],
-        default=DEFAULT_ADVANTAGE_NORMALIZATION,
+        "--underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_UNDERPREDICTION_LOSS_WEIGHT,
     )
     parser.add_argument(
-        "--guide-policy",
-        choices=["oracle", "static", "none"],
-        default=DEFAULT_GUIDE_POLICY,
+        "--terminal-underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT,
     )
     parser.add_argument(
-        "--oracle-s-grid-size", type=int, default=DEFAULT_ORACLE_S_GRID_SIZE
+        "--student-rollout-prob",
+        type=float,
+        default=DEFAULT_STUDENT_ROLLOUT_PROB,
     )
     parser.add_argument(
-        "--oracle-d-grid-size", type=int, default=DEFAULT_ORACLE_D_GRID_SIZE
+        "--student-rollout-warmup-epochs",
+        type=int,
+        default=DEFAULT_STUDENT_ROLLOUT_WARMUP_EPOCHS,
     )
-    parser.add_argument("--clip-coef", type=float, default=DEFAULT_CLIP_COEF)
-    parser.add_argument("--prior-coef", type=float, default=DEFAULT_PRIOR_COEF)
-    parser.add_argument("--entropy-coef", type=float, default=DEFAULT_ENTROPY_COEF)
-    parser.add_argument("--value-coef", type=float, default=DEFAULT_VALUE_COEF)
-    parser.add_argument("--max-grad-norm", type=float, default=DEFAULT_MAX_GRAD_NORM)
-    parser.add_argument("--warmup-epochs", type=int, default=DEFAULT_WARMUP_EPOCHS)
-    parser.add_argument("--warmup-steps", type=int, default=DEFAULT_WARMUP_STEPS)
-    parser.add_argument("--eval-particles", type=int, default=10_000)
+    parser.add_argument(
+        "--terminal-snap-ratio", type=float, default=DEFAULT_TERMINAL_SNAP_RATIO
+    )
+    parser.add_argument(
+        "--log-interval-bias", type=float, default=DEFAULT_LOG_INTERVAL_BIAS
+    )
+    parser.add_argument(
+        "--oracle-s-grid-size",
+        type=int,
+        default=DEFAULT_ORACLE_S_GRID_SIZE,
+    )
+    parser.add_argument(
+        "--oracle-d-grid-size",
+        type=int,
+        default=DEFAULT_ORACLE_D_GRID_SIZE,
+    )
+    parser.add_argument("--oracle-interval-chunk-size", type=int, default=64)
+    parser.add_argument("--eval-particles", type=int, default=3000)
+    parser.add_argument(
+        "--agreement-particles",
+        type=int,
+        default=0,
+        help="Particles per cost weight for agreement metrics. 0 skips agreement eval.",
+    )
     parser.add_argument(
         "--summary-out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_hparam_search_summary.csv"),
+        default=Path(
+            "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_summary.csv"
+        ),
     )
     parser.add_argument(
         "--detail-out",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_hparam_search_detail.csv"),
+        default=Path(
+            "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_detail.csv"
+        ),
     )
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=Path("logs/single_card_tradeoff/uvfa_ppo_hparam_search_models"),
+        default=Path(
+            "logs/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_models"
+        ),
     )
     parser.add_argument("--save-models", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
 
 
-def make_train_args(
+def make_candidate_args(
     args: argparse.Namespace,
     *,
     candidate: Candidate,
     model_out: Path,
 ) -> argparse.Namespace:
     return argparse.Namespace(
+        env=args.env,
+        user_id=args.user_id,
+        benchmark_result=args.benchmark_result,
+        benchmark_partition=args.benchmark_partition,
+        srs_benchmark_root=args.srs_benchmark_root,
+        button_usage=args.button_usage,
         days=args.days,
+        deck_scale=args.deck_scale,
         seed=args.seed,
         torch_device=args.torch_device,
+        cost_weights=args.cost_weights,
         train_envs=args.train_envs,
-        updates=args.updates,
-        rollout_steps=args.rollout_steps,
-        ppo_epochs=args.ppo_epochs,
-        minibatch_size=args.minibatch_size,
+        epochs=args.epochs,
+        steps_per_epoch=args.steps_per_epoch,
         learning_rate=args.learning_rate,
-        gamma=args.gamma,
-        gae_lambda=args.gae_lambda,
-        advantage_normalization=args.advantage_normalization,
-        obs_mode="rich",
-        network=candidate.network,
-        network_depth=candidate.network_depth,
-        guide_policy=args.guide_policy,
-        oracle_s_grid_size=args.oracle_s_grid_size,
-        oracle_d_grid_size=args.oracle_d_grid_size,
-        clip_coef=args.clip_coef,
-        prior_coef=args.prior_coef,
-        entropy_coef=args.entropy_coef,
-        value_coef=args.value_coef,
         max_grad_norm=args.max_grad_norm,
         hidden_size=candidate.hidden_size,
-        warmup_epochs=args.warmup_epochs,
-        warmup_steps=args.warmup_steps,
+        network=candidate.network,
+        network_depth=candidate.network_depth,
+        underprediction_loss_weight=args.underprediction_loss_weight,
+        terminal_underprediction_loss_weight=args.terminal_underprediction_loss_weight,
+        student_rollout_prob=args.student_rollout_prob,
+        student_rollout_warmup_epochs=args.student_rollout_warmup_epochs,
+        terminal_snap_ratio=args.terminal_snap_ratio,
+        log_interval_bias=args.log_interval_bias,
+        oracle_s_grid_size=args.oracle_s_grid_size,
+        oracle_d_grid_size=args.oracle_d_grid_size,
+        oracle_interval_chunk_size=args.oracle_interval_chunk_size,
         eval_particles=args.eval_particles,
-        baseline_particles=args.eval_particles,
-        baseline="fixed",
-        deck_scale=1,
         out=args.detail_out,
         model_out=model_out,
-        plot_path=None,
-        no_plot=True,
         no_progress=args.no_progress,
     )
 
 
 def write_csv(
-    path: Path, rows: list[dict[str, Any]], fieldnames: Sequence[str]
+    path: Path,
+    rows: list[dict[str, Any]],
+    fieldnames: Sequence[str],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -251,85 +278,132 @@ def main() -> None:
     args = parse_args()
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
+    if args.deck_scale <= 0:
+        raise SystemExit("--deck-scale must be > 0.")
     if args.train_envs <= 0 or args.eval_particles <= 0:
         raise SystemExit("--train-envs and --eval-particles must be > 0.")
-    if args.updates < 0:
-        raise SystemExit("--updates must be >= 0.")
-    if args.rollout_steps <= 0:
-        raise SystemExit("--rollout-steps must be > 0.")
+    if args.epochs < 0:
+        raise SystemExit("--epochs must be >= 0.")
+    if args.steps_per_epoch <= 0:
+        raise SystemExit("--steps-per-epoch must be > 0.")
     if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
         raise SystemExit("--oracle grid sizes must be >= 8.")
-
-    cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
-    action_retentions = parse_csv_floats(
-        args.action_retentions,
-        name="--action-retentions",
-    )
-    if any(weight < 0.0 for weight in cost_weights):
-        raise SystemExit("--cost-weights must be >= 0.")
-    if any(retention <= 0.0 or retention >= 1.0 for retention in action_retentions):
-        raise SystemExit("--action-retentions must be within (0, 1).")
+    if args.oracle_interval_chunk_size <= 0:
+        raise SystemExit("--oracle-interval-chunk-size must be > 0.")
+    if args.underprediction_loss_weight < 0.0:
+        raise SystemExit("--underprediction-loss-weight must be >= 0.")
+    if args.terminal_underprediction_loss_weight < 0.0:
+        raise SystemExit("--terminal-underprediction-loss-weight must be >= 0.")
+    if not 0.0 <= args.student_rollout_prob <= 1.0:
+        raise SystemExit("--student-rollout-prob must be within [0, 1].")
+    if args.student_rollout_warmup_epochs < 0:
+        raise SystemExit("--student-rollout-warmup-epochs must be >= 0.")
+    if args.terminal_snap_ratio < 0.0:
+        raise SystemExit("--terminal-snap-ratio must be >= 0.")
+    if args.agreement_particles < 0:
+        raise SystemExit("--agreement-particles must be >= 0.")
 
     candidates = parse_candidates(args.candidates)
-    device = (
-        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
-    )
-    guide_args = make_train_args(
-        args,
-        candidate=candidates[0],
-        model_out=args.model_dir / f"{candidates[0].name}.pt",
-    )
-    shared_guide = build_policy_guide(
-        args=guide_args,
-        device=device,
-        cost_weights=cost_weights,
-        action_retentions=action_retentions,
-    )
+    cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
+    if any(weight < 0.0 for weight in cost_weights):
+        raise SystemExit("--cost-weights must be >= 0.")
+    device = resolve_torch_device(args.torch_device)
+    fsrs_config = load_single_card_fsrs6_config(args)
 
+    oracle = FSRS6IntervalOracle(
+        days=args.days,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        interval_chunk_size=args.oracle_interval_chunk_size,
+        device=device,
+        **fsrs_config_kwargs(fsrs_config),
+    )
+    oracle_start = time.perf_counter()
+    policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)
+    oracle_solve_runtime_s = time.perf_counter() - oracle_start
+
+    baseline_params = param_count(
+        Candidate(
+            name="res96d3",
+            network="residual",
+            hidden_size=96,
+            network_depth=3,
+        )
+    )
     detail_rows: list[dict[str, Any]] = []
     summary_rows: list[dict[str, Any]] = []
 
     for candidate_idx, candidate in enumerate(candidates):
         model_out = args.model_dir / f"{candidate.name}.pt"
-        train_args = make_train_args(args, candidate=candidate, model_out=model_out)
+        candidate_args = make_candidate_args(
+            args,
+            candidate=candidate,
+            model_out=model_out,
+        )
         if not args.no_progress:
             print(
-                f"candidate={candidate.name} "
-                f"network={candidate.network} "
-                f"hidden={candidate.hidden_size} depth={candidate.network_depth}",
+                " ".join(
+                    [
+                        f"candidate={candidate.name}",
+                        f"network={candidate.network}",
+                        f"hidden={candidate.hidden_size}",
+                        f"depth={candidate.network_depth}",
+                    ]
+                ),
                 flush=True,
             )
-        model, train_stats = train_policy(
-            train_args,
+        model, train_stats = train_model(
+            candidate_args,
             device=device,
+            oracle=oracle,
+            policies=policies,
             cost_weights=cost_weights,
-            action_retentions=action_retentions,
-            policy_guide=shared_guide,
-            build_guide_if_missing=False,
+            fsrs_config=fsrs_config,
         )
+        eval_stats: dict[str, float] = {}
+        if args.agreement_particles > 0:
+            agreement_args = argparse.Namespace(**vars(candidate_args))
+            agreement_args.eval_particles = args.agreement_particles
+            eval_stats = evaluate_interval_agreement(
+                args=agreement_args,
+                model=model,
+                device=device,
+                oracle=oracle,
+                policies=policies,
+                cost_weights=cost_weights,
+                seed=args.seed + 70_000,
+                fsrs_config=fsrs_config,
+            )
         if args.save_models:
             save_model(
                 model_out,
                 model=model,
-                args=train_args,
+                args=candidate_args,
                 cost_weights=cost_weights,
-                action_retentions=action_retentions,
                 train_stats=train_stats,
+                eval_stats=eval_stats,
+                oracle_solve_runtime_s=oracle_solve_runtime_s,
+                fsrs_config=fsrs_config,
             )
-        param_count = sum(parameter.numel() for parameter in model.parameters())
+
+        params = sum(parameter.numel() for parameter in model.parameters())
+        compression_ratio = params / float(baseline_params)
         scalar_values: list[float] = []
+        eval_runtime_s = 0.0
         for cost_weight in cost_weights:
+            start = time.perf_counter()
             metrics = evaluate_policy(
                 model,
-                args=train_args,
+                args=candidate_args,
                 device=device,
                 cost_weight=cost_weight,
-                action_retentions=action_retentions,
                 particles=args.eval_particles,
-                seed=args.seed + 30_000 + int(round(cost_weight * 10.0)),
+                seed=args.seed + 80_000 + int(round(cost_weight * 10.0)),
                 goal_norm_max=max(cost_weights),
-                obs_mode=train_args.obs_mode,
+                fsrs_config=fsrs_config,
             )
+            runtime_s = time.perf_counter() - start
+            eval_runtime_s += runtime_s
             scalar = scalar_objective(metrics, cost_weight)
             scalar_values.append(scalar)
             detail_rows.append(
@@ -339,7 +413,8 @@ def main() -> None:
                     "network": candidate.network,
                     "hidden_size": candidate.hidden_size,
                     "network_depth": candidate.network_depth,
-                    "param_count": param_count,
+                    "param_count": params,
+                    "compression_ratio": compression_ratio,
                     "cost_weight": cost_weight,
                     "card_expected_retrievability": metrics.card_expected_retrievability,
                     "card_minutes_per_day": metrics.card_minutes_per_day,
@@ -350,11 +425,12 @@ def main() -> None:
                     "observed_retention": metrics.observed_retention,
                     "scalar_objective": scalar,
                     "delta_vs_best_candidate": None,
+                    "runtime_s": runtime_s,
                     "train_runtime_s": train_stats.runtime_s,
                     "train_transitions": train_stats.transitions,
                 }
             )
-        mean_scalar = sum(scalar_values) / float(len(scalar_values))
+
         summary_rows.append(
             {
                 "candidate": candidate.name,
@@ -362,15 +438,18 @@ def main() -> None:
                 "network": candidate.network,
                 "hidden_size": candidate.hidden_size,
                 "network_depth": candidate.network_depth,
-                "param_count": param_count,
-                "mean_scalar_objective": mean_scalar,
+                "param_count": params,
+                "compression_ratio": compression_ratio,
+                "mean_scalar_objective": sum(scalar_values) / float(len(scalar_values)),
                 "min_scalar_objective": min(scalar_values),
                 "max_scalar_objective": max(scalar_values),
                 "mean_delta_vs_best_candidate": None,
                 "min_delta_vs_best_candidate": None,
                 "train_runtime_s": train_stats.runtime_s,
+                "policy_eval_runtime_s": eval_runtime_s,
                 "train_transitions": train_stats.transitions,
-                "updates": train_stats.updates,
+                "oracle_solve_runtime_s": oracle_solve_runtime_s,
+                **eval_stats,
             }
         )
 
@@ -383,7 +462,7 @@ def main() -> None:
         for weight in cost_weights
     }
     deltas_by_candidate: dict[str, list[float]] = {
-        row["candidate"]: [] for row in summary_rows
+        str(row["candidate"]): [] for row in summary_rows
     }
     for row in detail_rows:
         weight = float(row["cost_weight"])
@@ -408,14 +487,22 @@ def main() -> None:
         "hidden_size",
         "network_depth",
         "param_count",
+        "compression_ratio",
         "mean_scalar_objective",
         "min_scalar_objective",
         "max_scalar_objective",
         "mean_delta_vs_best_candidate",
         "min_delta_vs_best_candidate",
         "train_runtime_s",
+        "policy_eval_runtime_s",
         "train_transitions",
-        "updates",
+        "oracle_solve_runtime_s",
+        "eval_smooth_l1_loss",
+        "eval_log_interval_mae",
+        "eval_log_interval_rmse",
+        "eval_interval_mae_days",
+        "eval_rounded_interval_agreement",
+        "eval_runtime_s",
     ]
     detail_fieldnames = [
         "candidate",
@@ -424,6 +511,7 @@ def main() -> None:
         "hidden_size",
         "network_depth",
         "param_count",
+        "compression_ratio",
         "cost_weight",
         "card_expected_retrievability",
         "card_minutes_per_day",
@@ -434,6 +522,7 @@ def main() -> None:
         "observed_retention",
         "scalar_objective",
         "delta_vs_best_candidate",
+        "runtime_s",
         "train_runtime_s",
         "train_transitions",
     ]
@@ -441,12 +530,16 @@ def main() -> None:
     write_csv(args.detail_out, detail_rows, detail_fieldnames)
     print(f"Wrote summary CSV: {args.summary_out}")
     print(f"Wrote detail CSV: {args.detail_out}")
+    print(
+        f"Interval oracle solve runtime_s={oracle_solve_runtime_s:.2f} device={device}"
+    )
     for row in summary_rows:
         print(
             " ".join(
                 [
                     f"candidate={row['candidate']}",
                     f"params={row['param_count']}",
+                    f"compression={float(row['compression_ratio']):.3f}",
                     f"mean_scalar={float(row['mean_scalar_objective']):.6f}",
                     f"mean_delta_best={float(row['mean_delta_vs_best_candidate']):.6f}",
                     f"min_delta_best={float(row['min_delta_vs_best_candidate']):.6f}",

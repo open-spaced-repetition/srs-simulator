@@ -16,23 +16,23 @@ import torch
 from torch import nn
 from torch.distributions import Normal
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.fsrs_oracle_frontier import FSRS6GridOracle
-from experiments.single_card_config import (
+from experiments.single_card_tradeoff.oracle_frontier import FSRS6GridOracle
+from experiments.single_card_tradeoff.config import (
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.single_card_tradeoff import (
+from experiments.single_card_tradeoff.tradeoff import (
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
 )
-from experiments.uvfa_ppo_single_card import (
+from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_COST_WEIGHTS,
     FSRS6SingleCardBatch,
     SimMetrics,

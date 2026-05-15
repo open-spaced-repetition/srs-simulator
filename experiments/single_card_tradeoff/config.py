@@ -107,7 +107,7 @@ def load_single_card_fsrs6_config(
     benchmark_result = getattr(args, "benchmark_result", None)
     benchmark_partition = str(getattr(args, "benchmark_partition", "0"))
     benchmark_root = getattr(args, "srs_benchmark_root", None)
-    root = repo_root or Path(__file__).resolve().parents[1]
+    root = repo_root or Path(__file__).resolve().parents[2]
 
     if env_name == "fsrs6":
         weights = load_benchmark_weights(

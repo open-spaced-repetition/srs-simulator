@@ -18,22 +18,22 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.single_card_tradeoff import (  # noqa: E402
+from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
 )
-from experiments.single_card_config import (  # noqa: E402
+from experiments.single_card_tradeoff.config import (  # noqa: E402
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.fsrs_oracle_frontier import FSRS6GridOracle  # noqa: E402
+from experiments.single_card_tradeoff.oracle_frontier import FSRS6GridOracle  # noqa: E402
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
