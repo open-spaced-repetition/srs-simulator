@@ -4,7 +4,7 @@ from __future__ import annotations
 # pyright: reportPrivateImportUsage=false
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 import csv
 from dataclasses import dataclass
 import math
@@ -80,7 +80,21 @@ DEFAULT_TARGET_RETENTIONS = [
     0.96,
     0.98,
 ]
-DEFAULT_UVFA_PPO_COST_WEIGHTS = [
+DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS = [
+    0,
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+]
+DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS = [
     0,
     1,
     2,
@@ -206,7 +220,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--uvfa-ppo-cost-weights",
         default=",".join(
-            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+            format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
         ),
         help=(
             "Comma-separated scalarization weights for uvfa_ppo. Defaults to "
@@ -228,7 +242,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--oracle-distill-cost-weights",
         default=",".join(
-            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+            format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
         ),
         help=(
             "Comma-separated scalarization weights for fsrs6_oracle_distill. "
@@ -258,7 +272,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--oracle-cost-weights",
         default=",".join(
-            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+            format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
         ),
         help=(
             "Comma-separated scalarization weights for fsrs6_oracle. Defaults to "
@@ -300,7 +314,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--oracle-interval-distill-cost-weights",
         default=",".join(
-            format_float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS
+            format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
         ),
         help=(
             "Comma-separated scalarization weights for "
@@ -675,6 +689,20 @@ def _chunks(values: Sequence[float], size: int) -> list[list[float]]:
     if size <= 0:
         return [list(values)]
     return [list(values[idx : idx + size]) for idx in range(0, len(values), size)]
+
+
+def _progress_iter(
+    values: Sequence[float],
+    *,
+    enabled: bool,
+    label: str,
+    unit: str,
+) -> Iterable[float]:
+    if not enabled:
+        return values
+    from tqdm import tqdm
+
+    return tqdm(values, desc=label, unit=unit)
 
 
 def _target_batch_supported(
@@ -1232,7 +1260,7 @@ def _oracle_interval_distill_cost_weights(
 ) -> list[float]:
     raw = getattr(args, "oracle_interval_distill_cost_weights", None)
     if raw is None:
-        return [float(value) for value in DEFAULT_UVFA_PPO_COST_WEIGHTS]
+        return [float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS]
     if not raw.strip():
         return [float(value) for value in policy_cost_weights]
     values = _parse_float_list(raw, label="FSRS6 oracle interval distill cost weight")
@@ -1646,7 +1674,12 @@ def _run_uvfa_ppo(
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
-    for cost_weight in cost_weights:
+    for cost_weight in _progress_iter(
+        cost_weights,
+        enabled=not args.no_progress,
+        label=f"{environment_name}/{scheduler_spec}",
+        unit="weight",
+    ):
         start = time.perf_counter()
         metrics = evaluate_policy(
             model,
@@ -1711,7 +1744,12 @@ def _run_fsrs6_oracle_distill(
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
-    for cost_weight in cost_weights:
+    for cost_weight in _progress_iter(
+        cost_weights,
+        enabled=not args.no_progress,
+        label=f"{environment_name}/{scheduler_spec}",
+        unit="weight",
+    ):
         start = time.perf_counter()
         metrics = evaluate_policy(
             model,
@@ -1780,7 +1818,12 @@ def _run_uvfa_ppo_rnn_interval(
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
-    for cost_weight in cost_weights:
+    for cost_weight in _progress_iter(
+        cost_weights,
+        enabled=not args.no_progress,
+        label=f"{environment_name}/{scheduler_spec}",
+        unit="weight",
+    ):
         start = time.perf_counter()
         metrics = evaluate_policy(
             model,
@@ -1852,7 +1895,12 @@ def _run_fsrs6_oracle_interval_distill(
     fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
-    for cost_weight in cost_weights:
+    for cost_weight in _progress_iter(
+        cost_weights,
+        enabled=not args.no_progress,
+        label=f"{environment_name}/{scheduler_spec}",
+        unit="weight",
+    ):
         start = time.perf_counter()
         metrics = evaluate_policy(
             model,

@@ -45,9 +45,11 @@ from experiments.single_card_config import (
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.single_card_tradeoff import DEFAULT_TARGET_RETENTIONS
+from experiments.single_card_tradeoff import (
+    DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
+    DEFAULT_TARGET_RETENTIONS,
+)
 from experiments.uvfa_ppo_single_card import (
-    DEFAULT_COST_WEIGHTS,
     DEFAULT_TRAIN_ENVS,
     FSRS6SingleCardBatch,
     fsrs_config_kwargs,
@@ -157,7 +159,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-device", default=None)
     parser.add_argument(
         "--cost-weights",
-        default=",".join(format_float(value) for value in DEFAULT_COST_WEIGHTS),
+        default=",".join(
+            format_float(value) for value in DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS
+        ),
     )
     parser.add_argument(
         "--action-retentions",

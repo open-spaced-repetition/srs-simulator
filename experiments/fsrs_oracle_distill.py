@@ -20,14 +20,16 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.single_card_tradeoff import DEFAULT_TARGET_RETENTIONS
 from experiments.single_card_config import (
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
+from experiments.single_card_tradeoff import (
+    DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
+    DEFAULT_TARGET_RETENTIONS,
+)
 from experiments.uvfa_ppo_single_card import (
-    DEFAULT_COST_WEIGHTS,
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_NETWORK,
@@ -79,7 +81,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-device", default=None)
     parser.add_argument(
         "--cost-weights",
-        default=",".join(format_float(value) for value in DEFAULT_COST_WEIGHTS),
+        default=",".join(
+            format_float(value) for value in DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS
+        ),
         help="Comma-separated scalarization weights for the oracle teacher.",
     )
     parser.add_argument(
