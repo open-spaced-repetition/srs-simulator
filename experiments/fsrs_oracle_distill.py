@@ -31,7 +31,6 @@ from experiments.uvfa_ppo_single_card import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_NETWORK,
-    DEFAULT_NETWORK_DEPTH,
     DEFAULT_ORACLE_D_GRID_SIZE,
     DEFAULT_ORACLE_S_GRID_SIZE,
     DEFAULT_TRAIN_ENVS,
@@ -54,7 +53,8 @@ DEFAULT_EVAL_PARTICLES = 10_000
 DEFAULT_AGREEMENT_ENVS = 4096
 DEFAULT_AGREEMENT_STEPS = 256
 DEFAULT_DISTILL_OBS_MODE = "oracle"
-DEFAULT_DISTILL_HIDDEN_SIZE = 96
+DEFAULT_DISTILL_HIDDEN_SIZE = 32
+DEFAULT_DISTILL_NETWORK_DEPTH = 2
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,11 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_NETWORK,
         help="Policy/value architecture.",
     )
-    parser.add_argument("--network-depth", type=int, default=DEFAULT_NETWORK_DEPTH)
+    parser.add_argument(
+        "--network-depth",
+        type=int,
+        default=DEFAULT_DISTILL_NETWORK_DEPTH,
+    )
     parser.add_argument("--hidden-size", type=int, default=DEFAULT_DISTILL_HIDDEN_SIZE)
     parser.add_argument(
         "--oracle-s-grid-size",

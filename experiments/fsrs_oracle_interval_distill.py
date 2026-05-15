@@ -47,6 +47,8 @@ DEFAULT_STUDENT_ROLLOUT_PROB = 0.5
 DEFAULT_STUDENT_ROLLOUT_WARMUP_EPOCHS = 8
 DEFAULT_TERMINAL_SNAP_RATIO = 0.85
 DEFAULT_LOG_INTERVAL_BIAS = 0.0
+DEFAULT_HIDDEN_SIZE = 64
+DEFAULT_NETWORK_DEPTH = 3
 
 
 @dataclass(frozen=True)
@@ -84,7 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps-per-epoch", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--hidden-size", type=int, default=96)
+    parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
     parser.add_argument(
         "--underprediction-loss-weight",
         type=float,
@@ -145,7 +147,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--network-depth",
         type=int,
-        default=3,
+        default=DEFAULT_NETWORK_DEPTH,
         help="Hidden blocks for --network residual; ignored by the MLP.",
     )
     parser.add_argument(
