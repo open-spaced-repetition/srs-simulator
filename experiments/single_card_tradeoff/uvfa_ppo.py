@@ -307,10 +307,12 @@ class FSRS6SingleCardBatch:
             "oracle_rho",
             "oracle_rho4",
             "oracle_rho3",
+            "oracle_stationary",
         }:
             raise ValueError(
                 "obs_mode must be 'basic', 'rich', 'belief', 'oracle', "
-                "'oracle_rho', 'oracle_rho4', or 'oracle_rho3'."
+                "'oracle_rho', 'oracle_rho4', 'oracle_rho3', or "
+                "'oracle_stationary'."
             )
 
         self.days = int(days)
@@ -423,6 +425,8 @@ class FSRS6SingleCardBatch:
         if self.obs_mode == "oracle_rho4":
             return 4
         if self.obs_mode == "oracle_rho3":
+            return 3
+        if self.obs_mode == "oracle_stationary":
             return 3
         if self.obs_mode == "rich":
             return 13
@@ -564,6 +568,16 @@ class FSRS6SingleCardBatch:
             return torch.stack(
                 [
                     rho_norm,
+                    d_norm,
+                    goal_norm,
+                ],
+                dim=1,
+            )
+
+        if self.obs_mode == "oracle_stationary":
+            return torch.stack(
+                [
+                    s_norm,
                     d_norm,
                     goal_norm,
                 ],

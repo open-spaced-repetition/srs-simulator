@@ -130,8 +130,13 @@ DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY = Path(
 DEFAULT_FSRS6_ORACLE_RETENTION_DISTILL_POLICY = Path(
     "artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt"
 )
+DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY = Path(
+    "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt"
+)
 FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
+FSRS6_ORACLE_INFINITE_SCHEDULER = "fsrs6_oracle_infinite"
 FSRS6_ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_distill"
+FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER = "fsrs6_oracle_infinite_distill"
 FSRS6_ORACLE_INTERVAL_SCHEDULER = "fsrs6_oracle_interval"
 FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER = "fsrs6_oracle_interval_distill"
 FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER = "fsrs6_oracle_retention_distill"
@@ -282,6 +287,28 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--oracle-infinite-distill-policy",
+        type=Path,
+        default=DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY,
+        help=(
+            "Path to an FSRS6 average-reward oracle distillation checkpoint "
+            "when --sched contains fsrs6_oracle_infinite_distill."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-infinite-distill-cost-weights",
+        default=",".join(
+            format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
+        ),
+        help=(
+            "Comma-separated scalarization weights for "
+            "fsrs6_oracle_infinite_distill. Defaults to "
+            "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024. "
+            "Pass an empty string to use the cost_weights saved in "
+            "--oracle-infinite-distill-policy."
+        ),
+    )
+    parser.add_argument(
         "--uvfa-ppo-rnn-interval-policy",
         type=Path,
         default=DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY,
@@ -331,6 +358,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=64,
         help="Interval candidates per Bellman-backup chunk for fsrs6_oracle_interval.",
+    )
+    parser.add_argument(
+        "--oracle-infinite-max-iterations",
+        type=int,
+        default=128,
+        help="Policy-iteration limit for fsrs6_oracle_infinite.",
+    )
+    parser.add_argument(
+        "--oracle-infinite-tolerance",
+        type=float,
+        default=1e-10,
+        help="Convergence tolerance for fsrs6_oracle_infinite.",
     )
     parser.add_argument(
         "--oracle-interval-distill-policy",
@@ -513,7 +552,9 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             raise SystemExit(str(exc)) from exc
         custom_schedulers = {
             FSRS6_ORACLE_SCHEDULER,
+            FSRS6_ORACLE_INFINITE_SCHEDULER,
             FSRS6_ORACLE_DISTILL_SCHEDULER,
+            FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER,
             FSRS6_ORACLE_INTERVAL_SCHEDULER,
             FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER,
             FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER,
@@ -1227,6 +1268,24 @@ def _load_fsrs6_oracle_distill_policy(
     )
 
 
+def _load_fsrs6_oracle_infinite_distill_policy(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], list[float], float, str]:
+    return _load_policy_checkpoint(
+        args.oracle_infinite_distill_policy,
+        device=device,
+        policy_label="FSRS-6 average-reward oracle-distilled",
+        train_hint=(
+            "Train one with `uv run "
+            "experiments/single_card_tradeoff/oracle_infinite_distill.py "
+            f"--model-out {args.oracle_infinite_distill_policy}` or pass "
+            "--oracle-infinite-distill-policy."
+        ),
+    )
+
+
 def _oracle_distill_cost_weights(
     args: argparse.Namespace,
     *,
@@ -1238,6 +1297,20 @@ def _oracle_distill_cost_weights(
     values = _parse_float_list(raw, label="Oracle-distilled cost weight")
     if any(value < 0.0 for value in values):
         raise SystemExit("Oracle-distilled cost weights must be >= 0.")
+    return values
+
+
+def _oracle_infinite_distill_cost_weights(
+    args: argparse.Namespace,
+    *,
+    policy_cost_weights: Sequence[float],
+) -> list[float]:
+    raw = getattr(args, "oracle_infinite_distill_cost_weights", None)
+    if raw is None or not raw.strip():
+        return [float(value) for value in policy_cost_weights]
+    values = _parse_float_list(raw, label="Average-reward oracle-distilled cost weight")
+    if any(value < 0.0 for value in values):
+        raise SystemExit("Average-reward oracle-distilled cost weights must be >= 0.")
     return values
 
 
@@ -1614,6 +1687,87 @@ def _evaluate_fsrs6_oracle_policies(
         s_idx = _oracle_s_to_idx(oracle, env.s)
         d_idx = _oracle_d_to_idx(oracle, env.d)
         action = policies[goal_indices, remaining, s_idx, d_idx]
+        env.step(action)
+
+    metrics: list[SimMetrics] = []
+    day_count = float(env.days)
+    for weight_idx in range(weight_count):
+        start = weight_idx * args.particles
+        stop = start + args.particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        particle_count = float(idx.numel())
+        total_memorized = env.total_memorized.index_select(0, idx).sum().item()
+        total_cost_seconds = env.total_cost_seconds.index_select(0, idx).sum().item()
+        total_reviews = float(env.total_reviews.index_select(0, idx).sum().item())
+        total_lapses = float(env.total_lapses.index_select(0, idx).sum().item())
+        observed_retention = (
+            1.0 - total_lapses / total_reviews if total_reviews > 0.0 else None
+        )
+        metrics.append(
+            SimMetrics(
+                card_expected_retrievability=total_memorized
+                / day_count
+                / particle_count,
+                card_minutes_per_day=total_cost_seconds
+                / day_count
+                / 60.0
+                / particle_count,
+                card_reviews_per_day=total_reviews / day_count / particle_count,
+                card_total_reviews=total_reviews / particle_count,
+                card_total_lapses=total_lapses / particle_count,
+                card_total_cost_seconds=total_cost_seconds / particle_count,
+                observed_retention=observed_retention,
+            )
+        )
+    return metrics
+
+
+@torch.inference_mode()
+def _evaluate_fsrs6_oracle_infinite_policies(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    oracle: Any,
+    policies: torch.Tensor,
+    action_retentions: Sequence[float],
+    cost_weights: Sequence[float],
+    seed: int,
+    fsrs_config: SingleCardFSRS6Config | None = None,
+) -> list[Any]:
+    from experiments.single_card_tradeoff.uvfa_ppo import (
+        FSRS6SingleCardBatch,
+        SimMetrics,
+    )
+
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
+
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=env_count,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+    goal_indices = torch.repeat_interleave(
+        torch.arange(weight_count, device=device, dtype=torch.int64),
+        args.particles,
+    )
+    for weight_idx, cost_weight in enumerate(cost_weights):
+        start = weight_idx * args.particles
+        stop = start + args.particles
+        idx = torch.arange(start, stop, device=device, dtype=torch.int64)
+        env.reset_indices(idx, goal_weight=cost_weight)
+
+    policies = policies.to(device=device)
+    while not bool(env.done.all().item()):
+        s_idx = _oracle_s_to_idx(oracle, env.s)
+        d_idx = _oracle_d_to_idx(oracle, env.d)
+        action = policies[goal_indices, s_idx, d_idx]
         env.step(action)
 
     metrics: list[SimMetrics] = []
@@ -2164,6 +2318,111 @@ def _run_fsrs6_oracle(
     return rows
 
 
+def _run_fsrs6_oracle_infinite(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            "fsrs6_oracle_infinite currently supports only --env fsrs6_default "
+            "or --env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            "fsrs6_oracle_infinite is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit("fsrs6_oracle_infinite does not support --fuzz.")
+    if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
+        raise SystemExit("--oracle grid sizes must be >= 8.")
+    if args.oracle_infinite_max_iterations <= 0:
+        raise SystemExit("--oracle-infinite-max-iterations must be > 0.")
+    if args.oracle_infinite_tolerance <= 0.0:
+        raise SystemExit("--oracle-infinite-tolerance must be > 0.")
+
+    from experiments.single_card_tradeoff.oracle_frontier import (
+        FSRS6AverageRewardOracle,
+    )
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    cost_weights = _oracle_cost_weights(args)
+    action_retentions = _oracle_action_retentions(args)
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
+    oracle = FSRS6AverageRewardOracle(
+        action_retentions=action_retentions,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        device=device,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+
+    start = time.perf_counter()
+    solution = oracle.solve_average_reward_policies(
+        cost_weights,
+        max_iterations=args.oracle_infinite_max_iterations,
+        tolerance=args.oracle_infinite_tolerance,
+        progress=not args.no_progress,
+    )
+    if not all(solution.converged):
+        failed = [
+            format_float(weight)
+            for weight, converged in zip(cost_weights, solution.converged, strict=True)
+            if not converged
+        ]
+        raise SystemExit(
+            "fsrs6_oracle_infinite did not converge for cost weights: "
+            + ",".join(failed)
+        )
+    metrics_by_weight = _evaluate_fsrs6_oracle_infinite_policies(
+        args=args,
+        device=device,
+        oracle=oracle,
+        policies=solution.policy,
+        action_retentions=action_retentions,
+        cost_weights=cost_weights,
+        seed=seed + 55_000,
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
+
+    for cost_weight, gain, iterations, residual in zip(
+        cost_weights,
+        solution.gains.tolist(),
+        solution.iterations,
+        solution.residuals,
+        strict=True,
+    ):
+        print(
+            " ".join(
+                [
+                    f"infinite_oracle w={format_float(cost_weight)}",
+                    f"gain={float(gain):.8f}",
+                    f"iterations={iterations}",
+                    f"residual={residual:.3g}",
+                ]
+            )
+        )
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=FSRS6_ORACLE_INFINITE_SCHEDULER,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
 def _run_fsrs6_oracle_interval(
     args: argparse.Namespace,
     *,
@@ -2348,6 +2607,70 @@ def _run_fsrs6_oracle_distill(
                 args,
                 environment_name=environment_name,
                 scheduler_name=FSRS6_ORACLE_DISTILL_SCHEDULER,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
+def _run_fsrs6_oracle_infinite_distill(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            "fsrs6_oracle_infinite_distill currently supports only "
+            "--env fsrs6_default or --env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            "fsrs6_oracle_infinite_distill is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit("fsrs6_oracle_infinite_distill does not support --fuzz.")
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    model, action_retentions, policy_cost_weights, goal_norm_max, obs_mode = (
+        _load_fsrs6_oracle_infinite_distill_policy(
+            args,
+            device=device,
+        )
+    )
+    cost_weights = _oracle_infinite_distill_cost_weights(
+        args,
+        policy_cost_weights=policy_cost_weights,
+    )
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
+
+    start = time.perf_counter()
+    metrics_by_weight = _evaluate_action_policy_weights(
+        args=args,
+        device=device,
+        model=model,
+        action_retentions=action_retentions,
+        cost_weights=cost_weights,
+        seed=seed + 37_000,
+        goal_norm_max=goal_norm_max,
+        obs_mode=obs_mode,
+        progress_label=f"{environment_name}/{scheduler_spec}",
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / max(1, len(cost_weights))
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER,
                 scheduler_spec=scheduler_spec,
                 goal_cost_weight=cost_weight,
                 seed=seed,
@@ -3156,6 +3479,16 @@ def main() -> None:
                     )
                 )
                 continue
+            if scheduler_name == FSRS6_ORACLE_INFINITE_SCHEDULER:
+                rows.extend(
+                    _run_fsrs6_oracle_infinite(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
+                continue
             if scheduler_name == FSRS6_ORACLE_INTERVAL_SCHEDULER:
                 rows.extend(
                     _run_fsrs6_oracle_interval(
@@ -3169,6 +3502,16 @@ def main() -> None:
             if scheduler_name == FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER:
                 rows.extend(
                     _run_fsrs6_oracle_interval_distill(
+                        args,
+                        environment_name=environment,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                    )
+                )
+                continue
+            if scheduler_name == FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER:
+                rows.extend(
+                    _run_fsrs6_oracle_infinite_distill(
                         args,
                         environment_name=environment,
                         scheduler_spec=scheduler_spec,

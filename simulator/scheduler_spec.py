@@ -50,7 +50,10 @@ def scheduler_uses_desired_retention(scheduler: str) -> bool:
         "uvfa_ppo",
         "uvfa_ppo_rnn_interval",
         "fsrs6_oracle",
+        "fsrs6_oracle_infinite",
         "fsrs6_oracle_distill",
+        "fsrs6_oracle_infinite_distill",
         "fsrs6_oracle_interval",
         "fsrs6_oracle_interval_distill",
+        "fsrs6_oracle_retention_distill",
     }

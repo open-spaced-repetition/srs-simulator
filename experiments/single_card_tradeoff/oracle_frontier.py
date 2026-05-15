@@ -64,6 +64,16 @@ class OracleSolution:
     policy: torch.Tensor | None
 
 
+@dataclass(frozen=True)
+class AverageRewardOracleSolution:
+    policy: torch.Tensor
+    gains: torch.Tensor
+    iterations: list[int]
+    converged: list[bool]
+    residuals: list[float]
+    runtime_s: float
+
+
 def parse_csv_floats(value: str, *, name: str) -> list[float]:
     values: list[float] = []
     for item in value.split(","):
@@ -692,6 +702,327 @@ class FSRS6GridOracle:
             min=0,
             max=self.d_grid.numel() - 1,
         ).to(torch.int64)
+
+
+class FSRS6AverageRewardOracle(FSRS6GridOracle):
+    def __init__(
+        self,
+        *,
+        action_retentions: Sequence[float],
+        s_grid_size: int,
+        d_grid_size: int,
+        dtype: torch.dtype = torch.float64,
+        device: torch.device | str | None = None,
+        fsrs_weights: Sequence[float] | None = None,
+        first_rating_prob: Sequence[float] | None = None,
+        review_rating_prob: Sequence[float] | None = None,
+        learning_costs: Sequence[float] | None = None,
+        review_costs: Sequence[float] | None = None,
+    ) -> None:
+        super().__init__(
+            days=2,
+            action_retentions=action_retentions,
+            s_grid_size=s_grid_size,
+            d_grid_size=d_grid_size,
+            dtype=dtype,
+            device=device,
+            fsrs_weights=fsrs_weights,
+            first_rating_prob=first_rating_prob,
+            review_rating_prob=review_rating_prob,
+            learning_costs=learning_costs,
+            review_costs=review_costs,
+        )
+        self.state_count = int(self.s_grid.numel() * self.d_grid.numel())
+        self._action_tables = self._precompute_average_reward_action_tables()
+
+    def solve_average_reward_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+        progress: bool = False,
+    ) -> AverageRewardOracleSolution:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        if max_iterations <= 0:
+            raise ValueError("max_iterations must be > 0.")
+        if tolerance <= 0.0:
+            raise ValueError("tolerance must be > 0.")
+
+        start = time.perf_counter()
+        policies: list[torch.Tensor] = []
+        gains: list[torch.Tensor] = []
+        iterations: list[int] = []
+        converged: list[bool] = []
+        residuals: list[float] = []
+        progress_bar = None
+        if progress:
+            from tqdm import tqdm
+
+            progress_bar = tqdm(
+                total=len(cost_weights) * max_iterations,
+                desc="Average-reward oracle",
+                unit="iter",
+                leave=False,
+            )
+        try:
+            for cost_weight in cost_weights:
+                result = self._solve_single_policy(
+                    cost_weight=float(cost_weight),
+                    max_iterations=max_iterations,
+                    tolerance=tolerance,
+                    progress_bar=progress_bar,
+                )
+                policy, gain, iteration_count, is_converged, residual = result
+                policies.append(
+                    policy.reshape(self.s_grid.numel(), self.d_grid.numel())
+                )
+                gains.append(gain)
+                iterations.append(iteration_count)
+                converged.append(is_converged)
+                residuals.append(residual)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        return AverageRewardOracleSolution(
+            policy=torch.stack(policies, dim=0).to(dtype=torch.int64),
+            gains=torch.stack(gains).to(dtype=self.dtype),
+            iterations=iterations,
+            converged=converged,
+            residuals=residuals,
+            runtime_s=time.perf_counter() - start,
+        )
+
+    def labels(
+        self,
+        *,
+        policies: torch.Tensor,
+        cost_weights: torch.Tensor,
+        s: torch.Tensor,
+        d: torch.Tensor,
+        goal_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        s_idx = self._s_to_idx(s)
+        d_idx = self._d_to_idx(d)
+        goal_idx = torch.argmin(
+            torch.abs(
+                goal_weight.to(dtype=cost_weights.dtype)[:, None]
+                - cost_weights[None, :]
+            ),
+            dim=1,
+        )
+        return policies.to(device=s.device)[goal_idx, s_idx, d_idx]
+
+    def _solve_single_policy(
+        self,
+        *,
+        cost_weight: float,
+        max_iterations: int,
+        tolerance: float,
+        progress_bar: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor, int, bool, float]:
+        interval, immediate_mem, review_cost, prob, next_idx = self._action_tables
+        reward = immediate_mem - float(cost_weight) * review_cost
+        policy = torch.argmax(reward / interval, dim=0).to(torch.int64)
+        h = torch.zeros(self.state_count, device=self.device, dtype=self.dtype)
+        gain = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+        residual = math.inf
+        converged = False
+
+        for iteration in range(1, max_iterations + 1):
+            selected = self._select_policy_tables(
+                policy=policy,
+                interval=interval,
+                reward=reward,
+                prob=prob,
+                next_idx=next_idx,
+            )
+            selected_interval, selected_reward, selected_prob, selected_next = selected
+            gain, h = self._evaluate_policy(
+                interval=selected_interval,
+                reward=selected_reward,
+                prob=selected_prob,
+                next_idx=selected_next,
+                initial_h=h,
+                tolerance=tolerance,
+            )
+            scores = (
+                reward
+                - gain * interval
+                + self._expected_bias(
+                    prob=prob,
+                    next_idx=next_idx,
+                    h=h,
+                )
+            )
+            new_policy = torch.argmax(scores, dim=0).to(torch.int64)
+            current_score = scores.gather(0, policy[None, :]).squeeze(0)
+            residual = float((scores.max(dim=0).values - current_score).max().item())
+            policy_changed = bool((new_policy != policy).any().item())
+            policy = new_policy
+            if progress_bar is not None:
+                progress_bar.update(1)
+            if not policy_changed and residual <= tolerance:
+                converged = True
+                return policy, gain, iteration, converged, residual
+
+        return policy, gain, max_iterations, converged, residual
+
+    def _precompute_average_reward_action_tables(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        intervals: list[torch.Tensor] = []
+        immediate_mem: list[torch.Tensor] = []
+        review_cost: list[torch.Tensor] = []
+        probs: list[torch.Tensor] = []
+        next_indices: list[torch.Tensor] = []
+        d_count = int(self.d_grid.numel())
+        for transition in self.transitions:
+            interval = transition.interval.to(dtype=self.dtype)
+            interval_flat = interval[:, None].expand_as(self.s_mesh).reshape(-1)
+            intervals.append(interval_flat)
+            immediate = self._memorized_sum_integral(self.s_grid, transition.interval)
+            immediate_mem.append(immediate[:, None].expand_as(self.s_mesh).reshape(-1))
+            rating_probs = torch.stack(
+                [
+                    prob[:, None].expand_as(self.s_mesh).reshape(-1)
+                    for prob in transition.prob
+                ],
+                dim=1,
+            )
+            cost = torch.zeros(self.state_count, device=self.device, dtype=self.dtype)
+            for rating_idx, rating in enumerate(range(1, 5)):
+                cost += (
+                    rating_probs[:, rating_idx] * self.review_cost_minutes[rating - 1]
+                )
+            review_cost.append(cost)
+            probs.append(rating_probs)
+            next_indices.append(
+                torch.stack(
+                    [
+                        (
+                            transition.next_s_idx[rating_idx].reshape(-1) * d_count
+                            + transition.next_d_idx[rating_idx].reshape(-1)
+                        )
+                        for rating_idx in range(4)
+                    ],
+                    dim=1,
+                ).to(torch.int64)
+            )
+        return (
+            torch.stack(intervals, dim=0),
+            torch.stack(immediate_mem, dim=0),
+            torch.stack(review_cost, dim=0),
+            torch.stack(probs, dim=0),
+            torch.stack(next_indices, dim=0),
+        )
+
+    def _memorized_sum_integral(
+        self,
+        s: torch.Tensor,
+        days: torch.Tensor,
+    ) -> torch.Tensor:
+        days_f = days.to(dtype=self.dtype)
+        safe_s = torch.clamp(s, min=self.bounds.s_min)
+        rate = self.factor / safe_s
+        upper = days_f + 0.5
+        lower = torch.full_like(upper, 0.5)
+        exponent = self.decay + 1.0
+        integral = (
+            torch.pow(1.0 + rate * upper, exponent)
+            - torch.pow(1.0 + rate * lower, exponent)
+        ) / (rate * exponent)
+        return torch.where(days_f > 0.0, integral, torch.zeros_like(integral))
+
+    def _select_policy_tables(
+        self,
+        *,
+        policy: torch.Tensor,
+        interval: torch.Tensor,
+        reward: torch.Tensor,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        state_idx = torch.arange(self.state_count, device=self.device)
+        return (
+            interval[policy, state_idx],
+            reward[policy, state_idx],
+            prob[policy, state_idx],
+            next_idx[policy, state_idx],
+        )
+
+    def _evaluate_policy(
+        self,
+        *,
+        interval: torch.Tensor,
+        reward: torch.Tensor,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+        initial_h: torch.Tensor,
+        tolerance: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        stationary = self._stationary_distribution(
+            prob=prob,
+            next_idx=next_idx,
+            tolerance=tolerance,
+        )
+        gain = torch.sum(stationary * reward) / torch.sum(stationary * interval)
+        h = initial_h
+        eval_tolerance = max(float(tolerance), 1e-11)
+        for _ in range(4096):
+            h_next = (
+                reward
+                - gain * interval
+                + torch.sum(
+                    prob * h.index_select(0, next_idx.reshape(-1)).reshape_as(prob),
+                    dim=1,
+                )
+            )
+            h_next = h_next - h_next[0]
+            diff = torch.max(torch.abs(h_next - h))
+            h = h_next
+            if float(diff.item()) <= eval_tolerance:
+                break
+        return gain, h
+
+    def _stationary_distribution(
+        self,
+        *,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+        tolerance: float,
+    ) -> torch.Tensor:
+        pi = torch.full(
+            (self.state_count,),
+            1.0 / float(self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        flat_next = next_idx.reshape(-1)
+        stationary_tolerance = max(float(tolerance), 1e-12)
+        for _ in range(4096):
+            new_pi = torch.zeros_like(pi)
+            new_pi.scatter_add_(0, flat_next, (pi[:, None] * prob).reshape(-1))
+            new_pi = new_pi / torch.clamp(new_pi.sum(), min=1e-30)
+            diff = torch.max(torch.abs(new_pi - pi))
+            pi = new_pi
+            if float(diff.item()) <= stationary_tolerance:
+                break
+        return pi
+
+    def _expected_bias(
+        self,
+        *,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+        h: torch.Tensor,
+    ) -> torch.Tensor:
+        return torch.sum(
+            prob * h.index_select(0, next_idx.reshape(-1)).reshape_as(prob),
+            dim=2,
+        )
 
 
 class FSRS6IntervalOracle(FSRS6GridOracle):
