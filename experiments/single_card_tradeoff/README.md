@@ -243,6 +243,21 @@ The default `uvfa_ppo` run used 2,359,296 training transitions, 36 PPO updates, 
 
 The default `uvfa_ppo_rnn_interval` run used 2,359,296 training transitions, 36 PPO updates, the oracle guide policy, and the `belief` GRU-128 policy. Training took `240.77s`; the resulting 87,559-parameter checkpoint was verified to use the clipped action grid and passed the fixed-interval baseline check.
 
+PPO guide ablations after clipping actions:
+
+The no-sub-0.5 ablation artifacts are under `artifacts/single_card_tradeoff/ppo_ablation/`. All six checkpoints were verified to use the clipped 11-action grid with minimum action `0.5`, and the tradeoff CSVs below use the clipped 11-target `fsrs6_default` baseline.
+
+| candidate | guide setup | parameters | train transitions | updates | train time | fixed-baseline check | vs `fsrs6_default` relative regret | coverage |
+| --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |
+| `uvfa_ppo_no_guide` | no guide | 27,148 | 2,359,296 | 36 | 28.54s | pass | -22.74% | 85.9% |
+| `uvfa_ppo_static_guide` | static guide | 27,148 | 2,359,296 | 36 | 31.93s | fail | -8.52% | 54.0% |
+| `uvfa_ppo_oracle_warmup_only` | oracle warmup, no PPO updates | 27,148 | 0 | 0 | 188.67s | fail | -16.40% | 64.2% |
+| `uvfa_ppo_rnn_interval_no_guide` | no guide, no warmup prior | 87,559 | 2,359,296 | 36 | 40.58s | fail | +0.93% | 87.8% |
+| `uvfa_ppo_rnn_interval_static_guide` | static guide | 87,559 | 2,359,296 | 36 | 48.80s | fail | -2.22% | 42.7% |
+| `uvfa_ppo_rnn_interval_oracle_warmup_only` | oracle warmup, no PPO updates | 87,559 | 0 | 0 | 196.54s | pass | -21.31% | 72.6% |
+
+The ablation takeaway did not change after removing actions below `0.5`: the default oracle-guided PPO runs remain the strongest PPO checkpoints in the current report. Discrete PPO without a guide still beats `fsrs6_default`, but it trails the default oracle-guided checkpoint on both relative regret and coverage. The RNN interval warmup-only checkpoint is useful as a prior-quality check, but its coverage is lower than the default trained RNN checkpoint.
+
 Stationary finite action distribution with sub-0.5 actions removed:
 
 The exact stationary finite oracle policy was visualized over the equal-weighted `(stability, difficulty)` policy table with 1825 days, a 64x32 grid, representative weights `0,16,64,256,1024`, and only desired-retention actions `>=0.5`. The artifacts are in `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`: `findings.md`, `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `action_distribution.png`, and `policy_heatmaps.png`. All policies converged, with policy-iteration counts `[3,2,3,5,8]`.
@@ -279,7 +294,7 @@ The no-sub-0.5 compression artifacts are under `artifacts/single_card_tradeoff/s
 
 The 476-parameter students are not acceptable replacements for the current checkpoint. The teacher-forced student keeps a favorable AUC only over a tiny high-memory span, while the student-rollout model has much better coverage but loses the time-regret advantage against `fsrs6_default`. Under the clipped action space, the practical checkpoint remains the 1,452-parameter `residual:16:2` model unless a new compression recipe is introduced.
 
-Older exact infinite-oracle, historical PPO-compare, and PPO-ablation artifacts were not reused as current no-sub-0.5 findings unless their checkpoints were verified to contain only actions `>=0.5`. The root default `uvfa_ppo_policy.pt` and `uvfa_ppo_rnn_interval_policy.pt` have been rerun and verified; the older compare and ablation checkpoint directories should still be rerun before making updated claims about those variants under the new action space.
+Older exact infinite-oracle, historical PPO-compare, and historical PPO view artifacts were not reused as current no-sub-0.5 findings unless their checkpoints were verified to contain only actions `>=0.5`. The root default `uvfa_ppo_policy.pt`, root default `uvfa_ppo_rnn_interval_policy.pt`, and the six `ppo_ablation` checkpoints listed above have been rerun and verified; the older `ppo_compare` directory and legacy `_view` files should still be rerun before making updated claims about those variants under the new action space.
 
 ## Lessons
 
