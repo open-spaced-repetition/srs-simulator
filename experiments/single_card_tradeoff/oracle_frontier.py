@@ -811,6 +811,9 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
         iterations: list[int] = []
         converged: list[bool] = []
         residuals: list[float] = []
+        weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
         finite_policies = self.solve_policies(cost_weights, progress=progress)
         progress_bar = None
         if progress:
@@ -823,20 +826,25 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
                 leave=False,
             )
         try:
-            for weight_idx, cost_weight in enumerate(cost_weights):
-                result = self._solve_single_stationary_finite_policy(
-                    cost_weight=float(cost_weight),
-                    finite_policy=finite_policies[weight_idx],
-                    max_iterations=max_iterations,
-                    tolerance=tolerance,
-                    progress_bar=progress_bar,
-                )
-                policy, metrics, iteration_count, is_converged, residual = result
-                policies.append(policy)
-                metrics_by_weight.append(metrics)
-                iterations.append(iteration_count)
-                converged.append(is_converged)
-                residuals.append(residual)
+            result = self._solve_stationary_finite_policy_batch(
+                cost_weights=weight_tensor,
+                finite_policies=finite_policies,
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress_bar=progress_bar,
+            )
+            (
+                batched_policy,
+                batch_metrics,
+                batch_iterations,
+                batch_converged,
+                batch_residuals,
+            ) = result
+            policies.extend(policy for policy in batched_policy)
+            metrics_by_weight.extend(batch_metrics)
+            iterations.extend(batch_iterations)
+            converged.extend(batch_converged)
+            residuals.extend(batch_residuals)
         finally:
             if progress_bar is not None:
                 progress_bar.close()
@@ -853,6 +861,128 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             converged=converged,
             residuals=residuals,
             runtime_s=time.perf_counter() - start,
+        )
+
+    def _solve_stationary_finite_policy_batch(
+        self,
+        *,
+        cost_weights: torch.Tensor,
+        finite_policies: torch.Tensor,
+        max_iterations: int,
+        tolerance: float,
+        progress_bar: Any,
+    ) -> tuple[
+        torch.Tensor,
+        list[OracleMetrics],
+        list[int],
+        list[bool],
+        list[float],
+    ]:
+        policy = self._project_stationary_policies(finite_policies)
+        weight_count = int(cost_weights.numel())
+        value = self._evaluate_stationary_policy_value_batch(
+            policy=policy,
+            cost_weights=cost_weights,
+        )
+        objective = self._objective_from_value_batch(
+            value=value,
+            cost_weights=cost_weights,
+        )
+        iterations = torch.zeros(
+            weight_count,
+            device=self.device,
+            dtype=torch.int64,
+        )
+        converged = torch.zeros(weight_count, device=self.device, dtype=torch.bool)
+        residuals = torch.full(
+            (weight_count,),
+            math.inf,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        active = torch.ones(weight_count, device=self.device, dtype=torch.bool)
+
+        for iteration in range(1, max_iterations + 1):
+            active_count = int(active.sum().item())
+            if active_count == 0:
+                break
+            active_idx = active.nonzero(as_tuple=False).squeeze(1)
+            active_policy = policy.index_select(0, active_idx)
+            active_weights = cost_weights.index_select(0, active_idx)
+            active_value = value.index_select(0, active_idx)
+            occupancy = self._rollout_occupancy_batch(
+                policy=active_policy,
+                stationary=True,
+            )
+            new_policy, residual, visited = self._improve_stationary_policy_batch(
+                policy=active_policy,
+                occupancy=occupancy,
+                value=active_value,
+                cost_weights=active_weights,
+            )
+            changed = ((new_policy != active_policy) & visited).reshape(
+                active_count,
+                self.state_count,
+            )
+            policy_changed = changed.any(dim=1)
+            residuals[active_idx] = residual
+            iterations[active_idx] = iteration
+            if progress_bar is not None:
+                progress_bar.update(active_count)
+
+            done = (~policy_changed) | (residual <= tolerance)
+            if bool(done.any().item()):
+                done_idx = active_idx[done]
+                converged[done_idx] = True
+                active[done_idx] = False
+
+            candidate = ~done
+            if not bool(candidate.any().item()):
+                continue
+
+            candidate_idx = active_idx[candidate]
+            candidate_policy = new_policy[candidate]
+            candidate_weights = cost_weights.index_select(0, candidate_idx)
+            candidate_value = self._evaluate_stationary_policy_value_batch(
+                policy=candidate_policy,
+                cost_weights=candidate_weights,
+            )
+            candidate_objective = self._objective_from_value_batch(
+                value=candidate_value,
+                cost_weights=candidate_weights,
+            )
+            objective_improvement = candidate_objective - objective[candidate_idx]
+            accepted = objective_improvement > tolerance
+            residuals[candidate_idx] = torch.where(
+                accepted,
+                objective_improvement,
+                torch.clamp(objective_improvement, min=0.0),
+            )
+
+            if bool((~accepted).any().item()):
+                rejected_idx = candidate_idx[~accepted]
+                converged[rejected_idx] = True
+                active[rejected_idx] = False
+
+            if bool(accepted.any().item()):
+                accepted_idx = candidate_idx[accepted]
+                policy[accepted_idx] = candidate_policy[accepted]
+                value[accepted_idx] = candidate_value[accepted]
+                objective[accepted_idx] = candidate_objective[accepted]
+
+        if bool(active.any().item()):
+            iterations[active] = max_iterations
+
+        metrics = self._metrics_from_occupancy_batch(
+            policy=policy,
+            cost_weights=cost_weights,
+        )
+        return (
+            policy,
+            metrics,
+            [int(value) for value in iterations.cpu().tolist()],
+            [bool(value) for value in converged.cpu().tolist()],
+            [float(value) for value in residuals.cpu().tolist()],
         )
 
     def labels(
@@ -976,6 +1106,49 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
         projected[visited] = action_weight.argmax(dim=0)[visited]
         return projected.reshape(self.s_count, self.d_count).to(dtype=torch.int64)
 
+    def _project_stationary_policies(
+        self,
+        finite_policies: torch.Tensor,
+    ) -> torch.Tensor:
+        weight_count = int(finite_policies.shape[0])
+        occupancy = self._rollout_occupancy_batch(
+            policy=finite_policies,
+            stationary=False,
+        )
+        action_weight = torch.zeros(
+            (weight_count, self.action_count, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        occupancy_flat = occupancy[:, 1:, :]
+        policy_flat = finite_policies[:, 1:].reshape(
+            weight_count,
+            self.horizon,
+            self.state_count,
+        )
+        batch_offsets = (
+            torch.arange(weight_count, device=self.device, dtype=torch.int64)
+            .view(weight_count, 1, 1)
+            .mul(self.action_count * self.state_count)
+        )
+        state_idx = self._flat_state_idx.view(1, 1, self.state_count)
+        scatter_idx = batch_offsets + policy_flat * self.state_count + state_idx
+        action_weight.reshape(-1).scatter_add_(
+            0,
+            scatter_idx.reshape(-1),
+            occupancy_flat.reshape(-1),
+        )
+
+        projected = finite_policies[:, self.horizon].reshape(
+            weight_count,
+            self.state_count,
+        )
+        action_count = action_weight.sum(dim=1)
+        visited = action_count > 0.0
+        best_action = action_weight.argmax(dim=1)
+        projected = torch.where(visited, best_action, projected).to(dtype=torch.int64)
+        return projected.reshape(weight_count, self.s_count, self.d_count)
+
     def _evaluate_stationary_policy(
         self,
         *,
@@ -1074,6 +1247,52 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
 
         return value
 
+    def _evaluate_stationary_policy_value_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        weight_count = int(policy.shape[0])
+        value = torch.zeros(
+            (weight_count, self.horizon + 1, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        interval, prob, next_idx = self._select_stationary_policy_tables_batch(policy)
+        batch_idx = torch.arange(weight_count, device=self.device)[:, None]
+        weight_penalty = cost_weights.to(dtype=self.dtype)[:, None]
+
+        for rem in range(1, self.horizon + 1):
+            cont_mask = interval <= rem
+            future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
+            active_days = torch.minimum(interval, torch.full_like(interval, rem))
+            value_rem = self.memorized_by_day[
+                active_days,
+                self._flat_s_idx[None, :].expand_as(active_days),
+            ].clone()
+
+            if cont_mask.any():
+                for rating_idx, rating in enumerate(range(1, 5)):
+                    future_value = value[
+                        batch_idx,
+                        future_rem,
+                        next_idx[:, rating_idx, :],
+                    ]
+                    review_minutes = self.review_cost_minutes[rating - 1]
+                    weighted = torch.where(
+                        cont_mask,
+                        prob[:, rating_idx, :],
+                        torch.zeros_like(prob[:, rating_idx, :]),
+                    )
+                    value_rem += weighted * (
+                        future_value - weight_penalty * review_minutes
+                    )
+
+            value[:, rem] = value_rem
+
+        return value
+
     def _objective_from_value(
         self,
         *,
@@ -1106,6 +1325,32 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             ).item()
             / float(self.days)
         )
+
+    def _objective_from_value_batch(
+        self,
+        *,
+        value: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        total_value = torch.zeros(
+            int(cost_weights.numel()),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        total_learning_minutes = torch.tensor(
+            0.0,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        for rating in range(1, 5):
+            prob = self.first_rating_prob[rating - 1]
+            s0, d0 = self._init_state_scalar(rating)
+            s_idx = self._s_to_idx(s0)
+            d_idx = self._d_to_idx(d0)
+            state_idx = s_idx * self.d_count + d_idx
+            total_value += prob * value[:, self.horizon, state_idx]
+            total_learning_minutes += prob * self.learning_cost_minutes[rating - 1]
+        return (total_value - cost_weights * total_learning_minutes) / float(self.days)
 
     def _stationary_candidate_tables(
         self,
@@ -1259,6 +1504,93 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             visited.reshape(self.s_count, self.d_count),
         )
 
+    def _improve_stationary_policy_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        occupancy: torch.Tensor,
+        value: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        weight_count = int(policy.shape[0])
+        action_scores = torch.zeros(
+            (weight_count, self.action_count, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        state_occupancy = occupancy[:, 1:, :].sum(dim=1)
+        visited = state_occupancy > 0.0
+        interval, prob, next_idx = self._action_tables
+        batch_idx = torch.arange(weight_count, device=self.device)[:, None, None]
+        weight_penalty = cost_weights.to(dtype=self.dtype).view(weight_count, 1, 1)
+
+        for rem in range(1, self.horizon + 1):
+            rem_occupancy = occupancy[:, rem, :]
+            if float(rem_occupancy.sum().item()) <= 0.0:
+                continue
+            cont_mask = interval <= rem
+            future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
+            active_days = torch.minimum(interval, torch.full_like(interval, rem))
+            s_idx = self._flat_s_idx[None, :].expand_as(active_days)
+            candidate_value = self.memorized_by_day[active_days, s_idx][
+                None,
+                :,
+                :,
+            ].expand(weight_count, -1, -1)
+            candidate_value = candidate_value.clone()
+
+            if cont_mask.any():
+                expanded_future_rem = future_rem[None, :, :].expand(
+                    weight_count,
+                    -1,
+                    -1,
+                )
+                for rating_idx, rating in enumerate(range(1, 5)):
+                    expanded_next_idx = next_idx[:, rating_idx, :][
+                        None,
+                        :,
+                        :,
+                    ].expand(weight_count, -1, -1)
+                    future_value = value[
+                        batch_idx,
+                        expanded_future_rem,
+                        expanded_next_idx,
+                    ]
+                    review_minutes = self.review_cost_minutes[rating - 1]
+                    weighted = torch.where(
+                        cont_mask,
+                        prob[:, rating_idx, :],
+                        torch.zeros_like(prob[:, rating_idx, :]),
+                    )[None, :, :]
+                    candidate_value += weighted * (
+                        future_value - weight_penalty * review_minutes
+                    )
+            action_scores += rem_occupancy[:, None, :] * candidate_value
+
+        best_score, best_action = action_scores.max(dim=1)
+        policy_flat = policy.reshape(weight_count, self.state_count)
+        current_score = action_scores.gather(1, policy_flat[:, None, :]).squeeze(1)
+        improvement = best_score - current_score
+        masked_improvement = torch.where(
+            visited,
+            improvement,
+            torch.full_like(improvement, -math.inf),
+        )
+        residual = masked_improvement.max(dim=1).values
+        residual = torch.where(
+            visited.any(dim=1),
+            residual,
+            torch.zeros_like(residual),
+        )
+        new_policy = torch.where(visited, best_action, policy_flat).to(
+            dtype=torch.int64
+        )
+        return (
+            new_policy.reshape(weight_count, self.s_count, self.d_count),
+            residual,
+            visited.reshape(weight_count, self.s_count, self.d_count),
+        )
+
     def _rollout_occupancy(
         self, *, policy: torch.Tensor, stationary: bool
     ) -> torch.Tensor:
@@ -1314,6 +1646,75 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
 
         return occupancy
 
+    def _rollout_occupancy_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        stationary: bool,
+    ) -> torch.Tensor:
+        weight_count = int(policy.shape[0])
+        occupancy = torch.zeros(
+            (weight_count, self.horizon + 1, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        for rating in range(1, 5):
+            prob = self.first_rating_prob[rating - 1]
+            s0, d0 = self._init_state_scalar(rating)
+            s_idx = self._s_to_idx(s0)
+            d_idx = self._d_to_idx(d0)
+            state_idx = s_idx * self.d_count + d_idx
+            occupancy[:, self.horizon, state_idx] += prob
+
+        flat_occupancy = occupancy.reshape(-1)
+        batch_offsets = (
+            torch.arange(weight_count, device=self.device, dtype=torch.int64)
+            .view(weight_count, 1)
+            .mul((self.horizon + 1) * self.state_count)
+        )
+        selected_interval: torch.Tensor | None = None
+        selected_prob: torch.Tensor | None = None
+        selected_next_idx: torch.Tensor | None = None
+        if stationary:
+            selected_interval, selected_prob, selected_next_idx = (
+                self._select_stationary_policy_tables_batch(policy)
+            )
+
+        for rem in range(self.horizon, 0, -1):
+            current = occupancy[:, rem, :]
+            if float(current.sum().item()) <= 0.0:
+                continue
+            if not stationary:
+                selected_interval, selected_prob, selected_next_idx = (
+                    self._select_stationary_policy_tables_batch(policy[:, rem])
+                )
+            if (
+                selected_interval is None
+                or selected_prob is None
+                or selected_next_idx is None
+            ):
+                raise RuntimeError("selected policy tables were not initialized.")
+
+            cont_mask = selected_interval <= rem
+            if not bool(cont_mask.any().item()):
+                continue
+            source = current * cont_mask.to(dtype=self.dtype)
+            if float(source.sum().item()) <= 0.0:
+                continue
+
+            future_rem = torch.clamp(rem - selected_interval, min=0).to(torch.int64)
+            target_base = batch_offsets + future_rem * self.state_count
+            for rating_idx in range(4):
+                amount = source * selected_prob[:, rating_idx, :]
+                target = target_base + selected_next_idx[:, rating_idx, :]
+                flat_occupancy.scatter_add_(
+                    0,
+                    target.reshape(-1),
+                    amount.reshape(-1),
+                )
+
+        return occupancy
+
     def _metrics_from_tables(
         self,
         *,
@@ -1360,6 +1761,78 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             scalar_objective=mem_per_day - cost_weight * minutes_per_day,
             runtime_s=0.0,
         )
+
+    def _metrics_from_occupancy_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> list[OracleMetrics]:
+        weight_count = int(policy.shape[0])
+        occupancy = self._rollout_occupancy_batch(policy=policy, stationary=True)
+        interval, prob, _ = self._select_stationary_policy_tables_batch(policy)
+        total_mem = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_minutes = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_reviews = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_lapses = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        learning_minutes = (self.first_rating_prob * self.learning_cost_minutes).sum()
+        total_minutes += learning_minutes
+        expected_review_minutes = (prob * self.review_cost_minutes.view(1, 4, 1)).sum(
+            dim=1
+        )
+
+        for rem in range(1, self.horizon + 1):
+            current = occupancy[:, rem, :]
+            if float(current.sum().item()) <= 0.0:
+                continue
+            active_days = torch.minimum(interval, torch.full_like(interval, rem))
+            immediate_mem = self.memorized_by_day[
+                active_days,
+                self._flat_s_idx[None, :].expand_as(active_days),
+            ]
+            total_mem += (current * immediate_mem).sum(dim=1)
+
+            cont_mask = interval <= rem
+            source = current * cont_mask.to(dtype=self.dtype)
+            if float(source.sum().item()) <= 0.0:
+                continue
+            total_minutes += (source * expected_review_minutes).sum(dim=1)
+            total_reviews += source.sum(dim=1)
+            total_lapses += (source * prob[:, 0, :]).sum(dim=1)
+
+        day_count = float(self.days)
+        mem_per_day = (total_mem / day_count).cpu().tolist()
+        minutes_per_day = (total_minutes / day_count).cpu().tolist()
+        reviews_per_day = (total_reviews / day_count).cpu().tolist()
+        total_reviews_list = total_reviews.cpu().tolist()
+        total_lapses_list = total_lapses.cpu().tolist()
+        total_cost_seconds = (total_minutes * 60.0).cpu().tolist()
+        objectives = (
+            total_mem / day_count - cost_weights * (total_minutes / day_count)
+        ).cpu()
+        objective_list = objectives.tolist()
+
+        metrics: list[OracleMetrics] = []
+        for idx in range(weight_count):
+            reviews_float = float(total_reviews_list[idx])
+            lapses_float = float(total_lapses_list[idx])
+            observed_retention = (
+                1.0 - lapses_float / reviews_float if reviews_float > 0.0 else None
+            )
+            metrics.append(
+                OracleMetrics(
+                    card_expected_retrievability=float(mem_per_day[idx]),
+                    card_minutes_per_day=float(minutes_per_day[idx]),
+                    card_reviews_per_day=float(reviews_per_day[idx]),
+                    card_total_reviews=reviews_float,
+                    card_total_lapses=lapses_float,
+                    card_total_cost_seconds=float(total_cost_seconds[idx]),
+                    observed_retention=observed_retention,
+                    scalar_objective=float(objective_list[idx]),
+                    runtime_s=0.0,
+                )
+            )
+        return metrics
 
     def _zero_metrics(self, cost_weight: float) -> OracleMetrics:
         return OracleMetrics(
@@ -1428,6 +1901,27 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
         table_idx = policy_flat.view(1, 1, -1)
         selected_prob = prob.gather(0, table_idx.expand(1, 4, -1)).squeeze(0)
         selected_next_idx = next_idx.gather(0, table_idx.expand(1, 4, -1)).squeeze(0)
+        return selected_interval, selected_prob, selected_next_idx
+
+    def _select_stationary_policy_tables_batch(
+        self,
+        policy: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        interval, prob, next_idx = self._action_tables
+        weight_count = int(policy.shape[0])
+        policy_flat = policy.reshape(weight_count, self.state_count).to(
+            dtype=torch.int64
+        )
+        selected_interval = interval.gather(0, policy_flat)
+        table_idx = policy_flat.view(weight_count, 1, self.state_count)
+        selected_prob = prob.gather(
+            0,
+            table_idx.expand(weight_count, 4, self.state_count),
+        )
+        selected_next_idx = next_idx.gather(
+            0,
+            table_idx.expand(weight_count, 4, self.state_count),
+        )
         return selected_interval, selected_prob, selected_next_idx
 
     def _precompute_memorized_by_day(self) -> torch.Tensor:
