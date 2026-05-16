@@ -128,7 +128,7 @@ Pass `--source table` to count every nonterminal `(remaining, stability, difficu
 Visualize the stationary finite-lifecycle oracle directly over its stationary `(stability, difficulty, goal cost weight)` policy table:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_stationary_finite_policy_viz.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,16,64,256,1024
+uv run experiments/single_card_tradeoff/oracle_stationary_finite_policy_viz.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,16,64,256,1024 --action-retentions 0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98
 ```
 
 This writes `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `findings.md`, `action_distribution.png`, and `policy_heatmaps.png` under `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`. Use `--selected-weights` to choose which weights appear in the `(s,d)` heatmap panel.
@@ -222,29 +222,29 @@ The current default `fsrs6_oracle_distill` run used 4,194,304 teacher transition
 
 The stationary finite distillation run used 4,194,304 teacher transitions. Its final cross-entropy was `0.58973`, train teacher-action agreement was `73.55%`, eval agreement was `72.97%`, and all teacher policies converged with policy-iteration counts `[3,3,3,3,4,2,6,3,5,3,8,1]`.
 
-Stationary finite action distribution:
+Stationary finite action distribution with sub-0.5 actions removed:
 
-The exact stationary finite oracle policy was visualized over the equal-weighted `(stability, difficulty)` policy table with 1825 days, a 64x32 grid, and representative weights `0,16,64,256,1024`. The artifacts are in `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`: `findings.md`, `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `action_distribution.png`, and `policy_heatmaps.png`.
+The exact stationary finite oracle policy was visualized over the equal-weighted `(stability, difficulty)` policy table with 1825 days, a 64x32 grid, representative weights `0,16,64,256,1024`, and only desired-retention actions `>=0.5`. The artifacts are in `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`: `findings.md`, `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `action_distribution.png`, and `policy_heatmaps.png`. All policies converged, with policy-iteration counts `[3,2,3,5,8]`.
 
 | weight | modal retention | modal share | mean action retention | normalized entropy | objective |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 0.98 | 55.4% | 0.9168 | 0.572 | 0.987743 |
-| 16 | 0.93 | 21.5% | 0.8794 | 0.737 | 0.937493 |
-| 64 | 0.93 | 23.1% | 0.8378 | 0.757 | 0.842184 |
-| 256 | 0.10 | 23.5% | 0.6654 | 0.714 | 0.615004 |
-| 1024 | 0.10 | 76.8% | 0.2652 | 0.321 | 0.250814 |
+| 0 | 0.98 | 55.4% | 0.9238 | 0.646 | 0.987743 |
+| 16 | 0.93 | 21.5% | 0.8929 | 0.833 | 0.937493 |
+| 64 | 0.93 | 23.1% | 0.8638 | 0.853 | 0.842184 |
+| 256 | 0.50 | 24.9% | 0.7608 | 0.774 | 0.612241 |
+| 1024 | 0.50 | 52.6% | 0.6541 | 0.651 | 0.121657 |
 
-The dominant pattern is cost sensitivity: as `w` rises, the table-average desired-retention action falls from `0.9168` to `0.2652`, and the policy eventually collapses toward the cheapest action. The transition is not smooth, though. At `w=256`, the policy is still mixed and bimodal: `0.10` is the modal action, but high-retention actions such as `0.90` and `0.85` together still occupy a large share of the table. By `w=1024`, `0.10` covers `76.8%` of grid cells and entropy drops sharply.
+The dominant pattern is still cost sensitivity, but the action floor changes the high-cost behavior. As `w` rises, the table-average desired-retention action falls from `0.9238` to `0.6541`, and the policy eventually concentrates on the cheapest available action, `0.50`. The transition remains mixed: at `w=256`, `0.50` is only barely modal at `24.9%`, while `0.90` covers `24.0%` and `0.85` covers `18.8%`. By `w=1024`, `0.50` covers `52.6%` of grid cells, but the high-cost scalar objective drops to `0.121657` because the oracle can no longer choose very low review-cost actions below `0.5`.
 
 | weight | low stability mean | high stability mean | low difficulty mean | high difficulty mean |
 | ---: | ---: | ---: | ---: | ---: |
-| 0 | 0.7438 | 0.8700 | 0.9182 | 0.9258 |
-| 16 | 0.7436 | 0.8150 | 0.9000 | 0.8627 |
-| 64 | 0.7428 | 0.7880 | 0.8670 | 0.7966 |
-| 256 | 0.7361 | 0.2037 | 0.7599 | 0.4509 |
-| 1024 | 0.3250 | 0.2037 | 0.5358 | 0.1130 |
+| 0 | 0.7438 | 0.9200 | 0.9245 | 0.9289 |
+| 16 | 0.7436 | 0.8900 | 0.9063 | 0.8784 |
+| 64 | 0.7428 | 0.8727 | 0.8841 | 0.8278 |
+| 256 | 0.7422 | 0.5537 | 0.8196 | 0.6341 |
+| 1024 | 0.7420 | 0.5537 | 0.6639 | 0.6039 |
 
-The axis slices explain where the high-cost collapse happens. Low-stability states keep relatively high desired-retention actions through `w=256`, while high-stability states move to much lower actions because they can tolerate long intervals. Difficulty matters most once cost is high: at `w=1024`, the high-difficulty bin averages only `0.1130`, which means the oracle largely stops spending reviews on the hardest states, while the low-difficulty bin still averages `0.5358`.
+The axis slices explain where the clipped high-cost shift happens. Low-stability states stay near `0.742` even at high `w`, while high-stability states move down to about `0.554` because they can tolerate long intervals. Difficulty still matters once cost is high, but the no-sub-0.5 action constraint prevents the previous near-abandonment of hard states: at `w=1024`, the high-difficulty bin averages `0.6039` instead of collapsing below `0.5`.
 
 Current compact default baseline:
 
@@ -300,7 +300,7 @@ The UVFA PPO result is not purely inherited from oracle warmup: removing the gui
 - PPO guide ablations need a warmup-only control. A guided PPO checkpoint can look like a reinforcement-learning win even when most of the deployed behavior came from supervised oracle labels, especially for the RNN interval policy.
 - For the RNN interval policy, the current default is best interpreted as an oracle-imitation policy with PPO fine-tuning. The dense AUC barely changes from oracle warmup only to full training, while no-guide PPO does not recover the same frontier.
 - Removing remaining time at the oracle layer is a powerful structural compression. `fsrs6_oracle_stationary_finite` gives up a small amount of mid-cost scalar objective versus unrestricted `fsrs6_oracle`, but its exact policy table is 1825x smaller before any neural distillation.
-- The exact stationary finite policy is not just a lower-retention version of the finite oracle. Its action table is cost-sensitive and state-sensitive: at `w=256` it is still mixed and bimodal, while at `w=1024` most high-difficulty states collapse to the cheapest retention action. That explains why very small stationary finite distills lose span coverage quickly despite the smaller teacher table.
+- The exact stationary finite policy is not just a lower-retention version of the finite oracle. Its action table is cost-sensitive and state-sensitive: with sub-0.5 actions removed, `w=256` remains mixed and bimodal, while `w=1024` concentrates on the new cheapest action `0.50` and loses high-cost scalar objective. That explains why very small stationary finite distills lose span coverage quickly despite the smaller teacher table.
 - `oracle_rho4` is a strong compact observation. It gives a 1,536-parameter model enough horizon and stability information to cover the frontier when the loss geometry is right.
 - Train cost weights should be sparse but cover scale: use `0 + 2^0..2^10`. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
 - Integer interval actions are the most direct continuous-action target for the finite-horizon oracle. Continuous desired retention can work, but it needs interval-aware loss shaping and coverage validation.
