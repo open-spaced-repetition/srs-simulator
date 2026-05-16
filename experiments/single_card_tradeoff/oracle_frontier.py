@@ -860,14 +860,20 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
     ) -> tuple[torch.Tensor, OracleMetrics, int, bool, float]:
         policy = self._project_stationary_policy(finite_policy)
 
-        metrics = self._zero_metrics(cost_weight)
+        value: torch.Tensor | None = None
+        objective: float | None = None
         residual = math.inf
         converged = False
         for iteration in range(1, max_iterations + 1):
-            value, metrics = self._evaluate_stationary_policy(
-                policy=policy,
-                cost_weight=cost_weight,
-            )
+            if value is None or objective is None:
+                value = self._evaluate_stationary_policy_value(
+                    policy=policy,
+                    cost_weight=cost_weight,
+                )
+                objective = self._objective_from_value(
+                    value=value,
+                    cost_weight=cost_weight,
+                )
             occupancy = self._rollout_occupancy(policy=policy, stationary=True)
             new_policy, residual, visited = self._improve_stationary_policy(
                 policy=policy,
@@ -880,18 +886,28 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
                 progress_bar.update(1)
             if not policy_changed or residual <= tolerance:
                 converged = True
+                _, metrics = self._evaluate_stationary_policy(
+                    policy=policy,
+                    cost_weight=cost_weight,
+                )
                 return policy, metrics, iteration, converged, residual
             # The occupancy-weighted greedy step is a heuristic under the stationary
             # finite-lifecycle constraint, so accept only objective-improving moves.
-            _, new_metrics = self._evaluate_stationary_policy(
+            new_value = self._evaluate_stationary_policy_value(
                 policy=new_policy,
                 cost_weight=cost_weight,
             )
-            objective_improvement = (
-                new_metrics.scalar_objective - metrics.scalar_objective
+            new_objective = self._objective_from_value(
+                value=new_value,
+                cost_weight=cost_weight,
             )
+            objective_improvement = new_objective - objective
             if objective_improvement <= tolerance:
                 converged = True
+                _, metrics = self._evaluate_stationary_policy(
+                    policy=policy,
+                    cost_weight=cost_weight,
+                )
                 return (
                     policy,
                     metrics,
@@ -901,6 +917,8 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
                 )
             residual = objective_improvement
             policy = new_policy
+            value = new_value
+            objective = new_objective
 
         _, metrics = self._evaluate_stationary_policy(
             policy=policy,
@@ -915,12 +933,17 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             device=self.device,
             dtype=self.dtype,
         )
-        for rem in range(1, self.horizon + 1):
-            rem_occupancy = occupancy[rem].reshape(1, self.state_count)
-            if float(rem_occupancy.sum().item()) <= 0.0:
-                continue
-            rem_actions = finite_policy[rem].reshape(1, self.state_count)
-            action_weight.scatter_add_(0, rem_actions, rem_occupancy)
+        occupancy_flat = occupancy[1:].reshape(self.horizon, self.state_count)
+        policy_flat = finite_policy[1:].reshape(self.horizon, self.state_count)
+        scatter_idx = (
+            policy_flat * self.state_count
+            + self._flat_state_idx[None, :].expand(self.horizon, self.state_count)
+        ).reshape(-1)
+        action_weight.reshape(-1).scatter_add_(
+            0,
+            scatter_idx,
+            occupancy_flat.reshape(-1),
+        )
 
         projected = finite_policy[self.horizon].reshape(self.state_count).clone()
         visited = action_weight.sum(dim=0) > 0.0
@@ -988,6 +1011,75 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             lapses=lapses,
         )
         return value, metrics
+
+    def _evaluate_stationary_policy_value(
+        self,
+        *,
+        policy: torch.Tensor,
+        cost_weight: float,
+    ) -> torch.Tensor:
+        value = torch.zeros(
+            (self.horizon + 1, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        interval, prob, next_idx = self._select_stationary_policy_tables(policy)
+
+        for rem in range(1, self.horizon + 1):
+            cont_mask = interval <= rem
+            future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
+            active_days = torch.minimum(interval, torch.full_like(interval, rem))
+            value_rem = self._memorized_sum_flat(active_days)
+
+            if cont_mask.any():
+                for rating_idx, rating in enumerate(range(1, 5)):
+                    future_value = value[future_rem, next_idx[rating_idx]]
+                    review_minutes = self.review_cost_minutes[rating - 1]
+                    weighted = torch.where(
+                        cont_mask,
+                        prob[rating_idx],
+                        torch.zeros_like(prob[rating_idx]),
+                    )
+                    value_rem += weighted * (
+                        future_value - cost_weight * review_minutes
+                    )
+
+            value[rem] = value_rem
+
+        return value
+
+    def _objective_from_value(
+        self,
+        *,
+        value: torch.Tensor,
+        cost_weight: float,
+    ) -> float:
+        total_value = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+        total_learning_minutes = torch.tensor(
+            0.0,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        for rating in range(1, 5):
+            prob = self.first_rating_prob[rating - 1]
+            s0, d0 = self._init_state_scalar(rating)
+            s_idx = self._s_to_idx(s0)
+            d_idx = self._d_to_idx(d0)
+            state_idx = s_idx * self.d_count + d_idx
+            total_value += prob * value[self.horizon, state_idx]
+            total_learning_minutes += prob * self.learning_cost_minutes[rating - 1]
+        return float(
+            (
+                total_value
+                - torch.as_tensor(
+                    cost_weight,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                * total_learning_minutes
+            ).item()
+            / float(self.days)
+        )
 
     def _stationary_candidate_tables(
         self,
@@ -1157,38 +1249,42 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             occupancy[self.horizon, s_idx, d_idx] += prob
 
         flat_occupancy = occupancy.reshape(-1)
+        selected_interval: torch.Tensor | None = None
+        selected_prob: torch.Tensor | None = None
+        selected_next_idx: torch.Tensor | None = None
+        if stationary:
+            selected_interval, selected_prob, selected_next_idx = (
+                self._select_stationary_policy_tables(policy)
+            )
+
         for rem in range(self.horizon, 0, -1):
-            current = occupancy[rem]
+            current = occupancy[rem].reshape(-1)
             if float(current.sum().item()) <= 0.0:
                 continue
-            selected = policy if stationary else policy[rem]
-            for action_idx, transition in enumerate(self.transitions):
-                action_mask = selected == action_idx
-                if not bool(action_mask.any().item()):
-                    continue
-                cont_mask = transition.interval <= rem
-                if not bool(cont_mask.any().item()):
-                    continue
-                source = current * action_mask.to(dtype=self.dtype)
-                source = source * cont_mask[:, None].to(dtype=self.dtype)
-                if float(source.sum().item()) <= 0.0:
-                    continue
-
-                future_rem = torch.clamp(rem - transition.interval, min=0).to(
-                    torch.int64
+            if not stationary:
+                selected_interval, selected_prob, selected_next_idx = (
+                    self._select_stationary_policy_tables(policy[rem])
                 )
-                future_rem_idx = future_rem[:, None].expand_as(self.s_mesh)
-                for rating_idx in range(4):
-                    prob = transition.prob[rating_idx][:, None].expand_as(self.s_mesh)
-                    amount = source * prob
-                    target = (
-                        future_rem_idx * self.state_count
-                        + transition.next_s_idx[rating_idx] * self.d_count
-                        + transition.next_d_idx[rating_idx]
-                    )
-                    flat_occupancy.scatter_add_(
-                        0, target.reshape(-1), amount.reshape(-1)
-                    )
+            if (
+                selected_interval is None
+                or selected_prob is None
+                or selected_next_idx is None
+            ):
+                raise RuntimeError("selected policy tables were not initialized.")
+
+            cont_mask = selected_interval <= rem
+            if not bool(cont_mask.any().item()):
+                continue
+            source = current * cont_mask.to(dtype=self.dtype)
+            if float(source.sum().item()) <= 0.0:
+                continue
+
+            future_rem = torch.clamp(rem - selected_interval, min=0).to(torch.int64)
+            rem_offset = future_rem * self.state_count
+            for rating_idx in range(4):
+                amount = source * selected_prob[rating_idx]
+                target = rem_offset + selected_next_idx[rating_idx]
+                flat_occupancy.scatter_add_(0, target, amount)
 
         return occupancy
 
