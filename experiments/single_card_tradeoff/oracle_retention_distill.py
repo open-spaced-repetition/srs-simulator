@@ -36,6 +36,10 @@ from experiments.single_card_tradeoff.tradeoff import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.retention_space import (
+    MIN_TARGET_RETENTION,
+    validate_retention_values,
+)
 from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
@@ -56,7 +60,7 @@ DEFAULT_EVAL_PARTICLES = 10_000
 DEFAULT_OBS_MODE = "oracle_rho4"
 DEFAULT_HIDDEN_SIZE = 16
 DEFAULT_NETWORK_DEPTH = 2
-DEFAULT_RETENTION_MIN = 1e-4
+DEFAULT_RETENTION_MIN = MIN_TARGET_RETENTION
 DEFAULT_RETENTION_MAX = 0.999
 DEFAULT_INTERVAL_LOSS_WEIGHT = 1.0
 DEFAULT_RETENTION_LOGIT_LOSS_WEIGHT = 0.0
@@ -908,8 +912,8 @@ def main() -> None:
         raise SystemExit("--hidden-size must be > 0.")
     if args.network_depth <= 0:
         raise SystemExit("--network-depth must be > 0.")
-    if not 0.0 < args.retention_min < args.retention_max < 1.0:
-        raise SystemExit("--retention-min and --retention-max must be within (0, 1).")
+    if not MIN_TARGET_RETENTION <= args.retention_min < args.retention_max < 1.0:
+        raise SystemExit("--retention-min and --retention-max must be within [0.5, 1).")
     if args.interval_loss_weight < 0.0:
         raise SystemExit("--interval-loss-weight must be >= 0.")
     if args.retention_logit_loss_weight < 0.0:
@@ -945,8 +949,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
-    if any(value <= 0.0 or value >= 1.0 for value in action_retentions):
-        raise SystemExit("--action-retentions must be within (0, 1).")
+    validate_retention_values(action_retentions, name="--action-retentions")
     fsrs_config = load_single_card_fsrs6_config(args)
     oracle = FSRS6IntervalOracle(
         days=args.days,

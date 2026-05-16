@@ -36,6 +36,9 @@ from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
+    validate_retention_values,
+)
 from experiments.single_card_tradeoff.uvfa_ppo import fsrs_config_kwargs  # noqa: E402
 from simulator.defaults import DEFAULT_DAYS  # noqa: E402
 from simulator.scheduler_spec import format_float  # noqa: E402
@@ -746,8 +749,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
-    if any(value <= 0.0 or value >= 1.0 for value in action_retentions):
-        raise SystemExit("--action-retentions values must be within (0, 1).")
+    validate_retention_values(action_retentions, name="--action-retentions")
 
     device = _resolve_device(args.torch_device)
     fsrs_config = load_single_card_fsrs6_config(args)

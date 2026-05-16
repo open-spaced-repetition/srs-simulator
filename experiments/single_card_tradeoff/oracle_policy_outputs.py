@@ -29,6 +29,9 @@ from experiments.single_card_tradeoff.config import (  # noqa: E402
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
 )
+from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
+    validate_retention_values,
+)
 from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS  # noqa: E402
 from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch  # noqa: E402
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_SEED  # noqa: E402
@@ -759,8 +762,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
-    if any(value <= 0.0 or value >= 1.0 for value in action_retentions):
-        raise SystemExit("--action-retentions values must be within (0, 1).")
+    validate_retention_values(action_retentions, name="--action-retentions")
 
     device = _resolve_device(args)
     fsrs_config = load_single_card_fsrs6_config(args)

@@ -28,6 +28,10 @@ from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
+    validate_retention_values,
+    validate_retention_values_for_model,
+)
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
@@ -297,8 +301,10 @@ class FSRS6SingleCardBatch:
             raise ValueError("env_count must be > 0.")
         if any(weight < 0.0 for weight in cost_weights):
             raise ValueError("cost weights must be >= 0.")
-        if any(retention <= 0.0 or retention >= 1.0 for retention in action_retentions):
-            raise ValueError("action retentions must be within (0, 1).")
+        validate_retention_values_for_model(
+            action_retentions,
+            name="action retention",
+        )
         if obs_mode not in {
             "basic",
             "rich",
@@ -1807,6 +1813,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
+    validate_retention_values(action_retentions, name="--action-retentions")
     fixed_intervals = parse_csv_floats(args.fixed_intervals, name="--fixed-intervals")
     baseline_particles = args.baseline_particles or args.eval_particles
     fsrs_config = load_single_card_fsrs6_config(args)

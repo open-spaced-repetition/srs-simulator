@@ -36,6 +36,11 @@ from experiments.single_card_tradeoff.config import (
     SingleCardFSRS6Config,
     SUPPORTED_SINGLE_CARD_ENVS,
 )
+from experiments.single_card_tradeoff.retention_space import (
+    DEFAULT_TARGET_RETENTIONS,
+    MIN_TARGET_RETENTION,
+    validate_retention_values,
+)
 from simulator import simulate as simulate_event
 from simulator.behavior import StochasticBehavior
 from simulator.button_usage import load_button_usage_config, normalize_button_usage
@@ -67,23 +72,6 @@ from simulator.vectorized.multiuser_engine import simulate_multiuser
 from simulator.vectorized.multiuser_types import MultiUserBehavior, MultiUserCost
 
 DEFAULT_FIXED_INTERVALS = [8, 16, 32, 64, 128, 256, 512]
-DEFAULT_TARGET_RETENTIONS = [
-    0.10,
-    0.20,
-    0.30,
-    0.40,
-    0.50,
-    0.60,
-    0.65,
-    0.70,
-    0.75,
-    0.80,
-    0.85,
-    0.90,
-    0.93,
-    0.96,
-    0.98,
-]
 DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS = [
     0,
     1,
@@ -216,6 +204,7 @@ def parse_args() -> argparse.Namespace:
         default=",".join(format_float(value) for value in DEFAULT_TARGET_RETENTIONS),
         help=(
             "Comma-separated desired-retention targets for DR schedulers. "
+            f"Values must be >= {format_float(MIN_TARGET_RETENTION)}. "
             "Pass an empty string to use --start-retention/--end-retention/--step."
         ),
     )
@@ -369,7 +358,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--oracle-action-retentions",
         default=",".join(format_float(value) for value in DEFAULT_TARGET_RETENTIONS),
-        help="Discrete desired-retention actions available to fsrs6_oracle.",
+        help=(
+            "Discrete desired-retention actions available to fsrs6_oracle. "
+            f"Values must be >= {format_float(MIN_TARGET_RETENTION)}."
+        ),
     )
     parser.add_argument(
         "--oracle-s-grid-size",
@@ -627,16 +619,17 @@ def _retention_grid(args: argparse.Namespace) -> list[float]:
                 value = round(float(item), 2)
             except ValueError as exc:
                 raise SystemExit(f"Invalid target retention '{item}'.") from exc
-            if not (0.0 < value < 1.0):
-                raise SystemExit("Target retentions must be within (0, 1).")
             values.append(value)
         if not values:
             raise SystemExit("--target-retentions must include at least one value.")
+        validate_retention_values(values, name="Target retention")
         return values
     try:
-        return dr_values(args.start_retention, args.end_retention, args.step)
+        values = dr_values(args.start_retention, args.end_retention, args.step)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
+    validate_retention_values(values, name="Target retention")
+    return values
 
 
 def _make_behavior(
@@ -1245,6 +1238,10 @@ def _load_policy_checkpoint(
         raise SystemExit(f"{policy_label} checkpoint is missing cost_weights.")
     action_retentions = [float(value) for value in raw_actions]
     policy_cost_weights = [float(value) for value in raw_cost_weights]
+    validate_retention_values(
+        action_retentions,
+        name=f"{policy_label} action retention",
+    )
     obs_dim = int(checkpoint.get("obs_dim", 7))
     hidden_size = int(checkpoint.get("hidden_size", 96))
     network = str(checkpoint.get("network", "mlp"))
@@ -1467,8 +1464,16 @@ def _load_fsrs6_oracle_retention_distill_policy(
         )
     model.load_state_dict(state_dict)
     model.eval()
-    retention_min = float(checkpoint.get("retention_min", 1e-4))
+    validate_retention_values(
+        action_retentions,
+        name="FSRS6 oracle retention distill action retention",
+    )
+    retention_min = float(checkpoint.get("retention_min", MIN_TARGET_RETENTION))
     retention_max = float(checkpoint.get("retention_max", 0.999))
+    if not MIN_TARGET_RETENTION <= retention_min < retention_max < 1.0:
+        raise SystemExit(
+            "FSRS6 oracle retention distill retention range must be within [0.5, 1)."
+        )
     terminal_snap_ratio = float(checkpoint.get("terminal_snap_ratio", 0.0))
     return (
         model,
@@ -1704,8 +1709,7 @@ def _oracle_action_retentions(args: argparse.Namespace) -> list[float]:
         args.oracle_action_retentions,
         label="Oracle action retention",
     )
-    if any(value <= 0.0 or value >= 1.0 for value in values):
-        raise SystemExit("Oracle action retentions must be within (0, 1).")
+    validate_retention_values(values, name="Oracle action retention")
     return values
 
 

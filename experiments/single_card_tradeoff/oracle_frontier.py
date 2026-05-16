@@ -26,6 +26,10 @@ from experiments.single_card_tradeoff.config import (  # noqa: E402
     add_single_card_fsrs6_config_args,
     load_single_card_fsrs6_config,
 )
+from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
+    validate_retention_values,
+    validate_retention_values_for_model,
+)
 from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
@@ -177,8 +181,10 @@ class FSRS6GridOracle:
             raise ValueError("days must be > 1.")
         if s_grid_size < 8 or d_grid_size < 8:
             raise ValueError("grid sizes must be >= 8.")
-        if any(value <= 0.0 or value >= 1.0 for value in action_retentions):
-            raise ValueError("action retentions must be within (0, 1).")
+        validate_retention_values_for_model(
+            action_retentions,
+            name="action retention",
+        )
 
         self.days = int(days)
         self.horizon = int(days - 1)
@@ -1993,6 +1999,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
+    validate_retention_values(action_retentions, name="--action-retentions")
     fsrs_config = load_single_card_fsrs6_config(args)
     oracle = FSRS6GridOracle(
         days=args.days,

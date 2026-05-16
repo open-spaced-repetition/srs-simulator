@@ -49,6 +49,7 @@ from experiments.single_card_tradeoff.tradeoff import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.retention_space import validate_retention_values
 from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_TRAIN_ENVS,
     FSRS6SingleCardBatch,
@@ -419,8 +420,7 @@ def main() -> None:
     )
     if any(weight < 0.0 for weight in cost_weights):
         raise SystemExit("--cost-weights must be >= 0.")
-    if any(retention <= 0.0 or retention >= 1.0 for retention in action_retentions):
-        raise SystemExit("--action-retentions must be within (0, 1).")
+    validate_retention_values(action_retentions, name="--action-retentions")
 
     candidates = parse_candidates(args.candidates)
     device = resolve_torch_device(args.torch_device)

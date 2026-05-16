@@ -32,6 +32,9 @@ from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
+    validate_retention_values,
+)
 from experiments.single_card_tradeoff.uvfa_ppo import (  # noqa: E402
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
@@ -473,8 +476,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
-    if any(value <= 0.0 or value >= 1.0 for value in action_retentions):
-        raise SystemExit("--action-retentions values must be within (0, 1).")
+    validate_retention_values(action_retentions, name="--action-retentions")
     fsrs_config = load_single_card_fsrs6_config(args)
 
     model, guide, stats = train_distilled_policy(

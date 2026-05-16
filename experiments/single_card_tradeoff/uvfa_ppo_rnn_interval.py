@@ -32,6 +32,7 @@ from experiments.single_card_tradeoff.tradeoff import (
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.retention_space import validate_retention_values
 from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_COST_WEIGHTS,
     FSRS6SingleCardBatch,
@@ -862,6 +863,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
+    validate_retention_values(action_retentions, name="--action-retentions")
     setattr(args, "action_retentions_values", action_retentions)
     fixed_intervals = parse_csv_floats(args.fixed_intervals, name="--fixed-intervals")
     baseline_particles = args.baseline_particles or args.eval_particles

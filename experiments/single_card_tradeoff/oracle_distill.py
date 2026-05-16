@@ -29,6 +29,7 @@ from experiments.single_card_tradeoff.tradeoff import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.retention_space import validate_retention_values
 from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
@@ -389,6 +390,7 @@ def main() -> None:
         args.action_retentions,
         name="--action-retentions",
     )
+    validate_retention_values(action_retentions, name="--action-retentions")
     fsrs_config = load_single_card_fsrs6_config(args)
 
     model, guide, stats = train_distilled_policy(
