@@ -288,7 +288,7 @@ class FSRS6GridOracle:
         self.s_mesh = self.s_grid[:, None].expand(s_grid_size, d_grid_size)
         self.d_mesh = self.d_grid[None, :].expand(s_grid_size, d_grid_size)
         self._s_grid_idx = torch.arange(self.s_grid.numel(), device=self.device)
-        self.memorized_by_day = self._precompute_memorized_by_day()
+        self.memorized_by_day = self._precompute_grid_memorized_by_day()
         self.transitions = self._precompute_transitions()
 
     def estimate(self, cost_weight: float, *, progress: bool = False) -> OracleMetrics:
@@ -668,7 +668,7 @@ class FSRS6GridOracle:
     def _memorized_sum_for_days(self, days: torch.Tensor) -> torch.Tensor:
         return self.memorized_by_day[days.to(torch.int64), self._s_grid_idx]
 
-    def _precompute_memorized_by_day(self) -> torch.Tensor:
+    def _precompute_grid_memorized_by_day(self) -> torch.Tensor:
         table = torch.zeros(
             (self.horizon + 1, self.s_grid.numel()),
             device=self.device,
