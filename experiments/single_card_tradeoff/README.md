@@ -282,19 +282,35 @@ The dominant pattern is still cost sensitivity, but the action floor changes the
 
 The axis slices explain where the clipped high-cost shift happens. Low-stability states stay near `0.742` even at high `w`, while high-stability states move down to about `0.554` because they can tolerate long intervals. Difficulty still matters once cost is high, but the no-sub-0.5 action constraint prevents the previous near-abandonment of hard states: at `w=1024`, the high-difficulty bin averages `0.6039` instead of collapsing below `0.5`.
 
-Stationary finite distill compression after clipping actions:
+Stationary finite sparse-weight and model-size compression:
 
-The no-sub-0.5 compression artifacts are under `artifacts/single_card_tradeoff/stationary_finite_no_sub05_compression/`. These runs distill the current 1,452-parameter stationary finite checkpoint into 476-parameter students and evaluate with the same 10,000-particle frontier setup. A more aggressive `residual:6:2` attempt was stopped because its full 10,000-particle evaluation did not finish in a reasonable time; it is not included as a current result.
+The newer stationary finite compression artifacts are under `artifacts/single_card_tradeoff/stationary_finite_cost_weight_ablation/` and `artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/`. These runs keep the clipped 11-action grid, evaluate against `fsrs6_default` with 10,000 particles, and use the standard 17 evaluation scalarization weights. The cost-weight ablation changes only the teacher training weights; all three models below use the same 1,452-parameter `oracle_stationary` residual `16x2` architecture.
 
-| candidate | parameters | table compression | vs `fsrs6_oracle_distill` relative regret | vs `fsrs6_oracle_distill` coverage | vs `fsrs6_default` relative regret | vs `fsrs6_default` coverage |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| current `residual:16:2` | 1,452 | 15.5x | +1.25% | 100.0% | -22.79% | 94.3% |
-| teacher-forced student `residual:8:2` | 476 | 47.3x | +2.35% | 13.4% | -22.91% | 11.6% |
-| student-rollout `residual:8:2` | 476 | 47.3x | +29.74% | 86.6% | +1.02% | 74.9% |
+| train weights | parameters | eval seeds | `time_regret_auc` | relative regret | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `0,1,2,4,8,16,32,64,128,256,512,1024` | 1,452 | 3 | -3.4043 +/- 0.0451 | -23.69% +/- 0.27% | 94.31% +/- 0.31% |
+| `0,4,16,64,256,1024` | 1,452 | 3 | -3.3352 +/- 0.0395 | -23.53% +/- 0.22% | 96.88% +/- 0.17% |
+| `0,16,64,256,1024` | 1,452 | 3 | -3.3904 +/- 0.0572 | -23.67% +/- 0.35% | 95.01% +/- 0.26% |
 
-The 476-parameter students are not acceptable replacements for the current checkpoint. The teacher-forced student keeps a favorable AUC only over a tiny high-memory span, while the student-rollout model has much better coverage but loses the time-regret advantage against `fsrs6_default`. Under the clipped action space, the practical checkpoint remains the 1,452-parameter `residual:16:2` model unless a new compression recipe is introduced.
+The five-weight schedule `0,16,64,256,1024` is a good sparse teacher-weight candidate for stationary finite distillation. It does not reduce checkpoint parameters by itself, but it preserves default-baseline relative regret and span coverage while cutting the number of teacher policies that must be solved.
 
-Older exact infinite-oracle, historical PPO-compare, oracle-distill hparam ablation, retention-distill coverage-fix, smoke, legacy stationary-finite compression, and historical PPO view artifacts were not reused as current no-sub-0.5 findings unless their checkpoints were verified to contain only actions `>=0.5` and their tradeoff CSVs were verified against the clipped 11-target baseline. The current report relies on the root default distill/PPO checkpoints, `no_sub05_*` comparison directories, `stationary_finite_no_sub05_compression/`, `stationary_finite_policy_viz/`, and the six `ppo_ablation` checkpoints listed above. Older directories such as `ablation/`, `ppo_compare/`, `retention_distill_compare/`, `retention_distill_coverage_fix/`, `smoke/`, `stationary_finite_compression/`, `stationary_finite_no_sub05_distill/`, and legacy `_view` files should be treated as historical until rerun under the clipped target/action space.
+Using that five-weight teacher schedule, the direct model-size ablation gives:
+
+| candidate | parameters | reduction vs 1,452 | epochs | eval seeds | teacher agreement | relative regret | coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `residual:16:2` | 1,452 | 0.0% | 64 | 3 | 73.76% | -23.67% +/- 0.35% | 95.01% +/- 0.26% |
+| `residual:12:2` | 900 | 38.0% | 64 | 1 | 73.12% | -23.58% | 97.71% |
+| `residual:10:2` | 672 | 53.7% | 64 | 1 | 71.45% | -22.68% | 85.66% |
+| `residual:8:2` | 476 | 67.2% | 64 | 1 | 71.64% | -22.29% | 86.66% |
+| `residual:8:2` | 476 | 67.2% | 128 | 3 | 73.01% | -23.50% +/- 0.25% | 95.27% +/- 0.27% |
+| `residual:8:1` | 316 | 78.2% | 64 | 1 | 69.64% | -21.54% | 73.56% |
+| `residual:6:1` | 216 | 85.1% | 64 | 1 | 69.45% | -19.68% | 73.68% |
+
+The important correction to the older compression section is that 476 parameters are viable when the small model is trained directly from the stationary finite teacher and given enough epochs. A 64-epoch `residual:8:2` run underfits and loses coverage, but the same 476-parameter architecture at 128 epochs recovers coverage to `95.27%` and keeps relative regret within `0.17` percentage points of the 1,452-parameter sparse baseline. The `residual:8:1` and `residual:6:1` runs are below the current capacity floor: they retain a favorable AUC only over a much narrower span.
+
+The recommended compressed stationary finite candidate is therefore `oracle_stationary`, `residual:8:2`, 476 parameters, 128 distillation epochs, and train weights `0,16,64,256,1024`. Relative to the 22,528-entry stationary finite policy table, this is a `47.3x` table-to-checkpoint compression; relative to the current 1,452-parameter checkpoint, it removes `67.2%` of learned parameters.
+
+The older `stationary_finite_no_sub05_compression/` teacher-forced and student-rollout students should be treated as historical compression recipes, not as the current best small-model result. Older exact infinite-oracle, historical PPO-compare, oracle-distill hparam ablation, retention-distill coverage-fix, smoke, legacy stationary-finite compression, and historical PPO view artifacts were not reused as current no-sub-0.5 findings unless their checkpoints were verified to contain only actions `>=0.5` and their tradeoff CSVs were verified against the clipped 11-target baseline. The current report relies on the root default distill/PPO checkpoints, `no_sub05_*` comparison directories, `stationary_finite_cost_weight_ablation/`, `stationary_finite_model_size_ablation/`, `stationary_finite_policy_viz/`, and the six `ppo_ablation` checkpoints listed above. Older directories such as `ablation/`, `ppo_compare/`, `retention_distill_compare/`, `retention_distill_coverage_fix/`, `smoke/`, `stationary_finite_compression/`, `stationary_finite_no_sub05_compression/`, `stationary_finite_no_sub05_distill/`, and legacy `_view` files should be treated as historical unless rerun under the clipped target/action space and the current training recipe.
 
 ## Lessons
 
@@ -302,10 +318,10 @@ Older exact infinite-oracle, historical PPO-compare, oracle-distill hparam ablat
 - Desired retention is not a naturally well-conditioned coordinate for an integer-interval teacher. Small retention errors can become large interval errors, especially for high stability, high cost weights, and horizon-terminal actions.
 - For continuous desired-retention distillation, train on the implied interval, not just the retention value. The repaired default keeps retention as the action output but supervises `log(interval(retention))`.
 - Underpredicting intervals is worse than overpredicting intervals at high cost weights. The effective training recipe weights high-cost underprediction and terminal-action underprediction more heavily.
-- Compression claims must be rerun after changing the action grid. The old low-action-space compression sweep overstated the usefulness of small stationary finite students for the clipped action space.
-- Student rollout is not automatically better. In the no-sub-0.5 compression check it improved span coverage versus teacher-forcing, but the 476-parameter student-rollout model lost the default-baseline time-regret advantage.
+- Compression claims must be rerun after changing the action grid and after changing the training recipe. The old low-action-space compression sweep overstated the usefulness of small stationary finite students for the clipped action space, while the newer direct sparse-teacher run shows that a 476-parameter `residual:8:2` model can recover coverage if trained longer.
+- Student rollout is not automatically better. In the older no-sub-0.5 compression check it improved span coverage versus teacher-forcing, but the 476-parameter student-rollout model lost the default-baseline time-regret advantage. The current best small stationary finite result is direct teacher distillation with sparse cost weights and 128 epochs.
 - Removing remaining time at the oracle layer is a powerful structural compression. With 64x32 grids and 11 clipped actions, the unrestricted finite oracle table has 41,113,600 entries, while the stationary finite table has 22,528 entries before any neural distillation.
 - The exact stationary finite policy is not just a lower-retention version of the finite oracle. Its action table is cost-sensitive and state-sensitive: with sub-0.5 actions removed, `w=256` remains mixed and bimodal, while `w=1024` concentrates on the new cheapest action `0.50` and loses high-cost scalar objective. That explains why very small stationary finite distills lose span coverage quickly despite the smaller teacher table.
 - `oracle_rho4` is a strong compact observation. With the clipped 11-action output head, it gives a 1,468-parameter model enough horizon and stability information to cover the frontier when the loss geometry is right.
-- Train cost weights should be sparse but cover scale: use `0 + 2^0..2^10`. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
+- Train cost weights should be sparse but cover scale. For stationary finite distillation, `0,16,64,256,1024` preserved relative regret and coverage in the current 3-seed evaluation; the broader `0 + 2^0..2^10` schedule remains a conservative default for unrestricted finite-oracle distillation. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
 - Integer interval actions are the most direct continuous-action target for the finite-horizon oracle. Continuous desired retention can work, but it needs interval-aware loss shaping and coverage validation.
