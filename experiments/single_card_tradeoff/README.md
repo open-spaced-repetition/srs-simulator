@@ -167,12 +167,12 @@ Stationary finite-lifecycle oracle comparison:
 
 The stationary finite oracle keeps the policy input stationary, `(stability, difficulty, goal cost weight)`, but optimizes that stationary policy against the same finite 1825-day new-card lifecycle used by the standard evaluation. This is a constrained-policy oracle, not the unrestricted finite-horizon `fsrs6_oracle`, so it should be judged by how much unrestricted finite-horizon value it preserves after removing the remaining-time input.
 
-The direct comparison below uses `fsrs6_default`, 1825 days, 10,000 particles, `deck_scale=10000`, default 64x32 oracle grids, and the standard evaluation cost weights `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`. `fsrs6_oracle` was rerun as `artifacts/single_card_tradeoff/fsrs6_oracle_exact_compare/results.csv`; the stationary finite rows are from `artifacts/single_card_tradeoff/stationary_finite_compare/results.csv`.
+The direct comparison below uses `fsrs6_default`, 1825 days, 10,000 particles, `deck_scale=10000`, default 64x32 oracle grids, and the standard evaluation cost weights `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`. `fsrs6_oracle` was rerun as `artifacts/single_card_tradeoff/fsrs6_oracle_exact_compare/results.csv`; the stationary finite exact rows are from `artifacts/single_card_tradeoff/stationary_finite_compare/results.csv`; the current compact distill rows are from `artifacts/single_card_tradeoff/default_oracle_distill_vs_stationary_finite_distill/results.csv`.
 
 | scheduler | policy input | vs `fsrs6_default` `time_regret_auc` | coverage |
 | --- | --- | ---: | ---: |
 | `fsrs6_oracle` | `(remaining, stability, difficulty, goal weight)` | -3.5985 | 79.0% |
-| `fsrs6_oracle_distill` | comparison checkpoint: `oracle`, `residual:32:2` | -3.6565 | 78.5% |
+| `fsrs6_oracle_distill` | `oracle_rho4`, `residual:16:2` | -3.6443 | 78.8% |
 | `fsrs6_oracle_stationary_finite` | `(stability, difficulty, goal weight)` | -3.3900 | 78.1% |
 | `fsrs6_oracle_stationary_finite_distill` | `(stability, difficulty, goal weight)` | -3.5814 | 72.2% |
 
@@ -180,30 +180,37 @@ The stationary finite exact oracle is close to the unrestricted finite-horizon o
 
 | scheduler | exact policy table entries | distill checkpoint parameters | table-to-distill compression |
 | --- | ---: | ---: | ---: |
-| `fsrs6_oracle` -> `fsrs6_oracle_distill` | 63,539,200 | 5,104 | 12,449x |
+| `fsrs6_oracle` -> `fsrs6_oracle_distill` | 63,539,200 | 1,536 | 41,367x |
 | `fsrs6_oracle_stationary_finite` -> `fsrs6_oracle_stationary_finite_distill` | 34,816 | 1,520 | 22.9x |
 
-The unrestricted finite oracle has the larger relative compression ratio because its table includes the 1825-step remaining-time dimension. The stationary finite oracle has already removed that dimension before distillation, so there is less redundancy left for the neural policy to compress. In absolute deployment size, however, the stationary finite distill is still much smaller: `1,520` parameters versus `5,104` in the `fsrs6_oracle_distill` checkpoint used for this comparison. That comparison checkpoint is the current `artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt`; the compact default baseline table below reports the smaller `oracle_rho4`, `residual:16:2` distill from the model-size search.
+The unrestricted finite oracle has the larger relative compression ratio because its table includes the 1825-step remaining-time dimension. The stationary finite oracle has already removed that dimension before distillation, so there is less redundancy left for the neural policy to compress. After retraining the default `fsrs6_oracle_distill_policy.pt` as the compact `oracle_rho4`, `residual:16:2` model, the two deployed neural policies are almost the same size: `1,536` parameters for `fsrs6_oracle_distill` versus `1,520` for `fsrs6_oracle_stationary_finite_distill`. The stationary finite distill is only 16 parameters smaller because it drops one input feature, not because the learned network is structurally different.
 
 Representative scalarization points:
 
 | weight | scheduler | card R | deck minutes/day | scalar objective |
 | ---: | --- | ---: | ---: | ---: |
 | 0 | `fsrs6_oracle` | 0.9884 | 59.35 | 0.9884 |
+| 0 | `fsrs6_oracle_distill` | 0.9885 | 62.41 | 0.9885 |
 | 0 | `fsrs6_oracle_stationary_finite` | 0.9883 | 58.40 | 0.9883 |
 | 0 | `fsrs6_oracle_stationary_finite_distill` | 0.9883 | 56.87 | 0.9883 |
 | 16 | `fsrs6_oracle` | 0.9752 | 25.27 | 0.9347 |
+| 16 | `fsrs6_oracle_distill` | 0.9765 | 25.63 | 0.9355 |
 | 16 | `fsrs6_oracle_stationary_finite` | 0.9751 | 25.44 | 0.9344 |
 | 16 | `fsrs6_oracle_stationary_finite_distill` | 0.9773 | 26.34 | 0.9351 |
 | 64 | `fsrs6_oracle` | 0.9491 | 16.78 | 0.8417 |
+| 64 | `fsrs6_oracle_distill` | 0.9557 | 17.94 | 0.8409 |
 | 64 | `fsrs6_oracle_stationary_finite` | 0.9487 | 17.83 | 0.8346 |
 | 64 | `fsrs6_oracle_stationary_finite_distill` | 0.9585 | 18.88 | 0.8376 |
 | 256 | `fsrs6_oracle` | 0.8377 | 8.64 | 0.6165 |
+| 256 | `fsrs6_oracle_distill` | 0.8116 | 7.77 | 0.6126 |
 | 256 | `fsrs6_oracle_stationary_finite` | 0.8210 | 8.31 | 0.6082 |
 | 256 | `fsrs6_oracle_stationary_finite_distill` | 0.8555 | 9.95 | 0.6008 |
 | 1024 | `fsrs6_oracle` | 0.5262 | 2.72 | 0.2480 |
+| 1024 | `fsrs6_oracle_distill` | 0.5271 | 2.70 | 0.2504 |
 | 1024 | `fsrs6_oracle_stationary_finite` | 0.5314 | 2.71 | 0.2538 |
 | 1024 | `fsrs6_oracle_stationary_finite_distill` | 0.5656 | 3.13 | 0.2456 |
+
+The current default `fsrs6_oracle_distill` run used 4,194,304 teacher transitions. Its final cross-entropy was `0.56995`, train teacher-action agreement was `75.11%`, and eval agreement was `74.38%`.
 
 The stationary finite distillation run used 4,194,304 teacher transitions. Its final cross-entropy was `0.58973`, train teacher-action agreement was `73.55%`, eval agreement was `72.97%`, and all teacher policies converged with policy-iteration counts `[3,3,3,3,4,2,6,3,5,3,8,1]`.
 
@@ -212,9 +219,10 @@ Current compact default baseline:
 | scheduler | model | parameters | vs `fsrs6_default` `time_regret_auc` | coverage |
 | --- | --- | ---: | ---: | ---: |
 | `fsrs6_oracle_distill` | `oracle_rho4`, `residual:16:2` | 1,536 | -3.6443 | 78.8% |
+| `fsrs6_oracle_stationary_finite_distill` | `oracle_stationary`, `residual:16:2` | 1,520 | -3.5814 | 72.2% |
 | `fsrs6_oracle_retention_distill` | `oracle_rho4`, `residual:16:2` | 1,536 | -3.4359 | 80.4% |
 
-The repaired continuous desired-retention distill now covers the frontier about as broadly as the discrete distill. Directly against `fsrs6_oracle_distill`, it still has a small positive regret (`+0.1837` deck-minutes/day over 100% overlap in the default comparison), so the discrete distill remains the strongest compact default baseline.
+The retrained compact `fsrs6_oracle_distill` remains the strongest compact default baseline in this group. Directly against `fsrs6_oracle_stationary_finite_distill`, it has `-0.1719` deck-minutes/day time-regret AUC over 100% of the stationary-finite distill span, while the stationary-finite distill covers only `91.6%` of the oracle-distill span when the baseline is reversed. The repaired continuous desired-retention distill now covers the frontier about as broadly as the discrete distill. Directly against `fsrs6_oracle_distill`, it still has a small positive regret (`+0.1837` deck-minutes/day over 100% overlap in the default comparison), so the discrete distill remains the strongest compact default baseline.
 
 Before the interval-aware repair, `fsrs6_oracle_retention_distill` looked deceptively strong against `fsrs6_default` (`time_regret_auc=-5.2367`) but had only `15.1%` coverage. Its points were concentrated in the high-memory region, so the AUC was computed over too narrow a memory span. The repaired version expands coverage to `80.4%` and moves the high-cost end from `card_mem≈0.900` to `card_mem≈0.518` at `w=1024`.
 
