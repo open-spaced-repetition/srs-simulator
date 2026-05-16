@@ -287,6 +287,8 @@ class FSRS6GridOracle:
         )
         self.s_mesh = self.s_grid[:, None].expand(s_grid_size, d_grid_size)
         self.d_mesh = self.d_grid[None, :].expand(s_grid_size, d_grid_size)
+        self._s_grid_idx = torch.arange(self.s_grid.numel(), device=self.device)
+        self.memorized_by_day = self._precompute_memorized_by_day()
         self.transitions = self._precompute_transitions()
 
     def estimate(self, cost_weight: float, *, progress: bool = False) -> OracleMetrics:
@@ -487,7 +489,7 @@ class FSRS6GridOracle:
         cont_mask = interval <= rem
         future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
         active_days = torch.minimum(interval, torch.full_like(interval, rem))
-        immediate_mem = self._memorized_sum(self.s_grid, active_days)[:, None]
+        immediate_mem = self._memorized_sum_for_days(active_days)[:, None]
         candidate_value = (
             immediate_mem.expand_as(self.s_mesh)
             .unsqueeze(2)
@@ -531,7 +533,7 @@ class FSRS6GridOracle:
         cont_mask = interval <= rem
         future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
         active_days = torch.minimum(interval, torch.full_like(interval, rem))
-        immediate_mem = self._memorized_sum(self.s_grid, active_days)[:, None]
+        immediate_mem = self._memorized_sum_for_days(active_days)[:, None]
         candidate_value = immediate_mem.expand_as(self.s_mesh).clone()
         candidate_mem = candidate_value.clone()
         candidate_minutes = torch.zeros_like(candidate_value)
@@ -662,6 +664,30 @@ class FSRS6GridOracle:
                 s.index_select(0, idx).unsqueeze(1),
             ).sum(dim=1)
         return out
+
+    def _memorized_sum_for_days(self, days: torch.Tensor) -> torch.Tensor:
+        return self.memorized_by_day[days.to(torch.int64), self._s_grid_idx]
+
+    def _precompute_memorized_by_day(self) -> torch.Tensor:
+        table = torch.zeros(
+            (self.horizon + 1, self.s_grid.numel()),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        if self.horizon <= 0:
+            return table
+        elapsed = torch.arange(
+            1,
+            self.horizon + 1,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        retrievability = self._forgetting_curve(
+            elapsed[:, None],
+            self.s_grid[None, :],
+        )
+        table[1:] = torch.cumsum(retrievability, dim=0)
+        return table
 
     def _next_d(self, d: torch.Tensor, rating: torch.Tensor) -> torch.Tensor:
         rating_f = rating.to(dtype=self.dtype)
