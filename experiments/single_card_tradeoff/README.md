@@ -175,19 +175,20 @@ No-sub-0.5 action-space rerun:
 
 The current default target/action retention grid is `0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98`. Checkpoints whose action grid includes values below `0.5` now fail validation in the tradeoff runner, and the report below only uses artifacts that were verified to use the new action grid.
 
-The current compact comparison uses `fsrs6_default`, 1825 days, 10,000 particles, `deck_scale=10000`, and the default scalarization weights from each checkpoint. The combined artifacts are in `artifacts/single_card_tradeoff/no_sub05_distill_compare/`. The default desired-retention baseline rows come from `artifacts/single_card_tradeoff/no_sub05_default_vs_stationary_finite_distill/results.csv`; the learned-policy evaluations are `artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_results.csv`, and `artifacts/single_card_tradeoff/uvfa_ppo_results.csv`.
+The current compact comparison uses `fsrs6_default`, 1825 days, 10,000 particles, `deck_scale=10000`, and the standard scalarization weights for each scheduler implementation. The combined artifacts are in `artifacts/single_card_tradeoff/no_sub05_distill_compare/`. The default desired-retention baseline rows come from `artifacts/single_card_tradeoff/no_sub05_default_vs_stationary_finite_distill/results.csv`; the learned-policy evaluations are `artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_results.csv`, `artifacts/single_card_tradeoff/uvfa_ppo_results.csv`, and `artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_results.csv`.
 
 | scheduler | policy input | parameters | vs `fsrs6_default` `time_regret_auc` | relative regret | coverage |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `fsrs6_oracle_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | -3.5137 | -23.46% | 86.5% |
-| `fsrs6_oracle_stationary_finite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | -3.2823 | -22.79% | 94.3% |
-| `fsrs6_oracle_retention_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | -3.3171 | -21.70% | 83.2% |
-| `fsrs6_oracle_infinite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | -4.4561 | -13.57% | 9.1% |
-| `uvfa_ppo` | `rich`, `residual:64:3` | 27,148 | -3.0411 | -23.58% | 96.3% |
+| `fsrs6_oracle_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | -3.6263 | -24.18% | 86.3% |
+| `fsrs6_oracle_stationary_finite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | -3.4070 | -23.70% | 94.7% |
+| `fsrs6_oracle_retention_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | -3.3248 | -21.79% | 83.5% |
+| `fsrs6_oracle_infinite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | -4.8242 | -14.66% | 9.0% |
+| `uvfa_ppo` | `rich`, `residual:64:3` | 27,148 | -3.4886 | -24.89% | 99.2% |
+| `uvfa_ppo_rnn_interval` | `belief`, `GRU:128` | 87,559 | -3.0423 | -21.67% | 69.2% |
 
-Directly against `fsrs6_oracle_distill`, the current `fsrs6_oracle_stationary_finite_distill` has `+0.1428` deck-minutes/day time-regret AUC, `+1.25%` relative regret, and `99.99%` coverage. The continuous desired-retention distill has `+0.2502` deck-minutes/day, `+2.14%` relative regret, and `96.1%` coverage. The default `uvfa_ppo` checkpoint has `-0.0584` deck-minutes/day, `-0.55%` relative regret, and `96.5%` coverage against `fsrs6_oracle_distill`; it is slightly ahead on the shared span, but it uses an order of magnitude more parameters. Reversing the baseline gives `fsrs6_oracle_distill` `-0.1428` deck-minutes/day over `91.7%` of the stationary-finite-distill span. The stationary finite distill is slightly worse than the unrestricted finite-horizon distill on shared span, but it covers more of the `fsrs6_default` retention span after clipping actions below `0.5`.
+Directly against `fsrs6_oracle_distill`, the current `fsrs6_oracle_stationary_finite_distill` has `+0.0944` deck-minutes/day time-regret AUC, `+0.83%` relative regret, and `99.997%` coverage. The continuous desired-retention distill has `+0.3542` deck-minutes/day, `+3.07%` relative regret, and `96.7%` coverage. The default `uvfa_ppo` checkpoint has `-0.0639` deck-minutes/day, `-0.56%` relative regret, and `99.9%` coverage against `fsrs6_oracle_distill`; it is slightly ahead on the shared span, but it uses an order of magnitude more parameters. The recurrent interval PPO has `+0.1289` deck-minutes/day, `+1.19%` relative regret, and `80.2%` coverage against `fsrs6_oracle_distill`. Reversing the stationary-finite baseline gives `fsrs6_oracle_distill` `-0.0944` deck-minutes/day over `91.1%` of the stationary-finite-distill span. The stationary finite distill is slightly worse than the unrestricted finite-horizon distill on shared span, but it covers more of the `fsrs6_default` retention span after clipping actions below `0.5`.
 
-The average-reward infinite distill should not be judged by its negative default-baseline AUC alone. Its frontier covers only `9.1%` of the default retention span after the action floor is applied, so the AUC is computed over a narrow high-memory region. Directly against `fsrs6_oracle_distill`, it has `+17.47%` relative regret over only `10.5%` of the oracle-distill span.
+The average-reward infinite distill should not be judged by its negative default-baseline AUC alone. Its frontier covers only `9.0%` of the default retention span after the action floor is applied, so the AUC is computed over a narrow high-memory region. Directly against `fsrs6_oracle_distill`, it has `+15.59%` relative regret over only `10.4%` of the oracle-distill span.
 
 | scheduler | exact policy table entries | distill checkpoint parameters | table-to-distill compression |
 | --- | ---: | ---: | ---: |
@@ -200,30 +201,35 @@ Representative scalarization points:
 
 | weight | scheduler | card R | deck minutes/day | scalar objective |
 | ---: | --- | ---: | ---: | ---: |
-| 0 | `fsrs6_oracle_distill` | 0.9884 | 62.86 | 0.9884 |
-| 0 | `fsrs6_oracle_stationary_finite_distill` | 0.9884 | 60.72 | 0.9884 |
-| 0 | `fsrs6_oracle_retention_distill` | 0.9947 | 371.80 | 0.9947 |
-| 0 | `fsrs6_oracle_infinite_distill` | 0.9858 | 52.83 | 0.9858 |
-| 16 | `fsrs6_oracle_distill` | 0.9772 | 25.99 | 0.9356 |
-| 16 | `fsrs6_oracle_stationary_finite_distill` | 0.9770 | 25.78 | 0.9358 |
-| 16 | `fsrs6_oracle_retention_distill` | 0.9751 | 24.69 | 0.9356 |
-| 16 | `fsrs6_oracle_infinite_distill` | 0.9714 | 25.62 | 0.9304 |
-| 16 | `uvfa_ppo` | 0.9779 | 26.93 | 0.9348 |
-| 64 | `fsrs6_oracle_distill` | 0.9538 | 18.21 | 0.8372 |
-| 64 | `fsrs6_oracle_stationary_finite_distill` | 0.9553 | 18.62 | 0.8362 |
-| 64 | `fsrs6_oracle_retention_distill` | 0.9523 | 17.27 | 0.8417 |
-| 64 | `fsrs6_oracle_infinite_distill` | 0.9641 | 22.21 | 0.8219 |
-| 64 | `uvfa_ppo` | 0.9534 | 17.57 | 0.8409 |
-| 256 | `fsrs6_oracle_distill` | 0.8436 | 9.23 | 0.6073 |
-| 256 | `fsrs6_oracle_stationary_finite_distill` | 0.8387 | 9.13 | 0.6050 |
-| 256 | `fsrs6_oracle_retention_distill` | 0.8422 | 9.59 | 0.5966 |
-| 256 | `fsrs6_oracle_infinite_distill` | 0.9592 | 20.34 | 0.4386 |
-| 256 | `uvfa_ppo` | 0.8420 | 9.21 | 0.6061 |
-| 1024 | `fsrs6_oracle_distill` | 0.6855 | 5.86 | 0.0859 |
-| 1024 | `fsrs6_oracle_stationary_finite_distill` | 0.6581 | 5.52 | 0.0934 |
-| 1024 | `fsrs6_oracle_retention_distill` | 0.6973 | 7.25 | -0.0448 |
-| 1024 | `fsrs6_oracle_infinite_distill` | 0.9541 | 19.51 | -1.0441 |
-| 1024 | `uvfa_ppo` | 0.6406 | 5.23 | 0.1050 |
+| 0 | `fsrs6_oracle_distill` | 0.9884 | 62.23 | 0.9884 |
+| 0 | `fsrs6_oracle_stationary_finite_distill` | 0.9884 | 59.52 | 0.9884 |
+| 0 | `fsrs6_oracle_retention_distill` | 0.9948 | 370.60 | 0.9948 |
+| 0 | `fsrs6_oracle_infinite_distill` | 0.9859 | 51.37 | 0.9859 |
+| 0 | `uvfa_ppo` | 0.9882 | 54.67 | 0.9882 |
+| 16 | `fsrs6_oracle_distill` | 0.9771 | 26.20 | 0.9351 |
+| 16 | `fsrs6_oracle_stationary_finite_distill` | 0.9769 | 25.89 | 0.9355 |
+| 16 | `fsrs6_oracle_retention_distill` | 0.9753 | 24.29 | 0.9365 |
+| 16 | `fsrs6_oracle_infinite_distill` | 0.9715 | 25.81 | 0.9302 |
+| 16 | `uvfa_ppo` | 0.9780 | 26.81 | 0.9351 |
+| 16 | `uvfa_ppo_rnn_interval` | 0.9721 | 22.98 | 0.9353 |
+| 64 | `fsrs6_oracle_distill` | 0.9547 | 17.59 | 0.8421 |
+| 64 | `fsrs6_oracle_stationary_finite_distill` | 0.9558 | 18.12 | 0.8398 |
+| 64 | `fsrs6_oracle_retention_distill` | 0.9522 | 17.24 | 0.8418 |
+| 64 | `fsrs6_oracle_infinite_distill` | 0.9642 | 21.79 | 0.8248 |
+| 64 | `uvfa_ppo` | 0.9536 | 17.65 | 0.8406 |
+| 64 | `uvfa_ppo_rnn_interval` | 0.9497 | 16.81 | 0.8421 |
+| 256 | `fsrs6_oracle_distill` | 0.8430 | 9.24 | 0.6065 |
+| 256 | `fsrs6_oracle_stationary_finite_distill` | 0.8387 | 9.18 | 0.6036 |
+| 256 | `fsrs6_oracle_retention_distill` | 0.8393 | 9.77 | 0.5893 |
+| 256 | `fsrs6_oracle_infinite_distill` | 0.9591 | 20.54 | 0.4332 |
+| 256 | `uvfa_ppo` | 0.8419 | 9.22 | 0.6058 |
+| 256 | `uvfa_ppo_rnn_interval` | 0.8648 | 10.13 | 0.6054 |
+| 1024 | `fsrs6_oracle_distill` | 0.6861 | 5.92 | 0.0797 |
+| 1024 | `fsrs6_oracle_stationary_finite_distill` | 0.6567 | 5.70 | 0.0727 |
+| 1024 | `fsrs6_oracle_retention_distill` | 0.6961 | 7.38 | -0.0598 |
+| 1024 | `fsrs6_oracle_infinite_distill` | 0.9543 | 19.29 | -1.0209 |
+| 1024 | `uvfa_ppo` | 0.6407 | 5.33 | 0.0945 |
+| 1024 | `uvfa_ppo_rnn_interval` | 0.7297 | 7.15 | -0.0020 |
 
 The current default `fsrs6_oracle_distill` run used 4,194,304 teacher transitions. Its final cross-entropy was `0.60431`, train teacher-action agreement was `74.26%`, and eval agreement was `73.21%`.
 
@@ -234,6 +240,8 @@ The infinite average-reward distillation run used 4,194,304 teacher transitions.
 The continuous desired-retention distillation run used 4,194,304 teacher transitions. Its final loss was `0.46096`, final interval loss was `0.43893`, eval log-interval MAE was `1.13859`, and rounded interval agreement was `10.12%`. The low rounded agreement reflects the continuous-retention objective; its frontier coverage is the more useful deployment check.
 
 The default `uvfa_ppo` run used 2,359,296 training transitions, 36 PPO updates, the oracle guide policy, and the `rich` residual `64x3` network. Training took `208.69s`; the resulting checkpoint was verified to use the clipped action grid and passed the fixed-interval baseline check.
+
+The default `uvfa_ppo_rnn_interval` run used 2,359,296 training transitions, 36 PPO updates, the oracle guide policy, and the `belief` GRU-128 policy. Training took `240.77s`; the resulting 87,559-parameter checkpoint was verified to use the clipped action grid and passed the fixed-interval baseline check.
 
 Stationary finite action distribution with sub-0.5 actions removed:
 
@@ -271,7 +279,7 @@ The no-sub-0.5 compression artifacts are under `artifacts/single_card_tradeoff/s
 
 The 476-parameter students are not acceptable replacements for the current checkpoint. The teacher-forced student keeps a favorable AUC only over a tiny high-memory span, while the student-rollout model has much better coverage but loses the time-regret advantage against `fsrs6_default`. Under the clipped action space, the practical checkpoint remains the 1,452-parameter `residual:16:2` model unless a new compression recipe is introduced.
 
-Older exact infinite-oracle, recurrent PPO, historical PPO-compare, and PPO-ablation artifacts were not reused as current no-sub-0.5 findings unless their checkpoints were verified to contain only actions `>=0.5`. The root default `uvfa_ppo_policy.pt` has been rerun and verified; the older compare and ablation checkpoint directories should still be rerun before making updated claims about those variants under the new action space.
+Older exact infinite-oracle, historical PPO-compare, and PPO-ablation artifacts were not reused as current no-sub-0.5 findings unless their checkpoints were verified to contain only actions `>=0.5`. The root default `uvfa_ppo_policy.pt` and `uvfa_ppo_rnn_interval_policy.pt` have been rerun and verified; the older compare and ablation checkpoint directories should still be rerun before making updated claims about those variants under the new action space.
 
 ## Lessons
 
