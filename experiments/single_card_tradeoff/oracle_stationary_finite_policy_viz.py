@@ -68,6 +68,13 @@ class OutputPaths:
     report: Path
     distribution_plot: Path
     heatmap_plot: Path
+    distill_summary: Path
+    distill_grid: Path
+    distill_binned: Path
+    distill_comparison: Path
+    distill_distribution_plot: Path
+    distill_heatmap_plot: Path
+    distill_difference_plot: Path
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,6 +154,15 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUT_DIR,
         help="Directory for CSV, report, and plot outputs.",
     )
+    parser.add_argument(
+        "--distill-policy",
+        type=Path,
+        default=None,
+        help=(
+            "Optional fsrs6_oracle_stationary_finite_distill checkpoint to "
+            "visualize on the same (stability, difficulty, cost weight) grid."
+        ),
+    )
     parser.add_argument("--no-grid-csv", action="store_true")
     parser.add_argument("--no-plot", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
@@ -169,6 +185,13 @@ def _output_paths(out_dir: Path) -> OutputPaths:
         report=out_dir / "findings.md",
         distribution_plot=out_dir / "action_distribution.png",
         heatmap_plot=out_dir / "policy_heatmaps.png",
+        distill_summary=out_dir / "distill_action_summary.csv",
+        distill_grid=out_dir / "distill_grid_actions.csv",
+        distill_binned=out_dir / "distill_binned_actions.csv",
+        distill_comparison=out_dir / "distill_exact_comparison.csv",
+        distill_distribution_plot=out_dir / "distill_action_distribution.png",
+        distill_heatmap_plot=out_dir / "distill_policy_heatmaps.png",
+        distill_difference_plot=out_dir / "distill_exact_difference_heatmaps.png",
     )
 
 
@@ -270,6 +293,60 @@ def _summary_rows(
                     "policy_iterations": solution.iterations[weight_idx],
                     "policy_residual": solution.residuals[weight_idx],
                     "policy_converged": solution.converged[weight_idx],
+                }
+            )
+    return rows
+
+
+def _distill_summary_rows(
+    *,
+    args: argparse.Namespace,
+    fsrs_config: SingleCardFSRS6Config,
+    policies: torch.Tensor,
+    cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+    distill_policy_path: Path,
+) -> list[dict[str, Any]]:
+    action_tensor = torch.tensor(
+        list(action_retentions),
+        device=policies.device,
+        dtype=torch.float64,
+    )
+    rows: list[dict[str, Any]] = []
+    for weight_idx, cost_weight in enumerate(cost_weights):
+        flat_actions = policies[weight_idx].reshape(-1)
+        counts = torch.bincount(
+            flat_actions,
+            minlength=len(action_retentions),
+        )[: len(action_retentions)].to(dtype=torch.float64)
+        total = float(counts.sum().item())
+        shares = counts / max(total, 1.0)
+        mean_retention = float((shares * action_tensor).sum().item())
+        modal_idx = int(torch.argmax(counts).item())
+        modal_share = float(shares[modal_idx].item())
+        entropy_bits = _entropy(shares)
+        normalized_entropy = entropy_bits / math.log2(len(action_retentions))
+        for action_idx, retention in enumerate(action_retentions):
+            count = int(counts[action_idx].item())
+            rows.append(
+                {
+                    "environment": fsrs_config.environment,
+                    "days": args.days,
+                    "s_grid_size": args.s_grid_size,
+                    "d_grid_size": args.d_grid_size,
+                    "distill_policy_path": str(distill_policy_path),
+                    "goal_cost_weight": cost_weight,
+                    "action_index": action_idx,
+                    "action_retention": retention,
+                    "cell_count": count,
+                    "cell_share": float(shares[action_idx].item()),
+                    "total_cells": int(total),
+                    "mean_action_retention": mean_retention,
+                    "modal_action_index": modal_idx,
+                    "modal_action_retention": action_retentions[modal_idx],
+                    "modal_cell_share": modal_share,
+                    "action_entropy_bits": entropy_bits,
+                    "normalized_action_entropy": normalized_entropy,
                 }
             )
     return rows
@@ -405,6 +482,7 @@ def _plot_distribution(
     summary_rows: Sequence[dict[str, Any]],
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    title: str = "Stationary finite oracle action distribution over (s, d) grid",
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -427,7 +505,7 @@ def _plot_distribution(
     ax.set_yticklabels([format_float(value) for value in cost_weights])
     ax.set_xlabel("Desired-retention action")
     ax.set_ylabel("Goal cost weight")
-    ax.set_title("Stationary finite oracle action distribution over (s, d) grid")
+    ax.set_title(title)
     if len(action_retentions) <= 18 and len(cost_weights) <= 20:
         for weight_idx in range(len(cost_weights)):
             for action_idx in range(len(action_retentions)):
@@ -492,6 +570,7 @@ def _plot_policy_heatmaps(
     cost_weights: Sequence[float],
     selected_weights: Sequence[float],
     action_retentions: Sequence[float],
+    title: str = "Stationary finite oracle policy over (stability, difficulty)",
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -544,7 +623,88 @@ def _plot_policy_heatmaps(
     if mesh is not None:
         cbar = fig.colorbar(mesh, ax=axes.ravel().tolist())
         cbar.set_label("Desired-retention action")
-    fig.suptitle("Stationary finite oracle policy over (stability, difficulty)")
+    fig.suptitle(title)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
+def _plot_policy_difference_heatmaps(
+    path: Path,
+    *,
+    oracle: FSRS6StationaryFiniteOracle,
+    exact_policies: torch.Tensor,
+    distill_policies: torch.Tensor,
+    cost_weights: Sequence[float],
+    selected_weights: Sequence[float],
+    action_retentions: Sequence[float],
+) -> None:
+    import matplotlib.pyplot as plt
+
+    weight_indices = _nearest_weight_indices(
+        cost_weights=cost_weights,
+        selected_weights=selected_weights,
+    )
+    if not weight_indices:
+        return
+
+    action_tensor = torch.tensor(
+        list(action_retentions),
+        device=exact_policies.device,
+        dtype=torch.float64,
+    )
+    d_edges = _grid_edges(oracle.d_grid, log_space=False)
+    s_edges = _grid_edges(oracle.s_grid, log_space=True)
+    selected_diffs = [
+        (
+            action_tensor[distill_policies[weight_idx]]
+            - action_tensor[exact_policies[weight_idx]]
+        )
+        .detach()
+        .to(device="cpu")
+        for weight_idx in weight_indices
+    ]
+    max_abs = max(
+        0.01,
+        max(float(torch.max(torch.abs(diff)).item()) for diff in selected_diffs),
+    )
+    col_count = min(3, len(weight_indices))
+    row_count = math.ceil(len(weight_indices) / col_count)
+    fig, axes = plt.subplots(
+        row_count,
+        col_count,
+        figsize=(4.8 * col_count, 3.8 * row_count),
+        squeeze=False,
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+    mesh = None
+    for panel_idx, (weight_idx, diff_grid) in enumerate(
+        zip(weight_indices, selected_diffs, strict=True)
+    ):
+        row_idx = panel_idx // col_count
+        col_idx = panel_idx % col_count
+        ax = axes[row_idx][col_idx]
+        mesh = ax.pcolormesh(
+            d_edges,
+            s_edges,
+            diff_grid.numpy(),
+            shading="auto",
+            cmap="coolwarm",
+            vmin=-max_abs,
+            vmax=max_abs,
+        )
+        ax.set_yscale("log")
+        ax.set_title(f"w={format_float(cost_weights[weight_idx])}")
+        ax.set_xlabel("Difficulty")
+        ax.set_ylabel("Stability (days)")
+    for panel_idx in range(len(weight_indices), row_count * col_count):
+        axes[panel_idx // col_count][panel_idx % col_count].axis("off")
+    if mesh is not None:
+        cbar = fig.colorbar(mesh, ax=axes.ravel().tolist())
+        cbar.set_label("Distill retention minus exact retention")
+    fig.suptitle("Distilled policy difference from exact stationary finite oracle")
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -564,6 +724,69 @@ def _dominant_rows(summary_rows: Sequence[dict[str, Any]]) -> list[dict[str, Any
     for _, rows in sorted(_rows_by_weight(summary_rows).items()):
         dominant.append(max(rows, key=lambda row: float(row["cell_share"])))
     return dominant
+
+
+def _distill_comparison_rows(
+    *,
+    args: argparse.Namespace,
+    fsrs_config: SingleCardFSRS6Config,
+    exact_policies: torch.Tensor,
+    distill_policies: torch.Tensor,
+    cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+    distill_policy_path: Path,
+) -> list[dict[str, Any]]:
+    action_tensor = torch.tensor(
+        list(action_retentions),
+        device=exact_policies.device,
+        dtype=torch.float64,
+    )
+    rows: list[dict[str, Any]] = []
+    for weight_idx, cost_weight in enumerate(cost_weights):
+        exact_idx = exact_policies[weight_idx].reshape(-1)
+        distill_idx = distill_policies[weight_idx].reshape(-1)
+        exact_retention = action_tensor[exact_idx]
+        distill_retention = action_tensor[distill_idx]
+        retention_diff = distill_retention - exact_retention
+        action_diff = distill_idx.to(dtype=torch.float64) - exact_idx.to(
+            dtype=torch.float64
+        )
+        match = distill_idx == exact_idx
+        lower = retention_diff < 0.0
+        higher = retention_diff > 0.0
+        total = float(exact_idx.numel())
+        rows.append(
+            {
+                "environment": fsrs_config.environment,
+                "days": args.days,
+                "s_grid_size": args.s_grid_size,
+                "d_grid_size": args.d_grid_size,
+                "distill_policy_path": str(distill_policy_path),
+                "goal_cost_weight": cost_weight,
+                "total_cells": int(total),
+                "exact_match_cell_share": float(match.sum().item() / total),
+                "distill_lower_cell_share": float(lower.sum().item() / total),
+                "distill_higher_cell_share": float(higher.sum().item() / total),
+                "mean_abs_action_index_diff": float(
+                    torch.mean(torch.abs(action_diff)).item()
+                ),
+                "mean_action_index_diff": float(torch.mean(action_diff).item()),
+                "mean_abs_retention_diff": float(
+                    torch.mean(torch.abs(retention_diff)).item()
+                ),
+                "mean_retention_diff": float(torch.mean(retention_diff).item()),
+                "max_abs_retention_diff": float(
+                    torch.max(torch.abs(retention_diff)).item()
+                ),
+                "exact_mean_action_retention": float(
+                    torch.mean(exact_retention).item()
+                ),
+                "distill_mean_action_retention": float(
+                    torch.mean(distill_retention).item()
+                ),
+            }
+        )
+    return rows
 
 
 def _axis_bin_mean_retention(
@@ -587,6 +810,118 @@ def _axis_bin_mean_retention(
     return weighted / total if total > 0.0 else 0.0
 
 
+def _load_distill_policy(
+    path: Path,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], list[float], float, str]:
+    if not path.exists():
+        raise SystemExit(f"--distill-policy not found: {path}")
+
+    from experiments.single_card_tradeoff.uvfa_ppo import PolicyValueNet
+
+    checkpoint = torch.load(path, map_location=device)
+    if not isinstance(checkpoint, dict):
+        raise SystemExit(f"Invalid distill checkpoint: {path}")
+    if checkpoint.get("policy_type") != "fsrs6_oracle_stationary_finite_distill":
+        raise SystemExit(
+            "--distill-policy must have policy_type="
+            "fsrs6_oracle_stationary_finite_distill."
+        )
+    raw_actions = checkpoint.get("action_retentions")
+    raw_cost_weights = checkpoint.get("cost_weights")
+    if not isinstance(raw_actions, list) or not raw_actions:
+        raise SystemExit("--distill-policy checkpoint is missing action_retentions.")
+    if not isinstance(raw_cost_weights, list) or not raw_cost_weights:
+        raise SystemExit("--distill-policy checkpoint is missing cost_weights.")
+    action_retentions = [float(value) for value in raw_actions]
+    validate_retention_values(
+        action_retentions,
+        name="--distill-policy action retention",
+    )
+    policy_cost_weights = [float(value) for value in raw_cost_weights]
+    obs_dim = int(checkpoint.get("obs_dim", 3))
+    hidden_size = int(checkpoint.get("hidden_size", 16))
+    network = str(checkpoint.get("network", "residual"))
+    network_depth = int(checkpoint.get("network_depth", 2))
+    obs_mode = str(checkpoint.get("obs_mode", "oracle_stationary"))
+    if obs_mode != "oracle_stationary":
+        raise SystemExit(
+            "stationary finite policy visualization supports distill checkpoints "
+            "with obs_mode=oracle_stationary."
+        )
+    model = PolicyValueNet(
+        obs_dim=obs_dim,
+        action_count=len(action_retentions),
+        hidden_size=hidden_size,
+        architecture=network,
+        depth=network_depth,
+    ).to(device)
+    state_dict = checkpoint.get("model_state_dict")
+    if not isinstance(state_dict, dict):
+        raise SystemExit("--distill-policy checkpoint is missing model_state_dict.")
+    model.load_state_dict(state_dict)
+    model.eval()
+    return (
+        model,
+        action_retentions,
+        policy_cost_weights,
+        max(policy_cost_weights),
+        obs_mode,
+    )
+
+
+def _retention_lists_match(
+    left: Sequence[float],
+    right: Sequence[float],
+    *,
+    tolerance: float = 1e-12,
+) -> bool:
+    if len(left) != len(right):
+        return False
+    return all(abs(float(a) - float(b)) <= tolerance for a, b in zip(left, right))
+
+
+@torch.inference_mode()
+def _distill_policy_grid(
+    *,
+    oracle: FSRS6StationaryFiniteOracle,
+    model: Any,
+    cost_weights: Sequence[float],
+    goal_norm_max: float,
+) -> torch.Tensor:
+    s_count = int(oracle.s_grid.numel())
+    d_count = int(oracle.d_grid.numel())
+    model_dtype = next(model.parameters()).dtype
+    s_norm = (
+        (
+            torch.log(torch.clamp(oracle.s_grid, min=oracle.bounds.s_min))
+            - oracle.log_s_min
+        )
+        / (oracle.log_s_max - oracle.log_s_min)
+    )[:, None].expand(s_count, d_count)
+    d_norm = (
+        (oracle.d_grid - oracle.bounds.d_min)
+        / (oracle.bounds.d_max - oracle.bounds.d_min)
+    )[None, :].expand(s_count, d_count)
+    max_goal = max(1.0, float(goal_norm_max))
+    policies: list[torch.Tensor] = []
+    for cost_weight in cost_weights:
+        goal_norm = math.log1p(float(cost_weight)) / math.log1p(max_goal)
+        goal_grid = torch.full_like(s_norm, goal_norm)
+        obs = torch.stack(
+            [
+                s_norm.reshape(-1),
+                d_norm.reshape(-1),
+                goal_grid.reshape(-1),
+            ],
+            dim=1,
+        ).to(dtype=model_dtype)
+        logits, _ = model(obs)
+        policies.append(torch.argmax(logits, dim=1).reshape(s_count, d_count))
+    return torch.stack(policies, dim=0).to(dtype=torch.int64)
+
+
 def _write_report(
     path: Path,
     *,
@@ -599,6 +934,8 @@ def _write_report(
     binned_rows: Sequence[dict[str, Any]],
     selected_weights: Sequence[float],
     runtime_s: float,
+    distill_summary_rows: Sequence[dict[str, Any]] | None = None,
+    distill_comparison_rows: Sequence[dict[str, Any]] | None = None,
 ) -> None:
     dominant = _dominant_rows(summary_rows)
     first_weight = float(cost_weights[0])
@@ -706,6 +1043,47 @@ def _write_report(
             )
         )
 
+    if distill_summary_rows is not None and distill_comparison_rows is not None:
+        distill_dominant = _dominant_rows(distill_summary_rows)
+        comparison_by_weight = {
+            float(row["goal_cost_weight"]): row for row in distill_comparison_rows
+        }
+        lines.extend(
+            [
+                "",
+                "## Distilled Policy Comparison",
+                "",
+                (
+                    "The distilled checkpoint is evaluated on the same "
+                    "equal-weighted `(s, d)` grid as the exact stationary finite "
+                    "oracle. Differences are action-table differences, not rollout "
+                    "occupancies."
+                ),
+                "",
+                (
+                    "| weight | exact mean | distill mean | match share | "
+                    "mean abs retention diff | distill lower | distill higher |"
+                ),
+                "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in distill_dominant:
+            cost_weight = float(row["goal_cost_weight"])
+            comparison = comparison_by_weight[cost_weight]
+            lines.append(
+                " | ".join(
+                    [
+                        f"| {format_float(cost_weight)}",
+                        f"{float(comparison['exact_mean_action_retention']):.4f}",
+                        f"{float(comparison['distill_mean_action_retention']):.4f}",
+                        f"{float(comparison['exact_match_cell_share']):.1%}",
+                        f"{float(comparison['mean_abs_retention_diff']):.4f}",
+                        f"{float(comparison['distill_lower_cell_share']):.1%}",
+                        f"{float(comparison['distill_higher_cell_share']):.1%} |",
+                    ]
+                )
+            )
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -810,6 +1188,66 @@ def main() -> None:
                 action_retentions=action_retentions,
             ),
         )
+    distill_summary_rows: list[dict[str, Any]] | None = None
+    distill_binned_rows: list[dict[str, Any]] | None = None
+    distill_comparison_rows: list[dict[str, Any]] | None = None
+    distill_policies: torch.Tensor | None = None
+    if args.distill_policy is not None:
+        model, distill_actions, _, goal_norm_max, _ = _load_distill_policy(
+            args.distill_policy,
+            device=device,
+        )
+        if not _retention_lists_match(distill_actions, action_retentions):
+            raise SystemExit(
+                "--distill-policy action_retentions must match --action-retentions."
+            )
+        distill_policies = _distill_policy_grid(
+            oracle=oracle,
+            model=model,
+            cost_weights=cost_weights,
+            goal_norm_max=goal_norm_max,
+        )
+        distill_summary_rows = _distill_summary_rows(
+            args=args,
+            fsrs_config=fsrs_config,
+            policies=distill_policies,
+            cost_weights=cost_weights,
+            action_retentions=action_retentions,
+            distill_policy_path=args.distill_policy,
+        )
+        distill_binned_rows = _binned_rows(
+            args=args,
+            fsrs_config=fsrs_config,
+            oracle=oracle,
+            policies=distill_policies,
+            cost_weights=cost_weights,
+            action_retentions=action_retentions,
+        )
+        distill_comparison_rows = _distill_comparison_rows(
+            args=args,
+            fsrs_config=fsrs_config,
+            exact_policies=solution.policy,
+            distill_policies=distill_policies,
+            cost_weights=cost_weights,
+            action_retentions=action_retentions,
+            distill_policy_path=args.distill_policy,
+        )
+        _write_csv(paths.distill_summary, distill_summary_rows)
+        _write_csv(paths.distill_binned, distill_binned_rows)
+        _write_csv(paths.distill_comparison, distill_comparison_rows)
+        if not args.no_grid_csv:
+            _write_csv(
+                paths.distill_grid,
+                _grid_rows(
+                    args=args,
+                    fsrs_config=fsrs_config,
+                    oracle=oracle,
+                    policies=distill_policies,
+                    cost_weights=cost_weights,
+                    action_retentions=action_retentions,
+                ),
+            )
+
     _write_report(
         paths.report,
         args=args,
@@ -821,13 +1259,17 @@ def main() -> None:
         binned_rows=binned_rows,
         selected_weights=selected_weights,
         runtime_s=runtime_s,
+        distill_summary_rows=distill_summary_rows,
+        distill_comparison_rows=distill_comparison_rows,
     )
+
     if not args.no_plot:
         _plot_distribution(
             paths.distribution_plot,
             summary_rows=summary_rows,
             cost_weights=cost_weights,
             action_retentions=action_retentions,
+            title="Stationary finite oracle action distribution over (s, d) grid",
         )
         _plot_policy_heatmaps(
             paths.heatmap_plot,
@@ -836,13 +1278,58 @@ def main() -> None:
             cost_weights=cost_weights,
             selected_weights=selected_weights,
             action_retentions=action_retentions,
+            title="Stationary finite oracle policy over (stability, difficulty)",
         )
         print(f"Wrote plot: {paths.distribution_plot}")
         print(f"Wrote plot: {paths.heatmap_plot}")
+        if (
+            distill_summary_rows is not None
+            and distill_policies is not None
+            and distill_comparison_rows is not None
+        ):
+            _plot_distribution(
+                paths.distill_distribution_plot,
+                summary_rows=distill_summary_rows,
+                cost_weights=cost_weights,
+                action_retentions=action_retentions,
+                title=(
+                    "Distilled stationary finite policy action distribution "
+                    "over (s, d) grid"
+                ),
+            )
+            _plot_policy_heatmaps(
+                paths.distill_heatmap_plot,
+                oracle=oracle,
+                policies=distill_policies,
+                cost_weights=cost_weights,
+                selected_weights=selected_weights,
+                action_retentions=action_retentions,
+                title=(
+                    "Distilled stationary finite policy over (stability, difficulty)"
+                ),
+            )
+            _plot_policy_difference_heatmaps(
+                paths.distill_difference_plot,
+                oracle=oracle,
+                exact_policies=solution.policy,
+                distill_policies=distill_policies,
+                cost_weights=cost_weights,
+                selected_weights=selected_weights,
+                action_retentions=action_retentions,
+            )
+            print(f"Wrote plot: {paths.distill_distribution_plot}")
+            print(f"Wrote plot: {paths.distill_heatmap_plot}")
+            print(f"Wrote plot: {paths.distill_difference_plot}")
     print(f"Wrote CSV: {paths.summary}")
     print(f"Wrote CSV: {paths.binned}")
     if not args.no_grid_csv:
         print(f"Wrote CSV: {paths.grid}")
+    if distill_summary_rows is not None:
+        print(f"Wrote CSV: {paths.distill_summary}")
+        print(f"Wrote CSV: {paths.distill_binned}")
+        print(f"Wrote CSV: {paths.distill_comparison}")
+        if not args.no_grid_csv:
+            print(f"Wrote CSV: {paths.distill_grid}")
     print(f"Wrote report: {paths.report}")
     _print_summary(summary_rows)
 

@@ -128,10 +128,10 @@ Pass `--source table` to count every nonterminal `(remaining, stability, difficu
 Visualize the stationary finite-lifecycle oracle directly over its stationary `(stability, difficulty, goal cost weight)` policy table:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_stationary_finite_policy_viz.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,16,64,256,1024 --action-retentions 0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98
+uv run experiments/single_card_tradeoff/oracle_stationary_finite_policy_viz.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,16,64,256,1024 --action-retentions 0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98 --distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
 ```
 
-This writes `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `findings.md`, `action_distribution.png`, and `policy_heatmaps.png` under `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`. Use `--selected-weights` to choose which weights appear in the `(s,d)` heatmap panel.
+This writes `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `findings.md`, `action_distribution.png`, and `policy_heatmaps.png` under `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`. When `--distill-policy` is provided it also writes `distill_action_summary.csv`, `distill_binned_actions.csv`, `distill_grid_actions.csv`, `distill_exact_comparison.csv`, `distill_action_distribution.png`, `distill_policy_heatmaps.png`, and `distill_exact_difference_heatmaps.png`. Use `--selected-weights` to choose which weights appear in the `(s,d)` heatmap panel.
 
 ## Interval Oracle And Distillation
 
