@@ -224,6 +224,22 @@ Current compact default baseline:
 
 The retrained compact `fsrs6_oracle_distill` remains the strongest compact default baseline in this group. Directly against `fsrs6_oracle_stationary_finite_distill`, it has `-0.1719` deck-minutes/day time-regret AUC over 100% of the stationary-finite distill span, while the stationary-finite distill covers only `91.6%` of the oracle-distill span when the baseline is reversed. The repaired continuous desired-retention distill now covers the frontier about as broadly as the discrete distill. Directly against `fsrs6_oracle_distill`, it still has a small positive regret (`+0.1837` deck-minutes/day over 100% overlap in the default comparison), so the discrete distill remains the strongest compact default baseline.
 
+Stationary finite distill compression sweep:
+
+The compression sweep artifacts are under `artifacts/single_card_tradeoff/stationary_finite_compression/`. The first group trained smaller networks directly against the stationary finite oracle labels. The second group distilled the current `1,520`-parameter stationary finite checkpoint into smaller students, either with teacher-forced rollouts or with student-rollout states after warmup.
+
+| candidate | parameters | table compression | vs `fsrs6_oracle_distill` relative regret | vs `fsrs6_oracle_distill` coverage | vs `fsrs6_default` relative regret | vs `fsrs6_default` coverage |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| current `residual:16:2` | 1,520 | 22.9x | +1.92% | 91.6% | -28.16% | 72.2% |
+| exact-label `residual:8:1` | 352 | 98.9x | +5.34% | 30.5% | -17.95% | 24.0% |
+| exact-label `residual:6:2` | 340 | 102.4x | +6.79% | 33.9% | -17.13% | 26.7% |
+| exact-label `mlp:8` | 248 | 140.4x | +2.78% | 11.8% | -21.90% | 9.3% |
+| teacher-forced student `residual:8:2` | 512 | 68.0x | +4.83% | 25.1% | -18.17% | 19.8% |
+| student-rollout `residual:8:2` | 512 | 68.0x | +4.81% | 88.0% | -25.82% | 69.3% |
+| student-rollout `residual:14:2` | 1,220 | 28.5x | +2.98% | 80.0% | -26.45% | 63.0% |
+
+The useful compressed candidate is `student-rollout residual:8:2` (`sroll_residual_h8_d2.pt`). It cuts the stationary finite distill from `1,520` to `512` parameters and raises table compression from `22.9x` to `68.0x`, while preserving most of the default-baseline span (`69.3%` versus `72.2%`). Its cost is higher regret: relative to `fsrs6_oracle_distill`, it is `+4.81%` instead of `+1.92%`; relative to `fsrs6_default`, it is still strongly better at `-25.82%`. The 100x+ compression attempts are not reliable frontier policies despite sometimes attractive AUC values, because their span coverage collapses to roughly `9-34%`.
+
 Before the interval-aware repair, `fsrs6_oracle_retention_distill` looked deceptively strong against `fsrs6_default` (`time_regret_auc=-5.2367`) but had only `15.1%` coverage. Its points were concentrated in the high-memory region, so the AUC was computed over too narrow a memory span. The repaired version expands coverage to `80.4%` and moves the high-cost end from `card_mem≈0.900` to `card_mem≈0.518` at `w=1024`.
 
 PPO oracle-guide ablation results are in `artifacts/single_card_tradeoff/ppo_ablation/ppo_oracle_warmup_ablation_summary.csv`. These runs use the same 10k-particle FSRS-6 default evaluation grid as the PPO comparison above.
@@ -248,6 +264,7 @@ The UVFA PPO result is not purely inherited from oracle warmup: removing the gui
 - For continuous desired-retention distillation, train on the implied interval, not just the retention value. The repaired default keeps retention as the action output but supervises `log(interval(retention))`.
 - Underpredicting intervals is worse than overpredicting intervals at high cost weights. The effective training recipe weights high-cost underprediction and terminal-action underprediction more heavily.
 - Student rollout matters. Teacher-forced states alone did not fix coverage; mixing student-rollout states after warmup exposed the model to the states it actually creates.
+- For stationary finite distill compression, 100x+ table compression is too aggressive under the current recipe because coverage collapses. The best observed smaller point is the 512-parameter student-rollout `residual:8:2` model: about one third of the current checkpoint size, with a manageable regret increase and much better span coverage than teacher-forced compression.
 - PPO guide ablations need a warmup-only control. A guided PPO checkpoint can look like a reinforcement-learning win even when most of the deployed behavior came from supervised oracle labels, especially for the RNN interval policy.
 - For the RNN interval policy, the current default is best interpreted as an oracle-imitation policy with PPO fine-tuning. The dense AUC barely changes from oracle warmup only to full training, while no-guide PPO does not recover the same frontier.
 - Removing remaining time at the oracle layer is a powerful structural compression. `fsrs6_oracle_stationary_finite` gives up a small amount of mid-cost scalar objective versus unrestricted `fsrs6_oracle`, but its exact policy table is 1825x smaller before any neural distillation.
