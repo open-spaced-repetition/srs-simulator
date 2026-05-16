@@ -1998,6 +1998,9 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
         iterations: list[int] = []
         converged: list[bool] = []
         residuals: list[float] = []
+        weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
         progress_bar = None
         if progress:
             from tqdm import tqdm
@@ -2009,21 +2012,27 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
                 leave=False,
             )
         try:
-            for cost_weight in cost_weights:
-                result = self._solve_single_policy(
-                    cost_weight=float(cost_weight),
-                    max_iterations=max_iterations,
-                    tolerance=tolerance,
-                    progress_bar=progress_bar,
-                )
-                policy, gain, iteration_count, is_converged, residual = result
-                policies.append(
-                    policy.reshape(self.s_grid.numel(), self.d_grid.numel())
-                )
-                gains.append(gain)
-                iterations.append(iteration_count)
-                converged.append(is_converged)
-                residuals.append(residual)
+            result = self._solve_policy_batch(
+                cost_weights=weight_tensor,
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress_bar=progress_bar,
+            )
+            (
+                batched_policy,
+                batched_gain,
+                batch_iterations,
+                batch_converged,
+                batch_residuals,
+            ) = result
+            policies.extend(
+                policy.reshape(self.s_grid.numel(), self.d_grid.numel())
+                for policy in batched_policy
+            )
+            gains.extend(gain for gain in batched_gain)
+            iterations.extend(batch_iterations)
+            converged.extend(batch_converged)
+            residuals.extend(batch_residuals)
         finally:
             if progress_bar is not None:
                 progress_bar.close()
@@ -2035,6 +2044,108 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
             converged=converged,
             residuals=residuals,
             runtime_s=time.perf_counter() - start,
+        )
+
+    def _solve_policy_batch(
+        self,
+        *,
+        cost_weights: torch.Tensor,
+        max_iterations: int,
+        tolerance: float,
+        progress_bar: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor, list[int], list[bool], list[float]]:
+        interval, immediate_mem, review_cost, prob, next_idx = self._action_tables
+        weight_count = int(cost_weights.numel())
+        reward = (
+            immediate_mem[None, :, :]
+            - cost_weights.view(
+                weight_count,
+                1,
+                1,
+            )
+            * review_cost[None, :, :]
+        )
+        policy = torch.argmax(reward / interval[None, :, :], dim=1).to(torch.int64)
+        h = torch.zeros(
+            (weight_count, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        gain = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        iterations = torch.zeros(
+            weight_count,
+            device=self.device,
+            dtype=torch.int64,
+        )
+        converged = torch.zeros(weight_count, device=self.device, dtype=torch.bool)
+        residuals = torch.full(
+            (weight_count,),
+            math.inf,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        active = torch.ones(weight_count, device=self.device, dtype=torch.bool)
+
+        for iteration in range(1, max_iterations + 1):
+            active_count = int(active.sum().item())
+            if active_count == 0:
+                break
+            active_idx = active.nonzero(as_tuple=False).squeeze(1)
+            active_policy = policy.index_select(0, active_idx)
+            active_reward = reward.index_select(0, active_idx)
+            selected = self._select_policy_tables_batch(
+                policy=active_policy,
+                interval=interval,
+                reward=active_reward,
+                prob=prob,
+                next_idx=next_idx,
+            )
+            selected_interval, selected_reward, selected_prob, selected_next = selected
+            active_gain, active_h = self._evaluate_policy_batch(
+                interval=selected_interval,
+                reward=selected_reward,
+                prob=selected_prob,
+                next_idx=selected_next,
+                initial_h=h.index_select(0, active_idx),
+                tolerance=tolerance,
+            )
+            scores = (
+                active_reward
+                - active_gain.view(active_count, 1, 1) * interval[None, :, :]
+                + self._expected_bias_batch(
+                    prob=prob,
+                    next_idx=next_idx,
+                    h=active_h,
+                )
+            )
+            new_policy = torch.argmax(scores, dim=1).to(torch.int64)
+            current_score = scores.gather(1, active_policy[:, None, :]).squeeze(1)
+            residual = scores.max(dim=1).values.sub(current_score).max(dim=1).values
+            policy_changed = (new_policy != active_policy).any(dim=1)
+
+            policy[active_idx] = new_policy
+            h[active_idx] = active_h
+            gain[active_idx] = active_gain
+            iterations[active_idx] = iteration
+            residuals[active_idx] = residual
+            if progress_bar is not None:
+                progress_bar.update(active_count)
+
+            done = (~policy_changed) & (residual <= tolerance)
+            if bool(done.any().item()):
+                done_idx = active_idx[done]
+                converged[done_idx] = True
+                active[done_idx] = False
+
+        if bool(active.any().item()):
+            iterations[active] = max_iterations
+
+        return (
+            policy,
+            gain,
+            [int(value) for value in iterations.cpu().tolist()],
+            [bool(value) for value in converged.cpu().tolist()],
+            [float(value) for value in residuals.cpu().tolist()],
         )
 
     def labels(
@@ -2195,6 +2306,53 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
             next_idx[policy, state_idx],
         )
 
+    def _select_policy_tables_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        interval: torch.Tensor,
+        reward: torch.Tensor,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        weight_count = int(policy.shape[0])
+        state_idx = torch.arange(self.state_count, device=self.device)
+        selected_interval = interval[policy, state_idx[None, :]]
+        selected_reward = reward.gather(1, policy[:, None, :]).squeeze(1)
+        policy_idx = policy[:, None, :, None]
+        selected_prob = (
+            prob[None, :, :, :]
+            .expand(
+                weight_count,
+                -1,
+                -1,
+                -1,
+            )
+            .gather(
+                1,
+                policy_idx.expand(weight_count, 1, self.state_count, 4),
+            )
+        )
+        selected_next_idx = (
+            next_idx[None, :, :, :]
+            .expand(
+                weight_count,
+                -1,
+                -1,
+                -1,
+            )
+            .gather(
+                1,
+                policy_idx.expand(weight_count, 1, self.state_count, 4),
+            )
+        )
+        return (
+            selected_interval,
+            selected_reward,
+            selected_prob.squeeze(1),
+            selected_next_idx.squeeze(1),
+        )
+
     def _evaluate_policy(
         self,
         *,
@@ -2229,6 +2387,47 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
                 break
         return gain, h
 
+    def _evaluate_policy_batch(
+        self,
+        *,
+        interval: torch.Tensor,
+        reward: torch.Tensor,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+        initial_h: torch.Tensor,
+        tolerance: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        stationary = self._stationary_distribution_batch(
+            prob=prob,
+            next_idx=next_idx,
+            tolerance=tolerance,
+        )
+        gain = torch.sum(stationary * reward, dim=1) / torch.sum(
+            stationary * interval,
+            dim=1,
+        )
+        h = initial_h
+        eval_tolerance = max(float(tolerance), 1e-11)
+        for _ in range(4096):
+            future_h = h.gather(
+                1,
+                next_idx.reshape(next_idx.shape[0], -1),
+            ).reshape_as(prob)
+            h_next = (
+                reward
+                - gain[:, None] * interval
+                + torch.sum(
+                    prob * future_h,
+                    dim=2,
+                )
+            )
+            h_next = h_next - h_next[:, :1]
+            diff = torch.max(torch.abs(h_next - h), dim=1).values
+            h = h_next
+            if bool((diff <= eval_tolerance).all().item()):
+                break
+        return gain, h
+
     def _stationary_distribution(
         self,
         *,
@@ -2254,6 +2453,46 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
                 break
         return pi
 
+    def _stationary_distribution_batch(
+        self,
+        *,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+        tolerance: float,
+    ) -> torch.Tensor:
+        weight_count = int(prob.shape[0])
+        pi = torch.full(
+            (weight_count, self.state_count),
+            1.0 / float(self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        flat_pi = pi.reshape(-1)
+        batch_offsets = (
+            torch.arange(weight_count, device=self.device, dtype=torch.int64)
+            .view(weight_count, 1, 1)
+            .mul(self.state_count)
+        )
+        target = batch_offsets + next_idx
+        stationary_tolerance = max(float(tolerance), 1e-12)
+        for _ in range(4096):
+            new_pi = torch.zeros_like(pi)
+            new_pi.reshape(-1).scatter_add_(
+                0,
+                target.reshape(-1),
+                (pi[:, :, None] * prob).reshape(-1),
+            )
+            new_pi = new_pi / torch.clamp(
+                new_pi.sum(dim=1, keepdim=True),
+                min=1e-30,
+            )
+            diff = torch.max(torch.abs(new_pi - pi), dim=1).values
+            pi = new_pi
+            flat_pi = pi.reshape(-1)
+            if bool((diff <= stationary_tolerance).all().item()):
+                break
+        return flat_pi.reshape(weight_count, self.state_count)
+
     def _expected_bias(
         self,
         *,
@@ -2265,6 +2504,20 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
             prob * h.index_select(0, next_idx.reshape(-1)).reshape_as(prob),
             dim=2,
         )
+
+    def _expected_bias_batch(
+        self,
+        *,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+        h: torch.Tensor,
+    ) -> torch.Tensor:
+        weight_count = int(h.shape[0])
+        future_h = h.gather(
+            1,
+            next_idx.reshape(1, -1).expand(weight_count, -1),
+        ).reshape(weight_count, prob.shape[0], self.state_count, 4)
+        return torch.sum(prob[None, :, :, :] * future_h, dim=3)
 
 
 class FSRS6IntervalOracle(FSRS6GridOracle):
