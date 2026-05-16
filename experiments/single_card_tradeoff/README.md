@@ -163,6 +163,50 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 
 The most useful summary metric is `time_regret_auc`, but it is only meaningful together with `span_coverage_percent`. A negative `time_regret_auc` means a scheduler uses fewer deck-scaled minutes/day than the baseline at the same memory target over their common memory interval. Low coverage means the comparison only covers a narrow part of the frontier.
 
+Stationary finite-lifecycle oracle comparison:
+
+The stationary finite oracle keeps the policy input stationary, `(stability, difficulty, goal cost weight)`, but optimizes that stationary policy against the same finite 1825-day new-card lifecycle used by the standard evaluation. This is a constrained-policy oracle, not the unrestricted finite-horizon `fsrs6_oracle`, so it should be judged by how much unrestricted finite-horizon value it preserves after removing the remaining-time input.
+
+The direct comparison below uses `fsrs6_default`, 1825 days, 10,000 particles, `deck_scale=10000`, default 64x32 oracle grids, and the standard evaluation cost weights `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`. `fsrs6_oracle` was rerun as `artifacts/single_card_tradeoff/fsrs6_oracle_exact_compare/results.csv`; the stationary finite rows are from `artifacts/single_card_tradeoff/stationary_finite_compare/results.csv`.
+
+| scheduler | policy input | vs `fsrs6_default` `time_regret_auc` | coverage |
+| --- | --- | ---: | ---: |
+| `fsrs6_oracle` | `(remaining, stability, difficulty, goal weight)` | -3.5985 | 79.0% |
+| `fsrs6_oracle_distill` | comparison checkpoint: `oracle`, `residual:32:2` | -3.6565 | 78.5% |
+| `fsrs6_oracle_stationary_finite` | `(stability, difficulty, goal weight)` | -3.3900 | 78.1% |
+| `fsrs6_oracle_stationary_finite_distill` | `(stability, difficulty, goal weight)` | -3.5814 | 72.2% |
+
+The stationary finite exact oracle is close to the unrestricted finite-horizon oracle while using a much smaller policy table. Its main weakness in this run is the mid-cost region: at representative weights its scalar objective is about `0.007-0.008` below `fsrs6_oracle` at `w=64` and `w=256`, while the zero-cost and high-cost endpoints are effectively tied within rollout/grid noise.
+
+| scheduler | exact policy table entries | distill checkpoint parameters | table-to-distill compression |
+| --- | ---: | ---: | ---: |
+| `fsrs6_oracle` -> `fsrs6_oracle_distill` | 63,539,200 | 5,104 | 12,449x |
+| `fsrs6_oracle_stationary_finite` -> `fsrs6_oracle_stationary_finite_distill` | 34,816 | 1,520 | 22.9x |
+
+The unrestricted finite oracle has the larger relative compression ratio because its table includes the 1825-step remaining-time dimension. The stationary finite oracle has already removed that dimension before distillation, so there is less redundancy left for the neural policy to compress. In absolute deployment size, however, the stationary finite distill is still much smaller: `1,520` parameters versus `5,104` in the `fsrs6_oracle_distill` checkpoint used for this comparison. That comparison checkpoint is the current `artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt`; the compact default baseline table below reports the smaller `oracle_rho4`, `residual:16:2` distill from the model-size search.
+
+Representative scalarization points:
+
+| weight | scheduler | card R | deck minutes/day | scalar objective |
+| ---: | --- | ---: | ---: | ---: |
+| 0 | `fsrs6_oracle` | 0.9884 | 59.35 | 0.9884 |
+| 0 | `fsrs6_oracle_stationary_finite` | 0.9883 | 58.40 | 0.9883 |
+| 0 | `fsrs6_oracle_stationary_finite_distill` | 0.9883 | 56.87 | 0.9883 |
+| 16 | `fsrs6_oracle` | 0.9752 | 25.27 | 0.9347 |
+| 16 | `fsrs6_oracle_stationary_finite` | 0.9751 | 25.44 | 0.9344 |
+| 16 | `fsrs6_oracle_stationary_finite_distill` | 0.9773 | 26.34 | 0.9351 |
+| 64 | `fsrs6_oracle` | 0.9491 | 16.78 | 0.8417 |
+| 64 | `fsrs6_oracle_stationary_finite` | 0.9487 | 17.83 | 0.8346 |
+| 64 | `fsrs6_oracle_stationary_finite_distill` | 0.9585 | 18.88 | 0.8376 |
+| 256 | `fsrs6_oracle` | 0.8377 | 8.64 | 0.6165 |
+| 256 | `fsrs6_oracle_stationary_finite` | 0.8210 | 8.31 | 0.6082 |
+| 256 | `fsrs6_oracle_stationary_finite_distill` | 0.8555 | 9.95 | 0.6008 |
+| 1024 | `fsrs6_oracle` | 0.5262 | 2.72 | 0.2480 |
+| 1024 | `fsrs6_oracle_stationary_finite` | 0.5314 | 2.71 | 0.2538 |
+| 1024 | `fsrs6_oracle_stationary_finite_distill` | 0.5656 | 3.13 | 0.2456 |
+
+The stationary finite distillation run used 4,194,304 teacher transitions. Its final cross-entropy was `0.58973`, train teacher-action agreement was `73.55%`, eval agreement was `72.97%`, and all teacher policies converged with policy-iteration counts `[3,3,3,3,4,2,6,3,5,3,8,1]`.
+
 Current compact default baseline:
 
 | scheduler | model | parameters | vs `fsrs6_default` `time_regret_auc` | coverage |
@@ -198,6 +242,7 @@ The UVFA PPO result is not purely inherited from oracle warmup: removing the gui
 - Student rollout matters. Teacher-forced states alone did not fix coverage; mixing student-rollout states after warmup exposed the model to the states it actually creates.
 - PPO guide ablations need a warmup-only control. A guided PPO checkpoint can look like a reinforcement-learning win even when most of the deployed behavior came from supervised oracle labels, especially for the RNN interval policy.
 - For the RNN interval policy, the current default is best interpreted as an oracle-imitation policy with PPO fine-tuning. The dense AUC barely changes from oracle warmup only to full training, while no-guide PPO does not recover the same frontier.
+- Removing remaining time at the oracle layer is a powerful structural compression. `fsrs6_oracle_stationary_finite` gives up a small amount of mid-cost scalar objective versus unrestricted `fsrs6_oracle`, but its exact policy table is 1825x smaller before any neural distillation.
 - `oracle_rho4` is a strong compact observation. It gives a 1,536-parameter model enough horizon and stability information to cover the frontier when the loss geometry is right.
 - Train cost weights should be sparse but cover scale: use `0 + 2^0..2^10`. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
 - Integer interval actions are the most direct continuous-action target for the finite-horizon oracle. Continuous desired retention can work, but it needs interval-aware loss shaping and coverage validation.
