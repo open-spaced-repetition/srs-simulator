@@ -29,7 +29,6 @@ from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
     FSRS6StationaryFiniteOracle,
 )
 from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
-    DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
@@ -54,14 +53,15 @@ from experiments.single_card_tradeoff.uvfa_ppo import (  # noqa: E402
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED  # noqa: E402
 from simulator.scheduler_spec import format_float  # noqa: E402
 
-DEFAULT_DISTILL_EPOCHS = 64
+DEFAULT_DISTILL_EPOCHS = 128
 DEFAULT_STEPS_PER_EPOCH = 64
 DEFAULT_EVAL_PARTICLES = 10_000
 DEFAULT_AGREEMENT_ENVS = 4096
 DEFAULT_AGREEMENT_STEPS = 256
 DEFAULT_DISTILL_OBS_MODE = "oracle_stationary"
-DEFAULT_DISTILL_HIDDEN_SIZE = 16
+DEFAULT_DISTILL_HIDDEN_SIZE = 8
 DEFAULT_DISTILL_NETWORK_DEPTH = 2
+DEFAULT_STATIONARY_FINITE_DISTILL_COST_WEIGHTS = [0.0, 16.0, 64.0, 256.0, 1024.0]
 DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS = 128
 DEFAULT_STATIONARY_FINITE_TOLERANCE = 1e-10
 
@@ -153,7 +153,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cost-weights",
         default=",".join(
-            format_float(value) for value in DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS
+            format_float(value)
+            for value in DEFAULT_STATIONARY_FINITE_DISTILL_COST_WEIGHTS
         ),
         help="Comma-separated scalarization weights for the oracle teacher.",
     )
