@@ -298,6 +298,19 @@ class FSRS6GridOracle:
             capture_policy=False,
         ).metrics
 
+    def estimate_many(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> list[OracleMetrics]:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
+        return self._estimate_many_batch(weight_tensor, progress=progress)
+
     def solve(
         self,
         cost_weight: float,
@@ -516,6 +529,215 @@ class FSRS6GridOracle:
             candidate_value += weighted * (future_value - cost_weights * review_minutes)
 
         return candidate_value
+
+    def _estimate_many_batch(
+        self,
+        cost_weights: torch.Tensor,
+        *,
+        progress: bool,
+    ) -> list[OracleMetrics]:
+        start = time.perf_counter()
+        weight_count = int(cost_weights.numel())
+        shape = (
+            self.horizon + 1,
+            self.s_grid.numel(),
+            self.d_grid.numel(),
+            weight_count,
+        )
+        value = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        memorized = torch.zeros_like(value)
+        minutes = torch.zeros_like(value)
+        reviews = torch.zeros_like(value)
+        lapses = torch.zeros_like(value)
+        weights = cost_weights.view(1, 1, weight_count)
+
+        progress_bar = None
+        if progress:
+            from tqdm import tqdm
+
+            progress_bar = tqdm(
+                total=self.horizon,
+                desc=f"Oracle metrics batch={weight_count}",
+                unit="day",
+                leave=False,
+            )
+        try:
+            for rem in range(1, self.horizon + 1):
+                best_value = torch.full_like(value[rem], -math.inf)
+                best_mem = torch.zeros_like(best_value)
+                best_minutes = torch.zeros_like(best_value)
+                best_reviews = torch.zeros_like(best_value)
+                best_lapses = torch.zeros_like(best_value)
+
+                for transition in self.transitions:
+                    candidate = self._candidate_tables_batch(
+                        transition=transition,
+                        rem=rem,
+                        cost_weights=weights,
+                        value=value,
+                        memorized=memorized,
+                        minutes=minutes,
+                        reviews=reviews,
+                        lapses=lapses,
+                    )
+                    candidate_value, candidate_mem, candidate_minutes = candidate[:3]
+                    candidate_reviews, candidate_lapses = candidate[3:]
+                    better = candidate_value > best_value
+                    best_value = torch.where(better, candidate_value, best_value)
+                    best_mem = torch.where(better, candidate_mem, best_mem)
+                    best_minutes = torch.where(
+                        better,
+                        candidate_minutes,
+                        best_minutes,
+                    )
+                    best_reviews = torch.where(
+                        better,
+                        candidate_reviews,
+                        best_reviews,
+                    )
+                    best_lapses = torch.where(
+                        better,
+                        candidate_lapses,
+                        best_lapses,
+                    )
+
+                value[rem] = best_value
+                memorized[rem] = best_mem
+                minutes[rem] = best_minutes
+                reviews[rem] = best_reviews
+                lapses[rem] = best_lapses
+                if progress_bar is not None:
+                    progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        total_mem = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_minutes = torch.zeros(
+            weight_count,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        total_reviews = torch.zeros(
+            weight_count,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        total_lapses = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        for rating in range(1, 5):
+            prob = self.first_rating_prob[rating - 1]
+            s0, d0 = self._init_state_scalar(rating)
+            s_idx = self._s_to_idx(s0)
+            d_idx = self._d_to_idx(d0)
+            total_mem += prob * memorized[self.horizon, s_idx, d_idx]
+            total_minutes += prob * (
+                self.learning_cost_minutes[rating - 1]
+                + minutes[self.horizon, s_idx, d_idx]
+            )
+            total_reviews += prob * reviews[self.horizon, s_idx, d_idx]
+            total_lapses += prob * lapses[self.horizon, s_idx, d_idx]
+
+        day_count = float(self.days)
+        elapsed_per_weight = (time.perf_counter() - start) / float(weight_count)
+        mem_per_day = (total_mem / day_count).cpu().tolist()
+        minutes_per_day = (total_minutes / day_count).cpu().tolist()
+        reviews_per_day = (total_reviews / day_count).cpu().tolist()
+        total_reviews_list = total_reviews.cpu().tolist()
+        total_lapses_list = total_lapses.cpu().tolist()
+        total_cost_seconds = (total_minutes * 60.0).cpu().tolist()
+        objectives = (
+            total_mem / day_count - cost_weights * (total_minutes / day_count)
+        ).cpu()
+        objective_list = objectives.tolist()
+
+        metrics: list[OracleMetrics] = []
+        for idx in range(weight_count):
+            reviews_float = float(total_reviews_list[idx])
+            lapses_float = float(total_lapses_list[idx])
+            observed_retention = (
+                1.0 - lapses_float / reviews_float if reviews_float > 0.0 else None
+            )
+            metrics.append(
+                OracleMetrics(
+                    card_expected_retrievability=float(mem_per_day[idx]),
+                    card_minutes_per_day=float(minutes_per_day[idx]),
+                    card_reviews_per_day=float(reviews_per_day[idx]),
+                    card_total_reviews=reviews_float,
+                    card_total_lapses=lapses_float,
+                    card_total_cost_seconds=float(total_cost_seconds[idx]),
+                    observed_retention=observed_retention,
+                    scalar_objective=float(objective_list[idx]),
+                    runtime_s=elapsed_per_weight,
+                )
+            )
+        return metrics
+
+    def _candidate_tables_batch(
+        self,
+        *,
+        transition: TransitionCache,
+        rem: int,
+        cost_weights: torch.Tensor,
+        value: torch.Tensor,
+        memorized: torch.Tensor,
+        minutes: torch.Tensor,
+        reviews: torch.Tensor,
+        lapses: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        interval = transition.interval
+        weight_count = int(cost_weights.numel())
+        cont_mask = interval <= rem
+        future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
+        active_days = torch.minimum(interval, torch.full_like(interval, rem))
+        immediate_mem = self._memorized_sum_for_days(active_days)[:, None]
+        candidate_value = (
+            immediate_mem.expand_as(self.s_mesh)
+            .unsqueeze(2)
+            .expand(-1, -1, weight_count)
+            .clone()
+        )
+        candidate_mem = candidate_value.clone()
+        candidate_minutes = torch.zeros_like(candidate_value)
+        candidate_reviews = torch.zeros_like(candidate_value)
+        candidate_lapses = torch.zeros_like(candidate_value)
+
+        if not cont_mask.any():
+            return (
+                candidate_value,
+                candidate_mem,
+                candidate_minutes,
+                candidate_reviews,
+                candidate_lapses,
+            )
+
+        rem_idx = future_rem[:, None].expand_as(self.s_mesh)
+        cont_2d = cont_mask[:, None].expand_as(self.s_mesh)
+        for rating_idx, rating in enumerate(range(1, 5)):
+            prob = transition.prob[rating_idx][:, None].expand_as(self.s_mesh)
+            s_idx = transition.next_s_idx[rating_idx]
+            d_idx = transition.next_d_idx[rating_idx]
+            future_value = value[rem_idx, s_idx, d_idx]
+            future_mem = memorized[rem_idx, s_idx, d_idx]
+            future_minutes = minutes[rem_idx, s_idx, d_idx]
+            future_reviews = reviews[rem_idx, s_idx, d_idx]
+            future_lapses = lapses[rem_idx, s_idx, d_idx]
+            review_minutes = self.review_cost_minutes[rating - 1]
+            weighted = torch.where(cont_2d, prob, torch.zeros_like(prob)).unsqueeze(2)
+            candidate_value += weighted * (future_value - cost_weights * review_minutes)
+            candidate_mem += weighted * future_mem
+            candidate_minutes += weighted * (future_minutes + review_minutes)
+            candidate_reviews += weighted * (future_reviews + 1.0)
+            candidate_lapses += weighted * (
+                future_lapses + (1.0 if rating == 1 else 0.0)
+            )
+
+        return (
+            candidate_value,
+            candidate_mem,
+            candidate_minutes,
+            candidate_reviews,
+            candidate_lapses,
+        )
 
     def _candidate_tables(
         self,
@@ -2914,8 +3136,15 @@ def main() -> None:
                 )
             )
 
-    for cost_weight in cost_weights:
-        metrics = oracle.estimate(cost_weight, progress=not args.no_progress)
+    metrics_by_oracle_weight = oracle.estimate_many(
+        cost_weights,
+        progress=not args.no_progress,
+    )
+    for cost_weight, metrics in zip(
+        cost_weights,
+        metrics_by_oracle_weight,
+        strict=True,
+    ):
         best_fsrs = fsrs_metrics_by_weight.get(cost_weight)
         delta = metrics.scalar_objective - best_fsrs if best_fsrs is not None else None
         rows.append(
