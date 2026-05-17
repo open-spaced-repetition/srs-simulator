@@ -41,6 +41,10 @@ from experiments.single_card_tradeoff.retention_space import (
     MIN_TARGET_RETENTION,
     validate_retention_values,
 )
+from experiments.single_card_tradeoff.run_monitoring import (
+    add_run_monitoring_args,
+    register_run_monitor,
+)
 from simulator import simulate as simulate_event
 from simulator.behavior import StochasticBehavior
 from simulator.button_usage import load_button_usage_config, normalize_button_usage
@@ -465,6 +469,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     add_torch_device_arg(parser)
+    add_run_monitoring_args(parser)
     parser.add_argument(
         "--target-batch-size",
         type=int,
@@ -3847,6 +3852,12 @@ def main() -> None:
         raise SystemExit("--target-batch-size must be >= 0.")
     if args.torch_device is None:
         args.torch_device = _default_torch_device()
+    register_run_monitor(
+        args,
+        device=args.torch_device,
+        output_dir=args.out.parent,
+        stage_name=Path(__file__).stem,
+    )
 
     environments = parse_csv(args.env) or ["fsrs6_default"]
     for environment in environments:

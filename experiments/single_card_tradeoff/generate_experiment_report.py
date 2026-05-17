@@ -477,9 +477,10 @@ def render_report(summary: Mapping[str, Any]) -> str:
             "reproduce the current report inputs."
         )
         lines.append(
-            "CUDA reruns of the multi-user distill and low-parameter direct-search "
-            "commands also write `performance_summary.json` and `gpu_monitor/` "
-            "memory samples under their configured output directories."
+            "CUDA reruns of the tradeoff, multi-user distill, and low-parameter "
+            "direct-search commands also write `performance_summary.json` and "
+            "`gpu_monitor/` memory samples under their configured output "
+            "directories."
         )
         lines.append("")
         lines.extend(
