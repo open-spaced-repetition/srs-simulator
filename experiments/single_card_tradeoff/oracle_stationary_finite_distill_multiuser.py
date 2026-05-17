@@ -77,6 +77,7 @@ DEFAULT_ORACLE_TEACHER_USER_BATCH_SIZE = 0
 DEFAULT_OUT_DIR = Path(
     "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_batched"
 )
+BASELINE_SCHEDULER = "fsrs6"
 PER_USER_SCHEDULER = "fsrs6_oracle_stationary_finite_distill_per_user"
 
 
@@ -2183,7 +2184,7 @@ def write_auc_summary(
     rows = [
         row
         for row in auc_rows
-        if row["baseline_scheduler"] == "fsrs6_default"
+        if row["baseline_scheduler"] == BASELINE_SCHEDULER
         and row["scheduler"] == scheduler
     ]
     with path.open("w", newline="", encoding="utf-8") as fh:
@@ -2355,8 +2356,8 @@ def main() -> None:
                     metric_row(
                         args,
                         user_id=user_id,
-                        scheduler="fsrs6_default",
-                        scheduler_spec="fsrs6_default",
+                        scheduler=BASELINE_SCHEDULER,
+                        scheduler_spec=BASELINE_SCHEDULER,
                         desired_retention=retention,
                         goal_cost_weight=None,
                         metrics=metrics,
@@ -2505,8 +2506,8 @@ def main() -> None:
                 metric_row(
                     args,
                     user_id=user_id,
-                    scheduler="fsrs6_default",
-                    scheduler_spec="fsrs6_default",
+                    scheduler=BASELINE_SCHEDULER,
+                    scheduler_spec=BASELINE_SCHEDULER,
                     desired_retention=retention,
                     goal_cost_weight=None,
                     metrics=metrics,
