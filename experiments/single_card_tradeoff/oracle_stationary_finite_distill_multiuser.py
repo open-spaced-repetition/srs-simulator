@@ -141,6 +141,7 @@ class MultiUserFSRS6SingleCardBatch:
         exact_memory: bool,
         goal_norm_max: float | None = None,
         obs_mode: str = "oracle_stationary",
+        reset_on_init: bool = True,
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -240,7 +241,8 @@ class MultiUserFSRS6SingleCardBatch:
             self.env_count, device=device, dtype=torch.int64
         )
         self.total_lapses = torch.empty_like(self.total_reviews)
-        self.reset_all()
+        if reset_on_init:
+            self.reset_all()
 
     @property
     def obs_dim(self) -> int:
@@ -965,6 +967,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-grad-norm", type=float, default=DEFAULT_MAX_GRAD_NORM)
     parser.add_argument("--eval-particles", type=int, default=DEFAULT_EVAL_PARTICLES)
+    parser.add_argument(
+        "--eval-group-batch-size",
+        type=int,
+        default=0,
+        help=(
+            "Number of retention or cost-weight evaluation groups to roll out "
+            "together. 0 means batch all groups at once."
+        ),
+    )
     parser.add_argument(
         "--agreement-envs-per-user",
         type=int,
@@ -1734,6 +1745,102 @@ def metric_row(
     }
 
 
+def _eval_group_chunks(
+    values: Sequence[float],
+    group_batch_size: int,
+) -> list[tuple[int, list[float]]]:
+    if not values:
+        return []
+    chunk_size = len(values) if group_batch_size <= 0 else group_batch_size
+    return [
+        (start, list(values[start : start + chunk_size]))
+        for start in range(0, len(values), chunk_size)
+    ]
+
+
+def _batched_eval_layout(
+    *,
+    user_count: int,
+    group_count: int,
+    particles_per_group: int,
+    device: torch.device,
+) -> tuple[list[int], torch.Tensor, torch.Tensor]:
+    user_indices: list[int] = []
+    group_indices: list[int] = []
+    local_group_indices: list[int] = []
+    for user_idx in range(user_count):
+        for group_idx in range(group_count):
+            user_indices.extend([user_idx] * particles_per_group)
+            group_indices.extend(
+                [user_idx * group_count + group_idx] * particles_per_group
+            )
+            local_group_indices.extend([group_idx] * particles_per_group)
+    return (
+        user_indices,
+        torch.tensor(group_indices, device=device, dtype=torch.int64),
+        torch.tensor(local_group_indices, device=device, dtype=torch.int64),
+    )
+
+
+@torch.inference_mode()
+def evaluate_static_retentions_by_user(
+    args: argparse.Namespace,
+    *,
+    retentions: Sequence[float],
+    device: torch.device,
+    configs: Sequence[SingleCardFSRS6Config],
+) -> list[tuple[float, list[SimMetrics], float]]:
+    user_count = len(configs)
+    results: list[tuple[float, list[SimMetrics], float] | None] = [
+        None for _ in retentions
+    ]
+    for start_idx, batch_retentions in _eval_group_chunks(
+        retentions,
+        args.eval_group_batch_size,
+    ):
+        group_count = len(batch_retentions)
+        user_indices, group_index, local_group_idx = _batched_eval_layout(
+            user_count=user_count,
+            group_count=group_count,
+            particles_per_group=args.eval_particles,
+            device=device,
+        )
+        env = MultiUserFSRS6SingleCardBatch(
+            days=args.days,
+            user_indices=user_indices,
+            configs=configs,
+            cost_weights=[0.0],
+            action_retentions=batch_retentions,
+            device=device,
+            dtype=torch.float64,
+            seed=args.seed + 50_000 + int(round(float(batch_retentions[0]) * 10_000.0)),
+            exact_memory=True,
+            goal_norm_max=1.0,
+        )
+        action = local_group_idx
+        start = time.perf_counter()
+        while not bool(env.done.all().item()):
+            env.step(action)
+        elapsed_s = time.perf_counter() - start
+        runtime_s = elapsed_s / float(max(1, user_count * group_count))
+        metrics_flat = env.metrics_by_group(
+            group_index=group_index,
+            group_count=user_count * group_count,
+            particles_per_group=args.eval_particles,
+        )
+        for local_idx, retention in enumerate(batch_retentions):
+            metrics_by_user = [
+                metrics_flat[user_idx * group_count + local_idx]
+                for user_idx in range(user_count)
+            ]
+            results[start_idx + local_idx] = (
+                retention,
+                metrics_by_user,
+                runtime_s,
+            )
+    return [result for result in results if result is not None]
+
+
 @torch.inference_mode()
 def evaluate_static_retention_by_user(
     args: argparse.Namespace,
@@ -1915,6 +2022,159 @@ def evaluate_batched_per_user_policy(
         ),
         runtime_s,
     )
+
+
+@torch.inference_mode()
+def evaluate_policies_by_user(
+    args: argparse.Namespace,
+    *,
+    model: PolicyValueNet,
+    cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+    goal_norm_max: float,
+    device: torch.device,
+    configs: Sequence[SingleCardFSRS6Config],
+) -> list[tuple[float, list[SimMetrics], float]]:
+    user_count = len(configs)
+    results: list[tuple[float, list[SimMetrics], float] | None] = [
+        None for _ in cost_weights
+    ]
+    model_dtype = next(model.parameters()).dtype
+    model.eval()
+    for start_idx, batch_weights in _eval_group_chunks(
+        cost_weights,
+        args.eval_group_batch_size,
+    ):
+        group_count = len(batch_weights)
+        user_indices, group_index, local_group_idx = _batched_eval_layout(
+            user_count=user_count,
+            group_count=group_count,
+            particles_per_group=args.eval_particles,
+            device=device,
+        )
+        env = MultiUserFSRS6SingleCardBatch(
+            days=args.days,
+            user_indices=user_indices,
+            configs=configs,
+            cost_weights=batch_weights,
+            action_retentions=action_retentions,
+            device=device,
+            dtype=torch.float64,
+            seed=args.seed + 70_000 + int(round(float(batch_weights[0]) * 10.0)),
+            exact_memory=True,
+            goal_norm_max=goal_norm_max,
+            reset_on_init=False,
+        )
+        goal_values = torch.tensor(
+            batch_weights,
+            device=device,
+            dtype=torch.float64,
+        ).index_select(0, local_group_idx)
+        env.reset_all(goal_values=goal_values)
+        start = time.perf_counter()
+        while not bool(env.done.all().item()):
+            obs = env.obs().to(dtype=model_dtype)
+            logits, _ = model(obs)
+            action = torch.argmax(logits, dim=1)
+            env.step(action)
+        elapsed_s = time.perf_counter() - start
+        runtime_s = elapsed_s / float(max(1, user_count * group_count))
+        metrics_flat = env.metrics_by_group(
+            group_index=group_index,
+            group_count=user_count * group_count,
+            particles_per_group=args.eval_particles,
+        )
+        for local_idx, cost_weight in enumerate(batch_weights):
+            metrics_by_user = [
+                metrics_flat[user_idx * group_count + local_idx]
+                for user_idx in range(user_count)
+            ]
+            results[start_idx + local_idx] = (
+                cost_weight,
+                metrics_by_user,
+                runtime_s,
+            )
+    return [result for result in results if result is not None]
+
+
+@torch.inference_mode()
+def evaluate_batched_per_user_policies(
+    args: argparse.Namespace,
+    *,
+    ensemble: BatchedPolicyEnsemble,
+    cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+    goal_norm_max: float,
+    device: torch.device,
+    configs: Sequence[SingleCardFSRS6Config],
+) -> list[tuple[float, list[SimMetrics], float]]:
+    user_count = len(configs)
+    results: list[tuple[float, list[SimMetrics], float] | None] = [
+        None for _ in cost_weights
+    ]
+    model_dtype = next(iter(ensemble.params.values())).dtype
+    for start_idx, batch_weights in _eval_group_chunks(
+        cost_weights,
+        args.eval_group_batch_size,
+    ):
+        group_count = len(batch_weights)
+        user_indices, group_index, local_group_idx = _batched_eval_layout(
+            user_count=user_count,
+            group_count=group_count,
+            particles_per_group=args.eval_particles,
+            device=device,
+        )
+        env = MultiUserFSRS6SingleCardBatch(
+            days=args.days,
+            user_indices=user_indices,
+            configs=configs,
+            cost_weights=batch_weights,
+            action_retentions=action_retentions,
+            device=device,
+            dtype=torch.float64,
+            seed=args.seed + 70_000 + int(round(float(batch_weights[0]) * 10.0)),
+            exact_memory=True,
+            goal_norm_max=goal_norm_max,
+            reset_on_init=False,
+        )
+        goal_values = torch.tensor(
+            batch_weights,
+            device=device,
+            dtype=torch.float64,
+        ).index_select(0, local_group_idx)
+        env.reset_all(goal_values=goal_values)
+        start = time.perf_counter()
+        while not bool(env.done.all().item()):
+            obs = (
+                env.obs()
+                .to(dtype=model_dtype)
+                .reshape(
+                    user_count,
+                    group_count * args.eval_particles,
+                    env.obs_dim,
+                )
+            )
+            logits, _ = batched_ensemble_forward(ensemble, obs)
+            action = torch.argmax(logits, dim=2).reshape(-1)
+            env.step(action)
+        elapsed_s = time.perf_counter() - start
+        runtime_s = elapsed_s / float(max(1, user_count * group_count))
+        metrics_flat = env.metrics_by_group(
+            group_index=group_index,
+            group_count=user_count * group_count,
+            particles_per_group=args.eval_particles,
+        )
+        for local_idx, cost_weight in enumerate(batch_weights):
+            metrics_by_user = [
+                metrics_flat[user_idx * group_count + local_idx]
+                for user_idx in range(user_count)
+            ]
+            results[start_idx + local_idx] = (
+                cost_weight,
+                metrics_by_user,
+                runtime_s,
+            )
+    return [result for result in results if result is not None]
 
 
 def save_checkpoint(
@@ -2211,6 +2471,8 @@ def main() -> None:
         raise SystemExit("--train-envs-per-user must be > 0.")
     if args.eval_particles <= 0:
         raise SystemExit("--eval-particles must be > 0.")
+    if args.eval_group_batch_size < 0:
+        raise SystemExit("--eval-group-batch-size must be >= 0.")
     if args.agreement_envs_per_user <= 0:
         raise SystemExit("--agreement-envs-per-user must be > 0.")
     if args.oracle_teacher_user_batch_size < 0:
@@ -2344,13 +2606,12 @@ def main() -> None:
 
         rows: list[dict[str, Any]] = []
         eval_start = time.perf_counter()
-        for retention in action_retentions:
-            metrics_by_user, runtime_s = evaluate_static_retention_by_user(
-                args,
-                retention=retention,
-                device=device,
-                configs=configs,
-            )
+        for retention, metrics_by_user, runtime_s in evaluate_static_retentions_by_user(
+            args,
+            retentions=action_retentions,
+            device=device,
+            configs=configs,
+        ):
             for user_id, metrics in zip(user_ids, metrics_by_user, strict=True):
                 rows.append(
                     metric_row(
@@ -2364,16 +2625,19 @@ def main() -> None:
                         runtime_s=runtime_s,
                     )
                 )
-        for cost_weight in eval_cost_weights:
-            metrics_by_user, runtime_s = evaluate_batched_per_user_policy(
-                args,
-                ensemble=ensemble,
-                cost_weight=cost_weight,
-                action_retentions=action_retentions,
-                goal_norm_max=max(cost_weights),
-                device=device,
-                configs=configs,
-            )
+        for (
+            cost_weight,
+            metrics_by_user,
+            runtime_s,
+        ) in evaluate_batched_per_user_policies(
+            args,
+            ensemble=ensemble,
+            cost_weights=eval_cost_weights,
+            action_retentions=action_retentions,
+            goal_norm_max=max(cost_weights),
+            device=device,
+            configs=configs,
+        ):
             for user_id, metrics in zip(user_ids, metrics_by_user, strict=True):
                 rows.append(
                     metric_row(
@@ -2494,13 +2758,12 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     eval_start = time.perf_counter()
-    for retention in action_retentions:
-        metrics_by_user, runtime_s = evaluate_static_retention_by_user(
-            args,
-            retention=retention,
-            device=device,
-            configs=configs,
-        )
+    for retention, metrics_by_user, runtime_s in evaluate_static_retentions_by_user(
+        args,
+        retentions=action_retentions,
+        device=device,
+        configs=configs,
+    ):
         for user_id, metrics in zip(user_ids, metrics_by_user, strict=True):
             rows.append(
                 metric_row(
@@ -2514,16 +2777,15 @@ def main() -> None:
                     runtime_s=runtime_s,
                 )
             )
-    for cost_weight in eval_cost_weights:
-        metrics_by_user, runtime_s = evaluate_policy_by_user(
-            args,
-            model=model,
-            cost_weight=cost_weight,
-            action_retentions=action_retentions,
-            goal_norm_max=max(cost_weights),
-            device=device,
-            configs=configs,
-        )
+    for cost_weight, metrics_by_user, runtime_s in evaluate_policies_by_user(
+        args,
+        model=model,
+        cost_weights=eval_cost_weights,
+        action_retentions=action_retentions,
+        goal_norm_max=max(cost_weights),
+        device=device,
+        configs=configs,
+    ):
         for user_id, metrics in zip(user_ids, metrics_by_user, strict=True):
             rows.append(
                 metric_row(
