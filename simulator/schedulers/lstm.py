@@ -867,6 +867,7 @@ class LSTMBatchSchedulerOps:
         weights = state.mem_w[user_idx, card_idx]
         stabilities = state.mem_s[user_idx, card_idx]
         decays = state.mem_d[user_idx, card_idx]
+        target = self._target_for_users(user_idx)
         min_int = max(1, int(math.ceil(self.min_interval)))
         max_int = max(min_int, int(math.floor(self.max_interval)))
         low = torch.full(
@@ -923,6 +924,7 @@ class LSTMBatchSchedulerOps:
         weights = state.mem_w[user_idx, card_idx]
         stabilities = state.mem_s[user_idx, card_idx]
         decays = state.mem_d[user_idx, card_idx]
+        target = self._target_for_users(user_idx)
         low = torch.full(
             (user_idx.numel(),),
             max(0.0, self.min_interval),
@@ -1007,13 +1009,6 @@ class LSTMBatchSchedulerOps:
         result = torch.where(torch.isnan(result), high, result)
         return torch.clamp(result, min=self.min_interval, max=self.max_interval)
 
-    def _target_for_users(self, user_idx: "torch.Tensor") -> "torch.Tensor":
-        if self._target.ndim == 0:
-            return self._target
-        return self._target.index_select(
-            0, user_idx.to(device=self.device, dtype=torch.int64)
-        )
-
     def _retention_at(
         self,
         days: "torch.Tensor",
@@ -1058,6 +1053,11 @@ class LSTMBatchSchedulerOps:
         base = torch.pow(target, -1.0 / d_eff) - 1.0
         t0 = s_eff * base
         return torch.clamp(t0, min=self.min_interval, max=self.max_interval)
+
+    def _target_for_users(self, user_idx: "torch.Tensor") -> "torch.Tensor":
+        if self._target.ndim == 0 or self._target.numel() == 1:
+            return self._target.reshape(()).expand(user_idx.numel())
+        return self._target.index_select(0, user_idx)
 
     @staticmethod
     def _lstm_retention(
