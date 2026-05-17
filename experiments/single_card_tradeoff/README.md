@@ -117,6 +117,16 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 
 The stationary finite oracle reports finite-lifecycle objective, policy-iteration count, and residual to stdout. The distilled checkpoint uses `policy_type=fsrs6_oracle_stationary_finite_distill` and defaults to the compressed `oracle_stationary` residual `8x2` policy: 476 parameters, 128 distillation epochs, and teacher cost weights `0,16,64,256,1024`. Its observation remains `stability`, `difficulty`, and goal cost weight only.
 
+For per-user benchmark distillation, `oracle_stationary_finite_distill_multiuser.py --per-user-models` trains one independent stationary finite distill policy per FSRS-6 user in a single Python process. The exact teacher uses `FSRS6BatchedStationaryFiniteOracle`, whose policy shape is `[user, cost_weight, stability, difficulty]`; `--oracle-teacher-user-batch-size 0` is the default and solves all requested users in one batched DP call. The student training then stacks `U` ordinary `PolicyValueNet` states with `torch.func.stack_module_state` and uses `vmap` over the user dimension, so each user has a separate 476-parameter model while the ensemble trains and evaluates as one batch. The default path without `--per-user-models` remains the older shared-student diagnostic baseline.
+
+```bash
+uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --per-user-models --out-dir artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_batched --no-progress
+```
+
+On the first eight benchmark users, the batched per-user run wrote `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_batched/` with 8 checkpoints, 476 parameters per checkpoint, 3,808 total trainable ensemble parameters, `teacher_s=207.29`, `train_s=61.36`, `agreement_s=0.78`, `eval_s=125.29`, mean final CE `0.38878`, mean train agreement `84.29%`, and mean eval agreement `81.63%` on the CPU test environment. Mean default-baseline span coverage was `95.82%`, and mean relative regret AUC was `-4.32%` over the eight users. Compared with the previous sequential per-user artifact `stationary_finite_distill_first8_users_per_user/`, batch training reduced train time from `175.60s` to `61.36s`, agreement time from `2.40s` to `0.78s`, and eval time from `158.90s` to `125.29s`.
+
+The shared-student diagnostic artifact is `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_batched/`. It used one 476-parameter model for all eight users and reported mean span coverage `96.71%` and mean relative regret AUC `-6.38%`. Despite much lower teacher agreement (`68.11%` eval agreement), it still had better AUC on this run because the shared model regularized interpolation between the sparse teacher cost weights `0,16,64,256,1024`; the batched per-user models improved supervised agreement but still had poor user-2 frontier interpolation (`+18.20%` relative regret AUC vs `fsrs6_default`). This suggests the next multiuser per-user experiment should try denser teacher cost weights rather than only more per-user training.
+
 Visualize the solved oracle policy's output distribution over states visited by the policy rollout:
 
 ```bash
