@@ -35,9 +35,11 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill import ( 
     DEFAULT_DISTILL_EPOCHS,
     DEFAULT_DISTILL_HIDDEN_SIZE,
     DEFAULT_DISTILL_NETWORK_DEPTH,
+    DEFAULT_DISTILL_SUPERVISION,
     DEFAULT_STATIONARY_FINITE_DISTILL_COST_WEIGHTS,
     DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS,
     DEFAULT_STATIONARY_FINITE_TOLERANCE,
+    DEFAULT_TABLE_SAMPLES_PER_WEIGHT,
     resolve_torch_device,
 )
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
@@ -111,6 +113,8 @@ class SingleUserTrainStats:
     final_ce_loss: float
     final_teacher_action_agreement: float
     eval_teacher_action_agreement: float
+    supervision: str = DEFAULT_DISTILL_SUPERVISION
+    table_samples_per_weight: int = DEFAULT_TABLE_SAMPLES_PER_WEIGHT
 
 
 @dataclass(frozen=True)
@@ -908,6 +912,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps-per-epoch", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument(
+        "--per-user-supervision",
+        choices=["uniform_table", "rollout"],
+        default=DEFAULT_DISTILL_SUPERVISION,
+        help=(
+            "Supervision distribution for --per-user-models. uniform_table samples "
+            "each exact stationary policy table cost weight equally; rollout keeps "
+            "the older teacher-forcing event distribution."
+        ),
+    )
+    parser.add_argument(
+        "--table-samples-per-weight",
+        type=int,
+        default=DEFAULT_TABLE_SAMPLES_PER_WEIGHT,
+        help=(
+            "Uniform exact policy table samples per user and cost weight per train "
+            "step for --per-user-models."
+        ),
+    )
+    parser.add_argument(
         "--network", choices=["mlp", "residual"], default=DEFAULT_NETWORK
     )
     parser.add_argument(
@@ -1276,6 +1299,64 @@ def materialize_ensemble_model(
     return model
 
 
+def sample_batched_uniform_table_batch(
+    guide: BatchedStationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    samples_per_weight: int,
+    device: torch.device,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    user_count, weight_count, s_count, d_count = guide.policy.shape
+    user_idx = torch.arange(user_count, device=device)[:, None, None].expand(
+        user_count,
+        weight_count,
+        samples_per_weight,
+    )
+    weight_idx = torch.arange(weight_count, device=device)[None, :, None].expand(
+        user_count,
+        weight_count,
+        samples_per_weight,
+    )
+    s_idx = torch.randint(
+        s_count,
+        (user_count, weight_count, samples_per_weight),
+        device=device,
+        generator=generator,
+    )
+    d_idx = torch.randint(
+        d_count,
+        (user_count, weight_count, samples_per_weight),
+        device=device,
+        generator=generator,
+    )
+    labels = guide.policy.to(device=device)[user_idx, weight_idx, s_idx, d_idx].reshape(
+        user_count,
+        -1,
+    )
+    max_goal = max(1.0, max(cost_weights))
+    goal_norm = torch.log1p(
+        torch.tensor(cost_weights, device=device, dtype=torch.float32)
+    ) / torch.log1p(torch.tensor(max_goal, device=device, dtype=torch.float32))
+    obs = torch.stack(
+        [
+            (s_idx.to(dtype=torch.float32) / float(s_count - 1)).reshape(
+                user_count,
+                -1,
+            ),
+            (d_idx.to(dtype=torch.float32) / float(d_count - 1)).reshape(
+                user_count,
+                -1,
+            ),
+            goal_norm[None, :, None]
+            .expand(user_count, weight_count, samples_per_weight)
+            .reshape(user_count, -1),
+        ],
+        dim=2,
+    )
+    return obs, labels.to(torch.int64)
+
+
 def train_batched_per_user_models(
     args: argparse.Namespace,
     *,
@@ -1313,6 +1394,8 @@ def train_batched_per_user_models(
         lr=args.learning_rate,
         eps=1e-5,
     )
+    table_generator = torch.Generator(device=device)
+    table_generator.manual_seed(args.seed + 90_000)
 
     obs = env.obs().reshape(user_count, args.train_envs_per_user, env.obs_dim)
     final_loss_by_user = [0.0 for _ in range(user_count)]
@@ -1323,16 +1406,25 @@ def train_batched_per_user_models(
         correct_by_user = torch.zeros(user_count, device=device, dtype=torch.float64)
         total_by_user = torch.zeros(user_count, device=device, dtype=torch.float64)
         for _ in range(args.steps_per_epoch):
-            label = teacher_labels(env, guide).reshape(
-                user_count,
-                args.train_envs_per_user,
-            )
+            if args.per_user_supervision == "uniform_table":
+                obs, label = sample_batched_uniform_table_batch(
+                    guide,
+                    cost_weights=cost_weights,
+                    samples_per_weight=args.table_samples_per_weight,
+                    device=device,
+                    generator=table_generator,
+                )
+            else:
+                label = teacher_labels(env, guide).reshape(
+                    user_count,
+                    args.train_envs_per_user,
+                )
             logits, _ = batched_ensemble_forward(ensemble, obs)
             per_item_loss = nn.functional.cross_entropy(
                 logits.reshape(-1, env.action_count),
                 label.reshape(-1),
                 reduction="none",
-            ).reshape(user_count, args.train_envs_per_user)
+            ).reshape(user_count, -1)
             loss_by_user = per_item_loss.mean(dim=1)
             loss = loss_by_user.sum()
             optimizer.zero_grad(set_to_none=True)
@@ -1346,17 +1438,18 @@ def train_batched_per_user_models(
             with torch.no_grad():
                 pred = torch.argmax(logits.detach(), dim=2)
                 correct_by_user += (pred == label).sum(dim=1).to(dtype=torch.float64)
-                total_by_user += float(args.train_envs_per_user)
+                total_by_user += float(label.shape[1])
                 loss_sum_by_user += (
                     per_item_loss.detach().sum(dim=1).to(dtype=torch.float64)
                 )
-                next_obs, _, done = env.step(label.reshape(-1))
-                if done.any():
-                    env.reset_indices(done.nonzero(as_tuple=False).squeeze(1))
-                    next_obs = env.obs()
-                obs = next_obs.reshape(
-                    user_count, args.train_envs_per_user, env.obs_dim
-                )
+                if args.per_user_supervision == "rollout":
+                    next_obs, _, done = env.step(label.reshape(-1))
+                    if done.any():
+                        env.reset_indices(done.nonzero(as_tuple=False).squeeze(1))
+                        next_obs = env.obs()
+                    obs = next_obs.reshape(
+                        user_count, args.train_envs_per_user, env.obs_dim
+                    )
         final_loss_tensor = loss_sum_by_user / torch.clamp(total_by_user, min=1.0)
         final_agreement_tensor = correct_by_user / torch.clamp(total_by_user, min=1.0)
         final_loss_by_user = [float(value) for value in final_loss_tensor.tolist()]
@@ -1539,6 +1632,57 @@ def estimate_batched_per_user_agreement(
             args.agreement_envs_per_user,
             env.obs_dim,
         )
+    runtime_s = time.perf_counter() - start
+    per_user = (correct_by_user / torch.clamp(total_by_user, min=1.0)).tolist()
+    overall = float(correct_by_user.sum().item() / max(1.0, total_by_user.sum().item()))
+    return overall, [float(value) for value in per_user], runtime_s
+
+
+@torch.inference_mode()
+def estimate_batched_per_user_table_agreement(
+    *,
+    ensemble: BatchedPolicyEnsemble,
+    guide: BatchedStationaryFiniteOracleGuide,
+    device: torch.device,
+    cost_weights: Sequence[float],
+) -> tuple[float, list[float], float]:
+    user_count, weight_count, s_count, d_count = guide.policy.shape
+    s_grid, d_grid = torch.meshgrid(
+        torch.arange(s_count, device=device),
+        torch.arange(d_count, device=device),
+        indexing="ij",
+    )
+    state_count = s_count * d_count
+    max_goal = max(1.0, max(cost_weights))
+    goal_norm = torch.log1p(
+        torch.tensor(cost_weights, device=device, dtype=torch.float32)
+    ) / torch.log1p(torch.tensor(max_goal, device=device, dtype=torch.float32))
+    correct_by_user = torch.zeros(user_count, device=device, dtype=torch.float64)
+    total_by_user = torch.zeros_like(correct_by_user)
+    model_dtype = next(iter(ensemble.params.values())).dtype
+    start = time.perf_counter()
+    for weight_idx in range(weight_count):
+        obs = torch.stack(
+            [
+                s_grid.reshape(-1).to(dtype=torch.float32) / float(s_count - 1),
+                d_grid.reshape(-1).to(dtype=torch.float32) / float(d_count - 1),
+                torch.full(
+                    (state_count,),
+                    float(goal_norm[weight_idx].item()),
+                    device=device,
+                    dtype=torch.float32,
+                ),
+            ],
+            dim=1,
+        )
+        obs = obs[None, :, :].expand(user_count, state_count, 3).to(dtype=model_dtype)
+        logits, _ = batched_ensemble_forward(ensemble, obs)
+        labels = guide.policy[:, weight_idx].to(device=device, dtype=torch.int64)
+        pred = torch.argmax(logits, dim=2).reshape(user_count, s_count, d_count)
+        correct_by_user += (
+            (pred == labels).reshape(user_count, -1).sum(dim=1).to(dtype=torch.float64)
+        )
+        total_by_user += float(state_count)
     runtime_s = time.perf_counter() - start
     per_user = (correct_by_user / torch.clamp(total_by_user, min=1.0)).tolist()
     overall = float(correct_by_user.sum().item() / max(1.0, total_by_user.sum().item()))
@@ -1887,6 +2031,8 @@ def save_single_user_checkpoint(
             "oracle_stationary_finite_converged": list(guide.converged[user_idx]),
             "distill_epochs": stats.epochs,
             "distill_steps_per_epoch": stats.steps_per_epoch,
+            "distill_supervision": stats.supervision,
+            "table_samples_per_weight": stats.table_samples_per_weight,
             "train_envs": stats.train_envs,
             "train_transitions": stats.train_transitions,
             "params_per_user": stats.params_per_user,
@@ -1975,6 +2121,8 @@ def write_single_user_train_summary(
             "ensemble_trainable_params",
             "epochs",
             "steps_per_epoch",
+            "supervision",
+            "table_samples_per_weight",
             "train_envs",
             "train_transitions",
             "setup_runtime_s",
@@ -1998,6 +2146,8 @@ def write_single_user_train_summary(
                     "ensemble_trainable_params": stats.ensemble_trainable_params,
                     "epochs": stats.epochs,
                     "steps_per_epoch": stats.steps_per_epoch,
+                    "supervision": stats.supervision,
+                    "table_samples_per_weight": stats.table_samples_per_weight,
                     "train_envs": stats.train_envs,
                     "train_transitions": stats.train_transitions,
                     "setup_runtime_s": setup_runtime_s,
@@ -2064,6 +2214,8 @@ def main() -> None:
         raise SystemExit("--agreement-envs-per-user must be > 0.")
     if args.oracle_teacher_user_batch_size < 0:
         raise SystemExit("--oracle-teacher-user-batch-size must be >= 0.")
+    if args.table_samples_per_weight <= 0:
+        raise SystemExit("--table-samples-per-weight must be > 0.")
 
     device = resolve_torch_device(args.torch_device)
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
@@ -2115,17 +2267,31 @@ def main() -> None:
                 params_per_user=params,
             )
         )
-        eval_agreement, eval_agreement_by_user, agreement_runtime_s = (
-            estimate_batched_per_user_agreement(
-                args,
-                ensemble=ensemble,
-                guide=guide,
-                device=device,
-                configs=configs,
-                cost_weights=cost_weights,
-                action_retentions=action_retentions,
+        if args.per_user_supervision == "uniform_table":
+            eval_agreement, eval_agreement_by_user, agreement_runtime_s = (
+                estimate_batched_per_user_table_agreement(
+                    ensemble=ensemble,
+                    guide=guide,
+                    device=device,
+                    cost_weights=cost_weights,
+                )
             )
-        )
+            train_samples_per_user = args.table_samples_per_weight * len(cost_weights)
+            training_scope = "per_user_batched_uniform_table_supervision"
+        else:
+            eval_agreement, eval_agreement_by_user, agreement_runtime_s = (
+                estimate_batched_per_user_agreement(
+                    args,
+                    ensemble=ensemble,
+                    guide=guide,
+                    device=device,
+                    configs=configs,
+                    cost_weights=cost_weights,
+                    action_retentions=action_retentions,
+                )
+            )
+            train_samples_per_user = args.train_envs_per_user
+            training_scope = "per_user_batched_single_process"
 
         ensemble_trainable_params = params * len(user_ids)
         stats_by_user: list[SingleUserTrainStats] = []
@@ -2138,15 +2304,17 @@ def main() -> None:
                 ensemble_trainable_params=ensemble_trainable_params,
                 epochs=args.epochs,
                 steps_per_epoch=args.steps_per_epoch,
-                train_envs=args.train_envs_per_user,
+                train_envs=train_samples_per_user,
                 train_transitions=(
-                    args.epochs * args.steps_per_epoch * args.train_envs_per_user
+                    args.epochs * args.steps_per_epoch * train_samples_per_user
                 ),
                 train_runtime_s=train_runtime_s,
                 agreement_runtime_s=agreement_runtime_s,
                 final_ce_loss=final_loss_by_user[user_idx],
                 final_teacher_action_agreement=final_agreement_by_user[user_idx],
                 eval_teacher_action_agreement=eval_agreement_by_user[user_idx],
+                supervision=args.per_user_supervision,
+                table_samples_per_weight=args.table_samples_per_weight,
             )
             model_path = args.out_dir / f"user_{user_id}_policy.pt"
             model = materialize_ensemble_model(
@@ -2168,7 +2336,7 @@ def main() -> None:
                 guide=guide,
                 stats=user_stats,
                 teacher_runtime_s=teacher_runtime_s,
-                training_scope="per_user_batched_single_process",
+                training_scope=training_scope,
             )
             stats_by_user.append(user_stats)
             model_paths.append(model_path)
@@ -2216,7 +2384,7 @@ def main() -> None:
                         goal_cost_weight=cost_weight,
                         metrics=metrics,
                         runtime_s=runtime_s,
-                        engine="per_user_batched_single_process",
+                        engine=training_scope,
                     )
                 )
         eval_runtime_s = time.perf_counter() - eval_start
@@ -2235,7 +2403,7 @@ def main() -> None:
             teacher_runtime_s=teacher_runtime_s,
             setup_runtime_s=setup_runtime_s,
             eval_runtime_s=eval_runtime_s,
-            training_scope="per_user_batched_single_process",
+            training_scope=training_scope,
         )
 
         mean_loss = sum(stats.final_ce_loss for stats in stats_by_user) / float(

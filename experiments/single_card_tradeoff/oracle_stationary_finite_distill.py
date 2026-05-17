@@ -64,6 +64,8 @@ DEFAULT_DISTILL_NETWORK_DEPTH = 2
 DEFAULT_STATIONARY_FINITE_DISTILL_COST_WEIGHTS = [0.0, 16.0, 64.0, 256.0, 1024.0]
 DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS = 128
 DEFAULT_STATIONARY_FINITE_TOLERANCE = 1e-10
+DEFAULT_DISTILL_SUPERVISION = "uniform_table"
+DEFAULT_TABLE_SAMPLES_PER_WEIGHT = 256
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,7 @@ class DistillStats:
     runtime_s: float
     final_loss: float
     final_action_agreement: float
+    supervision: str
 
 
 class StationaryFiniteOracleGuide:
@@ -167,6 +170,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=DEFAULT_DISTILL_EPOCHS)
     parser.add_argument("--steps-per-epoch", type=int, default=DEFAULT_STEPS_PER_EPOCH)
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
+    parser.add_argument(
+        "--supervision",
+        choices=["uniform_table", "rollout"],
+        default=DEFAULT_DISTILL_SUPERVISION,
+        help=(
+            "Teacher supervision distribution. uniform_table samples each exact "
+            "stationary policy table cost weight equally; rollout keeps the older "
+            "teacher-forcing event distribution."
+        ),
+    )
+    parser.add_argument(
+        "--table-samples-per-weight",
+        type=int,
+        default=DEFAULT_TABLE_SAMPLES_PER_WEIGHT,
+        help="Uniform exact policy table samples per cost weight per train step.",
+    )
     parser.add_argument(
         "--obs-mode",
         choices=[
@@ -268,6 +287,47 @@ def _build_env(
     )
 
 
+def sample_uniform_table_batch(
+    guide: StationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    samples_per_weight: int,
+    device: torch.device,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    weight_count, s_count, d_count = guide.policy.shape
+    weight_idx = torch.arange(weight_count, device=device)[:, None].expand(
+        weight_count,
+        samples_per_weight,
+    )
+    s_idx = torch.randint(
+        s_count,
+        (weight_count, samples_per_weight),
+        device=device,
+        generator=generator,
+    )
+    d_idx = torch.randint(
+        d_count,
+        (weight_count, samples_per_weight),
+        device=device,
+        generator=generator,
+    )
+    labels = guide.policy[weight_idx, s_idx, d_idx].reshape(-1).to(torch.int64)
+    max_goal = max(1.0, max(cost_weights))
+    goal_norm = torch.log1p(
+        torch.tensor(cost_weights, device=device, dtype=torch.float32)
+    ) / torch.log1p(torch.tensor(max_goal, device=device, dtype=torch.float32))
+    obs = torch.stack(
+        [
+            (s_idx.to(dtype=torch.float32) / float(s_count - 1)).reshape(-1),
+            (d_idx.to(dtype=torch.float32) / float(d_count - 1)).reshape(-1),
+            goal_norm[:, None].expand(weight_count, samples_per_weight).reshape(-1),
+        ],
+        dim=1,
+    )
+    return obs, labels
+
+
 def train_distilled_policy(
     args: argparse.Namespace,
     *,
@@ -309,6 +369,8 @@ def train_distilled_policy(
     )
 
     obs = env.obs()
+    table_generator = torch.Generator(device=device)
+    table_generator.manual_seed(args.seed + 90_000)
     final_loss = 0.0
     final_action_agreement = 0.0
     for epoch in range(args.epochs):
@@ -316,7 +378,16 @@ def train_distilled_policy(
         correct = 0
         total = 0
         for _ in range(args.steps_per_epoch):
-            label = guide.labels(env)
+            if args.supervision == "uniform_table":
+                obs, label = sample_uniform_table_batch(
+                    guide,
+                    cost_weights=cost_weights,
+                    samples_per_weight=args.table_samples_per_weight,
+                    device=device,
+                    generator=table_generator,
+                )
+            else:
+                label = guide.labels(env)
             logits, _ = model(obs)
             loss = nn.functional.cross_entropy(logits, label)
             optimizer.zero_grad(set_to_none=True)
@@ -330,11 +401,12 @@ def train_distilled_policy(
                 correct += int((pred == label).sum().item())
                 total += batch_total
                 loss_sum += float(loss.item()) * batch_total
-                next_obs, _, done = env.step(label)
-                if done.any():
-                    env.reset_indices(done.nonzero(as_tuple=False).squeeze(1))
-                    next_obs = env.obs()
-                obs = next_obs
+                if args.supervision == "rollout":
+                    next_obs, _, done = env.step(label)
+                    if done.any():
+                        env.reset_indices(done.nonzero(as_tuple=False).squeeze(1))
+                        next_obs = env.obs()
+                    obs = next_obs
 
         final_loss = loss_sum / float(max(1, total))
         final_action_agreement = correct / float(max(1, total))
@@ -353,12 +425,64 @@ def train_distilled_policy(
         DistillStats(
             epochs=args.epochs,
             steps_per_epoch=args.steps_per_epoch,
-            transitions=args.epochs * args.steps_per_epoch * args.train_envs,
+            transitions=(
+                args.epochs
+                * args.steps_per_epoch
+                * (
+                    args.table_samples_per_weight * len(cost_weights)
+                    if args.supervision == "uniform_table"
+                    else args.train_envs
+                )
+            ),
             runtime_s=runtime_s,
             final_loss=final_loss,
             final_action_agreement=final_action_agreement,
+            supervision=args.supervision,
         ),
     )
+
+
+@torch.inference_mode()
+def estimate_table_action_agreement(
+    model: PolicyValueNet,
+    guide: StationaryFiniteOracleGuide,
+    *,
+    device: torch.device,
+    cost_weights: Sequence[float],
+) -> float:
+    weight_count, s_count, d_count = guide.policy.shape
+    s_grid, d_grid = torch.meshgrid(
+        torch.arange(s_count, device=device),
+        torch.arange(d_count, device=device),
+        indexing="ij",
+    )
+    max_goal = max(1.0, max(cost_weights))
+    goal_norm = torch.log1p(
+        torch.tensor(cost_weights, device=device, dtype=torch.float32)
+    ) / torch.log1p(torch.tensor(max_goal, device=device, dtype=torch.float32))
+    correct = 0
+    total = 0
+    model_dtype = next(model.parameters()).dtype
+    model.eval()
+    for weight_idx in range(weight_count):
+        obs = torch.stack(
+            [
+                s_grid.reshape(-1).to(dtype=torch.float32) / float(s_count - 1),
+                d_grid.reshape(-1).to(dtype=torch.float32) / float(d_count - 1),
+                torch.full(
+                    (s_count * d_count,),
+                    float(goal_norm[weight_idx].item()),
+                    device=device,
+                    dtype=torch.float32,
+                ),
+            ],
+            dim=1,
+        ).to(dtype=model_dtype)
+        logits, _ = model(obs)
+        labels = guide.policy[weight_idx].reshape(-1).to(torch.int64)
+        correct += int((torch.argmax(logits, dim=1) == labels).sum().item())
+        total += int(labels.numel())
+    return correct / float(max(1, total))
 
 
 @torch.inference_mode()
@@ -443,6 +567,8 @@ def save_model(
             **fsrs_config.checkpoint_payload(),
             "distill_epochs": stats.epochs,
             "distill_steps_per_epoch": stats.steps_per_epoch,
+            "distill_supervision": stats.supervision,
+            "table_samples_per_weight": args.table_samples_per_weight,
             "train_updates": 0,
             "train_transitions": stats.transitions,
             "train_runtime_s": stats.runtime_s,
@@ -466,6 +592,12 @@ def main() -> None:
         raise SystemExit("--epochs must be >= 0.")
     if args.steps_per_epoch <= 0:
         raise SystemExit("--steps-per-epoch must be > 0.")
+    if args.table_samples_per_weight <= 0:
+        raise SystemExit("--table-samples-per-weight must be > 0.")
+    if args.supervision == "uniform_table" and args.obs_mode != "oracle_stationary":
+        raise SystemExit(
+            "--supervision uniform_table requires --obs-mode oracle_stationary."
+        )
     if args.network_depth <= 0:
         raise SystemExit("--network-depth must be > 0.")
     if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
@@ -497,15 +629,23 @@ def main() -> None:
         action_retentions=action_retentions,
         fsrs_config=fsrs_config,
     )
-    agreement = estimate_teacher_action_agreement(
-        model,
-        guide,
-        args=args,
-        device=device,
-        cost_weights=cost_weights,
-        action_retentions=action_retentions,
-        fsrs_config=fsrs_config,
-    )
+    if args.supervision == "uniform_table":
+        agreement = estimate_table_action_agreement(
+            model,
+            guide,
+            device=device,
+            cost_weights=cost_weights,
+        )
+    else:
+        agreement = estimate_teacher_action_agreement(
+            model,
+            guide,
+            args=args,
+            device=device,
+            cost_weights=cost_weights,
+            action_retentions=action_retentions,
+            fsrs_config=fsrs_config,
+        )
     save_model(
         args.model_out,
         model=model,
