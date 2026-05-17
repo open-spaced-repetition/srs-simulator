@@ -357,6 +357,24 @@ class MultiUserFSRS6SingleCardBatch:
         )
         return self._step_active_intervals(active, intervals, active_users)
 
+    def step_retention(
+        self,
+        retention: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        active = (~self.done).nonzero(as_tuple=False).squeeze(1)
+        if active.numel() == 0:
+            reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
+            return self.obs(), reward, self.done.clone()
+
+        active_retention = retention.index_select(0, active).to(dtype=self.dtype)
+        active_users = self.user_index.index_select(0, active)
+        intervals = self._intervals_for_retention(
+            self.s.index_select(0, active),
+            active_retention,
+            active_users,
+        )
+        return self._step_active_intervals(active, intervals, active_users)
+
     def _step_active_intervals(
         self,
         active: torch.Tensor,
@@ -529,6 +547,14 @@ class MultiUserFSRS6SingleCardBatch:
         users: torch.Tensor,
     ) -> torch.Tensor:
         retention = self.action_retentions.index_select(0, action)
+        return self._intervals_for_retention(s, retention, users)
+
+    def _intervals_for_retention(
+        self,
+        s: torch.Tensor,
+        retention: torch.Tensor,
+        users: torch.Tensor,
+    ) -> torch.Tensor:
         retention_factor = torch.pow(retention, 1.0 / self._decay_for(users)) - 1.0
         interval = s / self._factor_for(users) * retention_factor
         return torch.clamp(torch.round(interval), min=1.0).to(torch.int64)
