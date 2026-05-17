@@ -133,6 +133,8 @@ uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill_multius
 
 The multi-user evaluator now batches retention and cost-weight groups by default (`--eval-group-batch-size 0`); set `--eval-group-batch-size 1` to reproduce the older per-group rollout shape. On CUDA with the existing first-eight checkpoints and 1,000 particles per user/group, batching reduced static-retention baseline evaluation from `87.21s` to `24.70s` (`3.53x`) and per-user distill cost-weight evaluation from `99.20s` to `21.17s` (`4.69x`). This affects only the multi-user single-card evaluation path; the event and vectorized simulator engines are unchanged.
 
+When `--torch-device` resolves to CUDA, the multi-user distill and low-parameter direct-search scripts now start the same GPU memory monitor used by the rl_scheduler experiment runner. Each run writes `gpu_monitor/gpu_memory.jsonl`, `gpu_monitor/summary.json`, and `performance_summary.json` under `--out-dir`; pass `--no-gpu-monitor-enabled` only for CPU or diagnostic runs where those artifacts are not needed.
+
 For a direct low-parameter policy-search baseline, `low_param_direct_policy_search_multiuser.py` optimizes one independent 7-parameter monotone stationary policy per user with cross-entropy-method search. The policy outputs a continuous desired retention in `[0.5,0.98]` from `(stability, difficulty, cost weight)` and is evaluated against `fsrs6` and the per-user stationary finite distill baseline:
 
 ```bash

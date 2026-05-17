@@ -79,6 +79,7 @@ On the exact-teacher shared span, distill has -1.5637 deck-minutes/day time regr
 ## Reproduction Profile
 
 The TOML profile records the commands and expected outputs used to reproduce the current report inputs.
+CUDA reruns of the multi-user distill and low-parameter direct-search commands also write `performance_summary.json` and `gpu_monitor/` memory samples under their configured output directories.
 
 | command | expected outputs present |
 | --- | --- |

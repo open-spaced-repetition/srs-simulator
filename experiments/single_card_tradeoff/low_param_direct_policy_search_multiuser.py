@@ -52,6 +52,10 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill_multiuser
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
     validate_retention_values,
 )
+from experiments.single_card_tradeoff.run_monitoring import (  # noqa: E402
+    add_run_monitoring_args,
+    register_run_monitor,
+)
 from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
@@ -164,6 +168,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    add_run_monitoring_args(parser)
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
 
@@ -535,6 +540,12 @@ def write_history(path: Path, rows: Sequence[dict[str, Any]]) -> None:
             writer.writerow({field: row[field] for field in fieldnames})
 
 
+def format_optional_float(value: Any, *, digits: int) -> str:
+    if value is None or str(value) == "":
+        return "n/a"
+    return f"{float(value):.{digits}f}"
+
+
 def save_policy(
     path: Path,
     *,
@@ -580,6 +591,12 @@ def main() -> None:
     validate_args(args)
     user_ids = parse_user_ids(args.user_ids)
     device = resolve_torch_device(args.torch_device)
+    register_run_monitor(
+        args,
+        device=device,
+        output_dir=args.out_dir,
+        stage_name=Path(__file__).stem,
+    )
     train_cost_weights = parse_csv_floats(
         args.train_cost_weights,
         name="--train-cost-weights",
@@ -767,8 +784,10 @@ def main() -> None:
         print(
             f"vs={row['baseline_scheduler']} "
             f"coverage={row['mean_span_coverage_percent']:.2f}% "
-            f"time_regret_auc={row['mean_time_regret_auc']:.4f} "
-            f"relative_regret={row['mean_relative_regret_auc_percent']:.2f}%"
+            "time_regret_auc="
+            f"{format_optional_float(row['mean_time_regret_auc'], digits=4)} "
+            "relative_regret="
+            f"{format_optional_float(row['mean_relative_regret_auc_percent'], digits=2)}%"
         )
 
 

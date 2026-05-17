@@ -51,6 +51,10 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill import ( 
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
     validate_retention_values,
 )
+from experiments.single_card_tradeoff.run_monitoring import (  # noqa: E402
+    add_run_monitoring_args,
+    register_run_monitor,
+)
 from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
@@ -1042,6 +1046,7 @@ def parse_args() -> argparse.Namespace:
             "--eval-exact-vs-distill. Defaults to --out-dir."
         ),
     )
+    add_run_monitoring_args(parser)
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
 
@@ -2595,6 +2600,12 @@ def main() -> None:
         raise SystemExit("--table-samples-per-weight must be > 0.")
 
     device = resolve_torch_device(args.torch_device)
+    register_run_monitor(
+        args,
+        device=device,
+        output_dir=args.out_dir,
+        stage_name=Path(__file__).stem,
+    )
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
     eval_cost_weights = parse_csv_floats(
         args.eval_cost_weights,
