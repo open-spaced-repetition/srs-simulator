@@ -23,6 +23,12 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
+from experiments.single_card_tradeoff.auc_outputs import (  # noqa: E402
+    MULTI_SCHEDULER_AUC_FIELDS,
+    SINGLE_SCHEDULER_AUC_FIELDS,
+    write_auc_summary as write_filtered_auc_summary,
+    write_mean_auc_summary,
+)
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
@@ -78,6 +84,7 @@ DEFAULT_OUT_DIR = Path(
     "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_batched"
 )
 BASELINE_SCHEDULER = "fsrs6"
+EXACT_STATIONARY_FINITE_SCHEDULER = "fsrs6_oracle_stationary_finite"
 PER_USER_SCHEDULER = "fsrs6_oracle_stationary_finite_distill_per_user"
 
 
@@ -1018,6 +1025,23 @@ def parse_args() -> argparse.Namespace:
             "<out-dir>/multiuser_policy.pt. Ignored for per-user training."
         ),
     )
+    parser.add_argument(
+        "--eval-exact-vs-distill",
+        action="store_true",
+        help=(
+            "Skip training and evaluate exact stationary finite policies against "
+            "per-user distill checkpoints and the fsrs6 static-retention baseline."
+        ),
+    )
+    parser.add_argument(
+        "--distill-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing user_<id>_policy.pt checkpoints for "
+            "--eval-exact-vs-distill. Defaults to --out-dir."
+        ),
+    )
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
 
@@ -1335,6 +1359,66 @@ def materialize_ensemble_model(
     )
     model.load_state_dict(ensemble_state_dict_for_user(ensemble, user_idx))
     return model
+
+
+def load_per_user_distill_ensemble(
+    *,
+    distill_dir: Path,
+    user_ids: Sequence[int],
+    device: torch.device,
+) -> tuple[BatchedPolicyEnsemble, list[float], list[float]]:
+    models: list[PolicyValueNet] = []
+    first_checkpoint: dict[str, Any] | None = None
+    action_retentions: list[float] | None = None
+    cost_weights: list[float] | None = None
+    params_per_user: int | None = None
+    for user_id in user_ids:
+        checkpoint_path = distill_dir / f"user_{user_id}_policy.pt"
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Missing distill checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+        if checkpoint.get("policy_type") != "fsrs6_oracle_stationary_finite_distill":
+            raise ValueError(f"Unexpected policy_type in {checkpoint_path}.")
+        checkpoint_actions = [float(value) for value in checkpoint["action_retentions"]]
+        checkpoint_costs = [float(value) for value in checkpoint["cost_weights"]]
+        if action_retentions is None:
+            action_retentions = checkpoint_actions
+            cost_weights = checkpoint_costs
+            first_checkpoint = checkpoint
+        elif (
+            checkpoint_actions != action_retentions or checkpoint_costs != cost_weights
+        ):
+            raise ValueError(f"Distill checkpoint grid mismatch in {checkpoint_path}.")
+        model = PolicyValueNet(
+            int(checkpoint["obs_dim"]),
+            len(checkpoint_actions),
+            int(checkpoint["hidden_size"]),
+            architecture=str(checkpoint["network"]),
+            depth=int(checkpoint["network_depth"]),
+        )
+        model.load_state_dict(checkpoint["model_state_dict"])
+        models.append(model.to(device).eval())
+        checkpoint_params = checkpoint.get("params_per_user")
+        if params_per_user is None and checkpoint_params is not None:
+            params_per_user = int(checkpoint_params)
+    if first_checkpoint is None or action_retentions is None or cost_weights is None:
+        raise ValueError("user_ids must contain at least one user.")
+    if params_per_user is None:
+        params_per_user = sum(param.numel() for param in models[0].parameters())
+    params, buffers = torch.func.stack_module_state(models)
+    base_model = models[0]
+    base_model.requires_grad_(False)
+    ensemble = BatchedPolicyEnsemble(
+        base_model=base_model,
+        params=params,
+        buffers=buffers,
+        params_per_user=params_per_user,
+    )
+    return ensemble, action_retentions, cost_weights
 
 
 def sample_batched_uniform_table_batch(
@@ -1868,186 +1952,71 @@ def evaluate_static_retentions_by_user(
 
 
 @torch.inference_mode()
-def evaluate_static_retention_by_user(
+def evaluate_exact_stationary_finite_by_user(
     args: argparse.Namespace,
     *,
-    retention: float,
-    device: torch.device,
-    configs: Sequence[SingleCardFSRS6Config],
-) -> tuple[list[SimMetrics], float]:
-    user_count = len(configs)
-    user_indices = repeated_user_indices(user_count, args.eval_particles)
-    group_index = torch.tensor(
-        user_indices,
-        device=device,
-        dtype=torch.int64,
-    )
-    env = MultiUserFSRS6SingleCardBatch(
-        days=args.days,
-        user_indices=user_indices,
-        configs=configs,
-        cost_weights=[0.0],
-        action_retentions=[retention],
-        device=device,
-        dtype=torch.float64,
-        seed=args.seed + 50_000 + int(round(retention * 10_000.0)),
-        exact_memory=True,
-        goal_norm_max=1.0,
-    )
-    action = torch.zeros(env.env_count, device=device, dtype=torch.int64)
-    start = time.perf_counter()
-    while not bool(env.done.all().item()):
-        env.step(action)
-    runtime_s = (time.perf_counter() - start) / float(user_count)
-    return (
-        env.metrics_by_group(
-            group_index=group_index,
-            group_count=user_count,
-            particles_per_group=args.eval_particles,
-        ),
-        runtime_s,
-    )
-
-
-@torch.inference_mode()
-def evaluate_policy_by_user(
-    args: argparse.Namespace,
-    *,
-    model: PolicyValueNet,
-    cost_weight: float,
+    guide: BatchedStationaryFiniteOracleGuide,
+    cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     goal_norm_max: float,
     device: torch.device,
     configs: Sequence[SingleCardFSRS6Config],
-) -> tuple[list[SimMetrics], float]:
+) -> list[tuple[float, list[SimMetrics], float]]:
     user_count = len(configs)
-    user_indices = repeated_user_indices(user_count, args.eval_particles)
-    group_index = torch.tensor(user_indices, device=device, dtype=torch.int64)
-    env = MultiUserFSRS6SingleCardBatch(
-        days=args.days,
-        user_indices=user_indices,
-        configs=configs,
-        cost_weights=[cost_weight],
-        action_retentions=action_retentions,
-        device=device,
-        dtype=torch.float64,
-        seed=args.seed + 70_000 + int(round(cost_weight * 10.0)),
-        exact_memory=True,
-        goal_norm_max=goal_norm_max,
-    )
-    model_dtype = next(model.parameters()).dtype
-    model.eval()
-    start = time.perf_counter()
-    while not bool(env.done.all().item()):
-        obs = env.obs().to(dtype=model_dtype)
-        logits, _ = model(obs)
-        action = torch.argmax(logits, dim=1)
-        env.step(action)
-    runtime_s = (time.perf_counter() - start) / float(user_count)
-    return (
-        env.metrics_by_group(
-            group_index=group_index,
-            group_count=user_count,
+    results: list[tuple[float, list[SimMetrics], float] | None] = [
+        None for _ in cost_weights
+    ]
+    for start_idx, batch_weights in _eval_group_chunks(
+        cost_weights,
+        args.eval_group_batch_size,
+    ):
+        group_count = len(batch_weights)
+        user_indices, group_index, local_group_idx = _batched_eval_layout(
+            user_count=user_count,
+            group_count=group_count,
             particles_per_group=args.eval_particles,
-        ),
-        runtime_s,
-    )
-
-
-@torch.inference_mode()
-def evaluate_single_user_policy(
-    args: argparse.Namespace,
-    *,
-    user_idx: int,
-    model: PolicyValueNet,
-    cost_weight: float,
-    action_retentions: Sequence[float],
-    goal_norm_max: float,
-    device: torch.device,
-    configs: Sequence[SingleCardFSRS6Config],
-) -> tuple[SimMetrics, float]:
-    env = MultiUserFSRS6SingleCardBatch(
-        days=args.days,
-        user_indices=[user_idx] * args.eval_particles,
-        configs=configs,
-        cost_weights=[cost_weight],
-        action_retentions=action_retentions,
-        device=device,
-        dtype=torch.float64,
-        seed=args.seed + 70_000 + user_idx * 10_000 + int(round(cost_weight * 10.0)),
-        exact_memory=True,
-        goal_norm_max=goal_norm_max,
-    )
-    group_index = torch.zeros(env.env_count, device=device, dtype=torch.int64)
-    model_dtype = next(model.parameters()).dtype
-    model.eval()
-    start = time.perf_counter()
-    while not bool(env.done.all().item()):
-        obs = env.obs().to(dtype=model_dtype)
-        logits, _ = model(obs)
-        action = torch.argmax(logits, dim=1)
-        env.step(action)
-    runtime_s = time.perf_counter() - start
-    return (
-        env.metrics_by_group(
-            group_index=group_index,
-            group_count=1,
-            particles_per_group=args.eval_particles,
-        )[0],
-        runtime_s,
-    )
-
-
-@torch.inference_mode()
-def evaluate_batched_per_user_policy(
-    args: argparse.Namespace,
-    *,
-    ensemble: BatchedPolicyEnsemble,
-    cost_weight: float,
-    action_retentions: Sequence[float],
-    goal_norm_max: float,
-    device: torch.device,
-    configs: Sequence[SingleCardFSRS6Config],
-) -> tuple[list[SimMetrics], float]:
-    user_count = len(configs)
-    user_indices = repeated_user_indices(user_count, args.eval_particles)
-    group_index = torch.tensor(user_indices, device=device, dtype=torch.int64)
-    env = MultiUserFSRS6SingleCardBatch(
-        days=args.days,
-        user_indices=user_indices,
-        configs=configs,
-        cost_weights=[cost_weight],
-        action_retentions=action_retentions,
-        device=device,
-        dtype=torch.float64,
-        seed=args.seed + 70_000 + int(round(cost_weight * 10.0)),
-        exact_memory=True,
-        goal_norm_max=goal_norm_max,
-    )
-    model_dtype = next(iter(ensemble.params.values())).dtype
-    start = time.perf_counter()
-    while not bool(env.done.all().item()):
-        obs = (
-            env.obs()
-            .to(dtype=model_dtype)
-            .reshape(
-                user_count,
-                args.eval_particles,
-                env.obs_dim,
-            )
+            device=device,
         )
-        logits, _ = batched_ensemble_forward(ensemble, obs)
-        action = torch.argmax(logits, dim=2).reshape(-1)
-        env.step(action)
-    runtime_s = (time.perf_counter() - start) / float(user_count)
-    return (
-        env.metrics_by_group(
+        env = MultiUserFSRS6SingleCardBatch(
+            days=args.days,
+            user_indices=user_indices,
+            configs=configs,
+            cost_weights=batch_weights,
+            action_retentions=action_retentions,
+            device=device,
+            dtype=torch.float64,
+            seed=args.seed + 80_000 + int(round(float(batch_weights[0]) * 10.0)),
+            exact_memory=True,
+            goal_norm_max=goal_norm_max,
+            reset_on_init=False,
+        )
+        goal_values = torch.tensor(
+            batch_weights,
+            device=device,
+            dtype=torch.float64,
+        ).index_select(0, local_group_idx)
+        env.reset_all(goal_values=goal_values)
+        start = time.perf_counter()
+        while not bool(env.done.all().item()):
+            env.step(teacher_labels(env, guide))
+        elapsed_s = time.perf_counter() - start
+        runtime_s = elapsed_s / float(max(1, user_count * group_count))
+        metrics_flat = env.metrics_by_group(
             group_index=group_index,
-            group_count=user_count,
+            group_count=user_count * group_count,
             particles_per_group=args.eval_particles,
-        ),
-        runtime_s,
-    )
+        )
+        for local_idx, cost_weight in enumerate(batch_weights):
+            metrics_by_user = [
+                metrics_flat[user_idx * group_count + local_idx]
+                for user_idx in range(user_count)
+            ]
+            results[start_idx + local_idx] = (
+                cost_weight,
+                metrics_by_user,
+                runtime_s,
+            )
+    return [result for result in results if result is not None]
 
 
 @torch.inference_mode()
@@ -2466,26 +2435,145 @@ def write_auc_summary(
     *,
     scheduler: str = "fsrs6_oracle_stationary_finite_distill",
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    rows = [
-        row
-        for row in auc_rows
-        if row["baseline_scheduler"] == BASELINE_SCHEDULER
-        and row["scheduler"] == scheduler
-    ]
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        fieldnames = [
-            "environment",
-            "span_coverage_percent",
-            "time_regret_auc",
-            "relative_regret_auc_percent",
-            "covered_target_count",
-            "target_count",
-        ]
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({field: row[field] for field in fieldnames})
+    write_filtered_auc_summary(
+        path,
+        auc_rows,
+        baselines=[BASELINE_SCHEDULER],
+        schedulers=[scheduler],
+        fieldnames=SINGLE_SCHEDULER_AUC_FIELDS,
+    )
+
+
+def evaluate_exact_vs_distill(
+    args: argparse.Namespace,
+    *,
+    user_ids: Sequence[int],
+    configs: Sequence[SingleCardFSRS6Config],
+    eval_cost_weights: Sequence[float],
+    device: torch.device,
+) -> None:
+    distill_dir = args.distill_dir or args.out_dir
+    ensemble, action_retentions, distill_cost_weights = load_per_user_distill_ensemble(
+        distill_dir=distill_dir,
+        user_ids=user_ids,
+        device=device,
+    )
+    guide, teacher_runtime_s = build_guide(
+        args,
+        device=device,
+        configs=configs,
+        cost_weights=eval_cost_weights,
+        action_retentions=action_retentions,
+    )
+
+    rows: list[dict[str, Any]] = []
+    eval_start = time.perf_counter()
+    for retention, metrics_by_user, runtime_s in evaluate_static_retentions_by_user(
+        args,
+        retentions=action_retentions,
+        device=device,
+        configs=configs,
+    ):
+        for user_id, metrics in zip(user_ids, metrics_by_user, strict=True):
+            rows.append(
+                metric_row(
+                    args,
+                    user_id=user_id,
+                    scheduler=BASELINE_SCHEDULER,
+                    scheduler_spec=BASELINE_SCHEDULER,
+                    desired_retention=retention,
+                    goal_cost_weight=None,
+                    metrics=metrics,
+                    runtime_s=runtime_s,
+                )
+            )
+    for (
+        cost_weight,
+        metrics_by_user,
+        runtime_s,
+    ) in evaluate_exact_stationary_finite_by_user(
+        args,
+        guide=guide,
+        cost_weights=eval_cost_weights,
+        action_retentions=action_retentions,
+        goal_norm_max=max(eval_cost_weights),
+        device=device,
+        configs=configs,
+    ):
+        for user_id, metrics in zip(user_ids, metrics_by_user, strict=True):
+            rows.append(
+                metric_row(
+                    args,
+                    user_id=user_id,
+                    scheduler=EXACT_STATIONARY_FINITE_SCHEDULER,
+                    scheduler_spec=EXACT_STATIONARY_FINITE_SCHEDULER,
+                    desired_retention=None,
+                    goal_cost_weight=cost_weight,
+                    metrics=metrics,
+                    runtime_s=runtime_s,
+                    engine="multiuser_exact_policy_table_batch",
+                )
+            )
+    for cost_weight, metrics_by_user, runtime_s in evaluate_batched_per_user_policies(
+        args,
+        ensemble=ensemble,
+        cost_weights=eval_cost_weights,
+        action_retentions=action_retentions,
+        goal_norm_max=max(distill_cost_weights),
+        device=device,
+        configs=configs,
+    ):
+        for user_id, metrics in zip(user_ids, metrics_by_user, strict=True):
+            rows.append(
+                metric_row(
+                    args,
+                    user_id=user_id,
+                    scheduler=PER_USER_SCHEDULER,
+                    scheduler_spec=PER_USER_SCHEDULER,
+                    desired_retention=None,
+                    goal_cost_weight=cost_weight,
+                    metrics=metrics,
+                    runtime_s=runtime_s,
+                    engine="per_user_batched_uniform_table_supervision",
+                )
+            )
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    eval_runtime_s = time.perf_counter() - eval_start
+
+    args.out_dir.mkdir(parents=True, exist_ok=True)
+    results_path = args.out_dir / "results.csv"
+    regret_path = args.out_dir / "regret_auc.csv"
+    summary_path = args.out_dir / "summary.csv"
+    mean_summary_path = args.out_dir / "mean_summary.csv"
+    _write_csv(results_path, rows)
+    auc_rows = _build_regret_auc_rows(rows)
+    _write_regret_auc_csv(regret_path, auc_rows)
+    write_filtered_auc_summary(
+        summary_path,
+        auc_rows,
+        baselines=[BASELINE_SCHEDULER],
+        schedulers=[EXACT_STATIONARY_FINITE_SCHEDULER, PER_USER_SCHEDULER],
+        fieldnames=MULTI_SCHEDULER_AUC_FIELDS,
+    )
+    write_mean_auc_summary(
+        mean_summary_path,
+        auc_rows,
+        baselines=[BASELINE_SCHEDULER],
+        schedulers=[EXACT_STATIONARY_FINITE_SCHEDULER, PER_USER_SCHEDULER],
+        include_baseline_scheduler=False,
+    )
+
+    print(f"Wrote CSV: {results_path}")
+    print(f"Wrote regret AUC CSV: {regret_path}")
+    print(f"Wrote summary CSV: {summary_path}")
+    print(f"Wrote mean summary CSV: {mean_summary_path}")
+    print(
+        "Exact-vs-distill stationary finite evaluation: "
+        f"users={','.join(str(user_id) for user_id in user_ids)} "
+        f"distill_dir={distill_dir} device={device} "
+        f"teacher_s={teacher_runtime_s:.2f} eval_s={eval_runtime_s:.2f}"
+    )
 
 
 def main() -> None:
@@ -2518,6 +2606,16 @@ def main() -> None:
     )
     validate_retention_values(action_retentions, name="--action-retentions")
     configs = load_user_configs(args, user_ids)
+
+    if args.eval_exact_vs_distill:
+        evaluate_exact_vs_distill(
+            args,
+            user_ids=user_ids,
+            configs=configs,
+            eval_cost_weights=eval_cost_weights,
+            device=device,
+        )
+        return
 
     setup_start = time.perf_counter()
     params_probe = PolicyValueNet(

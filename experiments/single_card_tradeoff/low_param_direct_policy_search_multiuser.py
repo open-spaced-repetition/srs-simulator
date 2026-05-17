@@ -22,6 +22,11 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
+from experiments.single_card_tradeoff.auc_outputs import (  # noqa: E402
+    DETAILED_AUC_FIELDS,
+    write_auc_summary,
+    write_mean_auc_summary,
+)
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
@@ -34,12 +39,12 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill_multiuser
     BASELINE_SCHEDULER,
     DEFAULT_USER_IDS,
     PER_USER_SCHEDULER,
-    BatchedPolicyEnsemble,
     MultiUserFSRS6SingleCardBatch,
     _batched_eval_layout,
     _eval_group_chunks,
     evaluate_batched_per_user_policies,
     evaluate_static_retentions_by_user,
+    load_per_user_distill_ensemble,
     load_user_configs,
     metric_row,
     parse_user_ids,
@@ -55,7 +60,6 @@ from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
     _write_regret_auc_csv,
 )
 from experiments.single_card_tradeoff.uvfa_ppo import (  # noqa: E402
-    PolicyValueNet,
     parse_csv_floats,
 )
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED  # noqa: E402
@@ -513,54 +517,6 @@ def evaluate_direct_policy_by_user(
     return [result for result in results if result is not None]
 
 
-def load_distill_ensemble(
-    *,
-    distill_dir: Path,
-    user_ids: Sequence[int],
-    device: torch.device,
-) -> tuple[BatchedPolicyEnsemble, list[float], list[float]]:
-    models: list[PolicyValueNet] = []
-    first_checkpoint: dict[str, Any] | None = None
-    for user_id in user_ids:
-        checkpoint_path = distill_dir / f"user_{user_id}_policy.pt"
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Missing distill checkpoint: {checkpoint_path}")
-        checkpoint = torch.load(
-            checkpoint_path,
-            map_location="cpu",
-            weights_only=False,
-        )
-        if checkpoint.get("policy_type") != "fsrs6_oracle_stationary_finite_distill":
-            raise ValueError(f"Unexpected policy_type in {checkpoint_path}.")
-        if first_checkpoint is None:
-            first_checkpoint = checkpoint
-        model = PolicyValueNet(
-            int(checkpoint["obs_dim"]),
-            len(checkpoint["action_retentions"]),
-            int(checkpoint["hidden_size"]),
-            architecture=str(checkpoint["network"]),
-            depth=int(checkpoint["network_depth"]),
-        )
-        model.load_state_dict(checkpoint["model_state_dict"])
-        models.append(model.to(device).eval())
-    if first_checkpoint is None:
-        raise ValueError("user_ids must contain at least one user.")
-    params, buffers = torch.func.stack_module_state(models)
-    base_model = models[0]
-    base_model.requires_grad_(False)
-    ensemble = BatchedPolicyEnsemble(
-        base_model=base_model,
-        params=params,
-        buffers=buffers,
-        params_per_user=int(first_checkpoint["params_per_user"]),
-    )
-    action_retentions = [
-        float(value) for value in first_checkpoint["action_retentions"]
-    ]
-    cost_weights = [float(value) for value in first_checkpoint["cost_weights"]]
-    return ensemble, action_retentions, cost_weights
-
-
 def write_history(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as fh:
@@ -577,95 +533,6 @@ def write_history(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row[field] for field in fieldnames})
-
-
-def write_auc_summary(
-    path: Path,
-    rows: list[dict[str, Any]],
-    *,
-    baselines: set[str],
-    scheduler: str,
-) -> None:
-    selected = [
-        row
-        for row in rows
-        if row["baseline_scheduler"] in baselines and row["scheduler"] == scheduler
-    ]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        fieldnames = [
-            "environment",
-            "baseline_scheduler",
-            "scheduler",
-            "span_coverage_percent",
-            "time_regret_auc",
-            "baseline_time_auc",
-            "relative_regret_auc_percent",
-            "covered_target_count",
-            "target_count",
-        ]
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in selected:
-            writer.writerow({field: row[field] for field in fieldnames})
-
-
-def write_mean_summary(
-    path: Path,
-    rows: list[dict[str, Any]],
-    *,
-    baselines: Sequence[str],
-    scheduler: str,
-) -> list[dict[str, Any]]:
-    mean_rows: list[dict[str, Any]] = []
-    for baseline in baselines:
-        selected = [
-            row
-            for row in rows
-            if row["baseline_scheduler"] == baseline and row["scheduler"] == scheduler
-        ]
-        if not selected:
-            continue
-        mean_rows.append(
-            {
-                "baseline_scheduler": baseline,
-                "scheduler": scheduler,
-                "user_count": len(selected),
-                "mean_span_coverage_percent": sum(
-                    float(row["span_coverage_percent"]) for row in selected
-                )
-                / float(len(selected)),
-                "mean_time_regret_auc": sum(
-                    float(row["time_regret_auc"]) for row in selected
-                )
-                / float(len(selected)),
-                "mean_relative_regret_auc_percent": sum(
-                    float(row["relative_regret_auc_percent"]) for row in selected
-                )
-                / float(len(selected)),
-                "covered_target_count_sum": sum(
-                    int(row["covered_target_count"]) for row in selected
-                ),
-                "target_count_sum": sum(int(row["target_count"]) for row in selected),
-            }
-        )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        fieldnames = [
-            "baseline_scheduler",
-            "scheduler",
-            "user_count",
-            "mean_span_coverage_percent",
-            "mean_time_regret_auc",
-            "mean_relative_regret_auc_percent",
-            "covered_target_count_sum",
-            "target_count_sum",
-        ]
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in mean_rows:
-            writer.writerow({field: row[field] for field in fieldnames})
-    return mean_rows
 
 
 def save_policy(
@@ -729,7 +596,7 @@ def main() -> None:
     configs = load_user_configs(args, user_ids)
 
     distill_ensemble, distill_action_retentions, distill_train_cost_weights = (
-        load_distill_ensemble(
+        load_per_user_distill_ensemble(
             distill_dir=args.distill_dir,
             user_ids=user_ids,
             device=device,
@@ -830,14 +697,16 @@ def main() -> None:
     write_auc_summary(
         summary_path,
         auc_rows,
-        baselines={BASELINE_SCHEDULER, PER_USER_SCHEDULER},
-        scheduler=DIRECT_POLICY_SCHEDULER,
+        baselines=[BASELINE_SCHEDULER, PER_USER_SCHEDULER],
+        schedulers=[DIRECT_POLICY_SCHEDULER],
+        fieldnames=DETAILED_AUC_FIELDS,
     )
-    mean_rows = write_mean_summary(
+    mean_rows = write_mean_auc_summary(
         mean_summary_path,
         auc_rows,
         baselines=[BASELINE_SCHEDULER, PER_USER_SCHEDULER],
-        scheduler=DIRECT_POLICY_SCHEDULER,
+        schedulers=[DIRECT_POLICY_SCHEDULER],
+        include_baseline_scheduler=True,
     )
     write_history(history_path, history)
     save_policy(

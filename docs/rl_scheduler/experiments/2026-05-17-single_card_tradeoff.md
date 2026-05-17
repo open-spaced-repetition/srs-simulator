@@ -84,7 +84,7 @@ The TOML profile records the commands and expected outputs used to reproduce the
 | --- | --- |
 | train_first8_stationary_finite_distill | 3/3 |
 | evaluate_first8_stationary_finite_distill | 2/2 |
-| existing_exact_vs_distill_first8_artifact | 3/3 |
+| evaluate_first8_exact_vs_distill | 3/3 |
 | train_low_param_direct_sparse | 3/3 |
 | train_low_param_direct_dense | 3/3 |
 | generate_report | 3/3 |
