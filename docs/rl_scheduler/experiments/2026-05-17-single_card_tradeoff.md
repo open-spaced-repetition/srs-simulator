@@ -51,12 +51,12 @@ The per-user stationary finite distill trains eight independent 476-parameter st
 
 | metric | value |
 | --- | --- |
-| mean span coverage | 97.98% |
-| mean time regret AUC | -4.9726 |
-| mean relative regret AUC | -12.84% |
-| teacher_s | 61.06 |
-| train_s | 38.19 |
-| eval_s | 311.22 |
+| mean span coverage | 97.55% |
+| mean time regret AUC | -4.9501 |
+| mean relative regret AUC | -12.36% |
+| teacher_s | 58.82 |
+| train_s | 34.89 |
+| eval_s | 66.94 |
 | mean final CE | 0.69721 |
 | mean table agreement | 72.39% |
 
@@ -64,17 +64,17 @@ Exact stationary finite teacher versus per-user distill:
 
 | scheduler | mean time regret AUC vs fsrs6 | mean relative regret vs fsrs6 | mean coverage vs fsrs6 |
 | --- | --- | --- | --- |
-| fsrs6_oracle_stationary_finite | -3.1668 | -9.25% | 97.97% |
+| fsrs6_oracle_stationary_finite | -3.2265 | -9.28% | 97.91% |
 | fsrs6_oracle_stationary_finite_distill_per_user | -4.9501 | -12.36% | 97.55% |
 
-On the exact-teacher shared span, distill has -1.5637 deck-minutes/day time regret AUC and -3.03% relative regret at 96.55% coverage.
+On the exact-teacher shared span, distill has -1.5077 deck-minutes/day time regret AUC and -3.03% relative regret at 96.60% coverage.
 
 ## Low-Parameter Direct Search
 
 | run | params/user | total params | vs fsrs6 relative regret | vs fsrs6 coverage | vs distill relative regret | vs distill coverage |
 | --- | --- | --- | --- | --- | --- | --- |
 | sparse teacher weights | 7 | 56 | -7.50% | 72.37% | 4.43% | 68.48% |
-| dense teacher weights | 7 | 56 | -8.21% | 61.01% | 4.01% | 58.08% |
+| dense teacher weights | 7 | 56 | -9.01% | 66.45% | 3.12% | 62.74% |
 
 ## Reproduction Profile
 
