@@ -189,6 +189,15 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 
 `single_card_tradeoff` is best understood as a frontier experiment, not a full deck scheduler benchmark. It removes daily budget constraints and isolates the memory-time tradeoff for one iid card lifecycle. The metrics can be deck-scaled, but they should not be read as a complete workload simulation.
 
+The formal machine-generated report for the current artifacts is
+[`docs/rl_scheduler/experiments/2026-05-17-single_card_tradeoff.md`](../../docs/rl_scheduler/experiments/2026-05-17-single_card_tradeoff.md).
+Regenerate it with:
+
+```bash
+uv run python experiments/single_card_tradeoff/generate_experiment_report.py \
+  --config experiments/single_card_tradeoff/configs/stationary_finite_first8_report.toml
+```
+
 The most useful summary metric is `time_regret_auc`, but it is only meaningful together with `span_coverage_percent`. A negative `time_regret_auc` means a scheduler uses fewer deck-scaled minutes/day than the baseline at the same memory target over their common memory interval. Low coverage means the comparison only covers a narrow part of the frontier.
 
 No-sub-0.5 action-space rerun:
