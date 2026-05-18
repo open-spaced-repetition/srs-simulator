@@ -49,7 +49,7 @@ Analysis summaries:
 | run | git commit | dirty | Python | PyTorch | CUDA | device |
 | --- | --- | --- | --- | --- | --- | --- |
 | Anki SM2 AP | 275052e0d8f7eb3f9bd9f97b31ff128bf794de21 | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
-| ADR | 0b154d2abe638a8ae516a823a075e8e0005521aa | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
+| ADR | c1a791b35e56ef777005d8329a11ac42e34ab707 | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
 
 ## GPU Monitor
 
@@ -80,10 +80,10 @@ Scheduler-only hypervolume values are sums of per-user HV delta against the same
 | environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget-memory gain / baseline | budget coverage | memory-target regret AUC | memory-target regret / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | fsrs6 | Anki SM2 AP | -257,971 | -9.272% | 121 | 16.8 | +0.247% | 34/115, 31.091% span | -0.48 | -1.266% | 32/115, 25.999% span |
-| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.349% | 88/115, 81.550% span | -4.57 | -13.632% | 81/115, 78.146% span |
+| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.349% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
 | fsrs6 | Anki SM2 AP - ADR | -354,851 | -12.754% | -7 | -73.9 | - | -54, -50.459 pp span | 4.09 | - | -49, -52.147 pp span |
 | lstm | Anki SM2 AP | -344,345 | -12.120% | 107 | 70.6 | +1.071% | 35/111, 27.320% span | 2.39 | +6.331% | 34/111, 27.597% span |
-| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.935% | 79/111, 82.466% span | -1.82 | -4.176% | 81/111, 83.775% span |
+| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.935% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
 | lstm | Anki SM2 AP - ADR | -400,193 | -14.085% | -18 | 8.5 | - | -44, -55.146 pp span | 4.21 | - | -47, -56.179 pp span |
 
 ## Per-User HV Delta

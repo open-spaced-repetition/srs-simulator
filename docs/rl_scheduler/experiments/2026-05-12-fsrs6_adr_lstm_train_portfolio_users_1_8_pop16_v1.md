@@ -74,10 +74,10 @@ reaches the same memorized-card targets faster.
 
 | environment | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | FSRS-trained | 8/8 | 81/115 | 78.146% | -4.57 | -13.632% |
-| FSRS6 | LSTM-trained | 8/8 | 83/115 | 79.690% | -2.32 | -6.811% |
-| LSTM | FSRS-trained | 8/8 | 81/111 | 83.775% | -1.82 | -4.176% |
-| LSTM | LSTM-trained | 8/8 | 80/111 | 85.141% | -7.39 | -15.674% |
+| FSRS6 | FSRS-trained | 8/8 | 81/115 | 78.146% | -4.57 | -11.555% |
+| FSRS6 | LSTM-trained | 8/8 | 83/115 | 79.690% | -2.32 | -6.923% |
+| LSTM | FSRS-trained | 8/8 | 81/111 | 83.775% | -1.82 | -5.906% |
+| LSTM | LSTM-trained | 8/8 | 80/111 | 85.141% | -7.39 | -11.321% |
 
 LSTM-trained minus FSRS-trained:
 

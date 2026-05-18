@@ -72,9 +72,9 @@ uses linear interpolation over the common covered memory-target interval.
 
 | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 64/64 gen20 | 8/8 | 89/111 | 88.298% | -1.32 | -3.191% |
-| pop16 gen20 | 8/8 | 81/111 | 83.775% | -1.82 | -4.176% |
-| pop16 gen30 | 8/8 | 86/111 | 86.052% | -1.64 | -3.772% |
+| v3 64/64 gen20 | 8/8 | 89/111 | 88.298% | -1.32 | -5.589% |
+| pop16 gen20 | 8/8 | 81/111 | 83.775% | -1.82 | -5.906% |
+| pop16 gen30 | 8/8 | 86/111 | 86.052% | -1.64 | -5.674% |
 
 Delta from pop16 gen20 to pop16 gen30:
 

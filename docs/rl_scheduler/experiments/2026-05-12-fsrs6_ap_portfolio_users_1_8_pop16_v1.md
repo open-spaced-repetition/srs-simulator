@@ -71,8 +71,8 @@ uses linear interpolation over the common covered memory-target interval.
 
 | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| AP pop16 | 8/8 | 93/111 | 86.495% | -0.80 | -1.971% |
-| ADR pop16 | 8/8 | 81/111 | 83.775% | -1.82 | -4.176% |
+| AP pop16 | 8/8 | 93/111 | 86.495% | -0.80 | -4.717% |
+| ADR pop16 | 8/8 | 81/111 | 83.775% | -1.82 | -5.906% |
 
 AP minus ADR:
 
