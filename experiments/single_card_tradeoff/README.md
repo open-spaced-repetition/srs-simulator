@@ -161,6 +161,14 @@ uv run experiments/single_card_tradeoff/oracle_stationary_finite_policy_viz.py -
 
 This writes `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `findings.md`, `action_distribution.png`, and `policy_heatmaps.png` under `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`. When `--distill-policy` is provided it also writes `distill_action_summary.csv`, `distill_binned_actions.csv`, `distill_grid_actions.csv`, `distill_exact_comparison.csv`, `distill_action_distribution.png`, `distill_policy_heatmaps.png`, and `distill_exact_difference_heatmaps.png`. Use `--selected-weights` to choose which weights appear in the `(s,d)` heatmap panel.
 
+To reproduce the first-eight per-user exact, 476-parameter, and residual:4:1 policy-grid comparison:
+
+```bash
+uv run experiments/single_card_tradeoff/first8_r4d1_vs_476_policy_viz.py --no-progress
+```
+
+This writes exact, 476-parameter, residual:4:1, and difference heatmaps under `artifacts/single_card_tradeoff/first8_r4d1_vs_476_policy_viz/`, plus pairwise CSV summaries for `476_vs_exact`, `r4d1_vs_exact`, and `r4d1_vs_476`.
+
 ## Interval Oracle And Distillation
 
 The single-card sweep supports an integer-interval FSRS-6 oracle that enumerates every feasible next interval `1..remaining+1`, where `remaining+1` means no further review before the horizon:
