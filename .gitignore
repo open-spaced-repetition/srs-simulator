@@ -218,6 +218,9 @@ __marimo__/
 # Log files
 logs/
 artifacts/
+
+# Generated PDFs
+*.pdf
 experiments/rl_scheduler/plots/
 
 # Generated images

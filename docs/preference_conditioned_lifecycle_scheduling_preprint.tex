@@ -1,0 +1,350 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\title{Stationary Finite-Lifecycle Preference-Conditioned Scheduling for Spaced Repetition}
+\author{Anonymous Author(s)}
+\date{Preprint}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Spaced repetition systems usually expose a simple scheduling decision, such as the next review interval or a target recall probability, but the decision is made under a longer-term objective: preserve memory while spending as little review time as possible. Stochastic shortest path formulations, including SSP-MMC, optimize the expected review cost needed to reach an absorbing target memory state. This is a well-defined target-reaching objective. The scheduler studied here addresses a different problem that appears in practical policy evaluation: for a newly introduced item with a finite useful lifetime, choose a review policy that trades cumulative memory utility against review cost across a range of user or system preferences.
+
+We describe the theoretical foundation behind the current stationary finite distillation implementation. The implementation instantiates a model-based finite-lifecycle semi-Markov decision process: a memory state summarizes the item, an action chooses a desired-recall target that induces a review delay, the item earns retrievability utility during the delay, and a stochastic review outcome updates the memory state if the review occurs before the horizon. The exact finite-horizon policy is generally non-stationary because it depends on remaining time. The deployed oracle instead optimizes a deliberately restricted stationary policy class, mapping memory state and cost preference to an action. It initializes this stationary policy from the finite-horizon oracle, evaluates it over the finite lifecycle, and improves it with occupancy-weighted policy iteration. A compact student policy is then trained by supervised learning on the exact stationary policy table. The result is not model-free reinforcement learning; it is model-based planning followed by policy compression.
+\end{abstract}
+
+\noindent\textbf{Index Terms---}Spaced repetition, memory dynamics, finite horizon, semi-Markov decision process, policy iteration, policy distillation, memory-time tradeoff.
+
+\section{Introduction}
+
+Memory plays a central role in learning. To retain knowledge efficiently, learners must review material after delays that are long enough to benefit from the spacing effect, but not so long that recall becomes unreliable. The forgetting curve has been studied since Ebbinghaus~\citep{ebbinghaus1913memory}, and later cognitive and statistical models have connected review history, item difficulty, and recall probability~\citep{anderson1998atomic,pavlik2008using,settles2016trainable}. Modern spaced repetition systems can therefore be viewed as two coupled components: a memory dynamics model and a scheduler that uses that model to choose review actions.
+
+SSP-MMC follows this model-based tradition by formulating spaced-repetition scheduling as a stochastic shortest path problem over memory states, stochastic review outcomes, and review costs~\citep{ye2022stochastic}. Its objective is to minimize the expected cost of reaching an absorbing target memory state. SSP-MMC-Plus extends this line by improving how memory dynamics are captured while retaining the model-based scheduling perspective~\citep{su2023optimizing}.
+
+The scheduler studied in this paper is motivated by a different operational question. In single-card frontier experiments, the goal is not only to reach one fixed mastery threshold. The goal is to evaluate a family of policies that trade expected memory against expected study time over a finite new-item lifecycle. A low cost penalty should produce a memory-aggressive policy; a high cost penalty should produce a time-saving policy. The output of the method is therefore not one shortest path to a target state, but a preference-conditioned policy family.
+
+The current implementation makes one further structural choice. A fully optimal finite-horizon policy would usually depend on remaining time: the same memory state can justify different actions early and late in the lifecycle. The implemented stationary finite-lifecycle oracle removes remaining time from the deployed policy input. It searches within the constrained policy class
+\[
+\mu_\lambda: x \mapsto a,
+\]
+where \(x\) is the current memory state and \(\lambda\) is the review-cost preference. Remaining time is still used to evaluate and improve the policy over the finite lifecycle, but it is not part of the policy surface. This is a deliberate compression: the policy table is much smaller, easier to visualize, and easier to approximate with a compact student model.
+
+This paper revises the original preference-conditioned formulation around the actual implementation. The central theoretical object is a finite-lifecycle semi-Markov decision process (SMDP) with a stationary policy constraint. The exact teacher is an occupancy-weighted local policy-improvement procedure under that constraint. The distilled student is a supervised approximation of the exact stationary table, not an agent trained by exploration.
+
+Our contributions are as follows.
+\begin{enumerate}
+    \item We formulate the implemented scheduler as a finite-lifecycle SMDP in calendar time, where actions induce variable review delays and utility accumulates over skipped days.
+    \item We distinguish the unconstrained non-stationary finite-horizon oracle from the stationary finite-lifecycle oracle used for structural compression.
+    \item We describe the occupancy-weighted policy-iteration procedure that optimizes the stationary policy class against the finite-lifecycle objective.
+    \item We position the distilled policy as supervised compression of a model-based oracle and outline the empirical protocol used to compare exact and distilled policies on memory-time frontiers.
+\end{enumerate}
+
+\section{Related Work}
+
+\subsection{Memory Models for Scheduling}
+
+Spaced repetition scheduling depends on a predictive model of memory. Early models describe forgetting as a function of elapsed time~\citep{ebbinghaus1913memory}; cognitive models such as ACT-R describe practice effects and memory activation~\citep{anderson1998atomic}; half-life regression and related statistical models learn recall probabilities from review logs~\citep{pavlik2008using,settles2016trainable}. Sequence models can also summarize review history in hidden states, allowing the memory representation to capture time-series behavior~\citep{cho2014learning,su2023optimizing}.
+
+The implementation considered here uses a low-dimensional memory state and a parametric forgetting curve. The details of that memory model are not the main contribution of this paper. The scheduler requires only four model services: compute retrievability after an elapsed delay, convert a desired-recall action into a review delay, provide probabilities for possible review outcomes, and update the memory state after each outcome.
+
+\subsection{Schedule Optimization}
+
+Classical spaced repetition algorithms use handcrafted update rules or fixed threshold policies~\citep{pimsleur1967memory,leitner1972so,wozniak1990optimization}. They are efficient and interpretable, but their objectives are often implicit. Model-based optimization methods make the objective explicit. SSP-MMC casts review planning as a stochastic shortest path problem with an absorbing target memory state~\citep{ye2022stochastic}, and SSP-MMC-Plus extends the framework by modeling memory dynamics more directly~\citep{su2023optimizing}. MEMORIZE represents spaced repetition as a marked temporal point process and formulates review scheduling as continuous-time stochastic optimal control, optimizing recall probability over time subject to a cost on review frequency~\citep{tabibian2019enhancing}.
+
+The present method is closest to these model-based approaches, but differs in its policy object and deployment pathway. The policy is preference-conditioned, so one policy family covers multiple review-cost tradeoffs. The policy is also stationary in memory state even though it is evaluated over a finite lifecycle. Finally, the deployed model is a supervised approximation of an exact stationary policy table.
+
+\subsection{Relation to SSP-MMC and MEMORIZE}
+
+Table~\ref{tab:related-formulations} summarizes the conceptual relationship. The purpose is not to claim that SSP-MMC, SSP-MMC-Plus, or MEMORIZE is obsolete. SSP-MMC solves a well-defined target-reaching cost-minimization problem, SSP-MMC-Plus strengthens the memory-dynamics modeling in that line, and MEMORIZE solves a continuous-time recall--review-frequency control problem. The current work studies a different policy object and deployment pathway: finite-lifecycle memory-time scalarization under a compact stationary policy class.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.15\linewidth}>{\raggedright\arraybackslash}p{0.28\linewidth}>{\raggedright\arraybackslash}p{0.23\linewidth}>{\raggedright\arraybackslash}p{0.22\linewidth}@{}}
+\toprule
+Method & Objective & Time model & Policy object \\
+\midrule
+SSP-MMC & Cost to absorbing target & SSP over memory states & Target-reaching policy \\
+MEMORIZE & Recall--review-frequency control & Continuous-time point process & Review timing/intensity \\
+This work & Finite-lifecycle scalar utility & Finite SMDP & Stationary preference policy \\
+\bottomrule
+\end{tabular}
+\caption{Relationship among model-based spaced repetition formulations.}
+\label{tab:related-formulations}
+\end{table}
+
+Two distinctions are important. First, sweeping target memory thresholds in an SSP-MMC-style construction can produce several operating points, but those points are still generated by policies whose objective is to reach absorbing target states under a specified transition and cost model. They are not necessarily equivalent to directly optimizing cumulative lifecycle utility under a review-cost preference. Second, varying a scalar cost preference traces the supported portion of a memory-time frontier under linear scalarization; with discrete actions and nonconvex frontiers, unsupported Pareto points may require constrained or randomized formulations.
+
+\subsection{Policy Learning and Compression}
+
+Reinforcement learning can optimize sequential policies in complex environments~\citep{sutton2018reinforcement}, and prior work has explored deep reinforcement learning for tutoring and review scheduling~\citep{reddy2017accelerating,sinha2019improving}. The implementation studied here uses a different pattern. A model-based oracle first computes decisions under a specified objective. A compact neural policy then imitates those decisions. This is closer to supervised policy distillation than to model-free reinforcement learning. Preference conditioning is related to universal value function approximators and multi-objective scalarization~\citep{schaul2015universal,roijers2013survey}, but the deployed object here is an action policy rather than a value function.
+
+\section{Problem Formulation}
+
+\subsection{Calendar-Time Item Process}
+
+Consider one newly introduced item with a finite lifecycle of \(T\) days. Let \(x\in\mathcal{X}\) denote its memory state immediately after a learning or review event. Let \(\tau\in\{0,\ldots,T\}\) denote remaining calendar days. A scheduling action \(a\in\mathcal{A}\) is a desired-recall target chosen from a discrete action set. Given state \(x\), the memory model converts \(a\) into a review delay
+\[
+\Delta(x,a)\in\mathbb{N}.
+\]
+During the next \(\min\{\Delta(x,a),\tau\}\) days, the item contributes memory utility. In the implementation this utility is not an abstract reward. The one-day utility is predicted retrievability. If \(d\) is the number of days elapsed since the last learning or review event, define
+\[
+U(x,d)=R(x,d)\in[0,1],
+\]
+where \(R(x,d)\) is the model-predicted probability that the learner could recall the item on calendar day \(d\) after event-state \(x\). Equivalently, in a time-expanded Markov state \(z=(x,d)\), the daily utility is \(U(z)=R(x,d)\). Thus \(U=1\) means one full day of perfect predicted recall for one item, \(U=0.8\) means \(0.8\) day-equivalents of predicted recall, and there is no terminal bonus or discount factor. The interval utility is the undiscounted sum of these daily utilities before the next review or horizon end:
+\[
+M(x,a,\tau)
+=
+\sum_{d=1}^{\min\{\Delta(x,a),\tau\}} U(x,d)
+=
+\sum_{d=1}^{\min\{\Delta(x,a),\tau\}} R(x,d),
+\]
+so \(M\) is measured in \emph{retrievability-days}. One retrievability-day corresponds to one calendar day at perfect predicted recall for one item.
+
+If \(\Delta(x,a)>\tau\), the lifecycle ends before the next review. The item receives only interval utility and no further review cost. If \(\Delta(x,a)\le \tau\), the item is reviewed after \(\Delta(x,a)\) days. The review produces an outcome \(y\in\mathcal{Y}\), such as a graded response. The memory model provides
+\[
+P(y\mid x,a)
+\quad\text{and}\quad
+F(x,a,y),
+\]
+where \(F\) is the post-review memory-state transition.
+
+\subsection{Utility, Cost, and Units}
+
+The cost model is also concrete. Learning and review costs are rating-dependent response-time costs. The raw tables are stored as seconds, but the oracle converts them to minutes before applying the scalar cost weight. Let \(\tilde c_y^{\mathrm{review}}\) and \(\tilde c_y^{\mathrm{learn}}\) denote raw seconds for outcome \(y\). The objective uses
+\[
+c_y^{\mathrm{review}}=\tilde c_y^{\mathrm{review}}/60,
+\qquad
+c_y^{\mathrm{learn}}=\tilde c_y^{\mathrm{learn}}/60,
+\]
+so all costs below are minutes. The built-in single-card defaults use
+\[
+\tilde c^{\mathrm{learn}}=(33.79,24.30,13.68,6.50)\text{ seconds},
+\]
+\[
+\tilde c^{\mathrm{review}}=(23.00,11.68,7.33,5.60)\text{ seconds},
+\]
+for the four response outcomes. In minutes, the default review table is
+\[
+c^{\mathrm{review}}\approx(0.383,0.195,0.122,0.093).
+\]
+User-specific button-usage data can replace both the outcome probabilities and these cost tables.
+
+For a policy \(\mu\), define
+\[
+\mathrm{Mem}(\mu)
+=
+\mathbb{E}_{\mu}
+\left[
+\sum_{\text{calendar days }d=1}^{T}
+R_d
+\right],
+\]
+the expected total retrievability-days over the lifecycle, and
+\[
+\mathrm{Min}(\mu)
+=
+\mathbb{E}_{\mu}
+\left[
+c_{y_0}^{\mathrm{learn}}
++
+\sum_{\text{reviews }k}
+c_{y_k}^{\mathrm{review}}
+\right],
+\]
+the expected total study minutes, including the initial learning event and all reviews that occur before the horizon. The reported frontier coordinates are
+\[
+\bar{R}(\mu)=\frac{\mathrm{Mem}(\mu)}{T},
+\qquad
+\bar{C}(\mu)=\frac{\mathrm{Min}(\mu)}{T}.
+\]
+Here \(\bar{R}\) is average predicted retrievability per calendar day, and \(\bar{C}\) is expected study minutes per calendar day for one item. Since \(0\le U(x,d)\le1\), a change of \(0.01\) in \(\bar{R}\) means one percentage point of average predicted recall over the lifecycle, or \(0.01T\) additional retrievability-days. The scalar objective used for a cost preference \(\lambda\ge 0\) is
+\[
+J_\lambda(\mu)=\bar{R}(\mu)-\lambda \bar{C}(\mu).
+\]
+Equivalently, before division by \(T\), the objective is expected retrievability-days minus \(\lambda\) times expected minutes. Therefore \(\lambda\) has units of retrievability per minute: a review that costs \(c\) minutes must create more than \(\lambda c\) expected retrievability-days to improve the scalar objective. For example, with the default \(T=1825\) days, a \(10\)-second review costs \((10/60)\lambda\) retrievability-days in the total objective, or \((10/60)\lambda/1825\) average-retrievability units. At \(\lambda=64\), this is \(10.67\) retrievability-days, or \(0.0058\) units of \(\bar{R}\). The scalar objective is used to choose among policies at the same \(\lambda\); the interpretable frontier remains the two-dimensional pair \((\bar{C},\bar{R})\).
+
+\subsection{Non-Stationary Finite-Horizon Oracle}
+
+If the policy may depend on remaining time, the optimal value satisfies the finite-horizon SMDP recursion. For compactness in this equation, write \(\Delta_a=\Delta(x,a)\), \(P_a(y)=P(y\mid x,a)\), and \(F_a(y)=F(x,a,y)\):
+\begin{align}
+V_\lambda(\tau,x)
+=
+\max_{a\in\mathcal{A}}
+\Bigg[
+M(x,a,\tau)
++
+\mathbf{1}\{\Delta_a\le\tau\}
+\sum_{y\in\mathcal{Y}} P_a(y)
+\Big(
+V_\lambda(\tau-\Delta_a,F_a(y))
+-\lambda c_y^{\mathrm{review}}
+\Big)
+\Bigg],
+\label{eq:finite-oracle}
+\end{align}
+with \(V_\lambda(0,x)=0\). This is the exact finite-horizon oracle over the chosen state and action grids. Its policy generally has the form
+\[
+\pi_\lambda^*(a\mid x,\tau),
+\]
+because remaining time changes the future value of a review.
+
+\subsection{Stationary Finite-Lifecycle Policy Class}
+
+The implemented stationary finite-lifecycle oracle restricts the policy to
+\[
+\mu_\lambda(a\mid x),
+\]
+so the action depends on memory state and preference but not directly on remaining days. This restriction is not mathematically free: it prevents the policy from choosing different actions for the same state near the beginning and end of the lifecycle. The benefit is structural compression. A stationary policy table has one action per memory-state grid cell and preference, rather than one action per remaining-day, memory-state, and preference triple.
+
+For a fixed stationary policy \(\mu\), define
+\(\Delta_\mu(x)=\Delta(x,\mu(x))\),
+\(p_\mu(y\mid x)=P(y\mid x,\mu(x))\), and
+\(F_\mu(x,y)=F(x,\mu(x),y)\). The finite-lifecycle value is still evaluated with remaining time:
+\begin{align}
+V_\lambda^\mu(\tau,x)
+=
+M(x,\mu(x),\tau)
++
+\mathbf{1}\{\Delta_\mu(x)\le\tau\}
+\sum_{y\in\mathcal{Y}} p_\mu(y\mid x)
+\Big(
+V_\lambda^\mu(\tau-\Delta_\mu(x),F_\mu(x,y))
+-\lambda c_y^{\mathrm{review}}
+\Big).
+\label{eq:stationary-eval}
+\end{align}
+Thus, the policy is stationary, but its evaluation is finite-horizon and calendar-time aware.
+
+Equivalently, after fixing a stationary policy, the per-day scalar objective above can be computed by averaging the finite-lifecycle value over the possible initial learning outcomes:
+\[
+J_\lambda(\mu)
+=
+\frac{1}{T}
+\sum_{y_0\in\mathcal{Y}} P_0(y_0)
+\left[
+V_\lambda^\mu(T,x_0(y_0))
+-\lambda c^{\mathrm{learn}}_{y_0}
+\right],
+\]
+where \(x_0(y_0)\) is the state induced by the first learning response and \(c^{\mathrm{learn}}_{y_0}\) is its learning cost. The reported frontier coordinates are expected retrievability per day and expected minutes per day; the scalar objective is their difference after weighting minutes by \(\lambda\).
+
+\subsection{Connection to Target-Reaching Objectives}
+
+SSP-style target-reaching can be embedded into a related dynamic-programming framework by adding an absorbing target set, assigning zero future cost after absorption, and optimizing cost until absorption. The finite-lifecycle objective above should therefore be viewed as a related model-based planning formulation, not as a replacement for SSP-MMC or SSP-MMC-Plus. The two objectives answer different questions: SSP-MMC asks for the minimum expected cost to reach a target memory state; the stationary finite-lifecycle oracle asks which stationary policy gives the best finite-horizon memory-time tradeoff.
+
+\section{Method}
+
+\subsection{Exact Finite-Horizon Initialization}
+
+The implementation first solves the non-stationary finite-horizon oracle in Equation~\eqref{eq:finite-oracle} on a discretized memory-state grid and a discrete action grid. This policy is not the final deployed object. Instead, it provides a high-quality initialization for the stationary policy. The projection from non-stationary to stationary policy uses finite-horizon occupancy: under the finite policy, each memory state may be visited at several remaining times; the projected stationary action is the action with the largest occupancy-weighted count at that memory state.
+
+This initialization matters because the stationary optimization problem is nonconvex over discrete action tables. Starting from the finite-horizon oracle gives the local improvement procedure a policy that already reflects the finite lifecycle.
+
+\subsection{Policy Evaluation}
+
+Given a stationary policy \(\mu\), policy evaluation computes \(V_\lambda^\mu(\tau,x)\) using Equation~\eqref{eq:stationary-eval}. This dynamic program explicitly handles calendar time. If the selected delay exceeds remaining time, the item accrues only retrievability utility through the horizon. If the review occurs within the horizon, the value adds expected future value after each possible review outcome and subtracts preference-weighted review cost.
+
+The same evaluation also accumulates interpretable metrics: expected retrievability-days, expected review minutes, expected number of reviews, expected lapses, observed retention among scheduled reviews, and the scalar objective.
+
+\subsection{Occupancy-Weighted Policy Improvement}
+
+The stationary policy is improved using the occupancy distribution induced by its own finite-lifecycle rollout. Let
+\[
+q^\mu(\tau,x)
+\]
+be the probability that the item has remaining time \(\tau\) and memory state \(x\) under policy \(\mu\). For compactness write \(\Delta_a(x)=\Delta(x,a)\), \(p_a(y\mid x)=P(y\mid x,a)\), and \(F_a(x,y)=F(x,a,y)\). Define the one-step lookahead value under the current stationary value function:
+\begin{align}
+G_\lambda^\mu(\tau,x,a)
+&=
+M(x,a,\tau)
++
+\mathbf{1}\{\Delta_a(x)\le\tau\}
+\sum_{y\in\mathcal{Y}} p_a(y\mid x)
+\Big(
+V_\lambda^\mu(\tau-\Delta_a(x),F_a(x,y))
+-\lambda c_y^{\mathrm{review}}
+\Big).
+\end{align}
+For each state \(x\), the improvement step scores every candidate action \(a\) by its occupancy-weighted finite-horizon value:
+\begin{align}
+S_\lambda(a,x)
+=
+\sum_{\tau=1}^{T}
+q^\mu(\tau,x)
+G_\lambda^\mu(\tau,x,a).
+\end{align}
+The greedy candidate chooses \(\arg\max_a S_\lambda(a,x)\) for visited states. Because this is a constrained stationary-policy problem, the occupancy-weighted greedy update is treated as a local improvement heuristic rather than a global optimality proof. The implementation accepts an updated policy only when full policy evaluation shows an improvement in \(J_\lambda(\mu)\). Iteration stops when no visited state changes, the residual falls below tolerance, or the iteration limit is reached.
+
+\subsection{Preference Conditioning}
+
+The exact stationary oracle is solved for a set of review-cost preferences \(\Lambda\). Each \(\lambda\) produces one stationary action table over memory states. The preference-conditioned policy family can be viewed as a map
+\[
+(x,\lambda)\mapsto a.
+\]
+Varying \(\lambda\) gives a set of supported memory-time tradeoff policies under linear scalarization. The method does not claim to recover unsupported Pareto points without additional constrained optimization.
+
+\subsection{Supervised Policy Distillation}
+
+The distilled policy approximates the exact stationary tables. Training examples are drawn from tuples
+\[
+(x,\lambda,a^*(x,\lambda)),
+\]
+where \(a^*\) is the exact stationary oracle action. The default supervision samples the exact table uniformly over teacher preferences and memory-state grid cells. This avoids weighting the loss by rollout event counts, which can overrepresent low-cost policies because they schedule more reviews.
+
+The student receives only the stationary policy inputs: memory-state variables and the review-cost preference. It does not receive remaining time, because it is approximating the stationary oracle rather than the full non-stationary finite-horizon oracle. The training loss is ordinary action cross-entropy for the discrete action grid. This makes the student a compressed policy table, not a model-free reinforcement learner.
+
+\section{Experiments}
+
+The current project evaluates the theory through a single-card finite-lifecycle simulator. The empirical goal is to compare exact finite-horizon policies, exact stationary finite-lifecycle policies, and distilled stationary policies on the same memory-time frontier.
+
+\subsection{Primary Evaluation}
+
+Each rollout starts from a new-item learning event, samples an initial response, and follows the policy for \(T\) days. At each review, the policy chooses a desired-recall action, the memory model converts it into a delay, the simulator accumulates retrievability utility over calendar days, and a stochastic review outcome updates the state if the review occurs before the horizon.
+
+The primary metrics are:
+\begin{itemize}
+    \item expected retrievability per day;
+    \item expected review minutes per day;
+    \item scalar objective, retrievability per day minus \(\lambda\) times minutes per day;
+    \item frontier coverage and time-regret area against a reference scheduler;
+    \item teacher-student action agreement and rollout regret.
+\end{itemize}
+
+\subsection{Baselines and Comparisons}
+
+The most important comparison is not only student versus teacher. The exact stationary policy must also be compared with the unrestricted finite-horizon oracle to measure the cost of removing remaining time from the policy input. The distilled policy must be compared with the exact stationary table to measure compression loss. Fixed recall-target policies, fixed-interval policies, and target-reaching policies provide interpretable reference points.
+
+An SSP-MMC-style baseline should be evaluated by sweeping target memory thresholds while preserving the SSP state, transition, cost, and absorbing-target construction. This tests whether a family of goal-reaching policies approximates the lifecycle frontier. A MEMORIZE comparison should distinguish the original continuous-time point-process algorithm from any MEMORIZE-inspired adaptation to the present memory model and cost scale. Such a baseline tests whether the proposed stationary preference-conditioned SMDP policy improves on continuous-time recall--review-frequency optimal control under comparable modeling assumptions.
+
+\subsection{Ablations}
+
+The implementation naturally supports several ablations:
+\begin{enumerate}
+    \item \textbf{Stationarity cost.} Compare the unrestricted finite-horizon oracle with the stationary finite-lifecycle oracle.
+    \item \textbf{Preference grid.} Vary teacher cost weights and measure frontier interpolation.
+    \item \textbf{Action grid.} Vary desired-recall actions and measure supported frontier coverage.
+    \item \textbf{Supervision distribution.} Compare uniform exact-table supervision with rollout-weighted teacher forcing.
+    \item \textbf{Student capacity.} Vary student size and report action agreement, rollout regret, and inference cost.
+\end{enumerate}
+
+\subsection{Policy Analysis}
+
+The stationary exact policy is especially amenable to visualization because it maps memory state and preference directly to action. Policy heatmaps can reveal when the scheduler chooses aggressive or conservative desired-recall targets, how choices vary with memory state, and how review-cost preference moves the policy across the supported frontier. Difference heatmaps between the exact stationary table and the distilled policy isolate where compression errors matter.
+
+\subsection{Reproducibility}
+
+A credible empirical version of this paper should report the memory-state grid, action grid, horizon, preference grid, review-cost model, initial response distribution, random seeds, hardware, runtime, and all frontier metrics with uncertainty over seeds or users. Theoretical claims should distinguish three objects throughout: the unrestricted finite-horizon oracle, the exact stationary finite-lifecycle oracle, and the distilled stationary approximation.
+
+\bibliographystyle{plainnat}
+\bibliography{preference_conditioned_lifecycle_scheduling_refs}
+
+\end{document}

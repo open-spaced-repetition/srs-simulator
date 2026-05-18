@@ -1,0 +1,121 @@
+\begin{thebibliography}{16}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Anderson et~al.(1998)Anderson, Bothell, Lebiere, and
+  Matessa]{anderson1998atomic}
+John~R. Anderson, Daniel Bothell, Christian Lebiere, and Michael Matessa.
+\newblock An integrated theory of list memory.
+\newblock \emph{Journal of Memory and Language}, 38\penalty0 (4):\penalty0
+  341--380, 1998.
+
+\bibitem[Cho et~al.(2014)Cho, van Merri{\"e}nboer, Gulcehre, Bahdanau,
+  Bougares, Schwenk, and Bengio]{cho2014learning}
+Kyunghyun Cho, Bart van Merri{\"e}nboer, Caglar Gulcehre, Dzmitry Bahdanau,
+  Fethi Bougares, Holger Schwenk, and Yoshua Bengio.
+\newblock Learning phrase representations using rnn encoder--decoder for
+  statistical machine translation.
+\newblock In \emph{Proceedings of the 2014 Conference on Empirical Methods in
+  Natural Language Processing}, pages 1724--1734, 2014.
+\newblock \doi{10.3115/v1/D14-1179}.
+
+\bibitem[Ebbinghaus(1913)]{ebbinghaus1913memory}
+Hermann Ebbinghaus.
+\newblock \emph{Memory: A Contribution to Experimental Psychology}.
+\newblock Teachers College, Columbia University, New York, 1913.
+\newblock Translated by Henry A. Ruger and Clara E. Bussenius.
+
+\bibitem[Leitner(1972)]{leitner1972so}
+Sebastian Leitner.
+\newblock \emph{So lernt man lernen}.
+\newblock Herder, Freiburg, 1972.
+
+\bibitem[Pavlik and Anderson(2008)]{pavlik2008using}
+Philip~I. Pavlik and John~R. Anderson.
+\newblock Using a model to compute the optimal schedule of practice.
+\newblock \emph{Journal of Experimental Psychology: Applied}, 14\penalty0
+  (2):\penalty0 101--117, 2008.
+\newblock \doi{10.1037/1076-898X.14.2.101}.
+
+\bibitem[Pimsleur(1967)]{pimsleur1967memory}
+Paul Pimsleur.
+\newblock A memory schedule.
+\newblock \emph{The Modern Language Journal}, 51\penalty0 (2):\penalty0 73--75,
+  1967.
+\newblock \doi{10.1111/j.1540-4781.1967.tb06700.x}.
+
+\bibitem[Reddy et~al.(2017)Reddy, Labutov, Banerjee, and
+  Joachims]{reddy2017accelerating}
+Siddharth Reddy, Igor Labutov, Siddhartha Banerjee, and Thorsten Joachims.
+\newblock Accelerating human learning with deep reinforcement learning.
+\newblock In \emph{Proceedings of the NIPS Workshop on Teaching Machines,
+  Robots, and Humans}, 2017.
+
+\bibitem[Roijers et~al.(2013)Roijers, Vamplew, Whiteson, and
+  Dazeley]{roijers2013survey}
+Diederik~M. Roijers, Peter Vamplew, Shimon Whiteson, and Richard Dazeley.
+\newblock A survey of multi-objective sequential decision-making.
+\newblock \emph{Journal of Artificial Intelligence Research}, 48:\penalty0
+  67--113, 2013.
+\newblock \doi{10.1613/jair.3987}.
+
+\bibitem[Schaul et~al.(2015)Schaul, Horgan, Gregor, and
+  Silver]{schaul2015universal}
+Tom Schaul, Daniel Horgan, Karol Gregor, and David Silver.
+\newblock Universal value function approximators.
+\newblock In \emph{Proceedings of the 32nd International Conference on Machine
+  Learning}, pages 1312--1320, 2015.
+
+\bibitem[Settles and Meeder(2016)]{settles2016trainable}
+Burr Settles and Brendan Meeder.
+\newblock A trainable spaced repetition model for language learning.
+\newblock In \emph{Proceedings of the 54th Annual Meeting of the Association
+  for Computational Linguistics}, pages 1848--1858, 2016.
+\newblock \doi{10.18653/v1/P16-1174}.
+
+\bibitem[Sinha et~al.(2019)Sinha, Goyal, Larochelle, and
+  Pineau]{sinha2019improving}
+Samarth Sinha, Anirudh Goyal, Hugo Larochelle, and Joelle Pineau.
+\newblock Improving learning with deep reinforcement learning.
+\newblock In \emph{Proceedings of the 12th International Conference on
+  Educational Data Mining}, pages 566--569, 2019.
+
+\bibitem[Su et~al.(2023)Su, Ye, Nie, Cao, and Chen]{su2023optimizing}
+Jingyong Su, Junyao Ye, Liqiang Nie, Yilong Cao, and Yongyong Chen.
+\newblock Optimizing spaced repetition schedule by capturing the dynamics of
+  memory.
+\newblock \emph{IEEE Transactions on Knowledge and Data Engineering},
+  35\penalty0 (10):\penalty0 10085--10096, 2023.
+\newblock \doi{10.1109/TKDE.2023.3251721}.
+
+\bibitem[Sutton and Barto(2018)]{sutton2018reinforcement}
+Richard~S. Sutton and Andrew~G. Barto.
+\newblock \emph{Reinforcement Learning: An Introduction}.
+\newblock MIT Press, Cambridge, MA, 2 edition, 2018.
+
+\bibitem[Tabibian et~al.(2019)Tabibian, Upadhyay, De, Zarezade, Sch{\"o}lkopf,
+  and Gomez-Rodriguez]{tabibian2019enhancing}
+Behzad Tabibian, Utkarsh Upadhyay, Abir De, Ali Zarezade, Bernhard
+  Sch{\"o}lkopf, and Manuel Gomez-Rodriguez.
+\newblock Enhancing human learning via spaced repetition optimization.
+\newblock \emph{Proceedings of the National Academy of Sciences}, 116\penalty0
+  (10):\penalty0 3988--3993, 2019.
+\newblock \doi{10.1073/pnas.1815156116}.
+
+\bibitem[Wozniak(1990)]{wozniak1990optimization}
+Piotr~A. Wozniak.
+\newblock Optimization of learning, 1990.
+\newblock Master's thesis, Poznan University of Technology.
+
+\bibitem[Ye et~al.(2022)Ye, Su, and Cao]{ye2022stochastic}
+Junyao Ye, Jingyong Su, and Yilong Cao.
+\newblock A stochastic shortest path algorithm for optimizing spaced repetition
+  scheduling.
+\newblock In \emph{Proceedings of the 28th ACM SIGKDD Conference on Knowledge
+  Discovery and Data Mining}, pages 4381--4390, 2022.
+\newblock \doi{10.1145/3534678.3539081}.
+
+\end{thebibliography}
