@@ -13,6 +13,9 @@ from simulator.experiment_infra.gpu_monitor import (
     GpuMonitorSummary,
     disabled_monitor_summary,
 )
+from experiments.single_card_tradeoff.oracle_dp_cache import (
+    oracle_dp_cache_performance_payload,
+)
 
 
 def add_run_monitoring_args(parser: argparse.ArgumentParser) -> None:
@@ -124,5 +127,6 @@ def _write_performance_summary(
         "gpu_monitor_nvidia_smi_peak_utilization_percent": (
             gpu_monitor_summary.nvidia_smi_peak_utilization_percent
         ),
+        **oracle_dp_cache_performance_payload(),
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

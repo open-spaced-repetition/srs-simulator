@@ -119,6 +119,8 @@ The stationary finite oracle reports finite-lifecycle objective, policy-iteratio
 
 For per-user benchmark distillation, `oracle_stationary_finite_distill_multiuser.py --per-user-models` trains one independent stationary finite distill policy per FSRS-6 user in a single Python process. The exact teacher uses `FSRS6BatchedStationaryFiniteOracle`, whose policy shape is `[user, cost_weight, stability, difficulty]`; `--oracle-teacher-user-batch-size 0` is the default and solves all requested users in one batched DP call. The student training then stacks `U` ordinary `PolicyValueNet` states with `torch.func.stack_module_state` and uses `vmap` over the user dimension, so each user has a separate 476-parameter model while the ensemble trains and evaluates as one batch. The per-user default supervision is `--per-user-supervision uniform_table`: every train step samples the exact stationary policy table with equal mass on each sparse teacher cost weight, rather than weighting labels by rollout event counts. Use `--per-user-supervision rollout` only to reproduce the older teacher-forcing baseline. The default path without `--per-user-models` remains the older shared-student diagnostic baseline.
 
+All oracle DP entrypoints now cache per `(user, weight)` under `artifacts/single_card_tradeoff/dp_cache` by default. Pass `--no-dp-cache` to disable it or `--refresh-dp-cache` to force recomputation.
+
 ```bash
 uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --per-user-models --out-dir artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu --no-progress
 ```

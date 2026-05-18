@@ -30,6 +30,14 @@ from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
     validate_retention_values,
     validate_retention_values_for_model,
 )
+from experiments.single_card_tradeoff.oracle_dp_cache import (  # noqa: E402
+    OracleDPCacheConfig,
+    add_oracle_dp_cache_args,
+    load_cache_entry,
+    oracle_dp_cache_config_from_args,
+    resolve_oracle_dp_cache_config,
+    write_cache_entry,
+)
 from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.cost import DEFAULT_STATE_RATING_COSTS
@@ -105,6 +113,45 @@ class BatchedStationaryFiniteOracleSolution:
     converged: list[list[bool]]
     residuals: list[list[float]]
     runtime_s: float
+
+
+def _tensor_float_list(value: torch.Tensor) -> list[float]:
+    return [float(item) for item in value.detach().cpu().reshape(-1).tolist()]
+
+
+def _metrics_payload(metrics: OracleMetrics) -> dict[str, float | None]:
+    return {
+        "card_expected_retrievability": metrics.card_expected_retrievability,
+        "card_minutes_per_day": metrics.card_minutes_per_day,
+        "card_reviews_per_day": metrics.card_reviews_per_day,
+        "card_total_reviews": metrics.card_total_reviews,
+        "card_total_lapses": metrics.card_total_lapses,
+        "card_total_cost_seconds": metrics.card_total_cost_seconds,
+        "observed_retention": metrics.observed_retention,
+        "scalar_objective": metrics.scalar_objective,
+    }
+
+
+def _metrics_from_payload(
+    payload: dict[str, Any],
+    *,
+    runtime_s: float = 0.0,
+) -> OracleMetrics:
+    return OracleMetrics(
+        card_expected_retrievability=float(payload["card_expected_retrievability"]),
+        card_minutes_per_day=float(payload["card_minutes_per_day"]),
+        card_reviews_per_day=float(payload["card_reviews_per_day"]),
+        card_total_reviews=float(payload["card_total_reviews"]),
+        card_total_lapses=float(payload["card_total_lapses"]),
+        card_total_cost_seconds=float(payload["card_total_cost_seconds"]),
+        observed_retention=(
+            None
+            if payload.get("observed_retention") is None
+            else float(payload["observed_retention"])
+        ),
+        scalar_objective=float(payload["scalar_objective"]),
+        runtime_s=runtime_s,
+    )
 
 
 def parse_csv_floats(value: str, *, name: str) -> list[float]:
@@ -194,6 +241,7 @@ class FSRS6GridOracle:
         review_rating_prob: Sequence[float] | None = None,
         learning_costs: Sequence[float] | None = None,
         review_costs: Sequence[float] | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -210,6 +258,7 @@ class FSRS6GridOracle:
         self.device = (
             torch.device(device) if device is not None else torch.device("cpu")
         )
+        self.cache_config = resolve_oracle_dp_cache_config(cache_config)
         self.bounds = Bounds()
         resolved_weights = (
             DEFAULT_FSRS6_WEIGHTS if fsrs_weights is None else tuple(fsrs_weights)
@@ -309,6 +358,43 @@ class FSRS6GridOracle:
         self.memorized_by_day = self._precompute_grid_memorized_by_day()
         self.transitions = self._precompute_transitions()
 
+    def _single_user_payload(self) -> dict[str, Any]:
+        return {
+            "fsrs_weights": _tensor_float_list(self.weights),
+            "first_rating_prob": _tensor_float_list(self.first_rating_prob),
+            "review_rating_prob": _tensor_float_list(self.review_rating_prob),
+            "learning_costs": [
+                60.0 * value for value in _tensor_float_list(self.learning_cost_minutes)
+            ],
+            "review_costs": [
+                60.0 * value for value in _tensor_float_list(self.review_cost_minutes)
+            ],
+        }
+
+    def _cache_key_parts(
+        self,
+        *,
+        oracle_kind: str,
+        method: str,
+        cost_weight: float,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "algorithm_version": 1,
+            "oracle_kind": oracle_kind,
+            "method": method,
+            "days": self.days,
+            "s_grid_size": int(self.s_grid.numel()),
+            "d_grid_size": int(self.d_grid.numel()),
+            "action_retentions": _tensor_float_list(self.action_retentions),
+            "dtype": str(self.dtype),
+            "user_config": self._single_user_payload(),
+            "cost_weight": float(cost_weight),
+        }
+        if extra:
+            payload["extra"] = extra
+        return payload
+
     def estimate(self, cost_weight: float, *, progress: bool = False) -> OracleMetrics:
         return self.solve(
             cost_weight,
@@ -324,12 +410,105 @@ class FSRS6GridOracle:
     ) -> list[OracleMetrics]:
         if not cost_weights:
             raise ValueError("cost_weights must contain at least one value.")
+        start = time.perf_counter()
+        results: list[OracleMetrics | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="grid",
+                    method="estimate_many",
+                    cost_weight=float(weight),
+                ),
+                map_location=self.device,
+            )
+            if entry is None:
+                missing.append((idx, float(weight)))
+                continue
+            results[idx] = _metrics_from_payload(entry["metrics"], runtime_s=0.0)
+
+        if missing:
+            computed = self._estimate_many_uncached(
+                [weight for _, weight in missing],
+                progress=progress,
+            )
+            for (idx, weight), metrics in zip(missing, computed, strict=True):
+                results[idx] = metrics
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="grid",
+                        method="estimate_many",
+                        cost_weight=weight,
+                    ),
+                    data={"metrics": _metrics_payload(metrics)},
+                )
+        elapsed = time.perf_counter() - start
+        return [
+            _metrics_from_payload(_metrics_payload(metrics), runtime_s=elapsed)
+            for metrics in results
+            if metrics is not None
+        ]
+
+    def _estimate_many_uncached(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> list[OracleMetrics]:
         weight_tensor = torch.tensor(
             list(cost_weights), device=self.device, dtype=self.dtype
         )
         return self._estimate_many_batch(weight_tensor, progress=progress)
 
     def solve(
+        self,
+        cost_weight: float,
+        *,
+        progress: bool = False,
+        capture_policy: bool = False,
+    ) -> OracleSolution:
+        start = time.perf_counter()
+        key_parts = self._cache_key_parts(
+            oracle_kind="grid",
+            method="solve",
+            cost_weight=float(cost_weight),
+            extra={"capture_policy": capture_policy},
+        )
+        entry = load_cache_entry(
+            self.cache_config,
+            key_parts=key_parts,
+            map_location=self.device,
+        )
+        if entry is not None:
+            policy = entry.get("policy")
+            if policy is not None and not isinstance(policy, torch.Tensor):
+                policy = None
+            return OracleSolution(
+                metrics=_metrics_from_payload(
+                    entry["metrics"],
+                    runtime_s=time.perf_counter() - start,
+                ),
+                policy=policy.to(device=self.device) if policy is not None else None,
+            )
+
+        solution = self._solve_uncached(
+            cost_weight,
+            progress=progress,
+            capture_policy=capture_policy,
+        )
+        write_cache_entry(
+            self.cache_config,
+            key_parts=key_parts,
+            data={
+                "metrics": _metrics_payload(solution.metrics),
+                "policy": solution.policy,
+            },
+        )
+        return solution
+
+    def _solve_uncached(
         self,
         cost_weight: float,
         *,
@@ -447,6 +626,55 @@ class FSRS6GridOracle:
         )
 
     def solve_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            key_parts = self._cache_key_parts(
+                oracle_kind="grid",
+                method="solve_policies",
+                cost_weight=float(weight),
+            )
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=key_parts,
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing.append((idx, float(weight)))
+                continue
+            policies[idx] = entry["policy"].to(device=self.device)
+
+        if missing:
+            computed = self._solve_policies_uncached(
+                [weight for _, weight in missing],
+                progress=progress,
+            )
+            for local_idx, (idx, weight) in enumerate(missing):
+                policy = computed[local_idx].to(device=self.device)
+                policies[idx] = policy
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="grid",
+                        method="solve_policies",
+                        cost_weight=weight,
+                    ),
+                    data={"policy": policy},
+                )
+
+        return torch.stack(
+            [policy for policy in policies if policy is not None],
+            dim=0,
+        ).to(device=self.device)
+
+    def _solve_policies_uncached(
         self,
         cost_weights: Sequence[float],
         *,
@@ -1002,6 +1230,7 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
         review_rating_prob: Sequence[float] | None = None,
         learning_costs: Sequence[float] | None = None,
         review_costs: Sequence[float] | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         super().__init__(
             days=days,
@@ -1015,6 +1244,7 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
             review_rating_prob=review_rating_prob,
             learning_costs=learning_costs,
             review_costs=review_costs,
+            cache_config=cache_config,
         )
         self.s_count = int(self.s_grid.numel())
         self.d_count = int(self.d_grid.numel())
@@ -1045,6 +1275,107 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
         if tolerance <= 0.0:
             raise ValueError("tolerance must be > 0.")
 
+        start = time.perf_counter()
+        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
+        metrics_by_weight: list[OracleMetrics | None] = [None for _ in cost_weights]
+        objectives: list[float | None] = [None for _ in cost_weights]
+        iterations: list[int | None] = [None for _ in cost_weights]
+        converged: list[bool | None] = [None for _ in cost_weights]
+        residuals: list[float | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="stationary_finite",
+                    method="solve_stationary_finite_policies",
+                    cost_weight=float(weight),
+                    extra={
+                        "max_iterations": max_iterations,
+                        "tolerance": tolerance,
+                    },
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing.append((idx, float(weight)))
+                continue
+            policies[idx] = entry["policy"].to(device=self.device)
+            metrics_by_weight[idx] = _metrics_from_payload(
+                entry["metrics"],
+                runtime_s=0.0,
+            )
+            objectives[idx] = float(entry["objective"])
+            iterations[idx] = int(entry["iterations"])
+            converged[idx] = bool(entry["converged"])
+            residuals[idx] = float(entry["residual"])
+
+        if missing:
+            solution = self._solve_stationary_finite_policies_uncached(
+                [weight for _, weight in missing],
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            for local_idx, (idx, weight) in enumerate(missing):
+                policy = solution.policy[local_idx].to(device=self.device)
+                metrics = solution.metrics[local_idx]
+                objective = float(solution.objectives[local_idx].item())
+                iteration = solution.iterations[local_idx]
+                did_converge = solution.converged[local_idx]
+                residual = solution.residuals[local_idx]
+                policies[idx] = policy
+                metrics_by_weight[idx] = metrics
+                objectives[idx] = objective
+                iterations[idx] = iteration
+                converged[idx] = did_converge
+                residuals[idx] = residual
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="stationary_finite",
+                        method="solve_stationary_finite_policies",
+                        cost_weight=weight,
+                        extra={
+                            "max_iterations": max_iterations,
+                            "tolerance": tolerance,
+                        },
+                    ),
+                    data={
+                        "policy": policy,
+                        "metrics": _metrics_payload(metrics),
+                        "objective": objective,
+                        "iterations": iteration,
+                        "converged": did_converge,
+                        "residual": residual,
+                    },
+                )
+
+        return StationaryFiniteOracleSolution(
+            policy=torch.stack(
+                [policy for policy in policies if policy is not None],
+                dim=0,
+            ).to(device=self.device, dtype=torch.int64),
+            metrics=[metric for metric in metrics_by_weight if metric is not None],
+            objectives=torch.tensor(
+                [objective for objective in objectives if objective is not None],
+                device=self.device,
+                dtype=self.dtype,
+            ),
+            iterations=[int(value) for value in iterations if value is not None],
+            converged=[bool(value) for value in converged if value is not None],
+            residuals=[float(value) for value in residuals if value is not None],
+            runtime_s=time.perf_counter() - start,
+        )
+
+    def _solve_stationary_finite_policies_uncached(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+        progress: bool = False,
+    ) -> StationaryFiniteOracleSolution:
         start = time.perf_counter()
         policies: list[torch.Tensor] = []
         metrics_by_weight: list[OracleMetrics] = []
@@ -2201,6 +2532,7 @@ class FSRS6BatchedStationaryFiniteOracle:
         review_costs: Sequence[Sequence[float]],
         dtype: torch.dtype = torch.float64,
         device: torch.device | str | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         if days <= 1:
             raise ValueError("days must be > 1.")
@@ -2237,6 +2569,7 @@ class FSRS6BatchedStationaryFiniteOracle:
         self.device = (
             torch.device(device) if device is not None else torch.device("cpu")
         )
+        self.cache_config = resolve_oracle_dp_cache_config(cache_config)
         self.bounds = Bounds()
         self.weights = weights
         self.decay = -self.weights[:, 20]
@@ -2304,6 +2637,82 @@ class FSRS6BatchedStationaryFiniteOracle:
         self.memorized_by_day = self._precompute_memorized_by_day()
         self._action_tables = self._precompute_action_tables()
 
+    def _user_payload(self, user_idx: int) -> dict[str, Any]:
+        return {
+            "fsrs_weights": _tensor_float_list(self.weights[user_idx]),
+            "first_rating_prob": _tensor_float_list(self.first_rating_prob[user_idx]),
+            "review_rating_prob": _tensor_float_list(self.review_rating_prob[user_idx]),
+            "learning_costs": [
+                60.0 * value
+                for value in _tensor_float_list(self.learning_cost_minutes[user_idx])
+            ],
+            "review_costs": [
+                60.0 * value
+                for value in _tensor_float_list(self.review_cost_minutes[user_idx])
+            ],
+        }
+
+    def _cache_key_parts(
+        self,
+        *,
+        oracle_kind: str,
+        method: str,
+        user_idx: int,
+        cost_weight: float,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "algorithm_version": 1,
+            "oracle_kind": oracle_kind,
+            "method": method,
+            "days": self.days,
+            "s_grid_size": self.s_count,
+            "d_grid_size": self.d_count,
+            "action_retentions": _tensor_float_list(self.action_retentions),
+            "dtype": str(self.dtype),
+            "user_config": self._user_payload(user_idx),
+            "cost_weight": float(cost_weight),
+        }
+        if extra:
+            payload["extra"] = extra
+        return payload
+
+    def _suboracle(
+        self, user_indices: Sequence[int]
+    ) -> FSRS6BatchedStationaryFiniteOracle:
+        return FSRS6BatchedStationaryFiniteOracle(
+            days=self.days,
+            action_retentions=_tensor_float_list(self.action_retentions),
+            s_grid_size=self.s_count,
+            d_grid_size=self.d_count,
+            fsrs_weights=[
+                _tensor_float_list(self.weights[idx]) for idx in user_indices
+            ],
+            first_rating_prob=[
+                _tensor_float_list(self.first_rating_prob[idx]) for idx in user_indices
+            ],
+            review_rating_prob=[
+                _tensor_float_list(self.review_rating_prob[idx]) for idx in user_indices
+            ],
+            learning_costs=[
+                [
+                    60.0 * value
+                    for value in _tensor_float_list(self.learning_cost_minutes[idx])
+                ]
+                for idx in user_indices
+            ],
+            review_costs=[
+                [
+                    60.0 * value
+                    for value in _tensor_float_list(self.review_cost_minutes[idx])
+                ]
+                for idx in user_indices
+            ],
+            dtype=self.dtype,
+            device=self.device,
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+
     def solve_stationary_finite_policies(
         self,
         cost_weights: Sequence[float],
@@ -2319,6 +2728,144 @@ class FSRS6BatchedStationaryFiniteOracle:
         if tolerance <= 0.0:
             raise ValueError("tolerance must be > 0.")
 
+        start = time.perf_counter()
+        weight_list = [float(weight) for weight in cost_weights]
+        policies: list[list[torch.Tensor | None]] = [
+            [None for _ in weight_list] for _ in range(self.user_count)
+        ]
+        metrics: list[list[OracleMetrics | None]] = [
+            [None for _ in weight_list] for _ in range(self.user_count)
+        ]
+        objectives = torch.zeros(
+            (self.user_count, len(weight_list)),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        iterations: list[list[int | None]] = [
+            [None for _ in weight_list] for _ in range(self.user_count)
+        ]
+        converged: list[list[bool | None]] = [
+            [None for _ in weight_list] for _ in range(self.user_count)
+        ]
+        residuals: list[list[float | None]] = [
+            [None for _ in weight_list] for _ in range(self.user_count)
+        ]
+        missing_by_user: dict[int, list[int]] = {}
+        extra = {"max_iterations": max_iterations, "tolerance": tolerance}
+        for user_idx in range(self.user_count):
+            for weight_idx, weight in enumerate(weight_list):
+                entry = load_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="batched_stationary_finite",
+                        method="solve_stationary_finite_policies",
+                        user_idx=user_idx,
+                        cost_weight=weight,
+                        extra=extra,
+                    ),
+                    map_location=self.device,
+                )
+                if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                    missing_by_user.setdefault(user_idx, []).append(weight_idx)
+                    continue
+                policies[user_idx][weight_idx] = entry["policy"].to(device=self.device)
+                metrics[user_idx][weight_idx] = _metrics_from_payload(
+                    entry["metrics"],
+                    runtime_s=0.0,
+                )
+                objectives[user_idx, weight_idx] = float(entry["objective"])
+                iterations[user_idx][weight_idx] = int(entry["iterations"])
+                converged[user_idx][weight_idx] = bool(entry["converged"])
+                residuals[user_idx][weight_idx] = float(entry["residual"])
+
+        groups: dict[tuple[int, ...], list[int]] = {}
+        for user_idx, missing_weight_indices in missing_by_user.items():
+            groups.setdefault(tuple(missing_weight_indices), []).append(user_idx)
+        for missing_weight_indices, user_indices in groups.items():
+            suboracle = self._suboracle(user_indices)
+            group_weights = [weight_list[idx] for idx in missing_weight_indices]
+            solution = suboracle._solve_stationary_finite_policies_uncached(
+                group_weights,
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            for local_user_idx, user_idx in enumerate(user_indices):
+                for local_weight_idx, weight_idx in enumerate(missing_weight_indices):
+                    policy = solution.policy[local_user_idx, local_weight_idx].to(
+                        device=self.device
+                    )
+                    metric = solution.metrics[local_user_idx][local_weight_idx]
+                    objective = float(
+                        solution.objectives[local_user_idx, local_weight_idx].item()
+                    )
+                    iteration = solution.iterations[local_user_idx][local_weight_idx]
+                    did_converge = solution.converged[local_user_idx][local_weight_idx]
+                    residual = solution.residuals[local_user_idx][local_weight_idx]
+                    policies[user_idx][weight_idx] = policy
+                    metrics[user_idx][weight_idx] = metric
+                    objectives[user_idx, weight_idx] = objective
+                    iterations[user_idx][weight_idx] = iteration
+                    converged[user_idx][weight_idx] = did_converge
+                    residuals[user_idx][weight_idx] = residual
+                    write_cache_entry(
+                        self.cache_config,
+                        key_parts=self._cache_key_parts(
+                            oracle_kind="batched_stationary_finite",
+                            method="solve_stationary_finite_policies",
+                            user_idx=user_idx,
+                            cost_weight=weight_list[weight_idx],
+                            extra=extra,
+                        ),
+                        data={
+                            "policy": policy,
+                            "metrics": _metrics_payload(metric),
+                            "objective": objective,
+                            "iterations": iteration,
+                            "converged": did_converge,
+                            "residual": residual,
+                        },
+                    )
+
+        return BatchedStationaryFiniteOracleSolution(
+            policy=torch.stack(
+                [
+                    torch.stack(
+                        [policy for policy in user_policies if policy is not None],
+                        dim=0,
+                    )
+                    for user_policies in policies
+                ],
+                dim=0,
+            )
+            .to(device=self.device, dtype=torch.int64)
+            .reshape(self.user_count, len(weight_list), self.s_count, self.d_count),
+            metrics=[
+                [metric for metric in user_metrics if metric is not None]
+                for user_metrics in metrics
+            ],
+            objectives=objectives,
+            iterations=[
+                [int(value) for value in row if value is not None] for row in iterations
+            ],
+            converged=[
+                [bool(value) for value in row if value is not None] for row in converged
+            ],
+            residuals=[
+                [float(value) for value in row if value is not None]
+                for row in residuals
+            ],
+            runtime_s=time.perf_counter() - start,
+        )
+
+    def _solve_stationary_finite_policies_uncached(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+        progress: bool = False,
+    ) -> BatchedStationaryFiniteOracleSolution:
         start = time.perf_counter()
         weight_tensor = torch.tensor(
             list(cost_weights), device=self.device, dtype=self.dtype
@@ -2364,6 +2911,74 @@ class FSRS6BatchedStationaryFiniteOracle:
         )
 
     def solve_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        weight_list = [float(weight) for weight in cost_weights]
+        policies: list[list[torch.Tensor | None]] = [
+            [None for _ in weight_list] for _ in range(self.user_count)
+        ]
+        missing_by_user: dict[int, list[int]] = {}
+        for user_idx in range(self.user_count):
+            for weight_idx, weight in enumerate(weight_list):
+                entry = load_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="batched_stationary_finite",
+                        method="solve_policies",
+                        user_idx=user_idx,
+                        cost_weight=weight,
+                    ),
+                    map_location=self.device,
+                )
+                if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                    missing_by_user.setdefault(user_idx, []).append(weight_idx)
+                    continue
+                policies[user_idx][weight_idx] = entry["policy"].to(device=self.device)
+
+        groups: dict[tuple[int, ...], list[int]] = {}
+        for user_idx, missing_weight_indices in missing_by_user.items():
+            groups.setdefault(tuple(missing_weight_indices), []).append(user_idx)
+        for missing_weight_indices, user_indices in groups.items():
+            suboracle = self._suboracle(user_indices)
+            group_weights = [weight_list[idx] for idx in missing_weight_indices]
+            computed = suboracle._solve_policies_uncached(
+                group_weights,
+                progress=progress,
+            )
+            for local_user_idx, user_idx in enumerate(user_indices):
+                for local_weight_idx, weight_idx in enumerate(missing_weight_indices):
+                    policy = computed[local_user_idx, local_weight_idx].to(
+                        device=self.device
+                    )
+                    policies[user_idx][weight_idx] = policy
+                    write_cache_entry(
+                        self.cache_config,
+                        key_parts=self._cache_key_parts(
+                            oracle_kind="batched_stationary_finite",
+                            method="solve_policies",
+                            user_idx=user_idx,
+                            cost_weight=weight_list[weight_idx],
+                        ),
+                        data={"policy": policy},
+                    )
+
+        return torch.stack(
+            [
+                torch.stack(
+                    [policy for policy in user_policies if policy is not None],
+                    dim=0,
+                )
+                for user_policies in policies
+            ],
+            dim=0,
+        ).to(device=self.device)
+
+    def _solve_policies_uncached(
         self,
         cost_weights: Sequence[float],
         *,
@@ -3393,6 +4008,7 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
         review_rating_prob: Sequence[float] | None = None,
         learning_costs: Sequence[float] | None = None,
         review_costs: Sequence[float] | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         super().__init__(
             days=2,
@@ -3406,6 +4022,7 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
             review_rating_prob=review_rating_prob,
             learning_costs=learning_costs,
             review_costs=review_costs,
+            cache_config=cache_config,
         )
         self.state_count = int(self.s_grid.numel() * self.d_grid.numel())
         self._action_tables = self._precompute_average_reward_action_tables()
@@ -3425,6 +4042,101 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
         if tolerance <= 0.0:
             raise ValueError("tolerance must be > 0.")
 
+        start = time.perf_counter()
+        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
+        gains: list[torch.Tensor | None] = [None for _ in cost_weights]
+        iterations: list[int | None] = [None for _ in cost_weights]
+        converged: list[bool | None] = [None for _ in cost_weights]
+        residuals: list[float | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="average_reward",
+                    method="solve_average_reward_policies",
+                    cost_weight=float(weight),
+                    extra={
+                        "max_iterations": max_iterations,
+                        "tolerance": tolerance,
+                    },
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing.append((idx, float(weight)))
+                continue
+            policies[idx] = entry["policy"].to(device=self.device)
+            gains[idx] = torch.as_tensor(
+                entry["gain"],
+                device=self.device,
+                dtype=self.dtype,
+            )
+            iterations[idx] = int(entry["iterations"])
+            converged[idx] = bool(entry["converged"])
+            residuals[idx] = float(entry["residual"])
+
+        if missing:
+            solution = self._solve_average_reward_policies_uncached(
+                [weight for _, weight in missing],
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            for local_idx, (idx, weight) in enumerate(missing):
+                policy = solution.policy[local_idx].to(device=self.device)
+                gain = solution.gains[local_idx].to(device=self.device)
+                iteration = solution.iterations[local_idx]
+                did_converge = solution.converged[local_idx]
+                residual = solution.residuals[local_idx]
+                policies[idx] = policy
+                gains[idx] = gain
+                iterations[idx] = iteration
+                converged[idx] = did_converge
+                residuals[idx] = residual
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="average_reward",
+                        method="solve_average_reward_policies",
+                        cost_weight=weight,
+                        extra={
+                            "max_iterations": max_iterations,
+                            "tolerance": tolerance,
+                        },
+                    ),
+                    data={
+                        "policy": policy,
+                        "gain": float(gain.item()),
+                        "iterations": iteration,
+                        "converged": did_converge,
+                        "residual": residual,
+                    },
+                )
+
+        return AverageRewardOracleSolution(
+            policy=torch.stack(
+                [policy for policy in policies if policy is not None],
+                dim=0,
+            ).to(device=self.device, dtype=torch.int64),
+            gains=torch.stack(
+                [gain for gain in gains if gain is not None],
+                dim=0,
+            ).to(device=self.device, dtype=self.dtype),
+            iterations=[int(value) for value in iterations if value is not None],
+            converged=[bool(value) for value in converged if value is not None],
+            residuals=[float(value) for value in residuals if value is not None],
+            runtime_s=time.perf_counter() - start,
+        )
+
+    def _solve_average_reward_policies_uncached(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+        progress: bool = False,
+    ) -> AverageRewardOracleSolution:
         start = time.perf_counter()
         policies: list[torch.Tensor] = []
         gains: list[torch.Tensor] = []
@@ -3968,6 +4680,7 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
         review_rating_prob: Sequence[float] | None = None,
         learning_costs: Sequence[float] | None = None,
         review_costs: Sequence[float] | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         if interval_chunk_size <= 0:
             raise ValueError("interval_chunk_size must be > 0.")
@@ -3983,11 +4696,62 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
             review_rating_prob=review_rating_prob,
             learning_costs=learning_costs,
             review_costs=review_costs,
+            cache_config=cache_config,
         )
         self.interval_chunk_size = int(interval_chunk_size)
         self.memorized_by_day = self._precompute_memorized_by_day()
 
     def solve_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="interval",
+                    method="solve_policies",
+                    cost_weight=float(weight),
+                    extra={"interval_chunk_size": self.interval_chunk_size},
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing.append((idx, float(weight)))
+                continue
+            policies[idx] = entry["policy"].to(device=self.device)
+
+        if missing:
+            computed = self._solve_interval_policies_uncached(
+                [weight for _, weight in missing],
+                progress=progress,
+            )
+            for local_idx, (idx, weight) in enumerate(missing):
+                policy = computed[local_idx].to(device=self.device)
+                policies[idx] = policy
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="interval",
+                        method="solve_policies",
+                        cost_weight=weight,
+                        extra={"interval_chunk_size": self.interval_chunk_size},
+                    ),
+                    data={"policy": policy},
+                )
+
+        return torch.stack(
+            [policy for policy in policies if policy is not None],
+            dim=0,
+        ).to(device=self.device)
+
+    def _solve_interval_policies_uncached(
         self,
         cost_weights: Sequence[float],
         *,

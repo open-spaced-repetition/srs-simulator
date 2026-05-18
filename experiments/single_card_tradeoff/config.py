@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from experiments.retention_sweep.cli_utils import add_benchmark_args
+from experiments.single_card_tradeoff.oracle_dp_cache import (
+    add_oracle_dp_cache_args,
+    oracle_dp_cache_config_from_args,
+    set_default_oracle_dp_cache_config,
+)
 from simulator.benchmark_loader import load_benchmark_weights, parse_result_overrides
 from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
 from simulator.button_usage import load_button_usage_config, normalize_button_usage
@@ -77,6 +82,7 @@ def add_single_card_fsrs6_config_args(
             "probabilities and learning/review costs are loaded for --user-id."
         ),
     )
+    add_oracle_dp_cache_args(parser)
 
 
 def _coerce_tuple(
@@ -97,6 +103,7 @@ def load_single_card_fsrs6_config(
     environment: str | None = None,
     repo_root: Path | None = None,
 ) -> SingleCardFSRS6Config:
+    set_default_oracle_dp_cache_config(oracle_dp_cache_config_from_args(args))
     env_name = environment or str(getattr(args, "env", "fsrs6_default"))
     if env_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise ValueError(
