@@ -39,6 +39,7 @@ class SchedulerCatalogTests(unittest.TestCase):
                     "anki_sm2_ap",
                     "fsrs6_adr",
                     "fsrs6_adr_time",
+                    "fsrs6_oracle_stationary_finite_distill",
                     "fsrs6_ap",
                     "fsrs6_default_adr",
                 }

@@ -34,6 +34,7 @@ from simulator.experiment_infra.baseline_dr_selection import (
 
 RUN_ID_SCOPED_SCHEDULERS = run_id_scoped_sweep_schedulers()
 ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
+ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_stationary_finite_distill"
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
     re.IGNORECASE,
@@ -479,6 +480,52 @@ def _resolve_fsrs6_ap_label(
     return f"AP {title or path.stem}", None
 
 
+def _resolve_oracle_distill_label(
+    meta: Dict[str, Any], base_dirs: Sequence[Path]
+) -> str:
+    policy_path = meta.get("fsrs6_oracle_stationary_finite_distill_policy")
+    goal_weight = meta.get("fsrs6_oracle_stationary_finite_distill_goal_cost_weight")
+    if isinstance(goal_weight, (float, int)) and not isinstance(goal_weight, bool):
+        return f"w={float(goal_weight):.6g}"
+    if not policy_path:
+        return "Oracle distill"
+    path = Path(policy_path)
+    if not path.is_absolute():
+        for base_dir in base_dirs:
+            candidate = (base_dir / path).resolve()
+            if candidate.exists():
+                path = candidate
+                break
+    if path.exists():
+        sibling_metadata = _load_policy_sibling_metadata(
+            path,
+            scheduler_name=ORACLE_DISTILL_SCHEDULER,
+        )
+        if sibling_metadata is not None:
+            metadata_weight = sibling_metadata.get("goal_cost_weight")
+            if isinstance(metadata_weight, (float, int)) and not isinstance(
+                metadata_weight, bool
+            ):
+                return f"w={float(metadata_weight):.6g}"
+            policy_index = sibling_metadata.get("portfolio_index")
+            if isinstance(policy_index, int):
+                return f"Oracle distill policy_{policy_index}"
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            payload_weight = payload.get("goal_cost_weight")
+            if isinstance(payload_weight, (float, int)) and not isinstance(
+                payload_weight, bool
+            ):
+                return f"w={float(payload_weight):.6g}"
+            raw_title = payload.get("title")
+            if isinstance(raw_title, str) and raw_title.strip():
+                return raw_title.strip()
+        except (OSError, json.JSONDecodeError):
+            pass
+    return f"Oracle distill {path.parent.name}"
+
+
 def _resolve_anki_sm2_ap_label(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> str:
     policy_path = meta.get("anki_sm2_ap_policy")
     if not policy_path:
@@ -748,6 +795,8 @@ def _iter_log_entries(
                 continue
         elif scheduler == "anki_sm2_ap":
             title = _resolve_anki_sm2_ap_label(meta, base_dirs)
+        elif scheduler == ORACLE_DISTILL_SCHEDULER:
+            title = _resolve_oracle_distill_label(meta, base_dirs)
         elif scheduler == "fixed":
             title = f"Ivl={format_float(fixed_interval)}"
         elif scheduler_uses_desired_retention(scheduler):
@@ -799,6 +848,17 @@ def _iter_log_entries(
             )
         elif scheduler == "anki_sm2_ap":
             entry.update({"anki_sm2_ap_policy": meta.get("anki_sm2_ap_policy")})
+        elif scheduler == ORACLE_DISTILL_SCHEDULER:
+            entry.update(
+                {
+                    "fsrs6_oracle_stationary_finite_distill_policy": meta.get(
+                        "fsrs6_oracle_stationary_finite_distill_policy"
+                    ),
+                    "fsrs6_oracle_stationary_finite_distill_goal_cost_weight": meta.get(
+                        "fsrs6_oracle_stationary_finite_distill_goal_cost_weight"
+                    ),
+                }
+            )
         yield desired_value, entry
 
 
@@ -846,6 +906,15 @@ def _no_desired_dedupe_key(
         policy_path = entry.get("anki_sm2_ap_policy")
         if isinstance(policy_path, str) and policy_path:
             title_key = policy_path
+    if scheduler_name == ORACLE_DISTILL_SCHEDULER:
+        policy_path = entry.get("fsrs6_oracle_stationary_finite_distill_policy")
+        if isinstance(policy_path, str) and policy_path:
+            title_key = policy_path
+            goal_weight = entry.get(
+                "fsrs6_oracle_stationary_finite_distill_goal_cost_weight"
+            )
+            if goal_weight is not None:
+                title_key = f"{title_key}|w={goal_weight}"
 
     short_term_source = entry.get("short_term_source")
     engine = entry.get("engine")

@@ -266,6 +266,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
         trainer = batch.get("trainer")
         if trainer in {
             "fsrs6_adr_portfolio",
+            "fsrs6_oracle_stationary_finite_distill_portfolio",
             "fsrs6_ap_portfolio",
             "anki_sm2_ap_portfolio",
         }:
@@ -277,6 +278,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     return bool(
         {
             "train_fsrs6_adr_portfolio.py",
+            "train_fsrs6_oracle_stationary_finite_distill_portfolio.py",
             "train_fsrs6_ap_portfolio.py",
             "train_anki_sm2_ap_portfolio.py",
         }
@@ -759,6 +761,7 @@ class TrainingBatchConfig:
         if self.trainer not in {
             "auto",
             "fsrs6_adr_portfolio",
+            "fsrs6_oracle_stationary_finite_distill_portfolio",
             "fsrs6_adr_cmaes",
             "fsrs6_ap_cmaes",
             "fsrs6_ap_portfolio",
@@ -766,8 +769,9 @@ class TrainingBatchConfig:
         }:
             raise ValueError(
                 "training.batch.trainer must be auto, fsrs6_adr_cmaes, "
-                "fsrs6_adr_portfolio, fsrs6_ap_cmaes, "
-                "fsrs6_ap_portfolio, or anki_sm2_ap_portfolio."
+                "fsrs6_adr_portfolio, "
+                "fsrs6_oracle_stationary_finite_distill_portfolio, "
+                "fsrs6_ap_cmaes, fsrs6_ap_portfolio, or anki_sm2_ap_portfolio."
             )
 
     def to_dict(self) -> dict[str, Any]:

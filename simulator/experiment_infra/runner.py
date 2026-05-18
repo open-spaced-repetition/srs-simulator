@@ -5228,6 +5228,12 @@ def _run_configured_batched_retention_sweep(
         fsrs6_adr_lambda_values=_sweep_policy_lambda_values(config)
         if scheduler_names & FSRS6_ADR_POLICY_SOURCE_SCHEDULERS
         else None,
+        fsrs6_oracle_stationary_finite_distill_policy=None,
+        fsrs6_oracle_stationary_finite_distill_policy_root=None,
+        fsrs6_oracle_stationary_finite_distill_train_run_root=run_root
+        if "fsrs6_oracle_stationary_finite_distill" in scheduler_names
+        else None,
+        fsrs6_oracle_stationary_finite_distill_policy_manifest=None,
         fsrs6_ap_policy=None,
         fsrs6_ap_policy_root=None,
         fsrs6_ap_train_run_root=run_root if "fsrs6_ap" in scheduler_names else None,
@@ -5333,6 +5339,14 @@ def _run_configured_batched_retention_sweep(
                     lane.fsrs6_adr_baseline_desired_retention
                 ),
                 "fsrs6_adr_lambda_value": lane.fsrs6_adr_lambda_value,
+                "fsrs6_oracle_stationary_finite_distill_policy": str(
+                    lane.fsrs6_oracle_stationary_finite_distill_policy
+                )
+                if lane.fsrs6_oracle_stationary_finite_distill_policy is not None
+                else None,
+                "fsrs6_oracle_stationary_finite_distill_goal_cost_weight": (
+                    lane.fsrs6_oracle_stationary_finite_distill_goal_cost_weight
+                ),
                 "fsrs6_ap_policy": str(lane.fsrs6_ap_policy)
                 if lane.fsrs6_ap_policy is not None
                 else None,
@@ -6001,6 +6015,7 @@ def _training_uses_portfolio_trainer(config: ExperimentConfig) -> bool:
         return True
     if config.training_batch.trainer in {
         "fsrs6_adr_portfolio",
+        "fsrs6_oracle_stationary_finite_distill_portfolio",
         "fsrs6_ap_portfolio",
         "anki_sm2_ap_portfolio",
     }:
@@ -6009,6 +6024,7 @@ def _training_uses_portfolio_trainer(config: ExperimentConfig) -> bool:
     return bool(
         {
             "train_fsrs6_adr_portfolio.py",
+            "train_fsrs6_oracle_stationary_finite_distill_portfolio.py",
             "train_fsrs6_ap_portfolio.py",
             "train_anki_sm2_ap_portfolio.py",
         }

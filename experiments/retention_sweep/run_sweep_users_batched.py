@@ -85,7 +85,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Comma-separated schedulers to sweep "
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
             "anki_sm2, anki_sm2_ap, memrise, fixed, fsrs6_adr, "
-            "fsrs6_adr_time, fsrs6_default_adr, fsrs6_ap)."
+            "fsrs6_adr_time, fsrs6_default_adr, "
+            "fsrs6_oracle_stationary_finite_distill, fsrs6_ap)."
         ),
     )
     add_retention_range_args(parser)
@@ -140,6 +141,42 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to an FSRS6 AP policy JSON when using --sched fsrs6_ap.",
+    )
+    parser.add_argument(
+        "--fsrs6-oracle-stationary-finite-distill-policy",
+        type=Path,
+        default=None,
+        help=(
+            "Path to an FSRS6 oracle stationary finite distill policy JSON when "
+            "using --sched fsrs6_oracle_stationary_finite_distill."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-oracle-stationary-finite-distill-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing trained FSRS6 oracle stationary finite distill policy "
+            "artifacts, usually train-overfit/train_outputs."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-oracle-stationary-finite-distill-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "Training run root; treated as <root>/train-overfit/train_outputs for "
+            "FSRS6 oracle stationary finite distill policy discovery."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-oracle-stationary-finite-distill-policy-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "TOML manifest with [[policies]] FSRS6 oracle stationary finite "
+            "distill entries."
+        ),
     )
     parser.add_argument(
         "--fsrs6-ap-policy-root",
@@ -352,6 +389,18 @@ def _merge_config_args(
         "fsrs6_adr_train_run_root": ("--fsrs6-adr-train-run-root",),
         "fsrs6_adr_policy_manifest": ("--fsrs6-adr-policy-manifest",),
         "fsrs6_adr_lambda_values": ("--fsrs6-adr-lambda-values",),
+        "fsrs6_oracle_stationary_finite_distill_policy": (
+            "--fsrs6-oracle-stationary-finite-distill-policy",
+        ),
+        "fsrs6_oracle_stationary_finite_distill_policy_root": (
+            "--fsrs6-oracle-stationary-finite-distill-policy-root",
+        ),
+        "fsrs6_oracle_stationary_finite_distill_train_run_root": (
+            "--fsrs6-oracle-stationary-finite-distill-train-run-root",
+        ),
+        "fsrs6_oracle_stationary_finite_distill_policy_manifest": (
+            "--fsrs6-oracle-stationary-finite-distill-policy-manifest",
+        ),
         "fsrs6_ap_policy": ("--fsrs6-ap-policy",),
         "fsrs6_ap_policy_root": ("--fsrs6-ap-policy-root",),
         "fsrs6_ap_train_run_root": ("--fsrs6-ap-train-run-root",),
@@ -404,6 +453,11 @@ def _print_dry_run(plan) -> None:
         print(f"example log dir: {plan.example_log_dir}")
     if plan.ctx.fsrs6_adr_policy_specs:
         print(f"fsrs6_adr policies: {len(plan.ctx.fsrs6_adr_policy_specs)}")
+    if plan.ctx.fsrs6_oracle_stationary_finite_distill_policy_specs:
+        print(
+            "fsrs6_oracle_stationary_finite_distill policies: "
+            f"{len(plan.ctx.fsrs6_oracle_stationary_finite_distill_policy_specs)}"
+        )
     if plan.ctx.fsrs6_ap_policy_specs:
         print(f"fsrs6_ap policies: {len(plan.ctx.fsrs6_ap_policy_specs)}")
     if plan.ctx.anki_sm2_ap_policy_specs:

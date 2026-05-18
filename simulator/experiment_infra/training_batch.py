@@ -18,6 +18,7 @@ from simulator.batched_engine.multiuser_engine import simulate_multiuser
 
 SUPPORTED_TRAINERS = {
     "fsrs6_adr_portfolio",
+    "fsrs6_oracle_stationary_finite_distill_portfolio",
     "fsrs6_adr_cmaes",
     "fsrs6_ap_cmaes",
     "fsrs6_ap_portfolio",
@@ -74,6 +75,8 @@ def resolve_in_process_trainer(
         return "fsrs6_ap_portfolio"
     if "train_anki_sm2_ap_portfolio.py" in script_names:
         return "anki_sm2_ap_portfolio"
+    if "train_fsrs6_oracle_stationary_finite_distill_portfolio.py" in script_names:
+        return "fsrs6_oracle_stationary_finite_distill_portfolio"
     if "train_fsrs6_adr_portfolio.py" in script_names:
         return "fsrs6_adr_portfolio"
     raise ValueError(
@@ -96,6 +99,9 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
     )
     from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
         PortfolioSettings,
+    )
+    from experiments.rl_scheduler.train_fsrs6_oracle_stationary_finite_distill_portfolio import (
+        OracleDistillPortfolioSettings,
     )
     from experiments.rl_scheduler.train_fsrs6_ap_portfolio import (
         APPortfolioSettings,
@@ -139,6 +145,17 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         )
         return max(
             len(portfolio.seed_retention_values or ()),
+            portfolio.population_size,
+            portfolio.offspring_size,
+        )
+    if trainer == "fsrs6_oracle_stationary_finite_distill_portfolio":
+        portfolio = OracleDistillPortfolioSettings.from_mapping(
+            config.training_portfolio,
+            settings=settings,
+            default_seed_retention_values=baseline_dr_values,
+        )
+        return max(
+            len(portfolio.seed_cost_weights or ()),
             portfolio.population_size,
             portfolio.offspring_size,
         )
@@ -203,6 +220,10 @@ def run_in_process_train_batch(
         )
     if trainer == "fsrs6_adr_portfolio":
         return _run_fsrs6_adr_portfolio_jobs(
+            jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
+        )
+    if trainer == "fsrs6_oracle_stationary_finite_distill_portfolio":
+        return _run_fsrs6_oracle_stationary_finite_distill_portfolio_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     if trainer == "fsrs6_ap_cmaes":
@@ -384,6 +405,64 @@ def _run_fsrs6_adr_portfolio_jobs(
                     artifact_paths=(),
                     progress_path=None,
                     error="ADR portfolio trainer did not return an outcome for this job.",
+                )
+            )
+            continue
+        results.append(
+            InProcessTrainOutcome(
+                job=job,
+                passed=outcome.passed,
+                artifact_paths=outcome.artifact_paths,
+                progress_path=outcome.progress_path,
+                error=outcome.error,
+            )
+        )
+    return results
+
+
+def _run_fsrs6_oracle_stationary_finite_distill_portfolio_jobs(
+    *,
+    jobs: list[InProcessTrainJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+) -> list[InProcessTrainOutcome]:
+    from experiments.rl_scheduler.train_fsrs6_oracle_stationary_finite_distill_portfolio import (
+        OracleDistillPortfolioTrainJob,
+        run_portfolio_train_jobs,
+    )
+
+    outcomes = run_portfolio_train_jobs(
+        jobs=[
+            OracleDistillPortfolioTrainJob(
+                user_id=job.user_id,
+                output_dir=job.output_dir,
+                command_record_path=job.command_record_path,
+            )
+            for job in jobs
+        ],
+        config=config,
+        config_path=config_path,
+        repo_root=repo_root,
+        execution_mode="in_process_batch",
+    )
+    outcome_by_key = {
+        (outcome.job.user_id, outcome.job.output_dir): outcome for outcome in outcomes
+    }
+    results: list[InProcessTrainOutcome] = []
+    for job in jobs:
+        outcome = outcome_by_key.get((job.user_id, job.output_dir))
+        if outcome is None:
+            results.append(
+                InProcessTrainOutcome(
+                    job=job,
+                    passed=False,
+                    artifact_paths=(),
+                    progress_path=None,
+                    error=(
+                        "Oracle stationary finite distill portfolio trainer did not "
+                        "return an outcome for this job."
+                    ),
                 )
             )
             continue

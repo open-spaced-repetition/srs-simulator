@@ -16,6 +16,9 @@ from simulator.batched_sweep.runner import BatchedSweepContext, _build_sweep_lan
 from simulator.batched_sweep.fsrs6_adr_policy import (
     resolve_fsrs6_adr_policy_specs,
 )
+from simulator.batched_sweep.fsrs6_oracle_stationary_finite_distill_policy import (
+    resolve_fsrs6_oracle_stationary_finite_distill_policy_specs,
+)
 from simulator.batched_sweep.fsrs6_ap_policy import (
     resolve_fsrs6_ap_policy_specs,
 )
@@ -35,6 +38,7 @@ from simulator.scheduler_spec import parse_scheduler_spec
 SUPPORTED_ENVS = {"lstm", "fsrs6", "fsrs6_default"}
 SUPPORTED_SCHEDS = set(batched_scheduler_names())
 ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
+ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_stationary_finite_distill"
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,16 @@ def build_batched_sweep_plan(
                 f"--sched {name} requires an FSRS6 ADR policy source "
                 "(--fsrs6-adr-policy, --fsrs6-adr-policy-root, "
                 "--fsrs6-adr-train-run-root, or --fsrs6-adr-policy-manifest)."
+            )
+        if name == ORACLE_DISTILL_SCHEDULER and not _has_fsrs6_oracle_distill_source(
+            args
+        ):
+            raise ValueError(
+                f"--sched {name} requires an FSRS6 oracle stationary finite distill "
+                "policy source (--fsrs6-oracle-stationary-finite-distill-policy, "
+                "--fsrs6-oracle-stationary-finite-distill-policy-root, "
+                "--fsrs6-oracle-stationary-finite-distill-train-run-root, or "
+                "--fsrs6-oracle-stationary-finite-distill-policy-manifest)."
             )
         if name == "fsrs6_ap" and not _has_fsrs6_ap_source(args):
             raise ValueError(
@@ -160,6 +174,31 @@ def build_batched_sweep_plan(
                 lambda_values=getattr(args, "fsrs6_adr_lambda_values", None),
             )
     fsrs6_ap_policy_specs = ()
+    fsrs6_oracle_distill_policy_specs = ()
+    if any(
+        parse_scheduler_spec(raw)[0] == ORACLE_DISTILL_SCHEDULER for raw in schedulers
+    ):
+        if _uses_expanded_fsrs6_oracle_distill_source(args):
+            fsrs6_oracle_distill_policy_specs = (
+                resolve_fsrs6_oracle_stationary_finite_distill_policy_specs(
+                    user_ids=user_ids,
+                    policy_root=getattr(
+                        args,
+                        "fsrs6_oracle_stationary_finite_distill_policy_root",
+                        None,
+                    ),
+                    train_run_root=getattr(
+                        args,
+                        "fsrs6_oracle_stationary_finite_distill_train_run_root",
+                        None,
+                    ),
+                    policy_manifest=getattr(
+                        args,
+                        "fsrs6_oracle_stationary_finite_distill_policy_manifest",
+                        None,
+                    ),
+                )
+            )
     if any(parse_scheduler_spec(raw)[0] == "fsrs6_ap" for raw in schedulers):
         if _uses_expanded_fsrs6_ap_source(args):
             fsrs6_ap_policy_specs = resolve_fsrs6_ap_policy_specs(
@@ -192,6 +231,12 @@ def build_batched_sweep_plan(
         log_layout=log_layout,
         fsrs6_adr_policy=getattr(args, "fsrs6_adr_policy", None),
         fsrs6_adr_policy_specs=fsrs6_adr_policy_specs,
+        fsrs6_oracle_stationary_finite_distill_policy=getattr(
+            args, "fsrs6_oracle_stationary_finite_distill_policy", None
+        ),
+        fsrs6_oracle_stationary_finite_distill_policy_specs=(
+            fsrs6_oracle_distill_policy_specs
+        ),
         fsrs6_ap_policy=getattr(args, "fsrs6_ap_policy", None),
         fsrs6_ap_policy_specs=fsrs6_ap_policy_specs,
         anki_sm2_ap_policy=getattr(args, "anki_sm2_ap_policy", None),
@@ -371,6 +416,13 @@ def _lane_counts_by_user(
             for spec in ctx.fsrs6_adr_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
             continue
+        if (
+            name == ORACLE_DISTILL_SCHEDULER
+            and ctx.fsrs6_oracle_stationary_finite_distill_policy_specs
+        ):
+            for spec in ctx.fsrs6_oracle_stationary_finite_distill_policy_specs:
+                counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
+            continue
         if name == "fsrs6_ap" and ctx.fsrs6_ap_policy_specs:
             for spec in ctx.fsrs6_ap_policy_specs:
                 counts_by_user[spec.user_id] = counts_by_user.get(spec.user_id, 0) + 1
@@ -412,6 +464,44 @@ def _uses_expanded_fsrs6_adr_source(args: argparse.Namespace) -> bool:
             "Configure only one expanded FSRS6 ADR policy source: "
             "--fsrs6-adr-policy-root, --fsrs6-adr-train-run-root, or "
             "--fsrs6-adr-policy-manifest."
+        )
+    return any(expanded)
+
+
+def _has_fsrs6_oracle_distill_source(args: argparse.Namespace) -> bool:
+    return any(
+        getattr(args, attr, None) is not None
+        for attr in (
+            "fsrs6_oracle_stationary_finite_distill_policy",
+            "fsrs6_oracle_stationary_finite_distill_policy_root",
+            "fsrs6_oracle_stationary_finite_distill_train_run_root",
+            "fsrs6_oracle_stationary_finite_distill_policy_manifest",
+        )
+    )
+
+
+def _uses_expanded_fsrs6_oracle_distill_source(args: argparse.Namespace) -> bool:
+    expanded = [
+        getattr(args, "fsrs6_oracle_stationary_finite_distill_policy_root", None)
+        is not None,
+        getattr(args, "fsrs6_oracle_stationary_finite_distill_train_run_root", None)
+        is not None,
+        getattr(args, "fsrs6_oracle_stationary_finite_distill_policy_manifest", None)
+        is not None,
+    ]
+    if getattr(
+        args, "fsrs6_oracle_stationary_finite_distill_policy", None
+    ) is not None and any(expanded):
+        raise ValueError(
+            "--fsrs6-oracle-stationary-finite-distill-policy cannot be combined "
+            "with expanded policy sources."
+        )
+    if sum(expanded) > 1:
+        raise ValueError(
+            "Configure only one expanded FSRS6 oracle stationary finite distill "
+            "policy source: --fsrs6-oracle-stationary-finite-distill-policy-root, "
+            "--fsrs6-oracle-stationary-finite-distill-train-run-root, or "
+            "--fsrs6-oracle-stationary-finite-distill-policy-manifest."
         )
     return any(expanded)
 

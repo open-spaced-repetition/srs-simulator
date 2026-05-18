@@ -34,6 +34,7 @@ from simulator.schedulers import (
     AnkiSM2APScheduler,
     MemriseScheduler,
     FSRS6ADRScheduler,
+    FSRS6OracleStationaryFiniteDistillScheduler,
     FSRS6APScheduler,
     SSPMMCScheduler,
 )
@@ -125,6 +126,17 @@ def _require_fsrs6_adr_policy(path: Path | None) -> Path:
     return path
 
 
+def _require_fsrs6_oracle_stationary_finite_distill_policy(
+    path: Path | None,
+) -> Path:
+    if path is None:
+        raise ValueError(
+            "FSRS6 oracle stationary finite distill scheduler requires "
+            "--fsrs6-oracle-stationary-finite-distill-policy pointing to a policy JSON."
+        )
+    return path
+
+
 def _require_fsrs6_ap_policy(path: Path | None) -> Path:
     if path is None:
         raise ValueError(
@@ -202,6 +214,15 @@ SCHEDULER_FACTORIES = {
         fsrs_weights=None,
         priority_mode=args.scheduler_priority,
         simulation_days=args.days,
+    ),
+    "fsrs6_oracle_stationary_finite_distill": lambda args: (
+        FSRS6OracleStationaryFiniteDistillScheduler(
+            policy_json=_require_fsrs6_oracle_stationary_finite_distill_policy(
+                args.fsrs6_oracle_stationary_finite_distill_policy
+            ),
+            fsrs_weights=_resolve_benchmark_weights(args, "fsrs6", expected_len=21),
+            priority_mode=args.scheduler_priority,
+        )
     ),
     "fsrs6_ap": lambda args: FSRS6APScheduler(
         policy_json=_require_fsrs6_ap_policy(args.fsrs6_ap_policy),
@@ -394,6 +415,15 @@ def main() -> None:
         help=(
             "Path to an FSRS6 ADR policy JSON when using --sched fsrs6_adr, "
             "fsrs6_adr_time, or fsrs6_default_adr."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-oracle-stationary-finite-distill-policy",
+        type=Path,
+        default=None,
+        help=(
+            "Path to an FSRS6 oracle stationary finite distill policy JSON when "
+            "using --sched fsrs6_oracle_stationary_finite_distill."
         ),
     )
     parser.add_argument(
@@ -591,12 +621,20 @@ def _format_plot_footer(args: argparse.Namespace) -> str:
         extra.append(f"fixed-interval={format_float(fixed_interval)}")
     sspmmc_policy = getattr(args, "sspmmc_policy", None)
     fsrs6_adr_policy = getattr(args, "fsrs6_adr_policy", None)
+    fsrs6_oracle_distill_policy = getattr(
+        args, "fsrs6_oracle_stationary_finite_distill_policy", None
+    )
     fsrs6_ap_policy = getattr(args, "fsrs6_ap_policy", None)
     anki_sm2_ap_policy = getattr(args, "anki_sm2_ap_policy", None)
     if sspmmc_policy:
         extra.append(f"sspmmc-policy={sspmmc_policy.stem}")
     if fsrs6_adr_policy:
         extra.append(f"fsrs6-adr-policy={fsrs6_adr_policy.stem}")
+    if fsrs6_oracle_distill_policy:
+        extra.append(
+            "fsrs6-oracle-stationary-finite-distill-policy="
+            f"{fsrs6_oracle_distill_policy.stem}"
+        )
     if fsrs6_ap_policy:
         extra.append(f"fsrs6-ap-policy={fsrs6_ap_policy.stem}")
     if anki_sm2_ap_policy:
@@ -870,6 +908,9 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         parts.append(f"ivl={format_float(fixed_interval)}")
     sspmmc_policy = getattr(args, "sspmmc_policy", None)
     fsrs6_adr_policy = getattr(args, "fsrs6_adr_policy", None)
+    fsrs6_oracle_distill_policy = getattr(
+        args, "fsrs6_oracle_stationary_finite_distill_policy", None
+    )
     fsrs6_ap_policy = getattr(args, "fsrs6_ap_policy", None)
     anki_sm2_ap_policy = getattr(args, "anki_sm2_ap_policy", None)
     if sspmmc_policy:
@@ -882,6 +923,15 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             parts.append(f"policy-dr={format_float(adr_baseline_dr)}")
         if adr_lambda is not None:
             parts.append(f"lambda={format_float(adr_lambda)}")
+    if fsrs6_oracle_distill_policy:
+        parts.append(f"policy={fsrs6_oracle_distill_policy.stem}")
+        goal_cost_weight = getattr(
+            args,
+            "fsrs6_oracle_stationary_finite_distill_goal_cost_weight",
+            None,
+        )
+        if goal_cost_weight is not None:
+            parts.append(f"goalw={format_float(goal_cost_weight)}")
     if fsrs6_ap_policy:
         parts.append(f"policy={fsrs6_ap_policy.stem}")
         ap_baseline_dr = getattr(args, "fsrs6_ap_baseline_desired_retention", None)
@@ -929,6 +979,16 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             args, "fsrs6_adr_baseline_desired_retention", None
         ),
         "fsrs6_adr_lambda_value": getattr(args, "fsrs6_adr_lambda_value", None),
+        "fsrs6_oracle_stationary_finite_distill_policy": str(
+            fsrs6_oracle_distill_policy
+        )
+        if fsrs6_oracle_distill_policy
+        else None,
+        "fsrs6_oracle_stationary_finite_distill_goal_cost_weight": getattr(
+            args,
+            "fsrs6_oracle_stationary_finite_distill_goal_cost_weight",
+            None,
+        ),
         "fsrs6_ap_policy": str(fsrs6_ap_policy) if fsrs6_ap_policy else None,
         "fsrs6_ap_baseline_desired_retention": getattr(
             args, "fsrs6_ap_baseline_desired_retention", None

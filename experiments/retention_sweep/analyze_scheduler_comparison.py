@@ -48,6 +48,7 @@ USER_FILE_RE = re.compile(r"simulation_results_retention_sweep_user_(\d+)\.json$
 DR_PERCENT_RE = re.compile(r"\bDR=(\d+(?:\.\d+)?)%")
 DR_TOKEN_RE = re.compile(r"(?:^|[_\W])dr[_=-]([01]?(?:\.\d+)?)", re.IGNORECASE)
 ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
+ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_stationary_finite_distill"
 
 
 @dataclass(frozen=True)
@@ -373,6 +374,7 @@ def row_from_item(
         *ADR_POLICY_SCHEDULERS,
         "fsrs6_ap",
         "anki_sm2_ap",
+        ORACLE_DISTILL_SCHEDULER,
     }:
         return None
     return SweepRow(
@@ -401,6 +403,10 @@ def _row_series_identity(item: dict[str, Any]) -> str | None:
             return policy
     if item.get("scheduler") == "anki_sm2_ap":
         policy = item.get("anki_sm2_ap_policy")
+        if isinstance(policy, str) and policy.strip():
+            return policy
+    if item.get("scheduler") == ORACLE_DISTILL_SCHEDULER:
+        policy = item.get("fsrs6_oracle_stationary_finite_distill_policy")
         if isinstance(policy, str) and policy.strip():
             return policy
     title = item.get("title")

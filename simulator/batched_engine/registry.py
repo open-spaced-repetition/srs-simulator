@@ -17,6 +17,7 @@ from simulator.schedulers import (
     HLRScheduler,
     MemriseScheduler,
     FSRS6ADRScheduler,
+    FSRS6OracleStationaryFiniteDistillScheduler,
     SSPMMCScheduler,
 )
 from simulator.schedulers.anki_sm2 import AnkiSM2BatchedSchedulerOps
@@ -29,6 +30,9 @@ from simulator.schedulers.hlr import HLRBatchedSchedulerOps
 from simulator.schedulers.lstm import LSTMBatchedSchedulerOps
 from simulator.schedulers.memrise import MemriseBatchedSchedulerOps
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchedSchedulerOps
+from simulator.schedulers.fsrs6_oracle_stationary_finite_distill import (
+    FSRS6OracleStationaryFiniteDistillBatchedSchedulerOps,
+)
 from simulator.schedulers.sspmmc import SSPMMCBatchedSchedulerOps
 from simulator.batched_engine.types import (
     BatchedEngineConfig,
@@ -77,6 +81,10 @@ def resolve_scheduler_ops(
         return SSPMMCBatchedSchedulerOps(scheduler, device=device, dtype=dtype)
     if isinstance(scheduler, FSRS6ADRScheduler):
         return FSRS6ADRBatchedSchedulerOps(scheduler, device=device, dtype=dtype)
+    if isinstance(scheduler, FSRS6OracleStationaryFiniteDistillScheduler):
+        return FSRS6OracleStationaryFiniteDistillBatchedSchedulerOps(
+            scheduler, device=device, dtype=dtype
+        )
     if isinstance(scheduler, DASHScheduler):
         raise ValueError(
             "Batched engine does not support DASHScheduler; "
@@ -87,5 +95,5 @@ def resolve_scheduler_ops(
     raise ValueError(
         "Batched engine requires a supported scheduler "
         "(FSRS6, FSRS3, HLR, fixed, Memrise, Anki SM-2, SSPMMC, "
-        "or FSRS6 ADR)."
+        "FSRS6 ADR, or FSRS6 oracle stationary finite distill)."
     )

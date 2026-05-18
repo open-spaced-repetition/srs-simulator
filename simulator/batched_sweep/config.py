@@ -87,6 +87,9 @@ class BatchedSweepConfig:
         logging_config = _table(raw, "logging", required=False)
         short_term = _table(raw, "short_term", required=False)
         fsrs6_adr = _table(raw, "fsrs6_adr", required=False)
+        fsrs6_oracle_distill = _table(
+            raw, "fsrs6_oracle_stationary_finite_distill", required=False
+        )
         fsrs6_ap = _table(raw, "fsrs6_ap", required=False)
         anki_sm2_ap = _table(raw, "anki_sm2_ap", required=False)
         fsrs6 = _table(raw, "fsrs6", required=False)
@@ -219,6 +222,26 @@ class BatchedSweepConfig:
                 fsrs6_adr.get("lambda_values"),
                 "fsrs6_adr.lambda_values",
             ),
+            fsrs6_oracle_stationary_finite_distill_policy=_optional_path(
+                fsrs6_oracle_distill.get("policy"),
+                "fsrs6_oracle_stationary_finite_distill.policy",
+                base_path=base_path,
+            ),
+            fsrs6_oracle_stationary_finite_distill_policy_root=_optional_path(
+                fsrs6_oracle_distill.get("policy_root"),
+                "fsrs6_oracle_stationary_finite_distill.policy_root",
+                base_path=base_path,
+            ),
+            fsrs6_oracle_stationary_finite_distill_train_run_root=_optional_path(
+                fsrs6_oracle_distill.get("train_run_root"),
+                "fsrs6_oracle_stationary_finite_distill.train_run_root",
+                base_path=base_path,
+            ),
+            fsrs6_oracle_stationary_finite_distill_policy_manifest=_optional_path(
+                fsrs6_oracle_distill.get("policy_manifest"),
+                "fsrs6_oracle_stationary_finite_distill.policy_manifest",
+                base_path=base_path,
+            ),
             fsrs6_ap_policy=_optional_path(
                 fsrs6_ap.get("policy"),
                 "fsrs6_ap.policy",
@@ -338,6 +361,9 @@ def _adapt_experiment_config(
     uses_fsrs6_adr_policy_source = bool(
         scheduler_names & schedulers_for_policy_source(PolicySource.FSRS6_ADR)
     )
+    uses_fsrs6_oracle_distill_policy_source = (
+        "fsrs6_oracle_stationary_finite_distill" in scheduler_names
+    )
     lambda_grid = training.get("lambda_grid")
     if _training_uses_portfolio_trainer(training):
         lambda_grid = None
@@ -357,6 +383,14 @@ def _adapt_experiment_config(
         lambda_grid=lambda_grid,
         default_train_run_root=default_train_run_root
         if uses_fsrs6_adr_policy_source
+        else None,
+    )
+    fsrs6_oracle_distill = _adapt_experiment_policy_source(
+        sweep,
+        prefix="fsrs6_oracle_stationary_finite_distill",
+        lambda_grid=None,
+        default_train_run_root=default_train_run_root
+        if uses_fsrs6_oracle_distill_policy_source
         else None,
     )
     fsrs6_ap = _adapt_experiment_policy_source(
@@ -405,6 +439,7 @@ def _adapt_experiment_config(
         "short_term": short_term,
         "fsrs6": fsrs6,
         "fsrs6_adr": fsrs6_adr,
+        "fsrs6_oracle_stationary_finite_distill": fsrs6_oracle_distill,
         "fsrs6_ap": fsrs6_ap,
         "anki_sm2_ap": anki_sm2_ap,
     }
@@ -446,6 +481,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
         trainer = batch.get("trainer")
         if trainer in {
             "fsrs6_adr_portfolio",
+            "fsrs6_oracle_stationary_finite_distill_portfolio",
             "fsrs6_ap_portfolio",
             "anki_sm2_ap_portfolio",
         }:
@@ -457,6 +493,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     return bool(
         {
             "train_fsrs6_adr_portfolio.py",
+            "train_fsrs6_oracle_stationary_finite_distill_portfolio.py",
             "train_fsrs6_ap_portfolio.py",
             "train_anki_sm2_ap_portfolio.py",
         }

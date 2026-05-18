@@ -145,6 +145,46 @@ class PortfolioWorkflowTests(unittest.TestCase):
         self.assertTrue(skipped_steps[-1].skipped)
         self.assertIn("--skip-report", skipped_steps[-1].reason or "")
 
+    def test_oracle_distill_portfolio_config_uses_matched_adr_report(self) -> None:
+        config_path = (
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1.toml"
+        )
+        config = ExperimentConfig.from_toml(config_path)
+
+        self.assertEqual(
+            config.training_batch.trainer,
+            "auto",
+        )
+        self.assertTrue(
+            any(
+                Path(item).name
+                == "train_fsrs6_oracle_stationary_finite_distill_portfolio.py"
+                for item in config.train_command_template
+            )
+        )
+        self.assertEqual(
+            config.sweep_batched.schedulers,
+            ("fsrs6_oracle_stationary_finite_distill",),
+        )
+        self.assertEqual(
+            config.report.candidate_label, "Oracle stationary finite distill"
+        )
+        self.assertEqual(config.report.comparison_label, "ADR")
+        self.assertIsNotNone(config.report.comparison_run_root)
+        command = _report_command(
+            config=config,
+            formal_run_id=(
+                "fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1"
+            ),
+        )
+        self.assertIn("--comparison-run-root", command)
+        self.assertEqual(
+            command[command.index("--candidate-label") + 1],
+            "Oracle stationary finite distill",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

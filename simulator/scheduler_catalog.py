@@ -8,10 +8,14 @@ from simulator.fsrs6_adr_policy import (
     FEATURE_VERSION_LOG_POLY,
     FEATURE_VERSION_LOG_POLY_TIME,
 )
+from simulator.fsrs6_oracle_stationary_finite_distill_policy import (
+    PORTFOLIO_CHILD_ACTION_SPACE as ORACLE_DISTILL_PORTFOLIO_CHILD_ACTION_SPACE,
+)
 
 
 class PolicySource(StrEnum):
     FSRS6_ADR = "fsrs6_adr"
+    FSRS6_ORACLE_STATIONARY_FINITE_DISTILL = "fsrs6_oracle_stationary_finite_distill"
     FSRS6_AP = "fsrs6_ap"
     ANKI_SM2_AP = "anki_sm2_ap"
     SSPMMC = "sspmmc"
@@ -166,6 +170,14 @@ SCHEDULER_DESCRIPTORS: dict[str, SchedulerDescriptor] = {
         policy_source=PolicySource.FSRS6_ADR,
         run_id_scoped_sweep=True,
     ),
+    "fsrs6_oracle_stationary_finite_distill": SchedulerDescriptor(
+        name="fsrs6_oracle_stationary_finite_distill",
+        supports_event=True,
+        supports_batched=True,
+        uses_desired_retention=False,
+        policy_source=PolicySource.FSRS6_ORACLE_STATIONARY_FINITE_DISTILL,
+        run_id_scoped_sweep=True,
+    ),
 }
 
 
@@ -173,6 +185,7 @@ PORTFOLIO_CHILD_ACTION_SPACES = frozenset(
     {
         "sd_retention_function_portfolio_child",
         "sdt_retention_function_portfolio_child",
+        ORACLE_DISTILL_PORTFOLIO_CHILD_ACTION_SPACE,
         "fsrs6_ap_weight_delta_portfolio_child",
         "anki_sm2_ap_params_portfolio_child",
     }
