@@ -1,0 +1,11 @@
+schema_version = 1
+name = "retention_distill"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+retention_distill = "docs/single_card_tradeoff/experiments/2026-05-17-retention_distill.md"
+
+[source_artifacts]
+retention_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_results.csv"
+

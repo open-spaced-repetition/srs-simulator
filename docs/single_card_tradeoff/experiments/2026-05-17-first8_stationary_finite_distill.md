@@ -1,7 +1,7 @@
 # First-eight Per-user Stationary Finite Distill
 
 Machine summary: `artifacts/single_card_tradeoff/reports/current/report_summary.json`
-Config: `experiments/single_card_tradeoff/configs/stationary_finite_first8_report.toml`
+Config: `experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml`
 
 ## Question
 

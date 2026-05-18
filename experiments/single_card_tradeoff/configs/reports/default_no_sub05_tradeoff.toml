@@ -1,0 +1,61 @@
+schema_version = 1
+name = "default_no_sub05_tradeoff"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+default_no_sub05_tradeoff = "docs/single_card_tradeoff/experiments/2026-05-17-default_no_sub05_tradeoff.md"
+
+[source_artifacts]
+default_regret_auc = "artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv"
+default_results = "artifacts/single_card_tradeoff/no_sub05_distill_compare/results.csv"
+oracle_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv"
+stationary_finite_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_results.csv"
+infinite_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_results.csv"
+uvfa_ppo_results = "artifacts/single_card_tradeoff/uvfa_ppo_results.csv"
+uvfa_ppo_rnn_interval_results = "artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_results.csv"
+retention_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_results.csv"
+
+[[commands]]
+name = "evaluate_default_no_sub05_tradeoff"
+description = "Evaluate the default FSRS-6 compact-policy comparison with no sub-0.5 actions."
+command = [
+  "uv",
+  "run",
+  "experiments/single_card_tradeoff/tradeoff.py",
+  "--env",
+  "fsrs6_default",
+  "--sched",
+  "fsrs6_default,fsrs6_oracle_distill,fsrs6_oracle_stationary_finite_distill,fsrs6_oracle_retention_distill,fsrs6_oracle_infinite_distill,uvfa_ppo,uvfa_ppo_rnn_interval",
+  "--particles",
+  "10000",
+  "--deck-scale",
+  "10000",
+  "--oracle-distill-policy",
+  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt",
+  "--oracle-stationary-finite-distill-policy",
+  "artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt",
+  "--oracle-retention-distill-policy",
+  "artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt",
+  "--oracle-infinite-distill-policy",
+  "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt",
+  "--uvfa-ppo-policy",
+  "artifacts/single_card_tradeoff/uvfa_ppo_policy.pt",
+  "--uvfa-ppo-rnn-interval-policy",
+  "artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt",
+  "--out",
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/results.csv",
+  "--plot-path",
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/results.png",
+  "--regret-auc-out",
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv",
+  "--torch-device",
+  "cuda",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/results.csv",
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv",
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/results.png",
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/performance_summary.json",
+  "artifacts/single_card_tradeoff/no_sub05_distill_compare/gpu_monitor/summary.json",
+]

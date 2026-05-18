@@ -29,7 +29,7 @@ from experiments.single_card_tradeoff.reporting import (
 
 
 DEFAULT_CONFIG = Path(
-    "experiments/single_card_tradeoff/configs/stationary_finite_first8_report.toml"
+    "experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml"
 )
 DEFAULT_REPORT_ROOT = Path("artifacts/single_card_tradeoff/reports/current")
 DEFAULT_DOC_OUTPUT = Path("docs/single_card_tradeoff/experiments/2026-05-17-index.md")
@@ -40,6 +40,18 @@ REPORT_FILENAMES = {
     "first8_stationary_finite_distill": "first8_stationary_finite_distill.md",
     "first8_exact_vs_distill": "first8_exact_vs_distill.md",
     "low_param_direct_search": "low_param_direct_search.md",
+    "uvfa_ppo": "uvfa_ppo.md",
+    "recurrent_interval_ppo": "recurrent_interval_ppo.md",
+    "oracle_distill": "oracle_distill.md",
+    "grid_oracle": "grid_oracle.md",
+    "infinite_stationary_oracles": "infinite_stationary_oracles.md",
+    "ppo_guide_ablation": "ppo_guide_ablation.md",
+    "stationary_finite_policy_viz": "stationary_finite_policy_viz.md",
+    "stationary_finite_compression": "stationary_finite_compression.md",
+    "oracle_policy_outputs": "oracle_policy_outputs.md",
+    "interval_oracle_distill": "interval_oracle_distill.md",
+    "retention_distill": "retention_distill.md",
+    "multiuser_eval_batching": "multiuser_eval_batching.md",
 }
 
 DEFAULT_DOC_OUTPUTS = {
@@ -56,6 +68,43 @@ DEFAULT_DOC_OUTPUTS = {
     ),
     "low_param_direct_search": Path(
         "docs/single_card_tradeoff/experiments/2026-05-17-low_param_direct_search.md"
+    ),
+    "uvfa_ppo": Path("docs/single_card_tradeoff/experiments/2026-05-17-uvfa_ppo.md"),
+    "recurrent_interval_ppo": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-recurrent_interval_ppo.md"
+    ),
+    "oracle_distill": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-oracle_distill.md"
+    ),
+    "grid_oracle": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-grid_oracle.md"
+    ),
+    "infinite_stationary_oracles": Path(
+        "docs/single_card_tradeoff/experiments/"
+        "2026-05-17-infinite_stationary_oracles.md"
+    ),
+    "ppo_guide_ablation": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-ppo_guide_ablation.md"
+    ),
+    "stationary_finite_policy_viz": Path(
+        "docs/single_card_tradeoff/experiments/"
+        "2026-05-17-stationary_finite_policy_viz.md"
+    ),
+    "stationary_finite_compression": Path(
+        "docs/single_card_tradeoff/experiments/"
+        "2026-05-17-stationary_finite_compression.md"
+    ),
+    "oracle_policy_outputs": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-oracle_policy_outputs.md"
+    ),
+    "interval_oracle_distill": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-interval_oracle_distill.md"
+    ),
+    "retention_distill": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-retention_distill.md"
+    ),
+    "multiuser_eval_batching": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-multiuser_eval_batching.md"
     ),
 }
 
@@ -91,6 +140,119 @@ DEFAULT_SOURCE_PATHS: dict[str, Path] = {
     "low_param_dense_metadata": Path(
         "artifacts/single_card_tradeoff/"
         "low_param_direct_policy_search_first8_users_dense_weights/metadata.json"
+    ),
+    "oracle_distill_results": Path(
+        "artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv"
+    ),
+    "oracle_distill_hparam_summary": Path(
+        "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_summary.csv"
+    ),
+    "stationary_finite_distill_results": Path(
+        "artifacts/single_card_tradeoff/"
+        "fsrs6_oracle_stationary_finite_distill_results.csv"
+    ),
+    "infinite_distill_results": Path(
+        "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_results.csv"
+    ),
+    "uvfa_ppo_results": Path("artifacts/single_card_tradeoff/uvfa_ppo_results.csv"),
+    "uvfa_ppo_hparam_summary": Path(
+        "artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_summary.csv"
+    ),
+    "uvfa_ppo_rnn_interval_results": Path(
+        "artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_results.csv"
+    ),
+    "grid_oracle_regret_auc": Path(
+        "artifacts/single_card_tradeoff/results_regret_auc.csv"
+    ),
+    "stationary_finite_compare_regret_auc": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_compare/regret_auc.csv"
+    ),
+    "infinite_distill_compare_regret_auc": Path(
+        "artifacts/single_card_tradeoff/infinite_distill_compare/regret_auc.csv"
+    ),
+    "ppo_ablation_summary": Path(
+        "artifacts/single_card_tradeoff/ppo_ablation/"
+        "ppo_oracle_warmup_ablation_summary.csv"
+    ),
+    "ppo_no_guide_regret_auc": Path(
+        "artifacts/single_card_tradeoff/ppo_ablation/"
+        "tradeoff_uvfa_ppo_no_guide_regret_auc.csv"
+    ),
+    "ppo_static_guide_regret_auc": Path(
+        "artifacts/single_card_tradeoff/ppo_ablation/"
+        "tradeoff_uvfa_ppo_static_guide_regret_auc.csv"
+    ),
+    "ppo_oracle_warmup_only_regret_auc": Path(
+        "artifacts/single_card_tradeoff/ppo_ablation/"
+        "tradeoff_uvfa_ppo_oracle_warmup_only_regret_auc.csv"
+    ),
+    "rnn_no_guide_regret_auc": Path(
+        "artifacts/single_card_tradeoff/ppo_ablation/"
+        "tradeoff_uvfa_ppo_rnn_interval_no_guide_regret_auc.csv"
+    ),
+    "rnn_static_guide_regret_auc": Path(
+        "artifacts/single_card_tradeoff/ppo_ablation/"
+        "tradeoff_uvfa_ppo_rnn_interval_static_guide_regret_auc.csv"
+    ),
+    "rnn_oracle_warmup_only_regret_auc": Path(
+        "artifacts/single_card_tradeoff/ppo_ablation/"
+        "tradeoff_uvfa_ppo_rnn_interval_oracle_warmup_only_regret_auc.csv"
+    ),
+    "stationary_finite_policy_action_summary": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_policy_viz/action_summary.csv"
+    ),
+    "stationary_finite_policy_distill_comparison": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_policy_viz/"
+        "distill_exact_comparison.csv"
+    ),
+    "stationary_finite_policy_findings": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_policy_viz/findings.md"
+    ),
+    "stationary_finite_cost_weight_ablation": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_cost_weight_ablation/"
+        "cost_weight_ablation_multiseed_summary.csv"
+    ),
+    "stationary_finite_model_size_ablation": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/"
+        "model_size_ablation_summary.csv"
+    ),
+    "oracle_policy_outputs_rollout": Path(
+        "artifacts/single_card_tradeoff/analysis/"
+        "no_sub05_fsrs6_oracle_policy_outputs_rollout_1825_p2048.csv"
+    ),
+    "oracle_policy_outputs_table": Path(
+        "artifacts/single_card_tradeoff/analysis/"
+        "no_sub05_fsrs6_oracle_policy_outputs_table_1825.csv"
+    ),
+    "oracle_policy_outputs_rollout_detail": Path(
+        "artifacts/single_card_tradeoff/analysis/"
+        "no_sub05_fsrs6_oracle_policy_outputs_rollout_1825_p2048_detail.csv"
+    ),
+    "oracle_policy_outputs_table_detail": Path(
+        "artifacts/single_card_tradeoff/analysis/"
+        "no_sub05_fsrs6_oracle_policy_outputs_table_1825_detail.csv"
+    ),
+    "interval_distill_results": Path(
+        "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill.csv"
+    ),
+    "interval_compare_regret_auc": Path(
+        "artifacts/single_card_tradeoff/oracle_interval_compare/regret_auc.csv"
+    ),
+    "interval_hparam_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "fsrs6_oracle_interval_distill_hparam_summary.csv"
+    ),
+    "retention_distill_results": Path(
+        "artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_results.csv"
+    ),
+    "multiuser_eval_batch_smoke_all_train": Path(
+        "artifacts/single_card_tradeoff/eval_batch_smoke_all/train_summary.csv"
+    ),
+    "multiuser_eval_batch_smoke_group1_train": Path(
+        "artifacts/single_card_tradeoff/eval_batch_smoke_group1/train_summary.csv"
+    ),
+    "multiuser_eval_batch_smoke_post_patch_train": Path(
+        "artifacts/single_card_tradeoff/eval_batch_smoke_post_patch/train_summary.csv"
     ),
 }
 
@@ -150,7 +312,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    config = load_toml_profile(args.config)
+    config = _load_report_config_tree(args.config)
     report_root = args.report_root or config_path(
         config,
         section_name="report",
@@ -285,6 +447,10 @@ def build_report_summary(
             "config_path": display_path(resolve_repo_path(config_path))
             if config_path is not None
             else None,
+            "included_profiles": [
+                display_path(path)
+                for path in report_config.get("_included_profile_paths", [])
+            ],
             "report_root": display_path(report_root),
             "published_report": display_path(output_paths["index"]),
             "published_reports": {
@@ -317,6 +483,10 @@ def build_report_summary(
             "sparse_teacher_weights": _low_param_summary(low_param_sparse),
             "dense_teacher_weights": _low_param_summary(low_param_dense),
         },
+        "configured_reports": _configured_reports(
+            source_paths=source_paths,
+            default_regret=default_regret,
+        ),
         "conclusions": [
             (
                 "The 476-parameter per-user stationary finite distill remains the "
@@ -339,7 +509,7 @@ def build_report_summary(
 
 
 def render_reports(summary: Mapping[str, Any]) -> dict[str, str]:
-    return {
+    reports = {
         "index": render_index_report(summary),
         "default_no_sub05_tradeoff": render_default_no_sub05_tradeoff_report(summary),
         "first8_stationary_finite_distill": (
@@ -348,6 +518,9 @@ def render_reports(summary: Mapping[str, Any]) -> dict[str, str]:
         "first8_exact_vs_distill": render_first8_exact_vs_distill_report(summary),
         "low_param_direct_search": render_low_param_direct_search_report(summary),
     }
+    for report in summary["configured_reports"]:
+        reports[report["key"]] = render_configured_report(summary, report)
+    return reports
 
 
 def render_index_report(summary: Mapping[str, Any]) -> str:
@@ -372,48 +545,59 @@ def render_index_report(summary: Mapping[str, Any]) -> str:
     )
     first8 = summary["first8_stationary_finite_distill"]
     distill_vs_exact = summary["first8_exact_vs_distill"]["distill_vs_exact"]
+    rows = [
+        [
+            "default no-sub-0.5 tradeoff",
+            f"`{published['default_no_sub05_tradeoff']}`",
+            (
+                "`fsrs6_oracle_stationary_finite_distill` keeps "
+                f"{format_percent(stationary_default['span_coverage_percent'])} "
+                "coverage vs `fsrs6_default`."
+            ),
+        ],
+        [
+            "first-eight per-user distill",
+            f"`{published['first8_stationary_finite_distill']}`",
+            (
+                "Eight independent 476-parameter students average "
+                f"{format_percent(first8['mean_relative_regret_auc_percent'])} "
+                "relative regret vs `fsrs6`."
+            ),
+        ],
+        [
+            "first-eight exact vs distill",
+            f"`{published['first8_exact_vs_distill']}`",
+            (
+                "Direct distill-vs-exact relative regret is "
+                f"{format_percent(distill_vs_exact['mean_relative_regret_auc_percent'])} "
+                "over "
+                f"{format_percent(distill_vs_exact['mean_span_coverage_percent'])} "
+                "shared coverage."
+            ),
+        ],
+        [
+            "low-parameter direct search",
+            f"`{published['low_param_direct_search']}`",
+            (
+                "The 7-parameter family is a useful lower-capacity "
+                "baseline but loses substantial coverage."
+            ),
+        ],
+    ]
+    rows.extend(
+        [
+            [
+                str(report["title"]),
+                f"`{published[report['key']]}`",
+                str(report["index_summary"]),
+            ]
+            for report in summary["configured_reports"]
+        ]
+    )
     lines.extend(
         markdown_table(
             ["experiment", "published report", "main result"],
-            [
-                [
-                    "default no-sub-0.5 tradeoff",
-                    f"`{published['default_no_sub05_tradeoff']}`",
-                    (
-                        "`fsrs6_oracle_stationary_finite_distill` keeps "
-                        f"{format_percent(stationary_default['span_coverage_percent'])} "
-                        "coverage vs `fsrs6_default`."
-                    ),
-                ],
-                [
-                    "first-eight per-user distill",
-                    f"`{published['first8_stationary_finite_distill']}`",
-                    (
-                        "Eight independent 476-parameter students average "
-                        f"{format_percent(first8['mean_relative_regret_auc_percent'])} "
-                        "relative regret vs `fsrs6`."
-                    ),
-                ],
-                [
-                    "first-eight exact vs distill",
-                    f"`{published['first8_exact_vs_distill']}`",
-                    (
-                        "Direct distill-vs-exact relative regret is "
-                        f"{format_percent(distill_vs_exact['mean_relative_regret_auc_percent'])} "
-                        "over "
-                        f"{format_percent(distill_vs_exact['mean_span_coverage_percent'])} "
-                        "shared coverage."
-                    ),
-                ],
-                [
-                    "low-parameter direct search",
-                    f"`{published['low_param_direct_search']}`",
-                    (
-                        "The 7-parameter family is a useful lower-capacity "
-                        "baseline but loses substantial coverage."
-                    ),
-                ],
-            ],
+            rows,
         )
     )
     lines.append("")
@@ -432,6 +616,57 @@ def render_index_report(summary: Mapping[str, Any]) -> str:
     for conclusion in summary["conclusions"]:
         lines.append(f"- {conclusion}")
     lines.append("")
+    return "\n".join(lines)
+
+
+def render_configured_report(
+    summary: Mapping[str, Any],
+    report: Mapping[str, Any],
+) -> str:
+    lines: list[str] = []
+    lines.append(f"# {report['title']}")
+    lines.append("")
+    _append_report_preamble(lines, summary, question=str(report["question"]))
+    lines.append("## Evidence")
+    lines.append("")
+    for paragraph in report["evidence"]:
+        lines.append(str(paragraph))
+        lines.append("")
+    source_lines = _configured_source_lines(report)
+    if source_lines:
+        lines.extend(source_lines)
+        lines.append("")
+    if report.get("notes"):
+        lines.append("Notes:")
+        for note in report["notes"]:
+            lines.append(f"- {note}")
+        lines.append("")
+
+    result_paragraphs = report.get("result_paragraphs") or []
+    tables = report.get("tables") or []
+    if result_paragraphs or tables:
+        lines.append("## Results")
+        lines.append("")
+        for paragraph in result_paragraphs:
+            lines.append(str(paragraph))
+            lines.append("")
+        for table in tables:
+            if table.get("title"):
+                lines.append(f"### {table['title']}")
+                lines.append("")
+            lines.extend(markdown_table(table["headers"], table["rows"]))
+            lines.append("")
+
+    _append_reproduction_profile(
+        lines,
+        summary,
+        command_names=report.get("command_names") or (),
+    )
+    lines.append("## Conclusion")
+    lines.append("")
+    lines.append(str(report["conclusion"]))
+    lines.append("")
+    _append_artifacts_footer(lines, summary, report_key=str(report["key"]))
     return "\n".join(lines)
 
 
@@ -888,6 +1123,1317 @@ def _source_lines(input_artifacts: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+def _configured_source_lines(report: Mapping[str, Any]) -> list[str]:
+    sources = report.get("source_artifacts") or []
+    if not sources:
+        return []
+    lines = ["Source artifacts:"]
+    for source in sources:
+        lines.append(f"- `{source['key']}`: `{source['path']}`")
+    return lines
+
+
+def _configured_reports(
+    *,
+    source_paths: Mapping[str, Path],
+    default_regret: Sequence[Mapping[str, str]],
+) -> list[dict[str, Any]]:
+    oracle_distill_hparams = read_csv_rows(
+        source_paths["oracle_distill_hparam_summary"]
+    )
+    uvfa_hparams = read_csv_rows(source_paths["uvfa_ppo_hparam_summary"])
+    grid_regret = read_csv_rows(source_paths["grid_oracle_regret_auc"])
+    stationary_compare = read_csv_rows(
+        source_paths["stationary_finite_compare_regret_auc"]
+    )
+    infinite_compare = read_csv_rows(
+        source_paths["infinite_distill_compare_regret_auc"]
+    )
+    ppo_summary = read_csv_rows(source_paths["ppo_ablation_summary"])
+    action_summary = read_csv_rows(
+        source_paths["stationary_finite_policy_action_summary"]
+    )
+    distill_policy_comparison = read_csv_rows(
+        source_paths["stationary_finite_policy_distill_comparison"]
+    )
+    cost_weight_ablation = read_csv_rows(
+        source_paths["stationary_finite_cost_weight_ablation"]
+    )
+    model_size_ablation = read_csv_rows(
+        source_paths["stationary_finite_model_size_ablation"]
+    )
+    oracle_rollout_outputs = read_csv_rows(
+        source_paths["oracle_policy_outputs_rollout"]
+    )
+    oracle_table_outputs = read_csv_rows(source_paths["oracle_policy_outputs_table"])
+    interval_results = read_csv_rows(source_paths["interval_distill_results"])
+    interval_regret = read_csv_rows(source_paths["interval_compare_regret_auc"])
+    interval_hparams = read_csv_rows(source_paths["interval_hparam_summary"])
+    retention_results = read_csv_rows(source_paths["retention_distill_results"])
+    smoke_all = read_csv_rows(source_paths["multiuser_eval_batch_smoke_all_train"])
+    smoke_group1 = read_csv_rows(
+        source_paths["multiuser_eval_batch_smoke_group1_train"]
+    )
+    smoke_post_patch = read_csv_rows(
+        source_paths["multiuser_eval_batch_smoke_post_patch_train"]
+    )
+
+    return [
+        _uvfa_ppo_report(source_paths, default_regret, uvfa_hparams),
+        _recurrent_interval_ppo_report(
+            source_paths,
+            default_regret,
+            ppo_summary,
+        ),
+        _oracle_distill_report(source_paths, default_regret, oracle_distill_hparams),
+        _grid_oracle_report(source_paths, grid_regret),
+        _infinite_stationary_oracles_report(
+            source_paths,
+            stationary_compare,
+            infinite_compare,
+        ),
+        _ppo_guide_ablation_report(source_paths, default_regret, ppo_summary),
+        _stationary_finite_policy_viz_report(
+            source_paths,
+            action_summary,
+            distill_policy_comparison,
+        ),
+        _stationary_finite_compression_report(
+            source_paths,
+            cost_weight_ablation,
+            model_size_ablation,
+        ),
+        _oracle_policy_outputs_report(
+            source_paths,
+            oracle_rollout_outputs,
+            oracle_table_outputs,
+        ),
+        _interval_oracle_distill_report(
+            source_paths,
+            interval_results,
+            interval_regret,
+            interval_hparams,
+        ),
+        _retention_distill_report(source_paths, default_regret, retention_results),
+        _multiuser_eval_batching_report(
+            source_paths,
+            smoke_all,
+            smoke_group1,
+            smoke_post_patch,
+        ),
+    ]
+
+
+def _uvfa_ppo_report(
+    source_paths: Mapping[str, Path],
+    default_regret: Sequence[Mapping[str, str]],
+    hparams: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    current = _regret_summary(
+        default_regret,
+        baseline_scheduler="fsrs6_default",
+        scheduler="uvfa_ppo",
+    )
+    best = hparams[0]
+    return {
+        "key": "uvfa_ppo",
+        "title": "UVFA PPO",
+        "question": (
+            "How does the goal-conditioned discrete-action PPO policy compare "
+            "with the clipped `fsrs6_default` frontier, and how sensitive is it "
+            "to model size?"
+        ),
+        "index_summary": (
+            "`uvfa_ppo` reaches "
+            f"{format_percent(current['relative_regret_auc_percent'])} relative "
+            f"regret at {format_percent(current['span_coverage_percent'])} "
+            "coverage, using 27,148 parameters."
+        ),
+        "evidence": [
+            (
+                "The deployment comparison uses the current no-sub-0.5 "
+                "`fsrs6_default` tradeoff artifact. The model-scale table comes "
+                "from the rerun hparam search CSV, not README prose."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "default_regret_auc",
+            "uvfa_ppo_hparam_summary",
+            "uvfa_ppo_results",
+        ),
+        "result_paragraphs": [
+            (
+                "The best hparam-search candidate by mean scalar objective is "
+                f"`{best['candidate']}` with "
+                f"{format_int(_int(best, 'param_count'))} parameters and mean "
+                f"scalar objective {format_float(best['mean_scalar_objective'], digits=4)}."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Current clipped tradeoff",
+                "headers": [
+                    "scheduler",
+                    "params",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _regret_table_row(
+                        "uvfa_ppo",
+                        current,
+                        params=PARAM_COUNTS["uvfa_ppo"],
+                    )
+                ],
+            },
+            {
+                "title": "Model-scale search",
+                "headers": [
+                    "candidate",
+                    "network",
+                    "params",
+                    "mean scalar",
+                    "delta vs best",
+                    "train_s",
+                ],
+                "rows": _hparam_rows(hparams, limit=6),
+            },
+        ],
+        "command_names": (
+            "evaluate_default_no_sub05_tradeoff",
+            "search_uvfa_ppo_hparams",
+        ),
+        "conclusion": (
+            "The default PPO checkpoint is competitive on coverage and AUC, "
+            "but it is a much larger policy than the compact oracle-distill "
+            "baselines."
+        ),
+    }
+
+
+def _recurrent_interval_ppo_report(
+    source_paths: Mapping[str, Path],
+    default_regret: Sequence[Mapping[str, str]],
+    ppo_summary: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    current = _regret_summary(
+        default_regret,
+        baseline_scheduler="fsrs6_default",
+        scheduler="uvfa_ppo_rnn_interval",
+    )
+    default_train = _find_ppo_summary_row(
+        ppo_summary,
+        method="uvfa_ppo_rnn_interval",
+        ablation="default_oracle_guide",
+    )
+    return {
+        "key": "recurrent_interval_ppo",
+        "title": "Recurrent Interval PPO",
+        "question": (
+            "Does the recurrent continuous-interval PPO policy improve the "
+            "single-card memory-time frontier after the clipped action-space "
+            "change?"
+        ),
+        "index_summary": (
+            "`uvfa_ppo_rnn_interval` reaches "
+            f"{format_percent(current['relative_regret_auc_percent'])} relative "
+            f"regret at {format_percent(current['span_coverage_percent'])} "
+            "coverage, but uses 87,559 parameters."
+        ),
+        "evidence": [
+            (
+                "The main row is from the current no-sub-0.5 default comparison. "
+                "The guide-ablation rows are read from the structured PPO "
+                "ablation CSVs."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "default_regret_auc",
+            "uvfa_ppo_rnn_interval_results",
+            "ppo_ablation_summary",
+            "rnn_no_guide_regret_auc",
+            "rnn_static_guide_regret_auc",
+            "rnn_oracle_warmup_only_regret_auc",
+        ),
+        "result_paragraphs": [
+            (
+                "The default recurrent run used "
+                f"{format_int(_int(default_train, 'train_transitions'))} training "
+                f"transitions and took {format_float(default_train['train_runtime_s'])}s."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Current clipped tradeoff",
+                "headers": [
+                    "scheduler",
+                    "params",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _regret_table_row(
+                        "uvfa_ppo_rnn_interval",
+                        current,
+                        params=PARAM_COUNTS["uvfa_ppo_rnn_interval"],
+                    )
+                ],
+            },
+            {
+                "title": "Recurrent guide ablations",
+                "headers": [
+                    "variant",
+                    "params",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": _ppo_ablation_rows(
+                    source_paths,
+                    default_regret,
+                    specs=(
+                        (
+                            "oracle guide",
+                            "uvfa_ppo_rnn_interval",
+                            "default",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                        (
+                            "no guide",
+                            "uvfa_ppo_rnn_interval",
+                            "rnn_no_guide_regret_auc",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                        (
+                            "static guide",
+                            "uvfa_ppo_rnn_interval",
+                            "rnn_static_guide_regret_auc",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                        (
+                            "oracle warmup only",
+                            "uvfa_ppo_rnn_interval",
+                            "rnn_oracle_warmup_only_regret_auc",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                    ),
+                ),
+            },
+        ],
+        "command_names": ("evaluate_default_no_sub05_tradeoff",),
+        "conclusion": (
+            "The recurrent interval policy is useful as a continuous-action "
+            "baseline, but the current artifact does not dominate the compact "
+            "stationary finite distill on coverage per parameter."
+        ),
+    }
+
+
+def _oracle_distill_report(
+    source_paths: Mapping[str, Path],
+    default_regret: Sequence[Mapping[str, str]],
+    hparams: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    current = _regret_summary(
+        default_regret,
+        baseline_scheduler="fsrs6_default",
+        scheduler="fsrs6_oracle_distill",
+    )
+    compact = next(row for row in hparams if row["candidate"] == "res16d2")
+    return {
+        "key": "oracle_distill",
+        "title": "Discrete Oracle Distillation",
+        "question": (
+            "How strong is the unrestricted finite-horizon FSRS-6 oracle "
+            "distillation baseline under the clipped action space?"
+        ),
+        "index_summary": (
+            "`fsrs6_oracle_distill` is the strongest compact default baseline: "
+            f"{format_percent(current['relative_regret_auc_percent'])} relative "
+            f"regret at {format_percent(current['span_coverage_percent'])} coverage."
+        ),
+        "evidence": [
+            (
+                "The tradeoff row is the current clipped default comparison. "
+                "The model-size facts come from the rerun oracle-distill "
+                "hparam-search summary."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "default_regret_auc",
+            "oracle_distill_results",
+            "oracle_distill_hparam_summary",
+        ),
+        "result_paragraphs": [
+            (
+                "The current compact default is `res16d2` with "
+                f"{format_int(_int(compact, 'param_count'))} parameters, final "
+                f"CE {format_float(compact['train_final_loss'], digits=4)}, and "
+                f"train teacher agreement "
+                f"{format_percent(100.0 * _float(compact, 'train_final_action_agreement'))}."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Current clipped tradeoff",
+                "headers": [
+                    "scheduler",
+                    "params",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _regret_table_row(
+                        "fsrs6_oracle_distill",
+                        current,
+                        params=PARAM_COUNTS["fsrs6_oracle_distill"],
+                    )
+                ],
+            },
+            {
+                "title": "Model-scale search",
+                "headers": [
+                    "candidate",
+                    "network",
+                    "params",
+                    "mean scalar",
+                    "delta vs best",
+                    "train_s",
+                ],
+                "rows": _hparam_rows(hparams, limit=8),
+            },
+        ],
+        "command_names": (
+            "evaluate_default_no_sub05_tradeoff",
+            "search_oracle_distill_hparams",
+        ),
+        "conclusion": (
+            "The unrestricted finite-oracle distill remains the compact baseline "
+            "to beat on the default FSRS-6 single-card frontier."
+        ),
+    }
+
+
+def _grid_oracle_report(
+    source_paths: Mapping[str, Path],
+    regret_rows: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    finite = _regret_summary(
+        regret_rows,
+        baseline_scheduler="fsrs6_default",
+        scheduler="fsrs6_oracle",
+    )
+    stationary_finite = _regret_summary(
+        regret_rows,
+        baseline_scheduler="fsrs6_default",
+        scheduler="fsrs6_oracle_stationary_finite",
+    )
+    return {
+        "key": "grid_oracle",
+        "title": "Grid Oracle",
+        "question": (
+            "How do exact finite-horizon grid policies compare with the "
+            "stationary finite policy class on the clipped default frontier?"
+        ),
+        "index_summary": (
+            "Exact finite grid oracle reaches "
+            f"{format_percent(finite['span_coverage_percent'])} coverage; "
+            "stationary finite exact reaches "
+            f"{format_percent(stationary_finite['span_coverage_percent'])}."
+        ),
+        "evidence": [
+            (
+                "This report uses the structured regret-AUC output from the "
+                "exact oracle comparison run."
+            ),
+        ],
+        "source_artifacts": _source_refs(source_paths, "grid_oracle_regret_auc"),
+        "tables": [
+            {
+                "title": "Exact policy classes vs fsrs6_default",
+                "headers": [
+                    "scheduler",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _regret_table_row_no_params("fsrs6_oracle", finite),
+                    _regret_table_row_no_params(
+                        "fsrs6_oracle_stationary_finite",
+                        stationary_finite,
+                    ),
+                ],
+            },
+        ],
+        "command_names": ("evaluate_grid_oracle_compare",),
+        "conclusion": (
+            "The stationary finite exact policy gives up a small amount of "
+            "time-regret performance and coverage versus the unrestricted "
+            "finite-horizon table, but removes the remaining-time policy input."
+        ),
+    }
+
+
+def _infinite_stationary_oracles_report(
+    source_paths: Mapping[str, Path],
+    stationary_compare: Sequence[Mapping[str, str]],
+    infinite_compare: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    rows = [
+        _regret_summary(
+            stationary_compare,
+            baseline_scheduler="fsrs6_default",
+            scheduler=scheduler,
+        )
+        for scheduler in (
+            "fsrs6_oracle_infinite",
+            "fsrs6_oracle_infinite_distill",
+            "fsrs6_oracle_stationary_finite",
+        )
+    ]
+    infinite_direct = _regret_summary(
+        infinite_compare,
+        baseline_scheduler="fsrs6_oracle_distill",
+        scheduler="fsrs6_oracle_infinite_distill",
+    )
+    return {
+        "key": "infinite_stationary_oracles",
+        "title": "Infinite And Stationary Oracles",
+        "question": (
+            "Does the average-reward infinite oracle transfer well to a finite "
+            "new-card lifecycle?"
+        ),
+        "index_summary": (
+            "Infinite distill has low default-baseline AUC but only "
+            f"{format_percent(rows[1]['span_coverage_percent'])} coverage."
+        ),
+        "evidence": [
+            (
+                "The comparison uses finite-lifecycle tradeoff artifacts for "
+                "the infinite exact/distill and stationary finite exact policies."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "stationary_finite_compare_regret_auc",
+            "infinite_distill_compare_regret_auc",
+            "infinite_distill_results",
+        ),
+        "result_paragraphs": [
+            (
+                "Directly against `fsrs6_oracle_distill`, infinite distill has "
+                f"{format_percent(infinite_direct['relative_regret_auc_percent'])} "
+                "relative regret over only "
+                f"{format_percent(infinite_direct['span_coverage_percent'])} "
+                "coverage."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Finite-lifecycle evaluation",
+                "headers": [
+                    "scheduler",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _regret_table_row_no_params(scheduler, row)
+                    for scheduler, row in zip(
+                        (
+                            "fsrs6_oracle_infinite",
+                            "fsrs6_oracle_infinite_distill",
+                            "fsrs6_oracle_stationary_finite",
+                        ),
+                        rows,
+                        strict=True,
+                    )
+                ],
+            }
+        ],
+        "command_names": ("evaluate_infinite_stationary_oracles",),
+        "conclusion": (
+            "The average-reward infinite objective is not aligned with the "
+            "1825-day new-card lifecycle in the current evaluation; its useful "
+            "frontier span is narrow after the action floor."
+        ),
+    }
+
+
+def _ppo_guide_ablation_report(
+    source_paths: Mapping[str, Path],
+    default_regret: Sequence[Mapping[str, str]],
+    ppo_summary: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    default_discrete = _find_ppo_summary_row(
+        ppo_summary,
+        method="uvfa_ppo",
+        ablation="default_oracle_guide",
+    )
+    default_recurrent = _find_ppo_summary_row(
+        ppo_summary,
+        method="uvfa_ppo_rnn_interval",
+        ablation="default_oracle_guide",
+    )
+    return {
+        "key": "ppo_guide_ablation",
+        "title": "PPO Guide Ablation",
+        "question": (
+            "Which guide setup is responsible for the PPO policies' clipped "
+            "single-card frontier performance?"
+        ),
+        "index_summary": (
+            "The no-guide discrete PPO still beats `fsrs6_default`, while RNN "
+            "interval PPO relies more heavily on the oracle guide."
+        ),
+        "evidence": [
+            (
+                "The table combines current no-sub-0.5 default rows for the "
+                "oracle-guided defaults with the six structured no-sub-0.5 "
+                "ablation regret CSVs."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "default_regret_auc",
+            "ppo_ablation_summary",
+            "ppo_no_guide_regret_auc",
+            "ppo_static_guide_regret_auc",
+            "ppo_oracle_warmup_only_regret_auc",
+            "rnn_no_guide_regret_auc",
+            "rnn_static_guide_regret_auc",
+            "rnn_oracle_warmup_only_regret_auc",
+        ),
+        "result_paragraphs": [
+            (
+                "The default discrete PPO summary reports "
+                f"{format_int(_int(default_discrete, 'train_transitions'))} "
+                "training transitions; the default recurrent summary reports "
+                f"{format_int(_int(default_recurrent, 'train_transitions'))}."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Clipped regret-AUC ablations",
+                "headers": [
+                    "variant",
+                    "params",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": _ppo_ablation_rows(
+                    source_paths,
+                    default_regret,
+                    specs=(
+                        ("ppo oracle guide", "uvfa_ppo", "default", "uvfa_ppo"),
+                        (
+                            "ppo no guide",
+                            "uvfa_ppo",
+                            "ppo_no_guide_regret_auc",
+                            "uvfa_ppo",
+                        ),
+                        (
+                            "ppo static guide",
+                            "uvfa_ppo",
+                            "ppo_static_guide_regret_auc",
+                            "uvfa_ppo",
+                        ),
+                        (
+                            "ppo oracle warmup only",
+                            "uvfa_ppo",
+                            "ppo_oracle_warmup_only_regret_auc",
+                            "uvfa_ppo",
+                        ),
+                        (
+                            "rnn oracle guide",
+                            "uvfa_ppo_rnn_interval",
+                            "default",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                        (
+                            "rnn no guide",
+                            "uvfa_ppo_rnn_interval",
+                            "rnn_no_guide_regret_auc",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                        (
+                            "rnn static guide",
+                            "uvfa_ppo_rnn_interval",
+                            "rnn_static_guide_regret_auc",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                        (
+                            "rnn oracle warmup only",
+                            "uvfa_ppo_rnn_interval",
+                            "rnn_oracle_warmup_only_regret_auc",
+                            "uvfa_ppo_rnn_interval",
+                        ),
+                    ),
+                ),
+            }
+        ],
+        "command_names": (),
+        "conclusion": (
+            "The oracle guide remains the safest PPO recipe in the current "
+            "artifact set. Guide choice changes both regret and frontier span, "
+            "so coverage must be reported with AUC."
+        ),
+    }
+
+
+def _stationary_finite_policy_viz_report(
+    source_paths: Mapping[str, Path],
+    action_summary: Sequence[Mapping[str, str]],
+    distill_comparison: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    action_rows = _stationary_action_summary_rows(action_summary)
+    distill_rows = [
+        [
+            _weight_label(row),
+            format_percent(100.0 * _float(row, "exact_match_cell_share")),
+            format_percent(100.0 * _float(row, "distill_lower_cell_share")),
+            format_percent(100.0 * _float(row, "distill_higher_cell_share")),
+            format_float(row["mean_abs_retention_diff"], digits=4),
+            format_float(row["mean_retention_diff"], digits=4),
+        ]
+        for row in distill_comparison
+    ]
+    return {
+        "key": "stationary_finite_policy_viz",
+        "title": "Stationary Finite Policy Visualization",
+        "question": (
+            "What action patterns does the exact stationary finite policy table "
+            "learn after removing action retentions below 0.5?"
+        ),
+        "index_summary": (
+            "The exact table shifts from modal 0.98 at `w=0` to modal 0.50 at "
+            "`w=1024`, with mixed behavior at intermediate weights."
+        ),
+        "evidence": [
+            (
+                "The visualization report is generated from `action_summary.csv` "
+                "and the exact-vs-distill table comparison CSV."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "stationary_finite_policy_action_summary",
+            "stationary_finite_policy_distill_comparison",
+            "stationary_finite_policy_findings",
+        ),
+        "tables": [
+            {
+                "title": "Exact table action summary",
+                "headers": [
+                    "weight",
+                    "modal retention",
+                    "modal share",
+                    "mean action retention",
+                    "normalized entropy",
+                    "iterations",
+                ],
+                "rows": action_rows,
+            },
+            {
+                "title": "Distill vs exact table",
+                "headers": [
+                    "weight",
+                    "exact match",
+                    "distill lower",
+                    "distill higher",
+                    "mean abs retention diff",
+                    "mean retention diff",
+                ],
+                "rows": distill_rows,
+            },
+        ],
+        "command_names": ("visualize_stationary_finite_policy",),
+        "conclusion": (
+            "The exact policy remains state-sensitive after clipping. The "
+            "distill mostly tracks the table, but exact-cell agreement is "
+            "lowest around the mixed `w=64` region."
+        ),
+    }
+
+
+def _stationary_finite_compression_report(
+    source_paths: Mapping[str, Path],
+    cost_weight_rows: Sequence[Mapping[str, str]],
+    model_size_rows: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    best_small = next(
+        row for row in model_size_rows if row["variant"] == "sf_train5_r8d2_e128"
+    )
+    return {
+        "key": "stationary_finite_compression",
+        "title": "Stationary Finite Compression",
+        "question": (
+            "How far can the stationary finite distill be compressed while "
+            "preserving relative regret and span coverage?"
+        ),
+        "index_summary": (
+            "The current 476-parameter `residual:8:2` 128-epoch model keeps "
+            f"{format_percent(best_small['span_coverage_percent_mean'])} coverage."
+        ),
+        "evidence": [
+            (
+                "The report uses the multi-seed sparse-cost-weight ablation and "
+                "the model-size ablation summaries from the current clipped "
+                "action-space run."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "stationary_finite_cost_weight_ablation",
+            "stationary_finite_model_size_ablation",
+        ),
+        "tables": [
+            {
+                "title": "Teacher cost-weight ablation",
+                "headers": [
+                    "variant",
+                    "weights",
+                    "params",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    [
+                        row["variant"],
+                        row["train_cost_weights"],
+                        format_int(_int(row, "parameter_count")),
+                        _mean_std_percent(
+                            row,
+                            "relative_regret_auc_percent_mean",
+                            "relative_regret_auc_percent_std",
+                        ),
+                        _mean_std_percent(
+                            row,
+                            "span_coverage_percent_mean",
+                            "span_coverage_percent_std",
+                        ),
+                    ]
+                    for row in cost_weight_rows
+                ],
+            },
+            {
+                "title": "Model-size ablation",
+                "headers": [
+                    "variant",
+                    "arch",
+                    "params",
+                    "epochs",
+                    "agreement",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    [
+                        row["variant"],
+                        row["arch_label"],
+                        format_int(_int(row, "parameter_count")),
+                        format_int(_int(row, "epochs")),
+                        format_percent(
+                            100.0 * _float(row, "eval_teacher_action_agreement")
+                        ),
+                        _mean_std_percent(
+                            row,
+                            "relative_regret_auc_percent_mean",
+                            "relative_regret_auc_percent_std",
+                        ),
+                        _mean_std_percent(
+                            row,
+                            "span_coverage_percent_mean",
+                            "span_coverage_percent_std",
+                        ),
+                    ]
+                    for row in model_size_rows
+                ],
+            },
+        ],
+        "command_names": (),
+        "conclusion": (
+            "The current compression floor is 476 parameters with longer "
+            "distillation. Smaller 216-316 parameter variants keep a favorable "
+            "AUC only over a much narrower frontier span."
+        ),
+    }
+
+
+def _oracle_policy_outputs_report(
+    source_paths: Mapping[str, Path],
+    rollout_outputs: Sequence[Mapping[str, str]],
+    table_outputs: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    return {
+        "key": "oracle_policy_outputs",
+        "title": "Oracle Policy Outputs",
+        "question": (
+            "Which desired-retention actions does the finite-horizon oracle "
+            "choose under rollout-weighted and table-weighted state sampling?"
+        ),
+        "index_summary": (
+            "The rerun clipped output analysis shows rollout weighting favors "
+            "high-retention actions at low cost and `0.50` only at the highest "
+            "cost."
+        ),
+        "evidence": [
+            (
+                "The old output-distribution artifacts used actions below 0.5, "
+                "so this report uses the rerun `no_sub05_*` structured CSVs."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "oracle_policy_outputs_rollout",
+            "oracle_policy_outputs_table",
+            "oracle_policy_outputs_rollout_detail",
+            "oracle_policy_outputs_table_detail",
+        ),
+        "tables": [
+            {
+                "title": "Rollout-weighted modal actions",
+                "headers": ["weight", "modal retention", "share", "decisions"],
+                "rows": _policy_output_rows(rollout_outputs),
+            },
+            {
+                "title": "Table-weighted modal actions",
+                "headers": ["weight", "modal retention", "share", "decisions"],
+                "rows": _policy_output_rows(table_outputs),
+            },
+        ],
+        "command_names": (
+            "analyze_oracle_policy_outputs_rollout",
+            "analyze_oracle_policy_outputs_table",
+        ),
+        "conclusion": (
+            "Rollout weighting and table weighting expose different parts of the "
+            "finite oracle, but both show the cost-driven shift toward cheaper "
+            "actions after the clipped action-space rerun."
+        ),
+    }
+
+
+def _interval_oracle_distill_report(
+    source_paths: Mapping[str, Path],
+    interval_results: Sequence[Mapping[str, str]],
+    interval_regret: Sequence[Mapping[str, str]],
+    interval_hparams: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    exact = _regret_summary(
+        interval_regret,
+        baseline_scheduler="fsrs6_default",
+        scheduler="fsrs6_oracle_interval",
+    )
+    distill = _regret_summary(
+        interval_regret,
+        baseline_scheduler="fsrs6_default",
+        scheduler="fsrs6_oracle_interval_distill",
+    )
+    train_row = interval_results[0]
+    return {
+        "key": "interval_oracle_distill",
+        "title": "Interval Oracle Distillation",
+        "question": (
+            "Can an integer-interval teacher and log-interval student improve "
+            "the default FSRS-6 single-card frontier?"
+        ),
+        "index_summary": (
+            "Interval distill reaches "
+            f"{format_percent(distill['relative_regret_auc_percent'])} relative "
+            f"regret at {format_percent(distill['span_coverage_percent'])} "
+            "coverage in the rerun comparison."
+        ),
+        "evidence": [
+            (
+                "The interval distill training, tradeoff comparison, and "
+                "model-size search were rerun to produce structured artifacts "
+                "for this report."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "interval_distill_results",
+            "interval_compare_regret_auc",
+            "interval_hparam_summary",
+        ),
+        "result_paragraphs": [
+            (
+                "The rerun interval distill final loss is "
+                f"{format_float(train_row['train_final_loss'], digits=5)}, with "
+                "eval log-interval MAE "
+                f"{format_float(train_row['eval_log_interval_mae'], digits=4)}."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Interval policies vs fsrs6_default",
+                "headers": [
+                    "scheduler",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _regret_table_row_no_params("fsrs6_oracle_interval", exact),
+                    _regret_table_row_no_params(
+                        "fsrs6_oracle_interval_distill",
+                        distill,
+                    ),
+                ],
+            },
+            {
+                "title": "Interval model-scale search",
+                "headers": [
+                    "candidate",
+                    "network",
+                    "params",
+                    "mean scalar",
+                    "delta vs best",
+                    "train_s",
+                ],
+                "rows": _hparam_rows(interval_hparams, limit=6),
+            },
+        ],
+        "command_names": (
+            "train_interval_distill",
+            "evaluate_interval_oracle_compare",
+            "search_interval_distill_hparams",
+        ),
+        "conclusion": (
+            "The interval distill is strong in the default comparison, while the "
+            "exact interval oracle row covers only the few cost weights solved "
+            "in this comparison."
+        ),
+    }
+
+
+def _retention_distill_report(
+    source_paths: Mapping[str, Path],
+    default_regret: Sequence[Mapping[str, str]],
+    retention_results: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    current = _regret_summary(
+        default_regret,
+        baseline_scheduler="fsrs6_default",
+        scheduler="fsrs6_oracle_retention_distill",
+    )
+    train_row = retention_results[0]
+    return {
+        "key": "retention_distill",
+        "title": "Continuous Desired-Retention Distillation",
+        "question": (
+            "How does the continuous desired-retention distill compare with "
+            "the clipped discrete-oracle distill baselines?"
+        ),
+        "index_summary": (
+            "`fsrs6_oracle_retention_distill` reaches "
+            f"{format_percent(current['relative_regret_auc_percent'])} relative "
+            f"regret at {format_percent(current['span_coverage_percent'])} coverage."
+        ),
+        "evidence": [
+            (
+                "The deployment row comes from the current no-sub-0.5 default "
+                "comparison; training/evaluation loss fields come from the "
+                "structured retention-distill results CSV."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "default_regret_auc",
+            "retention_distill_results",
+        ),
+        "result_paragraphs": [
+            (
+                "The structured result reports final loss "
+                f"{format_float(train_row['train_final_loss'], digits=4)}, "
+                "eval retention MAE "
+                f"{format_float(train_row['eval_retention_mae'], digits=4)}, and "
+                "eval log-interval MAE "
+                f"{format_float(train_row['eval_log_interval_mae'], digits=4)}."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Current clipped tradeoff",
+                "headers": [
+                    "scheduler",
+                    "params",
+                    "time_regret_auc",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _regret_table_row(
+                        "fsrs6_oracle_retention_distill",
+                        current,
+                        params=PARAM_COUNTS["fsrs6_oracle_retention_distill"],
+                    )
+                ],
+            }
+        ],
+        "command_names": ("evaluate_default_no_sub05_tradeoff",),
+        "conclusion": (
+            "The retention-output student is compact and viable, but in the "
+            "current clipped comparison it trails the discrete oracle distill "
+            "and stationary finite distill on coverage."
+        ),
+    }
+
+
+def _multiuser_eval_batching_report(
+    source_paths: Mapping[str, Path],
+    smoke_all: Sequence[Mapping[str, str]],
+    smoke_group1: Sequence[Mapping[str, str]],
+    smoke_post_patch: Sequence[Mapping[str, str]],
+) -> dict[str, Any]:
+    return {
+        "key": "multiuser_eval_batching",
+        "title": "Multiuser Evaluation Batching",
+        "question": (
+            "Does the multi-user stationary finite distill path have structured "
+            "smoke evidence for single-process batched training/evaluation?"
+        ),
+        "index_summary": (
+            "The available structured artifact is a tiny two-user smoke check; "
+            "it validates the batched path but is not a full performance study."
+        ),
+        "evidence": [
+            (
+                "No full sequential-versus-batched benchmark artifact is "
+                "available in the current tree. Per the report rule, this "
+                "section is limited to the existing structured smoke CSVs and "
+                "does not restate unstructured README timing claims."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "multiuser_eval_batch_smoke_all_train",
+            "multiuser_eval_batch_smoke_group1_train",
+            "multiuser_eval_batch_smoke_post_patch_train",
+        ),
+        "tables": [
+            {
+                "title": "Smoke runtime summaries",
+                "headers": [
+                    "artifact",
+                    "users",
+                    "teacher_s",
+                    "train_s",
+                    "eval_s",
+                    "params/user",
+                ],
+                "rows": [
+                    _smoke_runtime_row("all", smoke_all),
+                    _smoke_runtime_row("group1", smoke_group1),
+                    _smoke_runtime_row("post_patch", smoke_post_patch),
+                ],
+            }
+        ],
+        "command_names": (),
+        "conclusion": (
+            "The code path has structured smoke coverage. A full timing claim "
+            "should be made only after writing a dedicated benchmark artifact."
+        ),
+    }
+
+
+def _source_refs(source_paths: Mapping[str, Path], *keys: str) -> list[dict[str, str]]:
+    return [
+        {
+            "key": key,
+            "path": display_path(source_paths[key]),
+        }
+        for key in keys
+    ]
+
+
+def _hparam_rows(
+    rows: Sequence[Mapping[str, str]],
+    *,
+    limit: int,
+) -> list[list[str]]:
+    return [
+        [
+            row["candidate"],
+            f"{row['network']}:{row['hidden_size']}:{row['network_depth']}",
+            format_int(_int(row, "param_count")),
+            format_float(row["mean_scalar_objective"], digits=4),
+            format_float(row["mean_delta_vs_best_candidate"], digits=4),
+            format_float(row["train_runtime_s"], digits=2),
+        ]
+        for row in rows[:limit]
+    ]
+
+
+def _regret_summary(
+    rows: Sequence[Mapping[str, str]],
+    *,
+    baseline_scheduler: str,
+    scheduler: str,
+    environment: str = "fsrs6_default",
+) -> dict[str, float]:
+    return _regret_metrics(
+        _find_regret_row(
+            rows,
+            environment=environment,
+            baseline_scheduler=baseline_scheduler,
+            scheduler=scheduler,
+        )
+    )
+
+
+def _regret_table_row(
+    scheduler: str,
+    metrics: Mapping[str, Any],
+    *,
+    params: int | None,
+) -> list[str]:
+    return [
+        scheduler,
+        format_int(params),
+        format_float(metrics["time_regret_auc"], digits=4),
+        format_percent(metrics["relative_regret_auc_percent"]),
+        format_percent(metrics["span_coverage_percent"]),
+    ]
+
+
+def _regret_table_row_no_params(
+    scheduler: str,
+    metrics: Mapping[str, Any],
+) -> list[str]:
+    return [
+        scheduler,
+        format_float(metrics["time_regret_auc"], digits=4),
+        format_percent(metrics["relative_regret_auc_percent"]),
+        format_percent(metrics["span_coverage_percent"]),
+    ]
+
+
+def _find_ppo_summary_row(
+    rows: Sequence[Mapping[str, str]],
+    *,
+    method: str,
+    ablation: str,
+) -> Mapping[str, str]:
+    for row in rows:
+        if row["method"] == method and row["ablation"] == ablation:
+            return row
+    raise ValueError(f"Missing PPO summary row for {method}/{ablation}.")
+
+
+def _ppo_ablation_rows(
+    source_paths: Mapping[str, Path],
+    default_regret: Sequence[Mapping[str, str]],
+    *,
+    specs: Sequence[tuple[str, str, str, str]],
+) -> list[list[str]]:
+    result: list[list[str]] = []
+    for label, method, source_key, scheduler in specs:
+        if source_key == "default":
+            metrics = _regret_summary(
+                default_regret,
+                baseline_scheduler="fsrs6_default",
+                scheduler=scheduler,
+            )
+        else:
+            metrics = _regret_summary(
+                read_csv_rows(source_paths[source_key]),
+                baseline_scheduler="fsrs6_default",
+                scheduler=scheduler,
+            )
+        result.append(
+            [
+                label,
+                format_int(PARAM_COUNTS[method]),
+                format_float(metrics["time_regret_auc"], digits=4),
+                format_percent(metrics["relative_regret_auc_percent"]),
+                format_percent(metrics["span_coverage_percent"]),
+            ]
+        )
+    return result
+
+
+def _stationary_action_summary_rows(
+    rows: Sequence[Mapping[str, str]],
+) -> list[list[str]]:
+    by_weight: dict[float, Mapping[str, str]] = {}
+    for row in rows:
+        weight = _float(row, "goal_cost_weight")
+        by_weight.setdefault(weight, row)
+    return [
+        [
+            _weight_label(row),
+            format_float(row["modal_action_retention"], digits=2),
+            format_percent(100.0 * _float(row, "modal_cell_share")),
+            format_float(row["mean_action_retention"], digits=4),
+            format_float(row["normalized_action_entropy"], digits=3),
+            format_int(_int(row, "policy_iterations")),
+        ]
+        for _, row in sorted(by_weight.items())
+    ]
+
+
+def _policy_output_rows(rows: Sequence[Mapping[str, str]]) -> list[list[str]]:
+    by_weight: dict[float, list[Mapping[str, str]]] = {}
+    for row in rows:
+        by_weight.setdefault(_float(row, "goal_cost_weight"), []).append(row)
+    result: list[list[str]] = []
+    for _, group in sorted(by_weight.items()):
+        top = max(group, key=lambda row: _float(row, "decision_share"))
+        result.append(
+            [
+                _weight_label(top),
+                format_float(top["action_retention"], digits=2),
+                format_percent(100.0 * _float(top, "decision_share")),
+                format_int(_int(top, "total_decisions")),
+            ]
+        )
+    return result
+
+
+def _smoke_runtime_row(
+    label: str,
+    rows: Sequence[Mapping[str, str]],
+) -> list[str]:
+    row = rows[0]
+    return [
+        label,
+        format_int(len(rows)),
+        format_float(row["teacher_runtime_s"], digits=3),
+        format_float(row["train_runtime_s"], digits=3),
+        format_float(row["eval_runtime_s"], digits=3),
+        format_int(_int(row, "params_per_user")),
+    ]
+
+
+def _mean_std_percent(
+    row: Mapping[str, Any],
+    mean_key: str,
+    std_key: str,
+) -> str:
+    mean = _float(row, mean_key)
+    std = _float(row, std_key)
+    if std == 0.0:
+        return format_percent(mean)
+    return f"{format_percent(mean)} +/- {format_percent(std)}"
+
+
+def _weight_label(row: Mapping[str, Any]) -> str:
+    weight = _float(row, "goal_cost_weight")
+    if weight.is_integer():
+        return format_int(int(weight))
+    return format_float(weight, digits=2)
+
+
 def _config_report_outputs(
     config: Mapping[str, Any],
     *,
@@ -921,13 +2467,108 @@ def _config_source_paths(config: Mapping[str, Any]) -> dict[str, Path]:
         return dict(DEFAULT_SOURCE_PATHS)
     if not isinstance(raw, Mapping):
         raise ValueError("source_artifacts must be a TOML table.")
-    paths: dict[str, Path] = {}
-    for key in DEFAULT_SOURCE_PATHS:
-        value = raw.get(key)
+    paths = dict(DEFAULT_SOURCE_PATHS)
+    for key, value in raw.items():
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"source_artifacts.{key} must be a non-empty string.")
         paths[key] = Path(value)
     return paths
+
+
+def _load_report_config_tree(path: Path) -> dict[str, Any]:
+    resolved = resolve_repo_path(path)
+    config = load_toml_profile(resolved)
+    return _expand_report_config(config, config_path=resolved, seen={resolved})
+
+
+def _expand_report_config(
+    config: Mapping[str, Any],
+    *,
+    config_path: Path,
+    seen: set[Path],
+) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(config)
+    included_profiles: list[Path] = []
+    for profile_path in _child_profile_paths(config, config_path=config_path):
+        resolved = resolve_repo_path(profile_path)
+        if resolved in seen:
+            raise ValueError(
+                f"Recursive report profile include: {display_path(resolved)}"
+            )
+        child = load_toml_profile(resolved)
+        expanded_child = _expand_report_config(
+            child,
+            config_path=resolved,
+            seen={*seen, resolved},
+        )
+        included_profiles.append(resolved)
+        included_profiles.extend(expanded_child.get("_included_profile_paths", []))
+        _merge_report_profile(merged, expanded_child)
+    if included_profiles:
+        merged["_included_profile_paths"] = included_profiles
+    return merged
+
+
+def _child_profile_paths(
+    config: Mapping[str, Any],
+    *,
+    config_path: Path,
+) -> list[Path]:
+    report = config.get("report")
+    if report is None:
+        return []
+    if not isinstance(report, Mapping):
+        raise ValueError("report must be a TOML table.")
+    raw = report.get("profile_paths", [])
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError("report.profile_paths must be a string array.")
+    base = config_path.parent
+    paths: list[Path] = []
+    for item in raw:
+        child_path = Path(item)
+        if not child_path.is_absolute():
+            child_path = base / child_path
+        paths.append(child_path)
+    return paths
+
+
+def _merge_report_profile(
+    merged: dict[str, Any],
+    child: Mapping[str, Any],
+) -> None:
+    child_report = child.get("report")
+    if isinstance(child_report, Mapping):
+        merged_report = dict(merged.get("report") or {})
+        for key, value in child_report.items():
+            if key == "outputs":
+                if not isinstance(value, Mapping):
+                    raise ValueError("report.outputs must be a TOML table.")
+                outputs = dict(merged_report.get("outputs") or {})
+                outputs.update(value)
+                merged_report["outputs"] = outputs
+            elif key == "profile_paths":
+                continue
+            elif key not in merged_report:
+                merged_report[key] = value
+        merged["report"] = merged_report
+
+    child_sources = child.get("source_artifacts")
+    if child_sources is not None:
+        if not isinstance(child_sources, Mapping):
+            raise ValueError("source_artifacts must be a TOML table.")
+        sources = dict(merged.get("source_artifacts") or {})
+        sources.update(child_sources)
+        merged["source_artifacts"] = sources
+
+    child_commands = child.get("commands", [])
+    if child_commands:
+        if not isinstance(child_commands, list):
+            raise ValueError("commands must be an array of TOML tables.")
+        commands = list(merged.get("commands") or [])
+        commands.extend(child_commands)
+        merged["commands"] = commands
 
 
 def _profile_commands(

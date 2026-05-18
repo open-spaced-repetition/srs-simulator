@@ -1,0 +1,16 @@
+schema_version = 1
+name = "ppo_guide_ablation"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+ppo_guide_ablation = "docs/single_card_tradeoff/experiments/2026-05-17-ppo_guide_ablation.md"
+
+[source_artifacts]
+ppo_ablation_summary = "artifacts/single_card_tradeoff/ppo_ablation/ppo_oracle_warmup_ablation_summary.csv"
+ppo_no_guide_regret_auc = "artifacts/single_card_tradeoff/ppo_ablation/tradeoff_uvfa_ppo_no_guide_regret_auc.csv"
+ppo_static_guide_regret_auc = "artifacts/single_card_tradeoff/ppo_ablation/tradeoff_uvfa_ppo_static_guide_regret_auc.csv"
+ppo_oracle_warmup_only_regret_auc = "artifacts/single_card_tradeoff/ppo_ablation/tradeoff_uvfa_ppo_oracle_warmup_only_regret_auc.csv"
+rnn_no_guide_regret_auc = "artifacts/single_card_tradeoff/ppo_ablation/tradeoff_uvfa_ppo_rnn_interval_no_guide_regret_auc.csv"
+rnn_static_guide_regret_auc = "artifacts/single_card_tradeoff/ppo_ablation/tradeoff_uvfa_ppo_rnn_interval_static_guide_regret_auc.csv"
+rnn_oracle_warmup_only_regret_auc = "artifacts/single_card_tradeoff/ppo_ablation/tradeoff_uvfa_ppo_rnn_interval_oracle_warmup_only_regret_auc.csv"

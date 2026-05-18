@@ -1,0 +1,38 @@
+schema_version = 1
+name = "oracle_distill"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+oracle_distill = "docs/single_card_tradeoff/experiments/2026-05-17-oracle_distill.md"
+
+[source_artifacts]
+oracle_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv"
+oracle_distill_hparam_summary = "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_summary.csv"
+
+[[commands]]
+name = "search_oracle_distill_hparams"
+description = "Rerun the discrete oracle-distill model-size search."
+command = [
+  "uv",
+  "run",
+  "experiments/single_card_tradeoff/oracle_distill_hparam_search.py",
+  "--days",
+  "1825",
+  "--oracle-s-grid-size",
+  "64",
+  "--oracle-d-grid-size",
+  "32",
+  "--eval-particles",
+  "3000",
+  "--save-models",
+  "--torch-device",
+  "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_summary.csv",
+  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_detail.csv",
+  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_models",
+]
+

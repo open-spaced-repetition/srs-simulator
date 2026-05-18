@@ -1,0 +1,11 @@
+schema_version = 1
+name = "stationary_finite_compression"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+stationary_finite_compression = "docs/single_card_tradeoff/experiments/2026-05-17-stationary_finite_compression.md"
+
+[source_artifacts]
+stationary_finite_cost_weight_ablation = "artifacts/single_card_tradeoff/stationary_finite_cost_weight_ablation/cost_weight_ablation_multiseed_summary.csv"
+stationary_finite_model_size_ablation = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/model_size_ablation_summary.csv"

@@ -205,8 +205,13 @@ Regenerate them with:
 
 ```bash
 uv run python experiments/single_card_tradeoff/generate_experiment_report.py \
-  --config experiments/single_card_tradeoff/configs/stationary_finite_first8_report.toml
+  --config experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml
 ```
+
+The suite config is intentionally thin and includes one smaller profile per
+experiment from `experiments/single_card_tradeoff/configs/reports/`; the
+first-eight stationary finite profile remains at
+`experiments/single_card_tradeoff/configs/stationary_finite_first8_report.toml`.
 
 The most useful summary metric is `time_regret_auc`, but it is only meaningful together with `span_coverage_percent`. A negative `time_regret_auc` means a scheduler uses fewer deck-scaled minutes/day than the baseline at the same memory target over their common memory interval. Low coverage means the comparison only covers a narrow part of the frontier.
 

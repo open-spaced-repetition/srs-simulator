@@ -1,0 +1,12 @@
+schema_version = 1
+name = "multiuser_eval_batching"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+multiuser_eval_batching = "docs/single_card_tradeoff/experiments/2026-05-17-multiuser_eval_batching.md"
+
+[source_artifacts]
+multiuser_eval_batch_smoke_all_train = "artifacts/single_card_tradeoff/eval_batch_smoke_all/train_summary.csv"
+multiuser_eval_batch_smoke_group1_train = "artifacts/single_card_tradeoff/eval_batch_smoke_group1/train_summary.csv"
+multiuser_eval_batch_smoke_post_patch_train = "artifacts/single_card_tradeoff/eval_batch_smoke_post_patch/train_summary.csv"
