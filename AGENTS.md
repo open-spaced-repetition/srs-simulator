@@ -14,7 +14,7 @@ Project rules:
    - WSL: from the Linux shell, run `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "Get-Counter '\GPU Adapter Memory(*)\Shared Usage'"`.
    - Native Linux: `nvidia-smi` usually reports dedicated/FB memory rather than Windows-style shared GPU memory; use `watch -n 1 nvidia-smi` for VRAM plus system/CUDA profiling to infer spill behavior.
 9. For batched retention sweep experiments, use environment-specific lane caps when possible: `fsrs6` is typically safe at `max_lanes_per_batch = 8192`, while `lstm` should use `max_lanes_per_batch = 1024` to avoid shared GPU memory spill.
-10. The sandbox does not have GPU access. Commands or code paths that need CUDA/GPU execution must be run outside the sandbox.
+10. This machine has a GPU. If you find that you cannot use the GPU, it means you are likely in a sandbox environment. If the experiment requires CUDA/GPU support and you cannot use it, please request permission to obtain GPU access. If you can use the GPU directly, just use it without requesting permission.
 11. Tests use `unittest`, not pytest. Run focused tests with `uv run python -m unittest tests.test_module_name` and full discovery with `uv run python -m unittest discover tests`.
 
 ## Conventional Commits
