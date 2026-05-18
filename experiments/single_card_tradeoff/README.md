@@ -197,9 +197,11 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 
 `single_card_tradeoff` is best understood as a frontier experiment, not a full deck scheduler benchmark. It removes daily budget constraints and isolates the memory-time tradeoff for one iid card lifecycle. The metrics can be deck-scaled, but they should not be read as a complete workload simulation.
 
-The formal machine-generated report for the current artifacts is
-[`docs/rl_scheduler/experiments/2026-05-17-single_card_tradeoff.md`](../../docs/rl_scheduler/experiments/2026-05-17-single_card_tradeoff.md).
-Regenerate it with:
+The formal machine-generated reports for the current artifacts are published under
+[`docs/single_card_tradeoff/experiments`](../../docs/single_card_tradeoff/experiments),
+with one independent report per experiment and a short index at
+[`2026-05-17-index.md`](../../docs/single_card_tradeoff/experiments/2026-05-17-index.md).
+Regenerate them with:
 
 ```bash
 uv run python experiments/single_card_tradeoff/generate_experiment_report.py \

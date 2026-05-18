@@ -5,7 +5,14 @@ seed = 42
 
 [report]
 root = "artifacts/single_card_tradeoff/reports/current"
-output_path = "docs/rl_scheduler/experiments/2026-05-17-single_card_tradeoff.md"
+output_path = "docs/single_card_tradeoff/experiments/2026-05-17-index.md"
+
+[report.outputs]
+index = "docs/single_card_tradeoff/experiments/2026-05-17-index.md"
+default_no_sub05_tradeoff = "docs/single_card_tradeoff/experiments/2026-05-17-default_no_sub05_tradeoff.md"
+first8_stationary_finite_distill = "docs/single_card_tradeoff/experiments/2026-05-17-first8_stationary_finite_distill.md"
+first8_exact_vs_distill = "docs/single_card_tradeoff/experiments/2026-05-17-first8_exact_vs_distill.md"
+low_param_direct_search = "docs/single_card_tradeoff/experiments/2026-05-17-low_param_direct_search.md"
 
 [source_artifacts]
 default_regret_auc = "artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv"
@@ -248,6 +255,14 @@ command = [
 ]
 expected_outputs = [
   "artifacts/single_card_tradeoff/reports/current/report_summary.json",
-  "artifacts/single_card_tradeoff/reports/current/report.md",
-  "docs/rl_scheduler/experiments/2026-05-17-single_card_tradeoff.md",
+  "artifacts/single_card_tradeoff/reports/current/index.md",
+  "artifacts/single_card_tradeoff/reports/current/default_no_sub05_tradeoff.md",
+  "artifacts/single_card_tradeoff/reports/current/first8_stationary_finite_distill.md",
+  "artifacts/single_card_tradeoff/reports/current/first8_exact_vs_distill.md",
+  "artifacts/single_card_tradeoff/reports/current/low_param_direct_search.md",
+  "docs/single_card_tradeoff/experiments/2026-05-17-index.md",
+  "docs/single_card_tradeoff/experiments/2026-05-17-default_no_sub05_tradeoff.md",
+  "docs/single_card_tradeoff/experiments/2026-05-17-first8_stationary_finite_distill.md",
+  "docs/single_card_tradeoff/experiments/2026-05-17-first8_exact_vs_distill.md",
+  "docs/single_card_tradeoff/experiments/2026-05-17-low_param_direct_search.md",
 ]

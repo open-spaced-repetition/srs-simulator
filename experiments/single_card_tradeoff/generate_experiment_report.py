@@ -32,9 +32,32 @@ DEFAULT_CONFIG = Path(
     "experiments/single_card_tradeoff/configs/stationary_finite_first8_report.toml"
 )
 DEFAULT_REPORT_ROOT = Path("artifacts/single_card_tradeoff/reports/current")
-DEFAULT_DOC_OUTPUT = Path(
-    "docs/rl_scheduler/experiments/2026-05-17-single_card_tradeoff.md"
-)
+DEFAULT_DOC_OUTPUT = Path("docs/single_card_tradeoff/experiments/2026-05-17-index.md")
+
+REPORT_FILENAMES = {
+    "index": "index.md",
+    "default_no_sub05_tradeoff": "default_no_sub05_tradeoff.md",
+    "first8_stationary_finite_distill": "first8_stationary_finite_distill.md",
+    "first8_exact_vs_distill": "first8_exact_vs_distill.md",
+    "low_param_direct_search": "low_param_direct_search.md",
+}
+
+DEFAULT_DOC_OUTPUTS = {
+    "index": DEFAULT_DOC_OUTPUT,
+    "default_no_sub05_tradeoff": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-default_no_sub05_tradeoff.md"
+    ),
+    "first8_stationary_finite_distill": Path(
+        "docs/single_card_tradeoff/experiments/"
+        "2026-05-17-first8_stationary_finite_distill.md"
+    ),
+    "first8_exact_vs_distill": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-first8_exact_vs_distill.md"
+    ),
+    "low_param_direct_search": Path(
+        "docs/single_card_tradeoff/experiments/2026-05-17-low_param_direct_search.md"
+    ),
+}
 
 DEFAULT_SOURCE_PATHS: dict[str, Path] = {
     "default_regret_auc": Path(
@@ -140,11 +163,12 @@ def main(argv: list[str] | None = None) -> int:
         field_name="output_path",
         default=DEFAULT_DOC_OUTPUT,
     )
+    output_paths = _config_report_outputs(config, index_output_path=output_path)
     summary_path, report_path, summary = generate_report(
         config_path=args.config,
         report_config=config,
         report_root=report_root,
-        output_path=output_path,
+        output_paths=output_paths,
         source_paths=_config_source_paths(config),
         strict=args.strict,
     )
@@ -154,7 +178,11 @@ def main(argv: list[str] | None = None) -> int:
                 "passed": True,
                 "report_summary_path": str(summary_path),
                 "run_report_path": str(report_path),
-                "output_path": str(resolve_repo_path(output_path)),
+                "output_path": str(resolve_repo_path(output_paths["index"])),
+                "output_paths": {
+                    key: str(resolve_repo_path(path))
+                    for key, path in output_paths.items()
+                },
                 "input_artifacts": len(summary["input_artifacts"]["available"]),
             },
             indent=2,
@@ -169,42 +197,53 @@ def generate_report(
     config_path: Path | None,
     report_config: Mapping[str, Any],
     report_root: Path,
-    output_path: Path,
+    output_paths: Mapping[str, Path],
     source_paths: Mapping[str, Path],
     strict: bool,
 ) -> tuple[Path, Path, dict[str, Any]]:
     report_root = resolve_repo_path(report_root)
-    output_path = resolve_repo_path(output_path)
+    resolved_output_paths = {
+        key: resolve_repo_path(path) for key, path in output_paths.items()
+    }
     report_root.mkdir(parents=True, exist_ok=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    for output_path in resolved_output_paths.values():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path = report_root / "report_summary.json"
-    report_path = report_root / "report.md"
+    future_available_paths = {
+        summary_path,
+        *(report_root / filename for filename in REPORT_FILENAMES.values()),
+        *resolved_output_paths.values(),
+    }
 
     summary = build_report_summary(
         config_path=config_path,
         report_root=report_root,
-        output_path=output_path,
+        output_paths=resolved_output_paths,
         source_paths=source_paths,
         report_config=report_config,
+        future_available_paths=future_available_paths,
         strict=strict,
     )
     summary_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    markdown = render_report(summary)
-    report_path.write_text(markdown, encoding="utf-8")
-    output_path.write_text(markdown, encoding="utf-8")
-    return summary_path, report_path, summary
+    reports = render_reports(summary)
+    for key, markdown in reports.items():
+        report_path = report_root / REPORT_FILENAMES[key]
+        report_path.write_text(markdown, encoding="utf-8")
+        resolved_output_paths[key].write_text(markdown, encoding="utf-8")
+    return summary_path, report_root / REPORT_FILENAMES["index"], summary
 
 
 def build_report_summary(
     *,
     config_path: Path | None,
     report_root: Path,
-    output_path: Path,
+    output_paths: Mapping[str, Path],
     source_paths: Mapping[str, Path],
     report_config: Mapping[str, Any],
+    future_available_paths: set[Path],
     strict: bool,
 ) -> dict[str, Any]:
     source_paths = {key: resolve_repo_path(path) for key, path in source_paths.items()}
@@ -247,13 +286,23 @@ def build_report_summary(
             if config_path is not None
             else None,
             "report_root": display_path(report_root),
-            "published_report": display_path(output_path),
+            "published_report": display_path(output_paths["index"]),
+            "published_reports": {
+                key: display_path(path) for key, path in output_paths.items()
+            },
+            "report_artifacts": {
+                key: display_path(report_root / REPORT_FILENAMES[key])
+                for key in REPORT_FILENAMES
+            },
         },
         "input_artifacts": {
             "available": available,
             "missing": missing,
         },
-        "rerun_commands": _profile_commands(report_config),
+        "rerun_commands": _profile_commands(
+            report_config,
+            future_available_paths=future_available_paths,
+        ),
         "default_fsrs6_comparison": _default_comparison(default_regret),
         "default_direct_comparisons": _direct_default_comparisons(default_regret),
         "first8_stationary_finite_distill": _first8_distill_summary(
@@ -289,37 +338,128 @@ def build_report_summary(
     }
 
 
-def render_report(summary: Mapping[str, Any]) -> str:
+def render_reports(summary: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "index": render_index_report(summary),
+        "default_no_sub05_tradeoff": render_default_no_sub05_tradeoff_report(summary),
+        "first8_stationary_finite_distill": (
+            render_first8_stationary_finite_distill_report(summary)
+        ),
+        "first8_exact_vs_distill": render_first8_exact_vs_distill_report(summary),
+        "low_param_direct_search": render_low_param_direct_search_report(summary),
+    }
+
+
+def render_index_report(summary: Mapping[str, Any]) -> str:
     lines: list[str] = []
-    lines.append(f"# {summary['title']}")
+    lines.append("# Single-card Tradeoff Experiment Reports")
     lines.append("")
-    lines.append(
-        f"Machine summary: `{summary['run_roots']['report_root']}/report_summary.json`"
+    _append_report_preamble(
+        lines,
+        summary,
+        question=(
+            "This index links the independent reports generated from the current "
+            "single-card tradeoff artifacts."
+        ),
     )
+    lines.append("## Reports")
     lines.append("")
-    if summary["run_roots"].get("config_path"):
-        lines.append(f"Config: `{summary['run_roots']['config_path']}`")
-        lines.append("")
-    lines.append("## Question")
-    lines.append("")
-    lines.append(str(summary["question"]))
+    published = summary["run_roots"]["published_reports"]
+    stationary_default = next(
+        row
+        for row in summary["default_fsrs6_comparison"]
+        if row["scheduler"] == "fsrs6_oracle_stationary_finite_distill"
+    )
+    first8 = summary["first8_stationary_finite_distill"]
+    distill_vs_exact = summary["first8_exact_vs_distill"]["distill_vs_exact"]
+    lines.extend(
+        markdown_table(
+            ["experiment", "published report", "main result"],
+            [
+                [
+                    "default no-sub-0.5 tradeoff",
+                    f"`{published['default_no_sub05_tradeoff']}`",
+                    (
+                        "`fsrs6_oracle_stationary_finite_distill` keeps "
+                        f"{format_percent(stationary_default['span_coverage_percent'])} "
+                        "coverage vs `fsrs6_default`."
+                    ),
+                ],
+                [
+                    "first-eight per-user distill",
+                    f"`{published['first8_stationary_finite_distill']}`",
+                    (
+                        "Eight independent 476-parameter students average "
+                        f"{format_percent(first8['mean_relative_regret_auc_percent'])} "
+                        "relative regret vs `fsrs6`."
+                    ),
+                ],
+                [
+                    "first-eight exact vs distill",
+                    f"`{published['first8_exact_vs_distill']}`",
+                    (
+                        "Direct distill-vs-exact relative regret is "
+                        f"{format_percent(distill_vs_exact['mean_relative_regret_auc_percent'])} "
+                        "over "
+                        f"{format_percent(distill_vs_exact['mean_span_coverage_percent'])} "
+                        "shared coverage."
+                    ),
+                ],
+                [
+                    "low-parameter direct search",
+                    f"`{published['low_param_direct_search']}`",
+                    (
+                        "The 7-parameter family is a useful lower-capacity "
+                        "baseline but loses substantial coverage."
+                    ),
+                ],
+            ],
+        )
+    )
     lines.append("")
     lines.append("## Evidence")
     lines.append("")
     lines.append(
-        "This report is generated from the current machine-readable "
-        "`artifacts/single_card_tradeoff` CSV and JSON outputs. It does not rely on "
-        "hand-copied metrics."
+        "All reports are generated from the current machine-readable "
+        "`artifacts/single_card_tradeoff` CSV and JSON outputs."
     )
     lines.append("")
     lines.extend(_source_lines(summary["input_artifacts"]))
     lines.append("")
-    lines.append("## Default FSRS-6 Comparison")
+    _append_reproduction_profile(lines, summary, command_names=None)
+    lines.append("## Conclusions")
+    lines.append("")
+    for conclusion in summary["conclusions"]:
+        lines.append(f"- {conclusion}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_default_no_sub05_tradeoff_report(summary: Mapping[str, Any]) -> str:
+    lines: list[str] = []
+    lines.append("# Default No-sub-0.5 Tradeoff")
+    lines.append("")
+    _append_report_preamble(
+        lines,
+        summary,
+        question=(
+            "How do the clipped compact single-card policies compare against "
+            "`fsrs6_default` when action and target retentions below 0.5 are "
+            "removed?"
+        ),
+    )
+    lines.append("## Evidence")
     lines.append("")
     lines.append(
         "Environment `fsrs6_default`, 1825 days, 10,000 particles, "
         "`deck_scale=10000`, no sub-0.5 actions."
     )
+    lines.append("")
+    lines.extend(
+        _artifact_lines(summary, keys=("default_regret_auc", "default_results"))
+    )
+    lines.append("")
+    lines.append("## Results")
     lines.append("")
     lines.extend(
         markdown_table(
@@ -365,7 +505,53 @@ def render_report(summary: Mapping[str, Any]) -> str:
         )
     )
     lines.append("")
-    lines.append("## First Eight Users")
+    _append_reproduction_profile(
+        lines,
+        summary,
+        command_names=("evaluate_default_no_sub05_tradeoff",),
+    )
+    lines.append("## Conclusion")
+    lines.append("")
+    lines.append(
+        "The stationary finite distill is slightly worse than unrestricted "
+        "oracle distill on their shared span, but it covers more of the "
+        "`fsrs6_default` frontier under the clipped action space."
+    )
+    lines.append("")
+    _append_artifacts_footer(lines, summary, report_key="default_no_sub05_tradeoff")
+    return "\n".join(lines)
+
+
+def render_first8_stationary_finite_distill_report(
+    summary: Mapping[str, Any],
+) -> str:
+    lines: list[str] = []
+    lines.append("# First-eight Per-user Stationary Finite Distill")
+    lines.append("")
+    _append_report_preamble(
+        lines,
+        summary,
+        question=(
+            "Can independent 476-parameter stationary finite students trained in "
+            "one batched process improve the first-eight-user FSRS-6 tradeoff?"
+        ),
+    )
+    lines.append("## Evidence")
+    lines.append("")
+    lines.append(
+        "Environment `fsrs6`, users 1 through 8, one independent student per "
+        "user, uniform exact-table supervision over `(cost_weight, stability, "
+        "difficulty)`, and `fsrs6` as the baseline."
+    )
+    lines.append("")
+    lines.extend(
+        _artifact_lines(
+            summary,
+            keys=("first8_distill_summary", "first8_distill_train_summary"),
+        )
+    )
+    lines.append("")
+    lines.append("## Results")
     lines.append("")
     first8 = summary["first8_stationary_finite_distill"]
     lines.append(
@@ -411,6 +597,65 @@ def render_report(summary: Mapping[str, Any]) -> str:
         )
     )
     lines.append("")
+    _append_reproduction_profile(
+        lines,
+        summary,
+        command_names=(
+            "train_first8_stationary_finite_distill",
+            "evaluate_first8_stationary_finite_distill",
+        ),
+    )
+    lines.append("## Conclusion")
+    lines.append("")
+    lines.append(
+        "Uniform exact-table supervision fixed the high-cost interpolation failure "
+        "without adding teacher cost weights. The current first-eight artifact "
+        "keeps about 98% coverage and improves mean relative regret versus "
+        "`fsrs6`."
+    )
+    lines.append("")
+    _append_artifacts_footer(
+        lines,
+        summary,
+        report_key="first8_stationary_finite_distill",
+    )
+    return "\n".join(lines)
+
+
+def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
+    lines: list[str] = []
+    lines.append("# First-eight Exact Stationary Finite vs Distill")
+    lines.append("")
+    _append_report_preamble(
+        lines,
+        summary,
+        question=(
+            "How does the evaluated tradeoff change when replacing exact "
+            "stationary finite policy tables with per-user 476-parameter "
+            "distills?"
+        ),
+    )
+    lines.append("## Evidence")
+    lines.append("")
+    lines.append(
+        "Environment `fsrs6`, users 1 through 8. The exact and distill policies "
+        "are both evaluated against `fsrs6`; a direct regret row also compares "
+        "the distill to the exact stationary finite teacher on their shared "
+        "frontier span."
+    )
+    lines.append("")
+    lines.extend(
+        _artifact_lines(
+            summary,
+            keys=(
+                "first8_exact_vs_distill_mean_summary",
+                "first8_exact_vs_distill_regret_auc",
+            ),
+        )
+    )
+    lines.append("")
+    lines.append("## Results")
+    lines.append("")
     exact = summary["first8_exact_vs_distill"]
     lines.append("Exact stationary finite teacher versus per-user distill:")
     lines.append("")
@@ -444,7 +689,53 @@ def render_report(summary: Mapping[str, Any]) -> str:
         "coverage."
     )
     lines.append("")
-    lines.append("## Low-Parameter Direct Search")
+    _append_reproduction_profile(
+        lines,
+        summary,
+        command_names=("evaluate_first8_exact_vs_distill",),
+    )
+    lines.append("## Conclusion")
+    lines.append("")
+    lines.append(
+        "The per-user distill is not dominated in this sampled tradeoff "
+        "evaluation: direct distill-vs-exact relative regret is negative on the "
+        "shared span. The exact table remains the teacher and diagnostic target; "
+        "the distill is the compact deployable approximation."
+    )
+    lines.append("")
+    _append_artifacts_footer(lines, summary, report_key="first8_exact_vs_distill")
+    return "\n".join(lines)
+
+
+def render_low_param_direct_search_report(summary: Mapping[str, Any]) -> str:
+    lines: list[str] = []
+    lines.append("# Low-parameter Direct Policy Search")
+    lines.append("")
+    _append_report_preamble(
+        lines,
+        summary,
+        question=(
+            "Can a 7-parameter direct desired-retention function optimized by "
+            "evolutionary search replace the 476-parameter stationary finite "
+            "distill?"
+        ),
+    )
+    lines.append("## Evidence")
+    lines.append("")
+    lines.append(
+        "Environment `fsrs6`, users 1 through 8. Both sparse and dense "
+        "teacher-cost-weight direct-search runs are evaluated against `fsrs6` "
+        "and against the per-user stationary finite distill."
+    )
+    lines.append("")
+    lines.extend(
+        _artifact_lines(
+            summary,
+            keys=("low_param_sparse_metadata", "low_param_dense_metadata"),
+        )
+    )
+    lines.append("")
+    lines.append("## Results")
     lines.append("")
     low_param = summary["low_param_direct_search"]
     lines.extend(
@@ -469,44 +760,119 @@ def render_report(summary: Mapping[str, Any]) -> str:
         )
     )
     lines.append("")
-    if summary["rerun_commands"]:
-        lines.append("## Reproduction Profile")
-        lines.append("")
-        lines.append(
-            "The TOML profile records the commands and expected outputs used to "
-            "reproduce the current report inputs."
-        )
-        lines.append(
-            "CUDA reruns of the tradeoff, multi-user distill, and low-parameter "
-            "direct-search commands also write `performance_summary.json` and "
-            "`gpu_monitor/` memory samples under their configured output "
-            "directories."
-        )
-        lines.append("")
-        lines.extend(
-            markdown_table(
-                ["command", "expected outputs present"],
+    _append_reproduction_profile(
+        lines,
+        summary,
+        command_names=(
+            "train_low_param_direct_sparse",
+            "train_low_param_direct_dense",
+        ),
+    )
+    lines.append("## Conclusion")
+    lines.append("")
+    lines.append(
+        "The 7-parameter family is informative as a capacity floor, but it does "
+        "not currently replace the 476-parameter distill: both sparse and dense "
+        "runs lose substantial frontier coverage."
+    )
+    lines.append("")
+    _append_artifacts_footer(lines, summary, report_key="low_param_direct_search")
+    return "\n".join(lines)
+
+
+def _append_report_preamble(
+    lines: list[str],
+    summary: Mapping[str, Any],
+    *,
+    question: str,
+) -> None:
+    lines.append(
+        f"Machine summary: `{summary['run_roots']['report_root']}/report_summary.json`"
+    )
+    if summary["run_roots"].get("config_path"):
+        lines.append(f"Config: `{summary['run_roots']['config_path']}`")
+    lines.append("")
+    lines.append("## Question")
+    lines.append("")
+    lines.append(question)
+    lines.append("")
+
+
+def _artifact_lines(
+    summary: Mapping[str, Any],
+    *,
+    keys: Sequence[str],
+) -> list[str]:
+    available = summary["input_artifacts"]["available"]
+    missing = summary["input_artifacts"].get("missing") or {}
+    lines = ["Source artifacts:"]
+    for key in keys:
+        if key in available:
+            lines.append(f"- `{key}`: `{available[key]}`")
+        elif key in missing:
+            lines.append(f"- `{key}`: missing `{missing[key]}`")
+        else:
+            lines.append(f"- `{key}`: not configured")
+    return lines
+
+
+def _append_reproduction_profile(
+    lines: list[str],
+    summary: Mapping[str, Any],
+    *,
+    command_names: Sequence[str] | None,
+) -> None:
+    commands = _select_commands(summary["rerun_commands"], command_names)
+    if not commands:
+        return
+    lines.append("## Reproduction Profile")
+    lines.append("")
+    lines.append(
+        "The TOML profile records the command and expected outputs used to "
+        "reproduce this report input. CUDA reruns write "
+        "`performance_summary.json` and `gpu_monitor/` memory samples under "
+        "their configured output directories."
+    )
+    lines.append("")
+    lines.extend(
+        markdown_table(
+            ["command", "expected outputs present"],
+            [
                 [
-                    [
-                        row["name"],
-                        f"{row['available_expected_outputs']}/{row['expected_outputs']}",
-                    ]
-                    for row in summary["rerun_commands"]
-                ],
-            )
+                    row["name"],
+                    f"{row['available_expected_outputs']}/{row['expected_outputs']}",
+                ]
+                for row in commands
+            ],
         )
-        lines.append("")
-    lines.append("## Conclusions")
+    )
     lines.append("")
-    for conclusion in summary["conclusions"]:
-        lines.append(f"- {conclusion}")
-    lines.append("")
+
+
+def _select_commands(
+    commands: Sequence[Mapping[str, Any]],
+    command_names: Sequence[str] | None,
+) -> list[Mapping[str, Any]]:
+    if command_names is None:
+        return list(commands)
+    wanted = set(command_names)
+    return [row for row in commands if row["name"] in wanted]
+
+
+def _append_artifacts_footer(
+    lines: list[str],
+    summary: Mapping[str, Any],
+    *,
+    report_key: str,
+) -> None:
     lines.append("## Artifacts")
     lines.append("")
-    lines.append(f"- Published report: `{summary['run_roots']['published_report']}`")
+    published = summary["run_roots"]["published_reports"][report_key]
+    artifact = summary["run_roots"]["report_artifacts"][report_key]
+    lines.append(f"- Published report: `{published}`")
+    lines.append(f"- Artifact report: `{artifact}`")
     lines.append(f"- Report root: `{summary['run_roots']['report_root']}`")
     lines.append("")
-    return "\n".join(lines)
 
 
 def _source_lines(input_artifacts: Mapping[str, Any]) -> list[str]:
@@ -520,6 +886,33 @@ def _source_lines(input_artifacts: Mapping[str, Any]) -> list[str]:
         for key, path in sorted(missing.items()):
             lines.append(f"- `{key}`: `{path}`")
     return lines
+
+
+def _config_report_outputs(
+    config: Mapping[str, Any],
+    *,
+    index_output_path: Path,
+) -> dict[str, Path]:
+    outputs = dict(DEFAULT_DOC_OUTPUTS)
+    outputs["index"] = index_output_path
+    report = config.get("report")
+    if report is None:
+        return outputs
+    if not isinstance(report, Mapping):
+        raise ValueError("report must be a TOML table.")
+    raw_outputs = report.get("outputs")
+    if raw_outputs is None:
+        return outputs
+    if not isinstance(raw_outputs, Mapping):
+        raise ValueError("report.outputs must be a TOML table.")
+    for key in REPORT_FILENAMES:
+        value = raw_outputs.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"report.outputs.{key} must be a non-empty string.")
+        outputs[key] = Path(value)
+    return outputs
 
 
 def _config_source_paths(config: Mapping[str, Any]) -> dict[str, Path]:
@@ -537,7 +930,12 @@ def _config_source_paths(config: Mapping[str, Any]) -> dict[str, Path]:
     return paths
 
 
-def _profile_commands(config: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _profile_commands(
+    config: Mapping[str, Any],
+    *,
+    future_available_paths: set[Path] | None = None,
+) -> list[dict[str, Any]]:
+    future_available_paths = future_available_paths or set()
     commands = config.get("commands", [])
     if not isinstance(commands, list):
         raise ValueError("commands must be an array of TOML tables.")
@@ -571,7 +969,9 @@ def _profile_commands(config: Mapping[str, Any]) -> list[dict[str, Any]]:
                 ],
                 "expected_outputs": len(resolved_outputs),
                 "available_expected_outputs": sum(
-                    1 for path in resolved_outputs if path.exists()
+                    1
+                    for path in resolved_outputs
+                    if path.exists() or path in future_available_paths
                 ),
             }
         )
