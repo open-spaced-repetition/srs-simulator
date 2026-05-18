@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 import threading
 
@@ -314,7 +315,7 @@ def _run_command(
     progress_lock: threading.RLock | None,
     suppress_output: bool,
 ) -> int:
-    write_line = None
+    write_line: Callable[[str], None] | None = None
     local_bar: tqdm | None = None
     if progress_bar is None and suppress_output:
         local_bar = tqdm(total=0, disable=True)
@@ -322,11 +323,16 @@ def _run_command(
     if progress_bar is not None:
         if suppress_output:
 
-            def write_line(_line: str) -> None:
+            def suppress_write_line(_line: str) -> None:
                 pass
 
+            write_line = suppress_write_line
         else:
-            write_line = progress_bar.write
+
+            def progress_write_line(line: str) -> None:
+                progress_bar.write(line)
+
+            write_line = progress_write_line
     try:
         return run_command_with_progress(
             cmd=cmd,

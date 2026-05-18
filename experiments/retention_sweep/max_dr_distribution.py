@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.retention_sweep.cli_utils import LogFilenameFilter
+from simulator.retention_sweep.log_filter import LogFilenameFilter
 from simulator.scheduler_spec import (
     format_float,
     parse_scheduler_spec,

@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import torch
 
@@ -31,7 +31,13 @@ from experiments.rl_scheduler.portfolio_selection import (
     DEFAULT_SELECTION_PROCESS_POOL_WORKERS,
     LightweightSelectionPool,
     ObjectivePoint,
+    SelectionCandidate,
     SelectionTask,
+    objective_exclusive_hypervolume_contributions as _objective_exclusive_hypervolume_contributions,
+    objective_hypervolume_2d as _objective_hypervolume_2d,
+    objective_non_dominated_indices as _objective_non_dominated_indices,
+    reference_point as _reference_point,
+    select_sms_emoa_survivors as _select_sms_emoa_survivors,
 )
 from experiments.rl_scheduler.portfolio_training_common import (
     PortfolioFamilyAdapter,
@@ -68,6 +74,55 @@ _SELECTION_WORKER_ENV_VARS = (
     _SELECTION_PROCESS_POOL_WORKERS_ENV,
     "FSRS6_PORTFOLIO_SELECTION_WORKERS",
 )
+_SelectionCandidateT = TypeVar("_SelectionCandidateT", bound=SelectionCandidate)
+
+
+def reference_point(
+    points: Sequence[ObjectivePoint],
+    *,
+    margin_fraction: float = 0.05,
+) -> ObjectivePoint:
+    return _reference_point(points, margin_fraction=margin_fraction)
+
+
+def non_dominated_indices(points: Sequence[ObjectivePoint]) -> list[int]:
+    return _objective_non_dominated_indices(points)
+
+
+def hypervolume_2d(
+    points: Sequence[ObjectivePoint],
+    *,
+    reference: ObjectivePoint,
+) -> float:
+    return _objective_hypervolume_2d(points, reference=reference)
+
+
+def exclusive_hypervolume_contributions(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidate_points: Sequence[ObjectivePoint],
+    reference: ObjectivePoint,
+) -> list[float]:
+    return _objective_exclusive_hypervolume_contributions(
+        baseline_points=baseline_points,
+        candidate_points=candidate_points,
+        reference=reference,
+    )
+
+
+def select_sms_emoa_survivors(
+    *,
+    baseline_points: Sequence[ObjectivePoint],
+    candidates: Sequence[_SelectionCandidateT],
+    population_size: int,
+    reference: ObjectivePoint,
+) -> list[_SelectionCandidateT]:
+    return _select_sms_emoa_survivors(
+        baseline_points=baseline_points,
+        candidates=candidates,
+        population_size=population_size,
+        reference=reference,
+    )
 
 
 @dataclass(frozen=True, slots=True)

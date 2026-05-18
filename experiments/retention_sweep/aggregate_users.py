@@ -25,7 +25,7 @@ from simulator.scheduler_spec import (
     parse_scheduler_spec,
     scheduler_uses_desired_retention,
 )
-from experiments.retention_sweep.cli_utils import LogFilenameFilter
+from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 SchedulerSpec = Tuple[str, Optional[float], str]
 EquivPair = Tuple[SchedulerSpec, SchedulerSpec]

@@ -22,7 +22,8 @@ from simulator.batched_sweep.fsrs6_ap_policy import (
 from simulator.batched_sweep.anki_sm2_ap_policy import (
     resolve_anki_sm2_ap_policy_specs,
 )
-from simulator.batched_sweep.utils import chunked, dr_values, parse_cuda_devices
+from simulator.batched_sweep.utils import chunked, dr_values
+from simulator.sweep_utils import parse_cuda_devices
 from simulator.scheduler_catalog import (
     PolicySource,
     batched_scheduler_names,

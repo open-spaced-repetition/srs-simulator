@@ -1,9 +1,9 @@
 from simulator.batched_sweep.utils import (
     dr_values,
     format_id_list,
-    parse_cuda_devices,
     chunked,
 )
+from simulator.sweep_utils import parse_cuda_devices
 from simulator.batched_sweep.weights import (
     build_default_fsrs3_weights,
     build_default_fsrs6_weights,

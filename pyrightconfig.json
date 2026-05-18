@@ -1,4 +1,5 @@
 {
+  "reportPrivateImportUsage": false,
   "exclude": [
     "**/__pycache__",
     ".venv",
