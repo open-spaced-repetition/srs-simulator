@@ -18,6 +18,7 @@ profile_paths = [
   "reports/ppo_guide_ablation.toml",
   "reports/stationary_finite_policy_viz.toml",
   "reports/stationary_finite_compression.toml",
+  "reports/stationary_finite_epoch_extension.toml",
   "reports/oracle_policy_outputs.toml",
   "reports/interval_oracle_distill.toml",
   "reports/retention_distill.toml",

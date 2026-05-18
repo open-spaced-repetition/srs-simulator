@@ -48,6 +48,7 @@ REPORT_FILENAMES = {
     "ppo_guide_ablation": "ppo_guide_ablation.md",
     "stationary_finite_policy_viz": "stationary_finite_policy_viz.md",
     "stationary_finite_compression": "stationary_finite_compression.md",
+    "stationary_finite_epoch_extension": "stationary_finite_epoch_extension.md",
     "oracle_policy_outputs": "oracle_policy_outputs.md",
     "interval_oracle_distill": "interval_oracle_distill.md",
     "retention_distill": "retention_distill.md",
@@ -96,6 +97,10 @@ DEFAULT_DOC_OUTPUTS = {
     "stationary_finite_compression": Path(
         "docs/single_card_tradeoff/experiments/"
         "2026-05-17-stationary_finite_compression.md"
+    ),
+    "stationary_finite_epoch_extension": Path(
+        "docs/single_card_tradeoff/experiments/"
+        "2026-05-18-stationary_finite_epoch_extension.md"
     ),
     "oracle_policy_outputs": Path(
         "docs/single_card_tradeoff/experiments/2026-05-17-oracle_policy_outputs.md"
@@ -226,6 +231,18 @@ DEFAULT_SOURCE_PATHS: dict[str, Path] = {
     "stationary_finite_model_size_sub216_ablation": Path(
         "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/"
         "sub216_summary.csv"
+    ),
+    "stationary_finite_model_size_sub216_e256_ablation": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/"
+        "sub216_e256_summary.csv"
+    ),
+    "stationary_finite_model_size_sub216_e512_ablation": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/"
+        "sub216_e512_all_summary.csv"
+    ),
+    "stationary_finite_model_size_gpu_monitor_summary": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/"
+        "gpu_monitor/summary.json"
     ),
     "oracle_policy_outputs_rollout": Path(
         "artifacts/single_card_tradeoff/analysis/"
@@ -1200,6 +1217,15 @@ def _configured_reports(
     model_size_sub216_ablation = read_csv_rows(
         source_paths["stationary_finite_model_size_sub216_ablation"]
     )
+    model_size_sub216_e256_ablation = read_csv_rows(
+        source_paths["stationary_finite_model_size_sub216_e256_ablation"]
+    )
+    model_size_sub216_e512_ablation = read_csv_rows(
+        source_paths["stationary_finite_model_size_sub216_e512_ablation"]
+    )
+    model_size_gpu_monitor_summary = read_json_object(
+        source_paths["stationary_finite_model_size_gpu_monitor_summary"]
+    )
     oracle_rollout_outputs = read_csv_rows(
         source_paths["oracle_policy_outputs_rollout"]
     )
@@ -1253,6 +1279,14 @@ def _configured_reports(
             cost_weight_ablation,
             model_size_ablation,
             model_size_sub216_ablation,
+        ),
+        _stationary_finite_epoch_extension_report(
+            source_paths,
+            model_size_ablation,
+            model_size_sub216_ablation,
+            model_size_sub216_e256_ablation,
+            model_size_sub216_e512_ablation,
+            model_size_gpu_monitor_summary,
         ),
         _oracle_policy_outputs_report(
             source_paths,
@@ -1922,6 +1956,58 @@ def _stationary_finite_policy_viz_report(
     }
 
 
+def _stationary_finite_model_size_table_row(row: Mapping[str, str]) -> list[str]:
+    return [
+        row["variant"],
+        row["arch_label"],
+        format_int(_int(row, "parameter_count")),
+        format_int(_int(row, "epochs")),
+        format_percent(100.0 * _float(row, "eval_teacher_action_agreement")),
+        _mean_std_percent(
+            row,
+            "relative_regret_auc_percent_mean",
+            "relative_regret_auc_percent_std",
+        ),
+        _mean_std_percent(
+            row,
+            "span_coverage_percent_mean",
+            "span_coverage_percent_std",
+        ),
+    ]
+
+
+def _stationary_finite_epoch_extension_rows(
+    rows: Sequence[Mapping[str, str]],
+) -> list[Mapping[str, str]]:
+    by_variant = {row["variant"]: row for row in rows}
+    ordered_rows: list[Mapping[str, str]] = []
+    for label in (
+        "r5d1",
+        "r4d1",
+        "r3d1",
+        "mlp8",
+        "mlp6",
+        "mlp4",
+        "linear",
+        "quadratic",
+    ):
+        for epochs in (128, 256, 512):
+            row = by_variant.get(f"sf_train5_{label}_e{epochs}")
+            if row is not None:
+                ordered_rows.append(row)
+    return ordered_rows
+
+
+def _find_variant(
+    rows: Sequence[Mapping[str, str]],
+    variant: str,
+) -> Mapping[str, str]:
+    for row in rows:
+        if row["variant"] == variant:
+            return row
+    raise ValueError(f"Missing summary row for {variant}.")
+
+
 def _stationary_finite_compression_report(
     source_paths: Mapping[str, Path],
     cost_weight_rows: Sequence[Mapping[str, str]],
@@ -1952,9 +2038,8 @@ def _stationary_finite_compression_report(
         "index_summary": (
             "The aligned 128-epoch rerun keeps a strong "
             f"{format_int(_int(practical_floor, 'parameter_count'))}-parameter "
-            "student; below 216 parameters, the best-regret row is "
-            f"`{best_regret_sub216['arch_label']}` at "
-            f"{_mean_std_percent(best_regret_sub216, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')}."
+            "student; the 216-parameter `residual:6:1` remains the smallest "
+            "128-epoch row that keeps broad span coverage."
         ),
         "evidence": [
             (
@@ -2010,25 +2095,7 @@ def _stationary_finite_compression_report(
                     "coverage",
                 ],
                 "rows": [
-                    [
-                        row["variant"],
-                        row["arch_label"],
-                        format_int(_int(row, "parameter_count")),
-                        format_int(_int(row, "epochs")),
-                        format_percent(
-                            100.0 * _float(row, "eval_teacher_action_agreement")
-                        ),
-                        _mean_std_percent(
-                            row,
-                            "relative_regret_auc_percent_mean",
-                            "relative_regret_auc_percent_std",
-                        ),
-                        _mean_std_percent(
-                            row,
-                            "span_coverage_percent_mean",
-                            "span_coverage_percent_std",
-                        ),
-                    ]
+                    _stationary_finite_model_size_table_row(row)
                     for row in model_size_rows
                 ],
             },
@@ -2094,7 +2161,163 @@ def _stationary_finite_compression_report(
             f"{_mean_std_percent(residual_floor, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
             "relative regret and "
             f"{_mean_std_percent(residual_floor, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
-            "coverage for `residual:6:1`."
+            "coverage for `residual:6:1`. The separate stationary finite epoch "
+            "extension report tests whether longer training changes the "
+            "sub-216 conclusion."
+        ),
+    }
+
+
+def _stationary_finite_epoch_extension_report(
+    source_paths: Mapping[str, Path],
+    model_size_rows: Sequence[Mapping[str, str]],
+    model_size_sub216_rows: Sequence[Mapping[str, str]],
+    model_size_sub216_e256_rows: Sequence[Mapping[str, str]],
+    model_size_sub216_e512_rows: Sequence[Mapping[str, str]],
+    gpu_monitor_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    residual_floor = _find_variant(model_size_rows, "sf_train5_r6d1_e128")
+    r5d1_e256 = _find_variant(model_size_sub216_e256_rows, "sf_train5_r5d1_e256")
+    r4d1_e512 = _find_variant(model_size_sub216_e512_rows, "sf_train5_r4d1_e512")
+    mlp8_e512 = _find_variant(model_size_sub216_e512_rows, "sf_train5_mlp8_e512")
+    quadratic_e512 = _find_variant(
+        model_size_sub216_e512_rows,
+        "sf_train5_quadratic_e512",
+    )
+    r3d1_e512 = _find_variant(model_size_sub216_e512_rows, "sf_train5_r3d1_e512")
+    best_long_epoch = min(
+        [*model_size_sub216_e256_rows, *model_size_sub216_e512_rows],
+        key=lambda row: _float(row, "relative_regret_auc_percent_mean"),
+    )
+    epoch_extension_rows = _stationary_finite_epoch_extension_rows(
+        [
+            *model_size_sub216_rows,
+            *model_size_sub216_e256_rows,
+            *model_size_sub216_e512_rows,
+        ]
+    )
+    return {
+        "key": "stationary_finite_epoch_extension",
+        "title": "Stationary Finite Epoch Extension",
+        "question": (
+            "Can additional distillation epochs recover the relative regret and "
+            "span coverage of low-parameter stationary finite students?"
+        ),
+        "index_summary": (
+            f"`residual:4:1` reaches {_mean_std_percent(r4d1_e512, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret and "
+            f"{_mean_std_percent(r4d1_e512, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
+            "coverage at 512 epochs, but recovery is architecture-dependent."
+        ),
+        "evidence": [
+            (
+                "The experiment reruns representative sub-216 architectures for "
+                "256 epochs and the full sub-216 set for 512 epochs."
+            ),
+            (
+                "All non-epoch variables stay aligned with the current default "
+                "stationary finite distill recipe: five sparse teacher weights, "
+                "the clipped 11-action grid, `uniform_table` supervision, "
+                "64 steps per epoch, 10,000 evaluation particles, and eval "
+                "seeds `42,43,44`."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "stationary_finite_model_size_ablation",
+            "stationary_finite_model_size_sub216_ablation",
+            "stationary_finite_model_size_sub216_e256_ablation",
+            "stationary_finite_model_size_sub216_e512_ablation",
+            "stationary_finite_model_size_gpu_monitor_summary",
+        ),
+        "tables": [
+            {
+                "title": "Epoch-extension rows",
+                "headers": [
+                    "variant",
+                    "arch",
+                    "params",
+                    "epochs",
+                    "agreement",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _stationary_finite_model_size_table_row(row)
+                    for row in epoch_extension_rows
+                ],
+            },
+            {
+                "title": "Key comparators",
+                "headers": [
+                    "variant",
+                    "arch",
+                    "params",
+                    "epochs",
+                    "agreement",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    _stationary_finite_model_size_table_row(row)
+                    for row in (
+                        residual_floor,
+                        r5d1_e256,
+                        r4d1_e512,
+                        mlp8_e512,
+                        r3d1_e512,
+                        quadratic_e512,
+                    )
+                ],
+            },
+            {
+                "title": "GPU monitor",
+                "headers": ["metric", "value"],
+                "rows": [
+                    [
+                        "shared memory spill",
+                        _optional_bool_label(
+                            gpu_monitor_summary.get("shared_memory_spill_detected")
+                        ),
+                    ],
+                    [
+                        "peak shared memory",
+                        f"{format_float(_mib(_optional_float(gpu_monitor_summary, 'shared_memory_peak_single_adapter_bytes')), digits=1)} MiB",
+                    ],
+                    [
+                        "peak FB memory",
+                        f"{format_float(gpu_monitor_summary.get('nvidia_smi_peak_memory_used_mib'), digits=1)} MiB",
+                    ],
+                ],
+            },
+        ],
+        "command_names": (
+            "rerun_stationary_finite_sub216_e256_epoch_extension",
+            "rerun_stationary_finite_sub216_e512_epoch_extension",
+        ),
+        "conclusion": (
+            "Increasing epochs can recover low-parameter regret and coverage, "
+            "but not uniformly. `residual:5:1` reaches "
+            f"{_mean_std_percent(r5d1_e256, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret and "
+            f"{_mean_std_percent(r5d1_e256, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
+            "coverage at 256 epochs, then loses regret at 512 epochs. "
+            "`residual:4:1` needs 512 epochs to reach "
+            f"{_mean_std_percent(r4d1_e512, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret and "
+            f"{_mean_std_percent(r4d1_e512, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
+            "coverage, making it the smallest observed candidate that recovers "
+            "both metrics in this single-train-seed sweep. The best long-epoch "
+            "regret row is "
+            f"`{best_long_epoch['arch_label']}` at "
+            f"{format_int(_int(best_long_epoch, 'parameter_count'))} parameters, "
+            f"{_mean_std_percent(best_long_epoch, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret, but `mlp:8` is only marginally smaller than the "
+            "216-parameter `residual:6:1` baseline. Capacity still matters: "
+            f"`residual:3:1` remains broken at {_mean_std_percent(r3d1_e512, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret, and `quadratic` loses coverage at 512 epochs. "
+            "The 132-parameter row needs more train seeds and per-user "
+            "validation before it should replace the 128-epoch defaults."
         ),
     }
 

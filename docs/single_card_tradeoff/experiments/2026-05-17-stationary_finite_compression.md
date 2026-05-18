@@ -61,7 +61,7 @@ The TOML profile records the command and expected outputs used to reproduce this
 
 ## Conclusion
 
-After aligning epochs and evaluation seeds, the 316-parameter `residual:8:1` student recovers frontier span and remains competitive with larger students. The 216-parameter `residual:6:1` student also keeps span coverage, but with weaker relative regret in this rerun. In the quick sub-216 sweep, the best-regret row is `residual:5:1` at 172 parameters, -20.00% +/- 0.34% relative regret, and 95.30% +/- 0.29% coverage. The best coverage row is `quadratic` at 110 parameters, -10.05% +/- 0.63% relative regret, and 99.36% +/- 0.17% coverage. Both are weaker than -22.10% +/- 0.33% relative regret and 98.37% +/- 0.17% coverage for `residual:6:1`.
+After aligning epochs and evaluation seeds, the 316-parameter `residual:8:1` student recovers frontier span and remains competitive with larger students. The 216-parameter `residual:6:1` student also keeps span coverage, but with weaker relative regret in this rerun. In the quick sub-216 sweep, the best-regret row is `residual:5:1` at 172 parameters, -20.00% +/- 0.34% relative regret, and 95.30% +/- 0.29% coverage. The best coverage row is `quadratic` at 110 parameters, -10.05% +/- 0.63% relative regret, and 99.36% +/- 0.17% coverage. Both are weaker than -22.10% +/- 0.33% relative regret and 98.37% +/- 0.17% coverage for `residual:6:1`. The separate stationary finite epoch extension report tests whether longer training changes the sub-216 conclusion.
 
 ## Artifacts
 

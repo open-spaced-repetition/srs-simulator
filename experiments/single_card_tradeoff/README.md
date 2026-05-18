@@ -386,6 +386,9 @@ but their regret AUC is much weaker, so high coverage alone is not enough to
 justify further compression. The structured policies look like useful lower
 bounds, not practical replacements.
 
+The longer-epoch follow-up is recorded in
+`docs/single_card_tradeoff/experiments/2026-05-18-stationary_finite_epoch_extension.md`.
+
 The important correction to the older compression section is that the earlier
 64-epoch `residual:8:1` and `residual:6:1` rows were undertrained. When epochs
 and eval seeds are aligned to the current default recipe, the 316-parameter
@@ -394,9 +397,8 @@ larger students. The 216-parameter `residual:6:1` student also keeps coverage,
 but its relative regret is weaker in this rerun. Because this ablation still
 uses one training seed per architecture, the practical default remains
 `oracle_stationary`, `residual:8:2`, 476 parameters, 128 distillation epochs,
-and train weights `0,16,64,256,1024`; the 316-parameter student is now the
-main compression candidate to validate with more training seeds and per-user
-runs.
+and train weights `0,16,64,256,1024`. The 316-parameter student remains the
+lowest-risk 128-epoch compression candidate.
 
 Visualize the aligned model-size policies side-by-side against the exact
 stationary finite oracle:

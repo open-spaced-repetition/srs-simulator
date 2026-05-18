@@ -1,0 +1,74 @@
+schema_version = 1
+name = "stationary_finite_epoch_extension"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+stationary_finite_epoch_extension = "docs/single_card_tradeoff/experiments/2026-05-18-stationary_finite_epoch_extension.md"
+
+[source_artifacts]
+stationary_finite_model_size_ablation = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/model_size_ablation_summary.csv"
+stationary_finite_model_size_sub216_ablation = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_summary.csv"
+stationary_finite_model_size_sub216_e256_ablation = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_e256_summary.csv"
+stationary_finite_model_size_sub216_e512_ablation = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_e512_all_summary.csv"
+stationary_finite_model_size_gpu_monitor_summary = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/gpu_monitor/summary.json"
+
+[[commands]]
+name = "rerun_stationary_finite_sub216_e256_epoch_extension"
+description = "Run the 256-epoch representative sub-216 stationary finite checks."
+command = [
+  "uv",
+  "run",
+  "python",
+  "experiments/single_card_tradeoff/stationary_finite_model_size_ablation.py",
+  "--torch-device",
+  "cuda",
+  "--candidates",
+  "r5d1,r4d1,mlp8,quadratic",
+  "--epochs",
+  "256",
+  "--summary-prefix",
+  "sub216_e256",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_e256_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_e256_seed_metrics.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r5d1_e256_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r4d1_e256_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/mlp8_e256_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/quadratic_e256_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/gpu_monitor/summary.json",
+]
+
+[[commands]]
+name = "rerun_stationary_finite_sub216_e512_epoch_extension"
+description = "Run the full 512-epoch sub-216 stationary finite epoch-extension sweep."
+command = [
+  "uv",
+  "run",
+  "python",
+  "experiments/single_card_tradeoff/stationary_finite_model_size_ablation.py",
+  "--torch-device",
+  "cuda",
+  "--candidate-set",
+  "sub216",
+  "--epochs",
+  "512",
+  "--summary-prefix",
+  "sub216_e512_all",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_e512_all_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_e512_all_seed_metrics.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r5d1_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r4d1_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r3d1_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/mlp8_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/mlp6_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/mlp4_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/linear_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/quadratic_e512_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/gpu_monitor/summary.json",
+]
