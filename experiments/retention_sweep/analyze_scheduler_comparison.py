@@ -1471,6 +1471,19 @@ def memory_target_regret_auc_user_summaries(
     return summaries
 
 
+def _relative_regret_auc_percent_values(
+    summaries: list[MemoryTargetRegretAucUserSummary],
+) -> list[float]:
+    values: list[float] = []
+    for summary in summaries:
+        if summary.time_regret_auc is None or summary.baseline_time_auc is None:
+            continue
+        if math.isclose(summary.baseline_time_auc, 0.0):
+            continue
+        values.append((summary.time_regret_auc / summary.baseline_time_auc) * 100.0)
+    return values
+
+
 def memory_target_regret_auc_table(
     rows: list[SweepRow],
     env: str,
@@ -1504,10 +1517,11 @@ def memory_target_regret_auc_table(
             for summary in summaries
             if summary.baseline_time_auc is not None
         ]
+        relative_regret_auc_values = _relative_regret_auc_percent_values(summaries)
         span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
         relative_regret_auc = (
-            (average(time_regret_aucs) / average(baseline_time_aucs)) * 100.0
-            if baseline_time_aucs and average(baseline_time_aucs)
+            average(relative_regret_auc_values)
+            if relative_regret_auc_values
             else float("nan")
         )
         output_rows.append(
@@ -1942,6 +1956,7 @@ def build_memory_target_regret_auc_summary(
             for summary in summaries
             if summary.baseline_time_auc is not None
         ]
+        relative_regret_auc_values = _relative_regret_auc_percent_values(summaries)
         mean_time_regret_auc = (
             average(time_regret_aucs) if time_regret_aucs else float("nan")
         )
@@ -1950,8 +1965,8 @@ def build_memory_target_regret_auc_summary(
         )
         span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
         relative_regret_auc = (
-            (mean_time_regret_auc / mean_baseline_time_auc) * 100.0
-            if baseline_time_aucs and mean_baseline_time_auc
+            average(relative_regret_auc_values)
+            if relative_regret_auc_values
             else float("nan")
         )
         output_rows.append(
@@ -2451,8 +2466,9 @@ def render_env_summary(
                     "memory-target interval between the FSRS6 baseline frontier "
                     "and each scheduler frontier, using linear interpolation only. "
                     "Negative values mean the scheduler reaches the same "
-                    "memorized-card targets faster. Relative regret divides mean "
-                    "time regret AUC by mean covered baseline time AUC.\n"
+                    "memorized-card targets faster. Relative regret is the simple "
+                    "average of each user's time regret AUC divided by that user's "
+                    "covered baseline time AUC.\n"
                 )
                 print(
                     render_memory_target_regret_auc_summary(
@@ -2609,8 +2625,9 @@ def print_env_report(
                 "memory-target interval between the FSRS6 baseline frontier and "
                 "each scheduler frontier, using linear interpolation only. "
                 "Negative values mean the scheduler reaches the same memorized-card "
-                "targets faster. Relative regret divides mean time regret AUC by "
-                "mean covered baseline time AUC.\n"
+                "targets faster. Relative regret is the simple average of each "
+                "user's time regret AUC divided by that user's covered baseline "
+                "time AUC.\n"
             )
             print(
                 memory_target_regret_auc_table(

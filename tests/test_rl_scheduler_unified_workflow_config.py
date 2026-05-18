@@ -15,9 +15,11 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.retention_sweep.analyze_scheduler_comparison import (
     SweepRow,
     build_analysis_summary,
+    build_memory_target_regret_auc_summary,
     budget_memory_gain_auc_user_summaries,
     interpolated_memorized_under_budget,
     interpolated_min_time_for_memory_target,
+    memory_target_regret_auc_table,
     memory_target_regret_auc_user_summaries,
     parse_args as parse_analyze_args,
     render_report,
@@ -868,7 +870,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
         self.assertIn("### Memory-target regret AUC vs FSRS6 baseline", report)
         self.assertIn(
-            "| fsrs6_adr | 2/2 | 2/6 | 37.500% | -2.96 | -9.556% |",
+            "| fsrs6_adr | 2/2 | 2/6 | 37.500% | -2.96 | -10.797% |",
             report,
         )
 
@@ -996,6 +998,93 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(regret.covered_span, 100.0)
         self.assertAlmostEqual(regret.time_regret_auc or 0.0, 3.0)
         self.assertAlmostEqual(regret.baseline_time_auc or 0.0, 20.0)
+
+    def test_relative_regret_auc_is_simple_user_average(self) -> None:
+        def row(
+            *,
+            user_id: int,
+            scheduler: str,
+            memorized_average: float,
+            time_average: float,
+        ) -> SweepRow:
+            return SweepRow(
+                environment="fsrs6",
+                scheduler=scheduler,
+                user_id=user_id,
+                desired_retention=None,
+                memorized_average=memorized_average,
+                time_average=time_average,
+                reviews_average=time_average,
+                efficiency=memorized_average / time_average,
+                path=Path(f"{scheduler}-{user_id}.json"),
+                mtime_ns=0,
+            )
+
+        rows = [
+            row(
+                user_id=1, scheduler="fsrs6", memorized_average=100.0, time_average=5.0
+            ),
+            row(
+                user_id=1,
+                scheduler="fsrs6",
+                memorized_average=200.0,
+                time_average=15.0,
+            ),
+            row(
+                user_id=1,
+                scheduler="fsrs6_adr",
+                memorized_average=100.0,
+                time_average=15.0,
+            ),
+            row(
+                user_id=1,
+                scheduler="fsrs6_adr",
+                memorized_average=200.0,
+                time_average=25.0,
+            ),
+            row(
+                user_id=2,
+                scheduler="fsrs6",
+                memorized_average=100.0,
+                time_average=50.0,
+            ),
+            row(
+                user_id=2,
+                scheduler="fsrs6",
+                memorized_average=200.0,
+                time_average=150.0,
+            ),
+            row(
+                user_id=2,
+                scheduler="fsrs6_adr",
+                memorized_average=100.0,
+                time_average=50.0,
+            ),
+            row(
+                user_id=2,
+                scheduler="fsrs6_adr",
+                memorized_average=200.0,
+                time_average=150.0,
+            ),
+        ]
+
+        summary = build_memory_target_regret_auc_summary(
+            rows,
+            "fsrs6",
+            ("fsrs6_adr",),
+            baseline_scheduler="fsrs6",
+        )[0]
+        table = memory_target_regret_auc_table(
+            rows,
+            "fsrs6",
+            ("fsrs6_adr",),
+            baseline_scheduler="fsrs6",
+        )
+
+        self.assertAlmostEqual(summary["time_regret_auc_mean"] or 0.0, 5.0)
+        self.assertAlmostEqual(summary["baseline_time_auc_mean"] or 0.0, 55.0)
+        self.assertAlmostEqual(summary["relative_regret_auc_percent"] or 0.0, 50.0)
+        self.assertIn("| fsrs6_adr | 2/2 | 4/4 | 100.000% | 5.00 | 50.000% |", table)
 
     def test_analyze_scheduler_comparison_manifest_keeps_exact_baseline_dr(
         self,
