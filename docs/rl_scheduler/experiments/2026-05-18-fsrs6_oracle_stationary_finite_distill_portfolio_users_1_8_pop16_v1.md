@@ -114,6 +114,29 @@ Candidate-minus-comparison per-user HV delta is negative for 8/16 environment-us
 | 7 | 2,198 | 1,238 | 959 | 1,569 | 733 | 836 |
 | 8 | 1,788 | 1,918 | -130 | 1,503 | 1,556 | -53 |
 
+## Per-User Relative Time Regret AUC
+
+Relative time regret AUC is `time_regret_auc / baseline_time_auc * 100`, computed against the FSRS6 baseline frontier over the common covered memory-target interval. Negative values are better: the scheduler reaches the same memorized-card target faster than the FSRS6 baseline. The delta column is Oracle stationary finite distill minus ADR, so negative means Oracle is better than ADR.
+
+| environment | user | Oracle stationary finite distill relative regret AUC | ADR relative regret AUC | Oracle - ADR |
+| --- | --- | ---: | ---: | ---: |
+| fsrs6 | 1 | -8.07% | -7.00% | -1.07 pp |
+| fsrs6 | 2 | -17.87% | -16.26% | -1.61 pp |
+| fsrs6 | 3 | -10.93% | -10.22% | -0.71 pp |
+| fsrs6 | 4 | -19.47% | -16.86% | -2.61 pp |
+| fsrs6 | 5 | -15.42% | -14.07% | -1.36 pp |
+| fsrs6 | 6 | -15.85% | -14.83% | -1.02 pp |
+| fsrs6 | 7 | -20.97% | -9.17% | -11.81 pp |
+| fsrs6 | 8 | -4.79% | -4.02% | -0.77 pp |
+| lstm | 1 | -0.21% | -2.16% | +1.95 pp |
+| lstm | 2 | +2.76% | -0.85% | +3.61 pp |
+| lstm | 3 | -8.78% | -9.19% | +0.41 pp |
+| lstm | 4 | -1.96% | -6.42% | +4.46 pp |
+| lstm | 5 | -3.22% | -5.10% | +1.88 pp |
+| lstm | 6 | -11.84% | -10.28% | -1.56 pp |
+| lstm | 7 | -19.34% | -7.57% | -11.77 pp |
+| lstm | 8 | -3.94% | -5.68% | +1.74 pp |
+
 ## Diagnostics
 
 Unweighted policy-point averages describe where sampled policies lie; they are diagnostics only and do not replace external Pareto evidence.
