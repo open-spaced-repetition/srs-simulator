@@ -29,17 +29,24 @@ Source artifacts:
 
 | variant | arch | params | epochs | agreement | relative_regret | coverage |
 | --- | --- | --- | --- | --- | --- | --- |
-| sf_train5_r16d2_e64 | residual:16:2 | 1,452 | 64 | 73.76% | -23.67% +/- 0.35% | 95.01% +/- 0.26% |
-| sf_train5_r12d2_e64 | residual:12:2 | 900 | 64 | 73.12% | -23.58% | 97.71% |
-| sf_train5_r10d2_e64 | residual:10:2 | 672 | 64 | 71.45% | -22.68% | 85.66% |
-| sf_train5_r8d2_e64 | residual:8:2 | 476 | 64 | 71.64% | -22.29% | 86.66% |
-| sf_train5_r8d2_e128 | residual:8:2 | 476 | 128 | 73.01% | -23.50% +/- 0.25% | 95.27% +/- 0.27% |
-| sf_train5_r8d1_e64 | residual:8:1 | 316 | 64 | 69.64% | -21.54% | 73.56% |
-| sf_train5_r6d1_e64 | residual:6:1 | 216 | 64 | 69.45% | -19.68% | 73.68% |
+| sf_train5_r16d2_e128 | residual:16:2 | 1,452 | 128 | 77.45% | -23.00% +/- 0.23% | 96.57% +/- 0.17% |
+| sf_train5_r12d2_e128 | residual:12:2 | 900 | 128 | 77.00% | -23.30% +/- 0.33% | 97.60% +/- 0.26% |
+| sf_train5_r10d2_e128 | residual:10:2 | 672 | 128 | 75.67% | -23.20% +/- 0.33% | 98.11% +/- 0.25% |
+| sf_train5_r8d2_e128 | residual:8:2 | 476 | 128 | 74.98% | -22.15% +/- 0.28% | 98.41% +/- 0.18% |
+| sf_train5_r8d1_e128 | residual:8:1 | 316 | 128 | 74.52% | -22.88% +/- 0.45% | 98.53% +/- 0.23% |
+| sf_train5_r6d1_e128 | residual:6:1 | 216 | 128 | 73.71% | -22.10% +/- 0.33% | 98.37% +/- 0.17% |
+
+## Reproduction Profile
+
+The TOML profile records the command and expected outputs used to reproduce this report input. CUDA reruns write `performance_summary.json` and `gpu_monitor/` memory samples under their configured output directories.
+
+| command | expected outputs present |
+| --- | --- |
+| rerun_stationary_finite_model_size_ablation | 6/6 |
 
 ## Conclusion
 
-The current compression floor is 476 parameters with longer distillation. Smaller 216-316 parameter variants keep a favorable AUC only over a much narrower frontier span.
+After aligning epochs and evaluation seeds, the 316-parameter `residual:8:1` student recovers frontier span and remains competitive with larger students. The 216-parameter `residual:6:1` student also keeps span coverage, but with weaker relative regret in this rerun.
 
 ## Artifacts
 

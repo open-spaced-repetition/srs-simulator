@@ -1869,8 +1869,8 @@ def _stationary_finite_compression_report(
     cost_weight_rows: Sequence[Mapping[str, str]],
     model_size_rows: Sequence[Mapping[str, str]],
 ) -> dict[str, Any]:
-    best_small = next(
-        row for row in model_size_rows if row["variant"] == "sf_train5_r8d2_e128"
+    practical_floor = next(
+        row for row in model_size_rows if row["variant"] == "sf_train5_r8d1_e128"
     )
     return {
         "key": "stationary_finite_compression",
@@ -1880,8 +1880,10 @@ def _stationary_finite_compression_report(
             "preserving relative regret and span coverage?"
         ),
         "index_summary": (
-            "The current 476-parameter `residual:8:2` 128-epoch model keeps "
-            f"{format_percent(best_small['span_coverage_percent_mean'])} coverage."
+            "The aligned 128-epoch rerun pushes the compact candidate to "
+            f"{format_int(_int(practical_floor, 'parameter_count'))} parameters "
+            f"with {format_percent(practical_floor['span_coverage_percent_mean'])} "
+            "coverage."
         ),
         "evidence": [
             (
@@ -1959,11 +1961,12 @@ def _stationary_finite_compression_report(
                 ],
             },
         ],
-        "command_names": (),
+        "command_names": ("rerun_stationary_finite_model_size_ablation",),
         "conclusion": (
-            "The current compression floor is 476 parameters with longer "
-            "distillation. Smaller 216-316 parameter variants keep a favorable "
-            "AUC only over a much narrower frontier span."
+            "After aligning epochs and evaluation seeds, the 316-parameter "
+            "`residual:8:1` student recovers frontier span and remains competitive "
+            "with larger students. The 216-parameter `residual:6:1` student also "
+            "keeps span coverage, but with weaker relative regret in this rerun."
         ),
     }
 
