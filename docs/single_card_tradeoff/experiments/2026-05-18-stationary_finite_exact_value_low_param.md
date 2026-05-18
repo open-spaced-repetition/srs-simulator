@@ -11,9 +11,13 @@ Can very low-parameter direct policies approach the stationary finite oracle whi
 
 Environment `fsrs6`, users 1 through 8, 1825 days, clipped 11-action retention grid, and the standard 17 evaluation cost weights. The exact-value evaluator converts each stationary policy to a table on the oracle `(cost_weight, stability, difficulty)` grid and computes finite-lifecycle objective, memory, minutes, reviews, and lapses with DP/occupancy, not rollout particles.
 
+This evaluator is a teacher-gap diagnostic, not a claim that the grid exact policy is always the better deployed policy in the continuous simulator. The exact stationary finite teacher itself is a discrete-grid policy. Distill and direct policies are sampled back onto that same grid for deterministic evaluation, so this controls the objective and removes Monte Carlo noise, but it also removes any continuous-state smoothing benefit a neural policy may have during rollout.
+
 Source artifacts:
 - `stationary_finite_exact_value_mean_summary`: `artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/mean_summary.csv`
 - `stationary_finite_exact_value_metadata`: `artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/metadata.json`
+- `first8_exact_vs_distill_mean_summary`: `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/mean_summary.csv`
+- `first8_exact_vs_distill_regret_auc`: `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/regret_auc.csv`
 - `low_param_direct_interaction15_metadata`: `artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/metadata.json`
 - `low_param_direct_basis32_metadata`: `artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/metadata.json`
 - `low_param_direct_basis64_metadata`: `artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/metadata.json`
@@ -33,6 +37,15 @@ Source artifacts:
 | direct 32 basis | 32 | -9.15% | 74.97% | 24.37% | 71.35% |
 | direct 64 basis | 64 | -5.32% | 77.29% | 31.34% | 72.81% |
 
+### Continuous rollout comparator
+
+| policy | params/user | sampled rollout relative regret vs fsrs6 | sampled rollout coverage vs fsrs6 |
+| --- | ---: | ---: | ---: |
+| exact stationary finite | table | -9.28% | 97.91% |
+| 476-param distill | 476 | -12.36% | 97.55% |
+
+On the exact-teacher shared span in the sampled rollout comparison, the 476-param distill has -3.03% relative regret at 96.60% coverage versus exact. This should not be interpreted as proof that the distill is better than the teacher in the teacher's discrete DP problem. It does show that, in the continuous rollout simulator where exact tables require grid lookup and distills act as smooth functions of `S`, `D`, and `W`, the 476-param distill is already deployment-competitive with the exact stationary finite table.
+
 ### Direct-search rollout comparison
 
 | policy | params/user | rollout relative regret vs fsrs6 | rollout coverage vs fsrs6 |
@@ -43,7 +56,7 @@ Source artifacts:
 | direct 32 basis | 32 | -6.94% | 76.74% |
 | direct 64 basis | 64 | -4.64% | 79.75% |
 
-The direct-search rollout runs use continuous desired retention, while exact-value evaluation snaps direct policies to the nearest action in the clipped 11-action grid. The exact-value rows should be used for teacher-gap calibration; rollout rows remain useful for the direct-search training objective.
+The direct-search rollout runs use continuous desired retention, while exact-value evaluation snaps direct policies to the nearest action in the clipped 11-action grid. The exact-value rows should be used for teacher-gap calibration; rollout rows remain the better deployment-style view for direct policies in the continuous simulator.
 
 ### Endpoint check
 
@@ -71,6 +84,6 @@ The TOML profile records the commands and expected outputs used to reproduce thi
 
 ## Conclusion
 
-The exact-value evaluator resolves the sampled-evaluation ambiguity: the distills do not exceed the exact stationary finite teacher under deterministic DP evaluation. The 476-parameter distill keeps high coverage but has a real teacher gap, and the 132-parameter `residual:4:1` e512 distill is slightly weaker.
+The exact-value evaluator resolves the sampled-evaluation ambiguity for the teacher's discrete DP problem: the distills do not exceed the exact stationary finite teacher under deterministic DP evaluation. This does not imply that the exact table is the better practical continuous-simulator policy. Existing sampled rollout results show the 476-parameter distill is already comparable to exact stationary finite, with similar coverage and slightly better sampled regret AUC versus `fsrs6`.
 
 The direct-search capacity curve does not support the hypothesis that 64 or fewer parameters, in these monotone basis families, can closely match the oracle. The 15-parameter monotone interaction family improves coverage over the 7-parameter floor, but only to about 82% exact-value coverage versus `fsrs6` and about 80% versus the exact teacher. The 32- and 64-parameter basis families are not better in this run. Next work should either redesign the low-parameter family around the exact endpoint failures, or move the practical compression target back to the 96-172 parameter long-trained distill range.
