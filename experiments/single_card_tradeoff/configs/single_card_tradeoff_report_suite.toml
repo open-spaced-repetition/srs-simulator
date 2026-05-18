@@ -22,6 +22,7 @@ profile_paths = [
   "reports/interval_oracle_distill.toml",
   "reports/retention_distill.toml",
   "reports/multiuser_eval_batching.toml",
+  "reports/oracle_stationary_finite_cpu_gpu_benchmark.toml",
 ]
 
 [report.outputs]

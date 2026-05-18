@@ -52,6 +52,9 @@ REPORT_FILENAMES = {
     "interval_oracle_distill": "interval_oracle_distill.md",
     "retention_distill": "retention_distill.md",
     "multiuser_eval_batching": "multiuser_eval_batching.md",
+    "oracle_stationary_finite_cpu_gpu_benchmark": (
+        "oracle_stationary_finite_cpu_gpu_benchmark.md"
+    ),
 }
 
 DEFAULT_DOC_OUTPUTS = {
@@ -105,6 +108,10 @@ DEFAULT_DOC_OUTPUTS = {
     ),
     "multiuser_eval_batching": Path(
         "docs/single_card_tradeoff/experiments/2026-05-17-multiuser_eval_batching.md"
+    ),
+    "oracle_stationary_finite_cpu_gpu_benchmark": Path(
+        "docs/single_card_tradeoff/experiments/"
+        "2026-05-18-oracle_stationary_finite_cpu_gpu_benchmark.md"
     ),
 }
 
@@ -253,6 +260,30 @@ DEFAULT_SOURCE_PATHS: dict[str, Path] = {
     ),
     "multiuser_eval_batch_smoke_post_patch_train": Path(
         "artifacts/single_card_tradeoff/eval_batch_smoke_post_patch/train_summary.csv"
+    ),
+    "oracle_stationary_finite_cpu_gpu_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "oracle_stationary_finite_cpu_gpu_benchmark/summary.csv"
+    ),
+    "oracle_stationary_finite_cpu_gpu_runs": Path(
+        "artifacts/single_card_tradeoff/"
+        "oracle_stationary_finite_cpu_gpu_benchmark/runs.csv"
+    ),
+    "oracle_stationary_finite_cpu_gpu_metadata": Path(
+        "artifacts/single_card_tradeoff/"
+        "oracle_stationary_finite_cpu_gpu_benchmark/metadata.json"
+    ),
+    "oracle_stationary_finite_multiuser_cpu_gpu_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "oracle_stationary_finite_multiuser_cpu_gpu_benchmark/summary.csv"
+    ),
+    "oracle_stationary_finite_multiuser_cpu_gpu_runs": Path(
+        "artifacts/single_card_tradeoff/"
+        "oracle_stationary_finite_multiuser_cpu_gpu_benchmark/runs.csv"
+    ),
+    "oracle_stationary_finite_multiuser_cpu_gpu_metadata": Path(
+        "artifacts/single_card_tradeoff/"
+        "oracle_stationary_finite_multiuser_cpu_gpu_benchmark/metadata.json"
     ),
 }
 
@@ -1177,6 +1208,18 @@ def _configured_reports(
     smoke_post_patch = read_csv_rows(
         source_paths["multiuser_eval_batch_smoke_post_patch_train"]
     )
+    cpu_gpu_summary = read_csv_rows(
+        source_paths["oracle_stationary_finite_cpu_gpu_summary"]
+    )
+    cpu_gpu_metadata = read_json_object(
+        source_paths["oracle_stationary_finite_cpu_gpu_metadata"]
+    )
+    multiuser_cpu_gpu_summary = read_csv_rows(
+        source_paths["oracle_stationary_finite_multiuser_cpu_gpu_summary"]
+    )
+    multiuser_cpu_gpu_metadata = read_json_object(
+        source_paths["oracle_stationary_finite_multiuser_cpu_gpu_metadata"]
+    )
 
     return [
         _uvfa_ppo_report(source_paths, default_regret, uvfa_hparams),
@@ -1220,6 +1263,13 @@ def _configured_reports(
             smoke_all,
             smoke_group1,
             smoke_post_patch,
+        ),
+        _oracle_stationary_finite_cpu_gpu_benchmark_report(
+            source_paths,
+            cpu_gpu_summary,
+            cpu_gpu_metadata,
+            multiuser_cpu_gpu_summary,
+            multiuser_cpu_gpu_metadata,
         ),
     ]
 
@@ -2249,6 +2299,180 @@ def _multiuser_eval_batching_report(
     }
 
 
+def _oracle_stationary_finite_cpu_gpu_benchmark_report(
+    source_paths: Mapping[str, Path],
+    summary_rows: Sequence[Mapping[str, str]],
+    metadata: Mapping[str, Any],
+    multiuser_summary_rows: Sequence[Mapping[str, str]],
+    multiuser_metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    cpu = _device_summary(summary_rows, "cpu")
+    cuda = _device_summary(summary_rows, "cuda")
+    cuda_speedup = _optional_float(cuda, "cpu_relative_speedup")
+    multiuser_cpu = _device_summary(multiuser_summary_rows, "cpu")
+    multiuser_cuda = _device_summary(multiuser_summary_rows, "cuda")
+    multiuser_cuda_speedup = _optional_float(multiuser_cuda, "cpu_relative_speedup")
+    settings = metadata.get("settings")
+    if not isinstance(settings, Mapping):
+        settings = {}
+    multiuser_settings = multiuser_metadata.get("settings")
+    if not isinstance(multiuser_settings, Mapping):
+        multiuser_settings = {}
+    repeat_count = int(_optional_float(cpu, "repeat_count") or 0)
+    multiuser_repeat_count = int(_optional_float(multiuser_cpu, "repeat_count") or 0)
+    return {
+        "key": "oracle_stationary_finite_cpu_gpu_benchmark",
+        "title": "Oracle Stationary Finite CPU/GPU Benchmark",
+        "question": (
+            "How do CPU and CUDA runtimes compare for the default "
+            "`oracle_stationary_finite_distill` workloads?"
+        ),
+        "index_summary": (
+            f"Single-user: {_cpu_gpu_speed_fragment(cuda_speedup)}; "
+            f"multi-user: {_cpu_gpu_speed_fragment(multiuser_cuda_speedup)}."
+        ),
+        "evidence": [
+            (
+                "The benchmark runs `oracle_stationary_finite_distill.py` with "
+                "the formal default single-card workload: `fsrs6_default`, 1825 "
+                "days, default stationary finite teacher weights, 128 epochs, "
+                "64 steps per epoch, and 10,000 evaluation particles."
+            ),
+            (
+                "The multi-user benchmark runs "
+                "`oracle_stationary_finite_distill_multiuser.py --per-user-models` "
+                "for the first eight benchmark users with the same default "
+                "stationary finite distill recipe and button-usage costs."
+            ),
+            (
+                "Each workload/device pair is run once, so the report gives "
+                "observed timings without a variance estimate. CUDA memory and "
+                "spill fields come from the benchmark GPU monitor artifacts."
+            ),
+        ],
+        "source_artifacts": _source_refs(
+            source_paths,
+            "oracle_stationary_finite_cpu_gpu_summary",
+            "oracle_stationary_finite_cpu_gpu_runs",
+            "oracle_stationary_finite_cpu_gpu_metadata",
+            "oracle_stationary_finite_multiuser_cpu_gpu_summary",
+            "oracle_stationary_finite_multiuser_cpu_gpu_runs",
+            "oracle_stationary_finite_multiuser_cpu_gpu_metadata",
+        ),
+        "notes": [
+            (
+                f"Configured repeats per device: {format_int(repeat_count)}; "
+                f"CUDA available: {metadata.get('cuda_available')}."
+            ),
+            (
+                "Benchmark settings: "
+                f"epochs={settings.get('epochs')}, "
+                f"steps_per_epoch={settings.get('steps_per_epoch')}, "
+                f"eval_particles={settings.get('eval_particles')}."
+            ),
+            (
+                "Multi-user benchmark settings: "
+                f"users={multiuser_settings.get('user_ids')}, "
+                f"repeats={format_int(multiuser_repeat_count)}, "
+                f"eval_particles={multiuser_settings.get('eval_particles')}."
+            ),
+        ],
+        "tables": [
+            {
+                "title": "Single-user device timing",
+                "headers": [
+                    "device",
+                    "wall_s",
+                    "speedup_vs_cpu",
+                    "train_s",
+                    "eval_s",
+                    "repeats",
+                ],
+                "rows": [
+                    _cpu_gpu_timing_row(cpu),
+                    _cpu_gpu_timing_row(cuda),
+                ],
+            },
+            {
+                "title": "Single-user quality guard",
+                "headers": [
+                    "device",
+                    "params",
+                    "final CE",
+                    "train agreement",
+                    "eval agreement",
+                ],
+                "rows": [
+                    _cpu_gpu_quality_row(cpu),
+                    _cpu_gpu_quality_row(cuda),
+                ],
+            },
+            {
+                "title": "Single-user CUDA memory",
+                "headers": [
+                    "device",
+                    "samples",
+                    "dedicated MiB",
+                    "shared peak MiB",
+                    "spill",
+                ],
+                "rows": [_cpu_gpu_memory_row(cuda)],
+            },
+            {
+                "title": "Multi-user device timing",
+                "headers": [
+                    "device",
+                    "wall_s",
+                    "speedup_vs_cpu",
+                    "teacher_s",
+                    "train_s",
+                    "eval_s",
+                ],
+                "rows": [
+                    _multiuser_cpu_gpu_timing_row(multiuser_cpu),
+                    _multiuser_cpu_gpu_timing_row(multiuser_cuda),
+                ],
+            },
+            {
+                "title": "Multi-user quality guard",
+                "headers": [
+                    "device",
+                    "users",
+                    "params/user",
+                    "ensemble params",
+                    "mean CE",
+                    "eval agreement",
+                ],
+                "rows": [
+                    _multiuser_cpu_gpu_quality_row(multiuser_cpu),
+                    _multiuser_cpu_gpu_quality_row(multiuser_cuda),
+                ],
+            },
+            {
+                "title": "Multi-user CUDA memory",
+                "headers": [
+                    "device",
+                    "samples",
+                    "dedicated MiB",
+                    "shared peak MiB",
+                    "spill",
+                ],
+                "rows": [_cpu_gpu_memory_row(multiuser_cuda)],
+            },
+        ],
+        "command_names": (
+            "benchmark_oracle_stationary_finite_cpu_gpu",
+            "benchmark_oracle_stationary_finite_multiuser_cpu_gpu",
+        ),
+        "conclusion": (
+            f"Single-user: {_cpu_gpu_speed_sentence(cuda_speedup)} "
+            f"Multi-user: {_cpu_gpu_speed_sentence(multiuser_cuda_speedup)} "
+            "Treat both as point estimates until the benchmark is rerun with "
+            "multiple repeats."
+        ),
+    }
+
+
 def _source_refs(source_paths: Mapping[str, Path], *keys: str) -> list[dict[str, str]]:
     return [
         {
@@ -2257,6 +2481,123 @@ def _source_refs(source_paths: Mapping[str, Path], *keys: str) -> list[dict[str,
         }
         for key in keys
     ]
+
+
+def _device_summary(
+    rows: Sequence[Mapping[str, str]],
+    device: str,
+) -> Mapping[str, str]:
+    for row in rows:
+        if row["device"] == device:
+            return row
+    raise ValueError(f"Missing CPU/GPU benchmark summary row for {device}.")
+
+
+def _cpu_gpu_timing_row(row: Mapping[str, str]) -> list[str]:
+    return [
+        row["device"],
+        format_float(row["wall_runtime_s_mean"], digits=2),
+        f"{format_float(row['cpu_relative_speedup'], digits=2)}x",
+        format_float(row["train_runtime_s_mean"], digits=2),
+        format_float(row["eval_runtime_s_mean"], digits=2),
+        format_int(_optional_float(row, "repeat_count")),
+    ]
+
+
+def _cpu_gpu_quality_row(row: Mapping[str, str]) -> list[str]:
+    return [
+        row["device"],
+        format_int(_optional_float(row, "parameter_count")),
+        format_float(row["final_ce_loss_mean"], digits=5),
+        format_percent(100.0 * _float(row, "train_teacher_action_agreement_mean")),
+        format_percent(100.0 * _float(row, "eval_teacher_action_agreement_mean")),
+    ]
+
+
+def _multiuser_cpu_gpu_timing_row(row: Mapping[str, str]) -> list[str]:
+    return [
+        row["device"],
+        format_float(row["wall_runtime_s_mean"], digits=2),
+        f"{format_float(row['cpu_relative_speedup'], digits=2)}x",
+        format_float(row["teacher_runtime_s_mean"], digits=2),
+        format_float(row["train_runtime_s_mean"], digits=2),
+        format_float(row["eval_runtime_s_mean"], digits=2),
+    ]
+
+
+def _multiuser_cpu_gpu_quality_row(row: Mapping[str, str]) -> list[str]:
+    return [
+        row["device"],
+        format_int(_optional_float(row, "user_count")),
+        format_int(_optional_float(row, "params_per_user")),
+        format_int(_optional_float(row, "ensemble_trainable_params")),
+        format_float(row["mean_final_ce_loss"], digits=5),
+        format_percent(100.0 * _float(row, "mean_eval_teacher_action_agreement")),
+    ]
+
+
+def _cpu_gpu_memory_row(row: Mapping[str, str]) -> list[str]:
+    return [
+        row["device"],
+        format_int(_optional_float(row, "gpu_monitor_sample_count_max")),
+        format_float(
+            _optional_float(row, "gpu_monitor_nvidia_smi_peak_memory_used_mib_max"),
+            digits=1,
+        ),
+        format_float(
+            _mib(
+                _optional_float(
+                    row,
+                    "gpu_monitor_shared_memory_peak_single_adapter_bytes_max",
+                )
+            ),
+            digits=1,
+        ),
+        _optional_bool_label(row.get("gpu_monitor_shared_memory_spill_detected")),
+    ]
+
+
+def _cpu_gpu_speed_sentence(speedup: float | None) -> str:
+    if speedup is None:
+        return "CPU/CUDA wall-clock speedup is unavailable for this artifact."
+    if speedup >= 1.0:
+        return (
+            "CUDA completes the default stationary finite distill workload "
+            f"{format_float(speedup, digits=2)}x faster than CPU in the single "
+            "observed run."
+        )
+    return (
+        "CUDA is slower than CPU for the default stationary finite distill "
+        f"workload in the single observed run: CPU is "
+        f"{format_float(1.0 / speedup, digits=2)}x faster."
+    )
+
+
+def _cpu_gpu_speed_fragment(speedup: float | None) -> str:
+    if speedup is None:
+        return "CPU/CUDA speedup unavailable"
+    if speedup >= 1.0:
+        return f"CUDA {format_float(speedup, digits=2)}x faster than CPU"
+    return f"CPU {format_float(1.0 / speedup, digits=2)}x faster than CUDA"
+
+
+def _optional_float(row: Mapping[str, Any], key: str) -> float | None:
+    value = row.get(key)
+    if value in (None, ""):
+        return None
+    return float(value)
+
+
+def _mib(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return value / 1024.0 / 1024.0
+
+
+def _optional_bool_label(value: Any) -> str:
+    if value in (None, ""):
+        return "n/a"
+    return "yes" if str(value).lower() == "true" else "no"
 
 
 def _hparam_rows(
