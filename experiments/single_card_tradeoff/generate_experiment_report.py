@@ -223,6 +223,10 @@ DEFAULT_SOURCE_PATHS: dict[str, Path] = {
         "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/"
         "model_size_ablation_summary.csv"
     ),
+    "stationary_finite_model_size_sub216_ablation": Path(
+        "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/"
+        "sub216_summary.csv"
+    ),
     "oracle_policy_outputs_rollout": Path(
         "artifacts/single_card_tradeoff/analysis/"
         "no_sub05_fsrs6_oracle_policy_outputs_rollout_1825_p2048.csv"
@@ -1193,6 +1197,9 @@ def _configured_reports(
     model_size_ablation = read_csv_rows(
         source_paths["stationary_finite_model_size_ablation"]
     )
+    model_size_sub216_ablation = read_csv_rows(
+        source_paths["stationary_finite_model_size_sub216_ablation"]
+    )
     oracle_rollout_outputs = read_csv_rows(
         source_paths["oracle_policy_outputs_rollout"]
     )
@@ -1245,6 +1252,7 @@ def _configured_reports(
             source_paths,
             cost_weight_ablation,
             model_size_ablation,
+            model_size_sub216_ablation,
         ),
         _oracle_policy_outputs_report(
             source_paths,
@@ -1918,9 +1926,21 @@ def _stationary_finite_compression_report(
     source_paths: Mapping[str, Path],
     cost_weight_rows: Sequence[Mapping[str, str]],
     model_size_rows: Sequence[Mapping[str, str]],
+    model_size_sub216_rows: Sequence[Mapping[str, str]],
 ) -> dict[str, Any]:
     practical_floor = next(
         row for row in model_size_rows if row["variant"] == "sf_train5_r8d1_e128"
+    )
+    best_sub216 = max(
+        model_size_sub216_rows,
+        key=lambda row: _float(row, "span_coverage_percent_mean"),
+    )
+    best_regret_sub216 = min(
+        model_size_sub216_rows,
+        key=lambda row: _float(row, "relative_regret_auc_percent_mean"),
+    )
+    residual_floor = next(
+        row for row in model_size_rows if row["variant"] == "sf_train5_r6d1_e128"
     )
     return {
         "key": "stationary_finite_compression",
@@ -1930,22 +1950,24 @@ def _stationary_finite_compression_report(
             "preserving relative regret and span coverage?"
         ),
         "index_summary": (
-            "The aligned 128-epoch rerun pushes the compact candidate to "
-            f"{format_int(_int(practical_floor, 'parameter_count'))} parameters "
-            f"with {format_percent(practical_floor['span_coverage_percent_mean'])} "
-            "coverage."
+            "The aligned 128-epoch rerun keeps a strong "
+            f"{format_int(_int(practical_floor, 'parameter_count'))}-parameter "
+            "student; below 216 parameters, the best-regret row is "
+            f"`{best_regret_sub216['arch_label']}` at "
+            f"{_mean_std_percent(best_regret_sub216, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')}."
         ),
         "evidence": [
             (
                 "The report uses the multi-seed sparse-cost-weight ablation and "
-                "the model-size ablation summaries from the current clipped "
-                "action-space run."
+                "the aligned model-size ablation summaries from the current "
+                "clipped action-space run."
             ),
         ],
         "source_artifacts": _source_refs(
             source_paths,
             "stationary_finite_cost_weight_ablation",
             "stationary_finite_model_size_ablation",
+            "stationary_finite_model_size_sub216_ablation",
         ),
         "tables": [
             {
@@ -2010,13 +2032,69 @@ def _stationary_finite_compression_report(
                     for row in model_size_rows
                 ],
             },
+            {
+                "title": "Sub-216 and structured sweep",
+                "headers": [
+                    "variant",
+                    "family",
+                    "arch",
+                    "params",
+                    "epochs",
+                    "agreement",
+                    "relative_regret",
+                    "coverage",
+                ],
+                "rows": [
+                    [
+                        row["variant"],
+                        row.get("family", ""),
+                        row["arch_label"],
+                        format_int(_int(row, "parameter_count")),
+                        format_int(_int(row, "epochs")),
+                        format_percent(
+                            100.0 * _float(row, "eval_teacher_action_agreement")
+                        ),
+                        _mean_std_percent(
+                            row,
+                            "relative_regret_auc_percent_mean",
+                            "relative_regret_auc_percent_std",
+                        ),
+                        _mean_std_percent(
+                            row,
+                            "span_coverage_percent_mean",
+                            "span_coverage_percent_std",
+                        ),
+                    ]
+                    for row in model_size_sub216_rows
+                ],
+            },
         ],
-        "command_names": ("rerun_stationary_finite_model_size_ablation",),
+        "command_names": (
+            "rerun_stationary_finite_model_size_ablation",
+            "rerun_stationary_finite_sub216_model_size_ablation",
+        ),
         "conclusion": (
             "After aligning epochs and evaluation seeds, the 316-parameter "
             "`residual:8:1` student recovers frontier span and remains competitive "
             "with larger students. The 216-parameter `residual:6:1` student also "
-            "keeps span coverage, but with weaker relative regret in this rerun."
+            "keeps span coverage, but with weaker relative regret in this rerun. "
+            "In the quick sub-216 sweep, the best-regret row is "
+            f"`{best_regret_sub216['arch_label']}` at "
+            f"{format_int(_int(best_regret_sub216, 'parameter_count'))} parameters, "
+            f"{_mean_std_percent(best_regret_sub216, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret, and "
+            f"{_mean_std_percent(best_regret_sub216, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
+            "coverage. The best coverage row is "
+            f"`{best_sub216['arch_label']}` at "
+            f"{format_int(_int(best_sub216, 'parameter_count'))} parameters, "
+            f"{_mean_std_percent(best_sub216, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret, and "
+            f"{_mean_std_percent(best_sub216, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
+            "coverage. Both are weaker than "
+            f"{_mean_std_percent(residual_floor, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
+            "relative regret and "
+            f"{_mean_std_percent(residual_floor, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
+            "coverage for `residual:6:1`."
         ),
     }
 

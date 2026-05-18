@@ -201,7 +201,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--network",
-        choices=["mlp", "residual"],
+        choices=["mlp", "residual", "linear", "quadratic"],
         default=DEFAULT_NETWORK,
     )
     parser.add_argument(

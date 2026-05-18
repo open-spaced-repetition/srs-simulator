@@ -358,6 +358,34 @@ particles, and eval seeds `42,43,44` for every network size:
 | `residual:8:1` | 316 | 78.2% | 128 | 3 | 74.52% | -22.88% +/- 0.45% | 98.53% +/- 0.23% |
 | `residual:6:1` | 216 | 85.1% | 128 | 3 | 73.71% | -22.10% +/- 0.33% | 98.37% +/- 0.17% |
 
+Rerun the quick sub-216 and structured sweep with the same recipe:
+
+```bash
+uv run python experiments/single_card_tradeoff/stationary_finite_model_size_ablation.py --torch-device cuda --candidate-set sub216 --summary-prefix sub216 --no-progress
+```
+
+This adds smaller residual, MLP, linear, and quadratic policies under
+`sub216_summary.csv` without overwriting the aligned residual table:
+
+| candidate | family | parameters | epochs | teacher agreement | relative regret | coverage |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `residual:5:1` | residual | 172 | 128 | 71.41% | -20.00% +/- 0.34% | 95.30% +/- 0.29% |
+| `residual:4:1` | residual | 132 | 128 | 69.36% | -19.10% +/- 0.32% | 85.80% +/- 0.36% |
+| `residual:3:1` | residual | 96 | 128 | 51.90% | +74.46% +/- 10.13% | 81.88% +/- 0.30% |
+| `mlp:8` | MLP | 212 | 128 | 70.13% | -17.47% +/- 0.11% | 98.56% +/- 0.18% |
+| `mlp:6` | MLP | 150 | 128 | 66.39% | -13.71% +/- 0.22% | 96.66% +/- 0.25% |
+| `mlp:4` | MLP | 96 | 128 | 61.17% | -6.60% +/- 0.83% | 89.78% +/- 0.33% |
+| `linear` | structured | 44 | 128 | 43.15% | +86.56% +/- 2.73% | 98.79% +/- 0.07% |
+| `quadratic` | structured | 110 | 128 | 50.71% | -10.05% +/- 0.63% | 99.36% +/- 0.17% |
+
+The sub-216 sweep did not find a replacement for the 216-parameter
+`residual:6:1` baseline. `residual:5:1` is the best-regret sub-216 row, but it
+loses about 2.1 relative-regret points and 3.1 coverage points versus
+`residual:6:1`. `mlp:8`, `linear`, and `quadratic` preserve broad span coverage,
+but their regret AUC is much weaker, so high coverage alone is not enough to
+justify further compression. The structured policies look like useful lower
+bounds, not practical replacements.
+
 The important correction to the older compression section is that the earlier
 64-epoch `residual:8:1` and `residual:6:1` rows were undertrained. When epochs
 and eval seeds are aligned to the current default recipe, the 316-parameter
@@ -380,6 +408,14 @@ uv run python experiments/single_card_tradeoff/stationary_finite_arch_policy_viz
 This writes combined policy heatmaps, exact-difference heatmaps, mean-action
 curves, and `arch_policy_summary.csv` under
 `artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/policy_viz/`.
+For the sub-216 sweep:
+
+```bash
+uv run python experiments/single_card_tradeoff/stationary_finite_arch_policy_viz.py --torch-device cuda --candidate-set sub216 --out-dir artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/policy_viz_sub216 --no-progress
+```
+
+That run wrote the same plot set plus `findings.md`, where `residual:5:1` had
+the highest sub-216 exact-table match at 71.41%.
 
 The older `stationary_finite_no_sub05_compression/` teacher-forced and student-rollout students should be treated as historical compression recipes, not as the current best small-model result. Older exact infinite-oracle, historical PPO-compare, oracle-distill hparam ablation, retention-distill coverage-fix, smoke, legacy stationary-finite compression, and historical PPO view artifacts were not reused as current no-sub-0.5 findings unless their checkpoints were verified to contain only actions `>=0.5` and their tradeoff CSVs were verified against the clipped 11-target baseline. The current report relies on the root default distill/PPO checkpoints, `no_sub05_*` comparison directories, `stationary_finite_cost_weight_ablation/`, `stationary_finite_model_size_ablation/`, `stationary_finite_policy_viz/`, and the six `ppo_ablation` checkpoints listed above. Older directories such as `ablation/`, `ppo_compare/`, `retention_distill_compare/`, `retention_distill_coverage_fix/`, `smoke/`, `stationary_finite_compression/`, `stationary_finite_no_sub05_compression/`, `stationary_finite_no_sub05_distill/`, and legacy `_view` files should be treated as historical unless rerun under the clipped target/action space and the current training recipe.
 

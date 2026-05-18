@@ -45,29 +45,58 @@ DEFAULT_CANDIDATES = [
     "r8d1",
     "r6d1",
 ]
+DEFAULT_SUB216_CANDIDATES = [
+    "r5d1",
+    "r4d1",
+    "r3d1",
+    "mlp8",
+    "mlp6",
+    "mlp4",
+    "linear",
+    "quadratic",
+]
+DEFAULT_CANDIDATE_SETS = {
+    "default": DEFAULT_CANDIDATES,
+    "sub216": DEFAULT_SUB216_CANDIDATES,
+    "all": [*DEFAULT_CANDIDATES, *DEFAULT_SUB216_CANDIDATES],
+}
 
 
 @dataclass(frozen=True)
 class Candidate:
     label: str
+    network: str
     hidden_size: int
     network_depth: int
+    family: str
 
     @property
     def arch_label(self) -> str:
-        return f"residual:{self.hidden_size}:{self.network_depth}"
+        if self.network == "residual":
+            return f"residual:{self.hidden_size}:{self.network_depth}"
+        if self.network == "mlp":
+            return f"mlp:{self.hidden_size}"
+        return self.network
 
     def variant(self, epochs: int) -> str:
         return f"sf_train5_{self.label}_e{epochs}"
 
 
 CANDIDATES = {
-    "r16d2": Candidate("r16d2", hidden_size=16, network_depth=2),
-    "r12d2": Candidate("r12d2", hidden_size=12, network_depth=2),
-    "r10d2": Candidate("r10d2", hidden_size=10, network_depth=2),
-    "r8d2": Candidate("r8d2", hidden_size=8, network_depth=2),
-    "r8d1": Candidate("r8d1", hidden_size=8, network_depth=1),
-    "r6d1": Candidate("r6d1", hidden_size=6, network_depth=1),
+    "r16d2": Candidate("r16d2", "residual", 16, 2, "residual"),
+    "r12d2": Candidate("r12d2", "residual", 12, 2, "residual"),
+    "r10d2": Candidate("r10d2", "residual", 10, 2, "residual"),
+    "r8d2": Candidate("r8d2", "residual", 8, 2, "residual"),
+    "r8d1": Candidate("r8d1", "residual", 8, 1, "residual"),
+    "r6d1": Candidate("r6d1", "residual", 6, 1, "residual"),
+    "r5d1": Candidate("r5d1", "residual", 5, 1, "residual"),
+    "r4d1": Candidate("r4d1", "residual", 4, 1, "residual"),
+    "r3d1": Candidate("r3d1", "residual", 3, 1, "residual"),
+    "mlp8": Candidate("mlp8", "mlp", 8, 1, "mlp"),
+    "mlp6": Candidate("mlp6", "mlp", 6, 1, "mlp"),
+    "mlp4": Candidate("mlp4", "mlp", 4, 1, "mlp"),
+    "linear": Candidate("linear", "linear", 1, 1, "structured"),
+    "quadratic": Candidate("quadratic", "quadratic", 1, 1, "structured"),
 }
 
 
@@ -124,9 +153,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-device", default=None)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
+        "--candidate-set",
+        choices=sorted(DEFAULT_CANDIDATE_SETS),
+        default="default",
+        help=(
+            "Named candidate set to run when --candidates is omitted. "
+            "default preserves the aligned residual table; sub216 adds the "
+            "smaller residual, MLP, and structured sweep."
+        ),
+    )
+    parser.add_argument(
         "--candidates",
-        default=",".join(DEFAULT_CANDIDATES),
+        default=None,
         help=f"Comma-separated candidate keys. Valid values: {','.join(CANDIDATES)}",
+    )
+    parser.add_argument(
+        "--summary-prefix",
+        default="model_size_ablation",
+        help=(
+            "Prefix for the aggregate CSVs. The default writes "
+            "model_size_ablation_summary.csv and model_size_ablation_seed_metrics.csv."
+        ),
     )
     parser.add_argument("--epochs", type=int, default=DEFAULT_DISTILL_EPOCHS)
     parser.add_argument("--steps-per-epoch", type=int, default=DEFAULT_STEPS_PER_EPOCH)
@@ -188,7 +235,7 @@ def _train_candidate(args: argparse.Namespace, candidate: Candidate) -> Path:
         "--obs-mode",
         "oracle_stationary",
         "--network",
-        "residual",
+        candidate.network,
         "--hidden-size",
         str(candidate.hidden_size),
         "--network-depth",
@@ -330,6 +377,7 @@ def _build_summary_rows(seed_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
             {
                 "variant": first["variant"],
                 "arch_label": first["arch_label"],
+                "family": first["family"],
                 "parameter_count": first["parameter_count"],
                 "compression_vs_1452_percent": (
                     (1.0 - float(first["parameter_count"]) / 1452.0) * 100.0
@@ -363,7 +411,12 @@ def _build_summary_rows(seed_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def main() -> None:
     args = parse_args()
-    candidates = _parse_candidate_csv(args.candidates)
+    candidate_keys = (
+        args.candidates
+        if args.candidates is not None
+        else ",".join(DEFAULT_CANDIDATE_SETS[args.candidate_set])
+    )
+    candidates = _parse_candidate_csv(candidate_keys)
     eval_seeds = _parse_int_csv(args.eval_seeds, name="--eval-seeds")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -394,6 +447,7 @@ def main() -> None:
                 {
                     "variant": candidate.variant(args.epochs),
                     "arch_label": candidate.arch_label,
+                    "family": candidate.family,
                     "parameter_count": metadata["parameter_count"],
                     "compression_vs_1452_percent": (
                         (1.0 - float(metadata["parameter_count"]) / 1452.0) * 100.0
@@ -429,6 +483,7 @@ def main() -> None:
     seed_fieldnames = [
         "variant",
         "arch_label",
+        "family",
         "parameter_count",
         "compression_vs_1452_percent",
         "train_weight_count",
@@ -450,6 +505,7 @@ def main() -> None:
     summary_fieldnames = [
         "variant",
         "arch_label",
+        "family",
         "parameter_count",
         "compression_vs_1452_percent",
         "train_weight_count",
@@ -469,18 +525,12 @@ def main() -> None:
         "covered_target_count_values",
         "policy_path",
     ]
-    _write_csv(
-        args.out_dir / "model_size_ablation_seed_metrics.csv",
-        seed_rows,
-        seed_fieldnames,
-    )
-    _write_csv(
-        args.out_dir / "model_size_ablation_summary.csv",
-        _build_summary_rows(seed_rows),
-        summary_fieldnames,
-    )
-    print(f"Wrote {args.out_dir / 'model_size_ablation_seed_metrics.csv'}")
-    print(f"Wrote {args.out_dir / 'model_size_ablation_summary.csv'}")
+    seed_path = args.out_dir / f"{args.summary_prefix}_seed_metrics.csv"
+    summary_path = args.out_dir / f"{args.summary_prefix}_summary.csv"
+    _write_csv(seed_path, seed_rows, seed_fieldnames)
+    _write_csv(summary_path, _build_summary_rows(seed_rows), summary_fieldnames)
+    print(f"Wrote {seed_path}")
+    print(f"Wrote {summary_path}")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,21 @@ DEFAULT_POLICY_DIR = Path(
 DEFAULT_OUT_DIR = DEFAULT_POLICY_DIR / "policy_viz"
 DEFAULT_COST_WEIGHTS = [0.0, 16.0, 64.0, 256.0, 1024.0]
 DEFAULT_CANDIDATES = ["r16d2", "r12d2", "r10d2", "r8d2", "r8d1", "r6d1"]
+DEFAULT_SUB216_CANDIDATES = [
+    "r5d1",
+    "r4d1",
+    "r3d1",
+    "mlp8",
+    "mlp6",
+    "mlp4",
+    "linear",
+    "quadratic",
+]
+DEFAULT_CANDIDATE_SETS = {
+    "default": DEFAULT_CANDIDATES,
+    "sub216": DEFAULT_SUB216_CANDIDATES,
+    "all": [*DEFAULT_CANDIDATES, *DEFAULT_SUB216_CANDIDATES],
+}
 
 
 @dataclass(frozen=True)
@@ -69,6 +84,14 @@ CANDIDATES: dict[str, Candidate] = {
     "r8d2": Candidate("r8d2", "residual:8:2", "r8d2_e128_policy.pt"),
     "r8d1": Candidate("r8d1", "residual:8:1", "r8d1_e128_policy.pt"),
     "r6d1": Candidate("r6d1", "residual:6:1", "r6d1_e128_policy.pt"),
+    "r5d1": Candidate("r5d1", "residual:5:1", "r5d1_e128_policy.pt"),
+    "r4d1": Candidate("r4d1", "residual:4:1", "r4d1_e128_policy.pt"),
+    "r3d1": Candidate("r3d1", "residual:3:1", "r3d1_e128_policy.pt"),
+    "mlp8": Candidate("mlp8", "mlp:8", "mlp8_e128_policy.pt"),
+    "mlp6": Candidate("mlp6", "mlp:6", "mlp6_e128_policy.pt"),
+    "mlp4": Candidate("mlp4", "mlp:4", "mlp4_e128_policy.pt"),
+    "linear": Candidate("linear", "linear", "linear_e128_policy.pt"),
+    "quadratic": Candidate("quadratic", "quadratic", "quadratic_e128_policy.pt"),
 }
 
 
@@ -130,8 +153,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-dir", type=Path, default=DEFAULT_POLICY_DIR)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument(
+        "--candidate-set",
+        choices=sorted(DEFAULT_CANDIDATE_SETS),
+        default="default",
+        help="Named candidate set to visualize when --candidates is omitted.",
+    )
+    parser.add_argument(
         "--candidates",
-        default=",".join(DEFAULT_CANDIDATES),
+        default=None,
         help=f"Comma-separated candidate keys. Valid values: {','.join(CANDIDATES)}",
     )
     parser.add_argument("--no-progress", action="store_true")
@@ -414,7 +443,12 @@ def main() -> None:
         name="--action-retentions",
     )
     validate_retention_values(action_retentions, name="--action-retentions")
-    candidates = _parse_candidate_csv(args.candidates)
+    candidate_keys = (
+        args.candidates
+        if args.candidates is not None
+        else ",".join(DEFAULT_CANDIDATE_SETS[args.candidate_set])
+    )
+    candidates = _parse_candidate_csv(candidate_keys)
     device = _resolve_device(args.torch_device)
     fsrs_config = load_single_card_fsrs6_config(args)
 
