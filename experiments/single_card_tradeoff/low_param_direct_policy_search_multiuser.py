@@ -88,6 +88,41 @@ PARAMETER_NAMES = (
     "cost_difficulty",
 )
 PARAMETER_COUNT = len(PARAMETER_NAMES)
+POLICY_FAMILY_CHOICES = (
+    "bilinear_monotone",
+    "interaction15_monotone",
+    "basis32_monotone",
+    "basis64_monotone",
+)
+BASIS5_NAMES = ("bias", "stability", "difficulty", "stability_difficulty", "gap")
+BASIS8_NAMES = (
+    "bias",
+    "stability",
+    "difficulty",
+    "stability_difficulty",
+    "stability2",
+    "difficulty2",
+    "stability_hinge_mid",
+    "difficulty_hinge_mid",
+)
+BASIS16_NAMES = (
+    "bias",
+    "stability",
+    "difficulty",
+    "stability_difficulty",
+    "stability2",
+    "difficulty2",
+    "stability_hinge_25",
+    "stability_hinge_50",
+    "stability_hinge_75",
+    "difficulty_hinge_25",
+    "difficulty_hinge_50",
+    "difficulty_hinge_75",
+    "stability2_difficulty",
+    "stability_difficulty2",
+    "stability_gap",
+    "difficulty_gap",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -134,6 +169,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--min-retention", type=float, default=0.5)
     parser.add_argument("--max-retention", type=float, default=0.98)
+    parser.add_argument(
+        "--policy-family",
+        choices=POLICY_FAMILY_CHOICES,
+        default="bilinear_monotone",
+        help=(
+            "Parametric monotone direct-search family. The default preserves the "
+            "original 7-parameter bilinear baseline."
+        ),
+    )
     parser.add_argument("--population-size", type=int, default=32)
     parser.add_argument("--elite-count", type=int, default=8)
     parser.add_argument("--generations", type=int, default=64)
@@ -208,16 +252,131 @@ def validate_args(args: argparse.Namespace) -> None:
 
 def initial_theta(
     *,
+    policy_family: str,
     user_count: int,
     device: torch.device,
     dtype: torch.dtype,
 ) -> torch.Tensor:
-    theta = torch.zeros((user_count, PARAMETER_COUNT), device=device, dtype=dtype)
+    theta = torch.zeros(
+        (user_count, parameter_count_for_family(policy_family)),
+        device=device,
+        dtype=dtype,
+    )
     theta[:, 0] = 2.0
     theta[:, 1] = 0.4
     theta[:, 2] = -0.4
-    theta[:, 4] = 2.0
+    if policy_family == "bilinear_monotone":
+        theta[:, 4] = 2.0
+    else:
+        theta[:, basis_count_for_family(policy_family)] = 2.0
     return theta
+
+
+def basis_count_for_family(policy_family: str) -> int:
+    if policy_family == "interaction15_monotone":
+        return 5
+    if policy_family == "basis32_monotone":
+        return 8
+    if policy_family == "basis64_monotone":
+        return 16
+    if policy_family == "bilinear_monotone":
+        return 0
+    raise ValueError(f"Unknown policy_family: {policy_family}")
+
+
+def parameter_count_for_family(policy_family: str) -> int:
+    if policy_family == "bilinear_monotone":
+        return PARAMETER_COUNT
+    if policy_family == "interaction15_monotone":
+        return basis_count_for_family(policy_family) * 3
+    return basis_count_for_family(policy_family) * 4
+
+
+def parameter_names_for_family(policy_family: str) -> tuple[str, ...]:
+    if policy_family == "bilinear_monotone":
+        return PARAMETER_NAMES
+    if policy_family == "interaction15_monotone":
+        basis_names = BASIS5_NAMES
+        slope_names = ("cost_linear", "cost_quadratic")
+    elif policy_family == "basis32_monotone":
+        basis_names = BASIS8_NAMES
+        slope_names = ("cost_sqrt", "cost_linear", "cost_quadratic")
+    elif policy_family == "basis64_monotone":
+        basis_names = BASIS16_NAMES
+        slope_names = ("cost_sqrt", "cost_linear", "cost_quadratic")
+    else:
+        raise ValueError(f"Unknown policy_family: {policy_family}")
+    return (
+        *(f"base_{name}" for name in basis_names),
+        *(f"{slope}_{name}" for slope in slope_names for name in basis_names),
+    )
+
+
+def _basis5(s_norm: torch.Tensor, d_norm: torch.Tensor) -> torch.Tensor:
+    return torch.stack(
+        [
+            torch.ones_like(s_norm),
+            s_norm,
+            d_norm,
+            s_norm * d_norm,
+            s_norm - d_norm,
+        ],
+        dim=1,
+    )
+
+
+def _basis8(s_norm: torch.Tensor, d_norm: torch.Tensor) -> torch.Tensor:
+    return torch.stack(
+        [
+            torch.ones_like(s_norm),
+            s_norm,
+            d_norm,
+            s_norm * d_norm,
+            s_norm.square(),
+            d_norm.square(),
+            torch.relu(s_norm - 0.5),
+            torch.relu(d_norm - 0.5),
+        ],
+        dim=1,
+    )
+
+
+def _basis16(s_norm: torch.Tensor, d_norm: torch.Tensor) -> torch.Tensor:
+    return torch.stack(
+        [
+            torch.ones_like(s_norm),
+            s_norm,
+            d_norm,
+            s_norm * d_norm,
+            s_norm.square(),
+            d_norm.square(),
+            torch.relu(s_norm - 0.25),
+            torch.relu(s_norm - 0.5),
+            torch.relu(s_norm - 0.75),
+            torch.relu(d_norm - 0.25),
+            torch.relu(d_norm - 0.5),
+            torch.relu(d_norm - 0.75),
+            s_norm.square() * d_norm,
+            s_norm * d_norm.square(),
+            s_norm * (s_norm - d_norm),
+            d_norm * (s_norm - d_norm),
+        ],
+        dim=1,
+    )
+
+
+def basis_for_family(
+    policy_family: str,
+    s_norm: torch.Tensor,
+    d_norm: torch.Tensor,
+) -> torch.Tensor:
+    if policy_family == "interaction15_monotone":
+        return _basis5(s_norm, d_norm)
+    if policy_family == "basis32_monotone":
+        return _basis8(s_norm, d_norm)
+    if policy_family == "basis64_monotone":
+        return _basis16(s_norm, d_norm)
+    raise ValueError(f"Unknown basis policy_family: {policy_family}")
 
 
 def low_param_retention(
@@ -227,10 +386,61 @@ def low_param_retention(
     min_retention: float,
     max_retention: float,
 ) -> torch.Tensor:
+    return direct_policy_retention(
+        theta,
+        obs,
+        policy_family="bilinear_monotone",
+        min_retention=min_retention,
+        max_retention=max_retention,
+    )
+
+
+def direct_policy_retention(
+    theta: torch.Tensor,
+    obs: torch.Tensor,
+    *,
+    policy_family: str,
+    min_retention: float,
+    max_retention: float,
+) -> torch.Tensor:
     obs = obs.to(dtype=theta.dtype)
     s_norm = obs[:, 0]
     d_norm = obs[:, 1]
     w_norm = obs[:, 2]
+    if policy_family != "bilinear_monotone":
+        basis = basis_for_family(policy_family, s_norm, d_norm)
+        basis_count = basis.shape[1]
+        base = torch.sum(theta[:, :basis_count] * basis, dim=1)
+        w_clamped = torch.clamp(w_norm, min=0.0)
+        if policy_family == "interaction15_monotone":
+            slope_linear = torch.nn.functional.softplus(
+                torch.sum(theta[:, basis_count : basis_count * 2] * basis, dim=1)
+            )
+            slope_quadratic = torch.nn.functional.softplus(
+                torch.sum(theta[:, basis_count * 2 : basis_count * 3] * basis, dim=1)
+            )
+            logit = (
+                base - slope_linear * w_clamped - slope_quadratic * w_clamped.square()
+            )
+        else:
+            slope_sqrt = torch.nn.functional.softplus(
+                torch.sum(theta[:, basis_count : basis_count * 2] * basis, dim=1)
+            )
+            slope_linear = torch.nn.functional.softplus(
+                torch.sum(theta[:, basis_count * 2 : basis_count * 3] * basis, dim=1)
+            )
+            slope_quadratic = torch.nn.functional.softplus(
+                torch.sum(theta[:, basis_count * 3 : basis_count * 4] * basis, dim=1)
+            )
+            logit = (
+                base
+                - slope_sqrt * torch.sqrt(w_clamped)
+                - slope_linear * w_clamped
+                - slope_quadratic * w_clamped.square()
+            )
+        span = max_retention - min_retention
+        return min_retention + span * torch.sigmoid(logit)
+
     (
         bias,
         stability,
@@ -320,9 +530,10 @@ def evaluate_candidate_objectives(
     env.reset_all(goal_values=goal_values)
     while not bool(env.done.all().item()):
         selected_theta = theta[env.user_index, candidate_idx].to(dtype=torch.float64)
-        retention = low_param_retention(
+        retention = direct_policy_retention(
             selected_theta,
             env.obs(),
+            policy_family=args.policy_family,
             min_retention=args.min_retention,
             max_retention=args.max_retention,
         )
@@ -369,6 +580,7 @@ def optimize_direct_policy(
 ) -> tuple[torch.Tensor, list[dict[str, Any]], float]:
     user_count = len(configs)
     mean = initial_theta(
+        policy_family=args.policy_family,
         user_count=user_count,
         device=device,
         dtype=torch.float64,
@@ -400,7 +612,7 @@ def optimize_direct_policy(
             seed=args.seed + 130_000 + generation,
         )
         elite_scores, elite_idx = torch.topk(scores, k=args.elite_count, dim=1)
-        gather_idx = elite_idx[:, :, None].expand(-1, -1, PARAMETER_COUNT)
+        gather_idx = elite_idx[:, :, None].expand(-1, -1, mean.shape[1])
         elite_theta = candidates.gather(1, gather_idx)
         generation_best_score, generation_best_idx = torch.max(scores, dim=1)
         improved = generation_best_score > best_score
@@ -493,9 +705,10 @@ def evaluate_direct_policy_by_user(
         start = time.perf_counter()
         while not bool(env.done.all().item()):
             selected_theta = theta[env.user_index].to(dtype=torch.float64)
-            retention = low_param_retention(
+            retention = direct_policy_retention(
                 selected_theta,
                 env.obs(),
+                policy_family=args.policy_family,
                 min_retention=args.min_retention,
                 max_retention=args.max_retention,
             )
@@ -562,10 +775,11 @@ def save_policy(
     torch.save(
         {
             "policy_type": DIRECT_POLICY_SCHEDULER,
-            "policy_family": "bilinear_monotone",
-            "parameter_names": list(PARAMETER_NAMES),
-            "params_per_user": PARAMETER_COUNT,
-            "ensemble_trainable_params": PARAMETER_COUNT * len(user_ids),
+            "policy_family": args.policy_family,
+            "parameter_names": list(parameter_names_for_family(args.policy_family)),
+            "params_per_user": parameter_count_for_family(args.policy_family),
+            "ensemble_trainable_params": parameter_count_for_family(args.policy_family)
+            * len(user_ids),
             "theta_by_user": theta.detach().cpu(),
             "user_ids": list(user_ids),
             "user_configs": [config.checkpoint_payload() for config in configs],
@@ -739,9 +953,10 @@ def main() -> None:
     )
     metadata = {
         "scheduler": DIRECT_POLICY_SCHEDULER,
-        "policy_family": "bilinear_monotone",
-        "params_per_user": PARAMETER_COUNT,
-        "ensemble_trainable_params": PARAMETER_COUNT * len(user_ids),
+        "policy_family": args.policy_family,
+        "params_per_user": parameter_count_for_family(args.policy_family),
+        "ensemble_trainable_params": parameter_count_for_family(args.policy_family)
+        * len(user_ids),
         "device": str(device),
         "user_ids": list(user_ids),
         "days": args.days,
@@ -757,7 +972,7 @@ def main() -> None:
             str(user_id): {
                 name: float(value)
                 for name, value in zip(
-                    PARAMETER_NAMES,
+                    parameter_names_for_family(args.policy_family),
                     theta[user_idx].detach().cpu().tolist(),
                     strict=True,
                 )
@@ -776,8 +991,9 @@ def main() -> None:
     print(
         "Low-parameter direct policy search: "
         f"users={','.join(str(user_id) for user_id in user_ids)} "
-        f"params_each={PARAMETER_COUNT} "
-        f"ensemble_params={PARAMETER_COUNT * len(user_ids)} "
+        f"family={args.policy_family} "
+        f"params_each={parameter_count_for_family(args.policy_family)} "
+        f"ensemble_params={parameter_count_for_family(args.policy_family) * len(user_ids)} "
         f"device={device} train_s={train_runtime_s:.2f} eval_s={eval_runtime_s:.2f}"
     )
     for row in mean_rows:
