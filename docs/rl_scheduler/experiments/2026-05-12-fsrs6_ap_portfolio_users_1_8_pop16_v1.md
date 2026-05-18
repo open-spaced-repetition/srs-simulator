@@ -58,12 +58,14 @@ baseline manifest. Average memorized/time/efficiency are now diagnostic-only in
 
 Target LSTM budget-memory gain AUC, target scheduler rows only. It uses linear
 interpolation over the common covered time-budget interval. Positive values mean
-the scheduler remembers more cards at the same budget.
+the scheduler remembers more cards at the same budget. Relative gain AUC is the
+simple average of each user's memory gain AUC divided by that user's covered
+baseline memory AUC.
 
 | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| AP pop16 | 8/8 | 86/111 | 87.776% | +54.0 | +0.807% |
-| ADR pop16 | 8/8 | 79/111 | 82.466% | +62.2 | +0.935% |
+| AP pop16 | 8/8 | 86/111 | 87.776% | +54.0 | +0.822% |
+| ADR pop16 | 8/8 | 79/111 | 82.466% | +62.2 | +0.953% |
 
 Target LSTM memory-target regret AUC, target scheduler rows only. Negative
 values mean the scheduler reaches the same memorized-card targets faster. It

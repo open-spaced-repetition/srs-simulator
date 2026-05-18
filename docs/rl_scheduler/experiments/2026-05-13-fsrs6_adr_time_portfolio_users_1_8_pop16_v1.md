@@ -74,16 +74,16 @@ Training HV and sampled policy-point diagnostics should be interpreted against t
 
 ## External Pareto Results
 
-Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and budget-memory gain are better. Negative memory-target regret is better.
+Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and budget-memory gain are better. Negative memory-target regret is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
 
 | environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget-memory gain / baseline | budget coverage | memory-target regret AUC | memory-target regret / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fsrs6 | ADR time | 97,400 | +3.501% | 128 | 104.2 | +1.552% | 83/115, 79.851% span | -4.62 | -12.061% | 80/115, 77.083% span |
-| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.349% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
-| fsrs6 | ADR time - ADR | 520 | +0.019% | 0 | 13.5 | - | -5, -1.699 pp span | -0.05 | - | -1, -1.063 pp span |
-| lstm | ADR time | 48,430 | +1.705% | 125 | 76.9 | +1.159% | 79/111, 82.098% span | -0.96 | -6.084% | 80/111, 82.908% span |
-| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.935% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
-| lstm | ADR time - ADR | -7,419 | -0.261% | 0 | 14.8 | - | +0, -0.369 pp span | 0.86 | - | -1, -0.867 pp span |
+| fsrs6 | ADR time | 97,400 | +3.501% | 128 | 104.2 | +1.620% | 83/115, 79.851% span | -4.62 | -12.061% | 80/115, 77.083% span |
+| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
+| fsrs6 | ADR time - ADR | 520 | +0.019% | 0 | 13.5 | +0.220% | -5, -1.699 pp span | -0.05 | -0.506% | -1, -1.063 pp span |
+| lstm | ADR time | 48,430 | +1.705% | 125 | 76.9 | +1.190% | 79/111, 82.098% span | -0.96 | -6.084% | 80/111, 82.908% span |
+| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
+| lstm | ADR time - ADR | -7,419 | -0.261% | 0 | 14.8 | +0.237% | +0, -0.369 pp span | 0.86 | -0.177% | -1, -0.867 pp span |
 
 ## Per-User HV Delta
 

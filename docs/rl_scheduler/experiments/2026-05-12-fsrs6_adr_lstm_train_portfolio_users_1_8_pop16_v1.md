@@ -58,14 +58,16 @@ generated analysis, not as primary Pareto quality metrics.
 Budget-memory gain AUC integrates memorized-card gain over the common covered
 time-budget interval between the FSRS6 baseline frontier and each scheduler
 frontier, using linear interpolation only. Positive values mean the scheduler
-remembers more cards at the same budget.
+remembers more cards at the same budget. Relative gain AUC is the simple
+average of each user's memory gain AUC divided by that user's covered baseline
+memory AUC.
 
 | environment | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | FSRS-trained | 8/8 | 88/115 | 81.550% | +90.7 | +1.349% |
-| FSRS6 | LSTM-trained | 8/8 | 87/115 | 82.252% | +60.4 | +0.898% |
-| LSTM | FSRS-trained | 8/8 | 79/111 | 82.466% | +62.2 | +0.935% |
-| LSTM | LSTM-trained | 8/8 | 80/111 | 83.370% | +73.5 | +1.105% |
+| FSRS6 | FSRS-trained | 8/8 | 88/115 | 81.550% | +90.7 | +1.400% |
+| FSRS6 | LSTM-trained | 8/8 | 87/115 | 82.252% | +60.4 | +0.938% |
+| LSTM | FSRS-trained | 8/8 | 79/111 | 82.466% | +62.2 | +0.953% |
+| LSTM | LSTM-trained | 8/8 | 80/111 | 83.370% | +73.5 | +1.118% |
 
 Memory-target regret AUC integrates time regret over the common covered
 memory-target interval between the FSRS6 baseline frontier and each scheduler

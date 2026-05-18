@@ -1303,6 +1303,19 @@ def budget_memory_gain_auc_user_summaries(
     return summaries
 
 
+def _relative_gain_auc_percent_values(
+    summaries: list[BudgetMemoryGainAucUserSummary],
+) -> list[float]:
+    values: list[float] = []
+    for summary in summaries:
+        if summary.memory_gain_auc is None or summary.baseline_memory_auc is None:
+            continue
+        if math.isclose(summary.baseline_memory_auc, 0.0):
+            continue
+        values.append((summary.memory_gain_auc / summary.baseline_memory_auc) * 100.0)
+    return values
+
+
 def budget_memory_gain_auc_table(
     rows: list[SweepRow],
     env: str,
@@ -1336,10 +1349,11 @@ def budget_memory_gain_auc_table(
             for summary in summaries
             if summary.baseline_memory_auc is not None
         ]
+        relative_gain_auc_values = _relative_gain_auc_percent_values(summaries)
         span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
         relative_gain_auc = (
-            (average(memory_gain_aucs) / average(baseline_memory_aucs)) * 100.0
-            if baseline_memory_aucs and average(baseline_memory_aucs)
+            average(relative_gain_auc_values)
+            if relative_gain_auc_values
             else float("nan")
         )
         output_rows.append(
@@ -1898,10 +1912,11 @@ def build_budget_memory_gain_auc_summary(
         mean_baseline_memory_auc = (
             average(baseline_memory_aucs) if baseline_memory_aucs else float("nan")
         )
+        relative_gain_auc_values = _relative_gain_auc_percent_values(summaries)
         span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
         relative_gain_auc = (
-            (mean_memory_gain_auc / mean_baseline_memory_auc) * 100.0
-            if baseline_memory_aucs and mean_baseline_memory_auc
+            average(relative_gain_auc_values)
+            if relative_gain_auc_values
             else float("nan")
         )
         output_rows.append(
@@ -2450,8 +2465,8 @@ def render_env_summary(
                     "frontier and each scheduler frontier, using linear "
                     "interpolation only. Positive values mean the scheduler "
                     "remembers more cards at the same budget. Relative gain "
-                    "divides mean memory gain AUC by mean covered baseline memory "
-                    "AUC.\n"
+                    "is the simple average of each user's memory gain AUC divided "
+                    "by that user's covered baseline memory AUC.\n"
                 )
                 print(
                     render_budget_memory_gain_auc_summary(
@@ -2607,8 +2622,8 @@ def print_env_report(
                 "time-budget interval between the FSRS6 baseline frontier and each "
                 "scheduler frontier, using linear interpolation only. Positive "
                 "values mean the scheduler remembers more cards at the same "
-                "budget. Relative gain divides mean memory gain AUC by mean "
-                "covered baseline memory AUC.\n"
+                "budget. Relative gain is the simple average of each user's memory "
+                "gain AUC divided by that user's covered baseline memory AUC.\n"
             )
             print(
                 budget_memory_gain_auc_table(

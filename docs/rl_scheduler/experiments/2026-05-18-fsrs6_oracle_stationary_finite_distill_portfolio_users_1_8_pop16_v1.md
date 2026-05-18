@@ -88,16 +88,16 @@ Do not promote `fsrs6_oracle_stationary_finite_distill` as a replacement for `fs
 
 ## External Pareto Results
 
-Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and budget-memory gain are better. Negative memory-target regret is better.
+Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and budget-memory gain are better. Negative memory-target regret is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
 
 | environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget-memory gain / baseline | budget coverage | memory-target regret AUC | memory-target regret / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fsrs6 | Oracle stationary finite distill | 104,617 | +3.760% | 128 | 120.1 | +1.788% | 96/115, 70.232% span | -4.62 | -14.172% | 97/115, 88.859% span |
-| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.349% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
-| fsrs6 | Oracle stationary finite distill - ADR | 7,737 | +0.278% | 0 | 29.4 | - | +8, -11.319 pp span | -0.05 | - | +16, +10.713 pp span |
-| lstm | Oracle stationary finite distill | 37,584 | +1.323% | 128 | 69.9 | +1.051% | 88/111, 66.183% span | -0.76 | -5.817% | 91/111, 89.146% span |
-| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.935% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
-| lstm | Oracle stationary finite distill - ADR | -18,265 | -0.643% | 3 | 7.7 | - | +9, -16.283 pp span | 1.06 | - | +10, +5.371 pp span |
+| fsrs6 | Oracle stationary finite distill | 104,617 | +3.760% | 128 | 120.1 | +1.857% | 96/115, 70.232% span | -4.62 | -14.172% | 97/115, 88.859% span |
+| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
+| fsrs6 | Oracle stationary finite distill - ADR | 7,737 | +0.278% | 0 | 29.4 | +0.457% | +8, -11.319 pp span | -0.05 | -2.617% | +16, +10.713 pp span |
+| lstm | Oracle stationary finite distill | 37,584 | +1.323% | 128 | 69.9 | +1.072% | 88/111, 66.183% span | -0.76 | -5.817% | 91/111, 89.146% span |
+| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
+| lstm | Oracle stationary finite distill - ADR | -18,265 | -0.643% | 3 | 7.7 | +0.119% | +9, -16.283 pp span | 1.06 | +0.090% | +10, +5.371 pp span |
 
 ## Per-User HV Delta
 

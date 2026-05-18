@@ -341,7 +341,9 @@ def render_report_from_summary(
     lines.append(
         "Scheduler-only hypervolume values are sums of per-user HV delta against "
         "the same staged FSRS6 baseline manifest. Positive HV delta and "
-        "budget-memory gain are better. Negative memory-target regret is better."
+        "budget-memory gain are better. Negative memory-target regret is better. "
+        "The two baseline-relative AUC columns use user-simple averages from "
+        "the analysis summary."
     )
     lines.append("")
     lines.append(
@@ -780,20 +782,16 @@ def _env_scheduler_metrics(
         "frontier_points": hv.get("scheduler_frontier_points"),
         "budget_memory_gain_auc": budget.get("memory_gain_auc_mean"),
         "baseline_memory_auc": budget.get("baseline_memory_auc_mean"),
-        "relative_gain_auc_percent": _existing_or_ratio_percent(
-            budget.get("relative_gain_auc_percent"),
-            budget.get("memory_gain_auc_mean"),
-            budget.get("baseline_memory_auc_mean"),
+        "relative_gain_auc_percent": _existing_relative_percent(
+            budget.get("relative_gain_auc_percent")
         ),
         "covered_budget_count": budget.get("covered_budget_count"),
         "budget_count": budget.get("budget_count"),
         "budget_span_coverage_percent": budget.get("span_coverage_percent"),
         "memory_target_regret_auc": regret.get("time_regret_auc_mean"),
         "baseline_time_auc": regret.get("baseline_time_auc_mean"),
-        "relative_regret_auc_percent": _existing_or_ratio_percent(
-            regret.get("relative_regret_auc_percent"),
-            regret.get("time_regret_auc_mean"),
-            regret.get("baseline_time_auc_mean"),
+        "relative_regret_auc_percent": _existing_relative_percent(
+            regret.get("relative_regret_auc_percent")
         ),
         "covered_target_count": regret.get("covered_target_count"),
         "target_count": regret.get("target_count"),
@@ -827,6 +825,10 @@ def _pareto_delta(
             candidate.get("budget_memory_gain_auc"),
             comparison.get("budget_memory_gain_auc"),
         ),
+        "relative_gain_auc_percent": _subtract(
+            candidate.get("relative_gain_auc_percent"),
+            comparison.get("relative_gain_auc_percent"),
+        ),
         "covered_budget_count": _subtract(
             candidate.get("covered_budget_count"),
             comparison.get("covered_budget_count"),
@@ -839,6 +841,10 @@ def _pareto_delta(
         "memory_target_regret_auc": _subtract(
             candidate.get("memory_target_regret_auc"),
             comparison.get("memory_target_regret_auc"),
+        ),
+        "relative_regret_auc_percent": _subtract(
+            candidate.get("relative_regret_auc_percent"),
+            comparison.get("relative_regret_auc_percent"),
         ),
         "covered_target_count": _subtract(
             candidate.get("covered_target_count"),
@@ -1227,18 +1233,10 @@ def _subtract(left: Any, right: Any) -> float | None:
     return left_number - right_number
 
 
-def _existing_or_ratio_percent(existing: Any, numerator: Any, denominator: Any) -> Any:
-    if _number(existing) is not None:
-        return existing
-    numerator_number = _number(numerator)
-    denominator_number = _number(denominator)
-    if (
-        numerator_number is None
-        or denominator_number is None
-        or denominator_number == 0.0
-    ):
+def _existing_relative_percent(existing: Any) -> Any:
+    if _number(existing) is None:
         return None
-    return (numerator_number / denominator_number) * 100.0
+    return existing
 
 
 def _user_id_from_path(path: Path) -> int | None:

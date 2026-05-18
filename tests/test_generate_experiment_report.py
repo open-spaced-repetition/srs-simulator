@@ -23,8 +23,32 @@ def _write_json(path: Path, data: dict[str, object]) -> None:
 
 
 def _analysis_summary(
-    *, scheduler: str, hv_delta: float, user_delta: float
+    *,
+    scheduler: str,
+    hv_delta: float,
+    user_delta: float,
+    include_relative_metrics: bool = True,
 ) -> dict[str, object]:
+    budget_row: dict[str, object] = {
+        "scheduler": scheduler,
+        "memory_gain_auc_mean": hv_delta / 10.0,
+        "baseline_memory_auc_mean": 100.0,
+        "covered_budget_count": 2,
+        "budget_count": 3,
+        "span_coverage_percent": 50.0,
+    }
+    regret_row: dict[str, object] = {
+        "scheduler": scheduler,
+        "time_regret_auc_mean": -hv_delta / 1000.0,
+        "baseline_time_auc_mean": 10.0,
+        "covered_target_count": 2,
+        "target_count": 3,
+        "span_coverage_percent": 60.0,
+    }
+    if include_relative_metrics:
+        budget_row["relative_gain_auc_percent"] = hv_delta / 10.0
+        regret_row["relative_regret_auc_percent"] = -hv_delta / 100.0
+
     return {
         "type": "scheduler-comparison-analysis",
         "filters": {"schedulers": ["fsrs6", scheduler]},
@@ -38,26 +62,8 @@ def _analysis_summary(
                         "scheduler_frontier_points": 2,
                     }
                 ],
-                "budget_memory_gain_auc": [
-                    {
-                        "scheduler": scheduler,
-                        "memory_gain_auc_mean": hv_delta / 10.0,
-                        "baseline_memory_auc_mean": 100.0,
-                        "covered_budget_count": 2,
-                        "budget_count": 3,
-                        "span_coverage_percent": 50.0,
-                    }
-                ],
-                "memory_target_regret_auc": [
-                    {
-                        "scheduler": scheduler,
-                        "time_regret_auc_mean": -hv_delta / 1000.0,
-                        "baseline_time_auc_mean": 10.0,
-                        "covered_target_count": 2,
-                        "target_count": 3,
-                        "span_coverage_percent": 60.0,
-                    }
-                ],
+                "budget_memory_gain_auc": [budget_row],
+                "memory_target_regret_auc": [regret_row],
                 "per_user_hypervolume": {
                     scheduler: [
                         {
@@ -90,11 +96,15 @@ def _write_run(
     hv_delta: float,
     user_delta: float,
     include_gpu_monitor: bool = True,
+    include_relative_metrics: bool = True,
 ) -> None:
     _write_json(
         root / "analyze-pareto" / "analyze_pareto_outputs" / "analysis_summary.json",
         _analysis_summary(
-            scheduler=scheduler, hv_delta=hv_delta, user_delta=user_delta
+            scheduler=scheduler,
+            hv_delta=hv_delta,
+            user_delta=user_delta,
+            include_relative_metrics=include_relative_metrics,
         ),
     )
     _write_json(
@@ -243,6 +253,8 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertEqual(env["delta"]["hv_delta_sum"], 8.0)
         self.assertEqual(env["candidate"]["relative_gain_auc_percent"], 2.0)
         self.assertEqual(env["candidate"]["relative_regret_auc_percent"], -0.2)
+        self.assertAlmostEqual(env["delta"]["relative_gain_auc_percent"], 0.8)
+        self.assertAlmostEqual(env["delta"]["relative_regret_auc_percent"], -0.08)
         self.assertEqual(
             summary["run_metadata"]["candidate"]["baseline_dr_manifest"],
             "artifacts/rl_scheduler/baseline_dr_selection/test.json",
@@ -293,6 +305,44 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertIn("shared-memory spill cannot be judged", markdown)
         self.assertIn("256.0", markdown)
         self.assertIn("Do not promote `candidate_sched`.", markdown)
+
+    def test_missing_relative_metrics_are_not_recomputed_from_means(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "candidate"
+            comparison = root / "comparison"
+            _write_run(
+                candidate,
+                scheduler="candidate_sched",
+                hv_delta=20.0,
+                user_delta=3.0,
+                include_relative_metrics=False,
+            )
+            _write_run(
+                comparison,
+                scheduler="comparison_sched",
+                hv_delta=12.0,
+                user_delta=1.0,
+                include_relative_metrics=False,
+            )
+
+            _, _, summary = generate_report(
+                run_root=candidate,
+                comparison_run_root=comparison,
+                output_path=root / "docs" / "report.md",
+                title="Missing relative report",
+                question="Do missing relative metrics get fabricated?",
+                candidate_label="Candidate",
+                comparison_label="Comparison",
+            )
+
+        env = summary["external_pareto"]["environments"][0]
+        self.assertIsNone(env["candidate"]["relative_gain_auc_percent"])
+        self.assertIsNone(env["comparison"]["relative_gain_auc_percent"])
+        self.assertIsNone(env["delta"]["relative_gain_auc_percent"])
+        self.assertIsNone(env["candidate"]["relative_regret_auc_percent"])
+        self.assertIsNone(env["comparison"]["relative_regret_auc_percent"])
+        self.assertIsNone(env["delta"]["relative_regret_auc_percent"])
 
     def test_display_path_is_repo_relative_for_repo_paths(self) -> None:
         self.assertEqual(
