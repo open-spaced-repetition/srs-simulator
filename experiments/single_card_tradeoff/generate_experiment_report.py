@@ -39,6 +39,7 @@ REPORT_FILENAMES = {
     "default_no_sub05_tradeoff": "default_no_sub05_tradeoff.md",
     "first8_stationary_finite_distill": "first8_stationary_finite_distill.md",
     "first8_exact_vs_distill": "first8_exact_vs_distill.md",
+    "first8_stationary_finite_r4d1_e512": ("first8_stationary_finite_r4d1_e512.md"),
     "low_param_direct_search": "low_param_direct_search.md",
     "uvfa_ppo": "uvfa_ppo.md",
     "recurrent_interval_ppo": "recurrent_interval_ppo.md",
@@ -69,6 +70,10 @@ DEFAULT_DOC_OUTPUTS = {
     ),
     "first8_exact_vs_distill": Path(
         "docs/single_card_tradeoff/experiments/2026-05-17-first8_exact_vs_distill.md"
+    ),
+    "first8_stationary_finite_r4d1_e512": Path(
+        "docs/single_card_tradeoff/experiments/"
+        "2026-05-18-first8_stationary_finite_r4d1_e512.md"
     ),
     "low_param_direct_search": Path(
         "docs/single_card_tradeoff/experiments/2026-05-17-low_param_direct_search.md"
@@ -144,6 +149,36 @@ DEFAULT_SOURCE_PATHS: dict[str, Path] = {
     "first8_exact_vs_distill_regret_auc": Path(
         "artifacts/single_card_tradeoff/"
         "stationary_finite_exact_vs_distill_first8_users/regret_auc.csv"
+    ),
+    "first8_r4d1_e512_distill_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "stationary_finite_distill_first8_users_per_user_r4d1_e512_"
+        "uniform_table_supervision_fsrs6_baseline_gpu/summary.csv"
+    ),
+    "first8_r4d1_e512_distill_train_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "stationary_finite_distill_first8_users_per_user_r4d1_e512_"
+        "uniform_table_supervision_fsrs6_baseline_gpu/train_summary.csv"
+    ),
+    "first8_r4d1_e512_distill_gpu_monitor_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "stationary_finite_distill_first8_users_per_user_r4d1_e512_"
+        "uniform_table_supervision_fsrs6_baseline_gpu/gpu_monitor/summary.json"
+    ),
+    "first8_r4d1_e512_exact_vs_distill_mean_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "stationary_finite_exact_vs_distill_first8_users_r4d1_e512/"
+        "mean_summary.csv"
+    ),
+    "first8_r4d1_e512_exact_vs_distill_regret_auc": Path(
+        "artifacts/single_card_tradeoff/"
+        "stationary_finite_exact_vs_distill_first8_users_r4d1_e512/"
+        "regret_auc.csv"
+    ),
+    "first8_r4d1_e512_exact_vs_distill_gpu_monitor_summary": Path(
+        "artifacts/single_card_tradeoff/"
+        "stationary_finite_exact_vs_distill_first8_users_r4d1_e512/"
+        "gpu_monitor/summary.json"
     ),
     "low_param_sparse_metadata": Path(
         "artifacts/single_card_tradeoff/"
@@ -482,6 +517,24 @@ def build_report_summary(
     exact_vs_distill_regret = read_csv_rows(
         source_paths["first8_exact_vs_distill_regret_auc"]
     )
+    first8_r4d1_summary = read_csv_rows(
+        source_paths["first8_r4d1_e512_distill_summary"]
+    )
+    first8_r4d1_train = read_csv_rows(
+        source_paths["first8_r4d1_e512_distill_train_summary"]
+    )
+    first8_r4d1_train_gpu = read_json_object(
+        source_paths["first8_r4d1_e512_distill_gpu_monitor_summary"]
+    )
+    first8_r4d1_exact_vs_distill_mean = read_csv_rows(
+        source_paths["first8_r4d1_e512_exact_vs_distill_mean_summary"]
+    )
+    first8_r4d1_exact_vs_distill_regret = read_csv_rows(
+        source_paths["first8_r4d1_e512_exact_vs_distill_regret_auc"]
+    )
+    first8_r4d1_exact_vs_distill_gpu = read_json_object(
+        source_paths["first8_r4d1_e512_exact_vs_distill_gpu_monitor_summary"]
+    )
     low_param_sparse = read_json_object(source_paths["low_param_sparse_metadata"])
     low_param_dense = read_json_object(source_paths["low_param_dense_metadata"])
 
@@ -531,6 +584,16 @@ def build_report_summary(
             exact_vs_distill_mean,
             exact_vs_distill_regret,
         ),
+        "first8_stationary_finite_r4d1_e512": _first8_r4d1_e512_summary(
+            baseline_summary=first8_distill_summary,
+            baseline_train=first8_distill_train,
+            summary_rows=first8_r4d1_summary,
+            train_rows=first8_r4d1_train,
+            exact_vs_distill_mean=first8_r4d1_exact_vs_distill_mean,
+            exact_vs_distill_regret=first8_r4d1_exact_vs_distill_regret,
+            train_gpu_monitor=first8_r4d1_train_gpu,
+            exact_gpu_monitor=first8_r4d1_exact_vs_distill_gpu,
+        ),
         "low_param_direct_search": {
             "sparse_teacher_weights": _low_param_summary(low_param_sparse),
             "dense_teacher_weights": _low_param_summary(low_param_dense),
@@ -568,6 +631,9 @@ def render_reports(summary: Mapping[str, Any]) -> dict[str, str]:
             render_first8_stationary_finite_distill_report(summary)
         ),
         "first8_exact_vs_distill": render_first8_exact_vs_distill_report(summary),
+        "first8_stationary_finite_r4d1_e512": (
+            render_first8_stationary_finite_r4d1_e512_report(summary)
+        ),
         "low_param_direct_search": render_low_param_direct_search_report(summary),
     }
     for report in summary["configured_reports"]:
@@ -597,6 +663,7 @@ def render_index_report(summary: Mapping[str, Any]) -> str:
     )
     first8 = summary["first8_stationary_finite_distill"]
     distill_vs_exact = summary["first8_exact_vs_distill"]["distill_vs_exact"]
+    first8_r4d1 = summary["first8_stationary_finite_r4d1_e512"]
     rows = [
         [
             "default no-sub-0.5 tradeoff",
@@ -625,6 +692,17 @@ def render_index_report(summary: Mapping[str, Any]) -> str:
                 "over "
                 f"{format_percent(distill_vs_exact['mean_span_coverage_percent'])} "
                 "shared coverage."
+            ),
+        ],
+        [
+            "first-eight residual:4:1 e512",
+            f"`{published['first8_stationary_finite_r4d1_e512']}`",
+            (
+                "The 132-parameter per-user student reaches "
+                f"{format_percent(first8_r4d1['mean_relative_regret_auc_percent'])} "
+                "relative regret at "
+                f"{format_percent(first8_r4d1['mean_span_coverage_percent'])} "
+                "coverage vs `fsrs6`."
             ),
         ],
         [
@@ -991,6 +1069,191 @@ def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
     )
     lines.append("")
     _append_artifacts_footer(lines, summary, report_key="first8_exact_vs_distill")
+    return "\n".join(lines)
+
+
+def render_first8_stationary_finite_r4d1_e512_report(
+    summary: Mapping[str, Any],
+) -> str:
+    lines: list[str] = []
+    lines.append("# First-eight Residual:4:1 Epoch-512 Validation")
+    lines.append("")
+    _append_report_preamble(
+        lines,
+        summary,
+        question=(
+            "Does the 132-parameter `residual:4:1` stationary finite student "
+            "trained for 512 epochs transfer to the first eight FSRS-6 users?"
+        ),
+    )
+    report = summary["first8_stationary_finite_r4d1_e512"]
+    baseline = report["baseline_476"]
+    exact = report["exact_vs_distill"]
+    lines.append("## Evidence")
+    lines.append("")
+    lines.append(
+        "Environment `fsrs6`, users 1 through 8, one independent student per "
+        "user, uniform exact-table supervision, 512 epochs, and the same sparse "
+        "teacher weights, clipped action grid, evaluation weights, and eval "
+        "particles as the current 476-parameter first-eight baseline."
+    )
+    lines.append("")
+    lines.extend(
+        _artifact_lines(
+            summary,
+            keys=(
+                "first8_r4d1_e512_distill_summary",
+                "first8_r4d1_e512_distill_train_summary",
+                "first8_r4d1_e512_distill_gpu_monitor_summary",
+                "first8_r4d1_e512_exact_vs_distill_mean_summary",
+                "first8_r4d1_e512_exact_vs_distill_regret_auc",
+                "first8_r4d1_e512_exact_vs_distill_gpu_monitor_summary",
+            ),
+        )
+    )
+    lines.append("")
+    lines.append("## Results")
+    lines.append("")
+    lines.append(
+        "The validation trains eight independent 132-parameter students "
+        f"({format_int(report['ensemble_trainable_params'])} total trainable "
+        "parameters during batched training)."
+    )
+    lines.append("")
+    lines.append("### Mean vs fsrs6")
+    lines.append("")
+    lines.extend(
+        markdown_table(
+            [
+                "model",
+                "params/user",
+                "epochs",
+                "mean coverage",
+                "mean time regret AUC",
+                "mean relative regret",
+                "mean agreement",
+                "mean CE",
+            ],
+            [
+                _first8_model_summary_row("residual:8:2", baseline),
+                _first8_model_summary_row("residual:4:1", report),
+                [
+                    "delta r4d1 - r8d2",
+                    _signed_int_delta(
+                        report["params_per_user"] - baseline["params_per_user"]
+                    ),
+                    _signed_int_delta(report["epochs"] - baseline["epochs"]),
+                    _signed_percent(report["mean_span_coverage_delta_vs_476"]),
+                    _signed_float(report["mean_time_regret_delta_vs_476"], digits=4),
+                    _signed_percent(report["mean_relative_regret_auc_delta_vs_476"]),
+                    _signed_percent(
+                        100.0
+                        * report["mean_eval_teacher_action_agreement_delta_vs_476"]
+                    ),
+                    _signed_float(report["mean_final_ce_loss_delta_vs_476"], digits=5),
+                ],
+            ],
+        )
+    )
+    lines.append("")
+    lines.append("### Per-user deltas")
+    lines.append("")
+    lines.extend(
+        markdown_table(
+            [
+                "user",
+                "r4d1 coverage",
+                "r4d1 relative regret",
+                "coverage delta vs 476",
+                "relative regret delta vs 476",
+            ],
+            [
+                [
+                    row["user"],
+                    format_percent(row["span_coverage_percent"]),
+                    format_percent(row["relative_regret_auc_percent"]),
+                    _signed_percent(row["span_coverage_delta_vs_476"]),
+                    _signed_percent(row["relative_regret_auc_delta_vs_476"]),
+                ]
+                for row in report["per_user_rows"]
+            ],
+        )
+    )
+    lines.append("")
+    lines.append("### Exact-vs-distill check")
+    lines.append("")
+    lines.extend(
+        markdown_table(
+            [
+                "scheduler",
+                "mean coverage vs fsrs6",
+                "mean time regret AUC vs fsrs6",
+                "mean relative regret vs fsrs6",
+            ],
+            [
+                [
+                    row["scheduler"],
+                    format_percent(row["mean_span_coverage_percent"]),
+                    format_float(row["mean_time_regret_auc"], digits=4),
+                    format_percent(row["mean_relative_regret_auc_percent"]),
+                ]
+                for row in exact["vs_fsrs6"]
+            ],
+        )
+    )
+    lines.append("")
+    lines.append(
+        "On the exact-teacher shared span, `residual:4:1` has "
+        f"{format_float(exact['distill_vs_exact']['mean_time_regret_auc'], digits=4)} "
+        "time regret AUC and "
+        f"{format_percent(exact['distill_vs_exact']['mean_relative_regret_auc_percent'])} "
+        "relative regret at "
+        f"{format_percent(exact['distill_vs_exact']['mean_span_coverage_percent'])} "
+        "coverage."
+    )
+    lines.append("")
+    lines.append("### GPU monitor")
+    lines.append("")
+    lines.extend(
+        markdown_table(
+            ["stage", "shared spill", "peak shared memory", "peak FB memory"],
+            [
+                _gpu_monitor_row("train + fsrs6 eval", report["train_gpu_monitor"]),
+                _gpu_monitor_row("exact-vs-distill eval", report["exact_gpu_monitor"]),
+            ],
+        )
+    )
+    lines.append("")
+    _append_reproduction_profile(
+        lines,
+        summary,
+        command_names=(
+            "train_first8_stationary_finite_r4d1_e512",
+            "evaluate_first8_exact_vs_distill_r4d1_e512",
+        ),
+    )
+    lines.append("## Conclusion")
+    lines.append("")
+    lines.append(
+        "`residual:4:1` at 512 epochs does not validate as a drop-in "
+        "replacement for the first-eight per-user default. It cuts parameters "
+        f"from {format_int(baseline['params_per_user'])} to "
+        f"{format_int(report['params_per_user'])} per user, but mean coverage "
+        "changes by "
+        f"{_signed_float(report['mean_span_coverage_delta_vs_476'])} points "
+        "and mean relative regret changes by "
+        f"{_signed_float(report['mean_relative_regret_auc_delta_vs_476'])} "
+        "points versus the 476-parameter baseline. The largest coverage loss "
+        "is user 5, where the change is -11.25 points. Treat the 132-parameter "
+        "result as promising for the single default-user sweep, but not yet "
+        "robust across users."
+    )
+    lines.append("")
+    _append_artifacts_footer(
+        lines,
+        summary,
+        report_key="first8_stationary_finite_r4d1_e512",
+    )
     return "\n".join(lines)
 
 
@@ -2901,6 +3164,40 @@ def _optional_bool_label(value: Any) -> str:
     return "yes" if str(value).lower() == "true" else "no"
 
 
+def _signed_float(value: float, *, digits: int = 2) -> str:
+    return f"{value:+.{digits}f}"
+
+
+def _signed_percent(value: float) -> str:
+    return f"{value:+.2f}%"
+
+
+def _signed_int_delta(value: int) -> str:
+    return f"{value:+,}"
+
+
+def _first8_model_summary_row(label: str, row: Mapping[str, Any]) -> list[str]:
+    return [
+        label,
+        format_int(row["params_per_user"]),
+        format_int(row["epochs"]),
+        format_percent(row["mean_span_coverage_percent"]),
+        format_float(row["mean_time_regret_auc"], digits=4),
+        format_percent(row["mean_relative_regret_auc_percent"]),
+        format_percent(100.0 * float(row["mean_eval_teacher_action_agreement"])),
+        format_float(row["mean_final_ce_loss"], digits=5),
+    ]
+
+
+def _gpu_monitor_row(label: str, row: Mapping[str, Any]) -> list[str]:
+    return [
+        label,
+        _optional_bool_label(row.get("shared_memory_spill_detected")),
+        f"{format_float(_mib(_optional_float(row, 'shared_memory_peak_single_adapter_bytes')), digits=1)} MiB",
+        f"{format_float(row.get('nvidia_smi_peak_memory_used_mib'), digits=1)} MiB",
+    ]
+
+
 def _hparam_rows(
     rows: Sequence[Mapping[str, str]],
     *,
@@ -3366,6 +3663,82 @@ def _first8_exact_vs_distill_summary(
             ),
         },
     }
+
+
+def _first8_r4d1_e512_summary(
+    *,
+    baseline_summary: Sequence[Mapping[str, str]],
+    baseline_train: Sequence[Mapping[str, str]],
+    summary_rows: Sequence[Mapping[str, str]],
+    train_rows: Sequence[Mapping[str, str]],
+    exact_vs_distill_mean: Sequence[Mapping[str, str]],
+    exact_vs_distill_regret: Sequence[Mapping[str, str]],
+    train_gpu_monitor: Mapping[str, Any],
+    exact_gpu_monitor: Mapping[str, Any],
+) -> dict[str, Any]:
+    baseline = _first8_distill_summary(baseline_summary, baseline_train)
+    current = _first8_distill_summary(summary_rows, train_rows)
+    baseline_by_env = {row["environment"]: row for row in baseline_summary}
+    per_user_rows: list[dict[str, Any]] = []
+    for row in summary_rows:
+        baseline_row = baseline_by_env[row["environment"]]
+        per_user_rows.append(
+            {
+                "user": row["environment"].replace("fsrs6_user_", ""),
+                "span_coverage_percent": _float(row, "span_coverage_percent"),
+                "time_regret_auc": _float(row, "time_regret_auc"),
+                "relative_regret_auc_percent": _float(
+                    row,
+                    "relative_regret_auc_percent",
+                ),
+                "span_coverage_delta_vs_476": _float(
+                    row,
+                    "span_coverage_percent",
+                )
+                - _float(baseline_row, "span_coverage_percent"),
+                "time_regret_delta_vs_476": _float(row, "time_regret_auc")
+                - _float(baseline_row, "time_regret_auc"),
+                "relative_regret_auc_delta_vs_476": _float(
+                    row,
+                    "relative_regret_auc_percent",
+                )
+                - _float(baseline_row, "relative_regret_auc_percent"),
+            }
+        )
+
+    current.update(
+        {
+            "baseline_476": baseline,
+            "epochs": _int(train_rows[0], "epochs"),
+            "mean_span_coverage_delta_vs_476": (
+                current["mean_span_coverage_percent"]
+                - baseline["mean_span_coverage_percent"]
+            ),
+            "mean_time_regret_delta_vs_476": (
+                current["mean_time_regret_auc"] - baseline["mean_time_regret_auc"]
+            ),
+            "mean_relative_regret_auc_delta_vs_476": (
+                current["mean_relative_regret_auc_percent"]
+                - baseline["mean_relative_regret_auc_percent"]
+            ),
+            "mean_final_ce_loss_delta_vs_476": (
+                current["mean_final_ce_loss"] - baseline["mean_final_ce_loss"]
+            ),
+            "mean_eval_teacher_action_agreement_delta_vs_476": (
+                current["mean_eval_teacher_action_agreement"]
+                - baseline["mean_eval_teacher_action_agreement"]
+            ),
+            "per_user_rows": per_user_rows,
+            "exact_vs_distill": _first8_exact_vs_distill_summary(
+                exact_vs_distill_mean,
+                exact_vs_distill_regret,
+            ),
+            "train_gpu_monitor": dict(train_gpu_monitor),
+            "exact_gpu_monitor": dict(exact_gpu_monitor),
+        }
+    )
+    baseline["epochs"] = _int(baseline_train[0], "epochs")
+    return current
 
 
 def _low_param_summary(metadata: Mapping[str, Any]) -> dict[str, Any]:

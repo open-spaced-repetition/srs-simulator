@@ -1,0 +1,87 @@
+schema_version = 1
+name = "stationary_finite_first8_r4d1_e512"
+family = "single_card_tradeoff"
+seed = 42
+
+[report.outputs]
+first8_stationary_finite_r4d1_e512 = "docs/single_card_tradeoff/experiments/2026-05-18-first8_stationary_finite_r4d1_e512.md"
+
+[source_artifacts]
+first8_r4d1_e512_distill_summary = "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/summary.csv"
+first8_r4d1_e512_distill_train_summary = "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/train_summary.csv"
+first8_r4d1_e512_distill_gpu_monitor_summary = "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/gpu_monitor/summary.json"
+first8_r4d1_e512_exact_vs_distill_mean_summary = "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/mean_summary.csv"
+first8_r4d1_e512_exact_vs_distill_regret_auc = "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/regret_auc.csv"
+first8_r4d1_e512_exact_vs_distill_gpu_monitor_summary = "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/gpu_monitor/summary.json"
+
+[[commands]]
+name = "train_first8_stationary_finite_r4d1_e512"
+description = "Train one residual:4:1 512-epoch stationary finite distill per first-eight user."
+command = [
+  "uv",
+  "run",
+  "python",
+  "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "--env",
+  "fsrs6",
+  "--user-ids",
+  "1,2,3,4,5,6,7,8",
+  "--button-usage",
+  "../Anki-button-usage/button_usage.jsonl",
+  "--per-user-models",
+  "--per-user-supervision",
+  "uniform_table",
+  "--network",
+  "residual",
+  "--hidden-size",
+  "4",
+  "--network-depth",
+  "1",
+  "--epochs",
+  "512",
+  "--out-dir",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu",
+  "--torch-device",
+  "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/train_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/regret_auc.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/performance_summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/gpu_monitor/summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/user_1_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/user_8_policy.pt",
+]
+
+[[commands]]
+name = "evaluate_first8_exact_vs_distill_r4d1_e512"
+description = "Evaluate exact stationary finite policies and residual:4:1 per-user distills against fsrs6."
+command = [
+  "uv",
+  "run",
+  "python",
+  "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "--env",
+  "fsrs6",
+  "--user-ids",
+  "1,2,3,4,5,6,7,8",
+  "--button-usage",
+  "../Anki-button-usage/button_usage.jsonl",
+  "--eval-exact-vs-distill",
+  "--distill-dir",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu",
+  "--out-dir",
+  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512",
+  "--torch-device",
+  "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/mean_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/regret_auc.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/performance_summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/gpu_monitor/summary.json",
+]

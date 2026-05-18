@@ -9,6 +9,7 @@ output_path = "docs/single_card_tradeoff/experiments/2026-05-17-index.md"
 profile_paths = [
   "reports/default_no_sub05_tradeoff.toml",
   "stationary_finite_first8_report.toml",
+  "reports/stationary_finite_first8_r4d1_e512.toml",
   "reports/low_param_direct_search.toml",
   "reports/uvfa_ppo.toml",
   "reports/recurrent_interval_ppo.toml",
