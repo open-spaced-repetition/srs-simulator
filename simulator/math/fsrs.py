@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import Sequence, Tuple
+from typing import Tuple
 
 
 @dataclasses.dataclass(frozen=True)

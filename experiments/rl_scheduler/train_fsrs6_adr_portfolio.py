@@ -32,11 +32,6 @@ from experiments.rl_scheduler.portfolio_selection import (
     LightweightSelectionPool,
     ObjectivePoint,
     SelectionTask,
-    objective_exclusive_hypervolume_contributions as exclusive_hypervolume_contributions,
-    objective_hypervolume_2d as hypervolume_2d,
-    objective_non_dominated_indices as non_dominated_indices,
-    reference_point,
-    select_sms_emoa_survivors,
 )
 from experiments.rl_scheduler.portfolio_training_common import (
     PortfolioFamilyAdapter,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from typing import Sequence
 
 from simulator.core import Card, MemoryModel

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from simulator.sweep_utils import parse_cuda_devices
-
 
 def chunked(values: list[int], batch_size: int | None) -> Iterable[list[int]]:
     if batch_size is None:

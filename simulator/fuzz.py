@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Callable, Iterable, Optional
+from typing import Callable, Optional
 
 FUZZ_RANGES: list[tuple[float, float, float]] = [
     (2.5, 7.0, 0.15),

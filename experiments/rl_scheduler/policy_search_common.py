@@ -25,7 +25,6 @@ from simulator.batched_sweep.weights import (
     load_fsrs6_weights,
     resolve_lstm_paths,
 )
-from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.defaults import DEFAULT_LEARN_LIMIT, DEFAULT_SHORT_TERM_LOOPS_LIMIT
 from simulator.experiment_infra.schemas import ExperimentConfig
 from simulator.math.fsrs import Bounds
@@ -38,7 +37,6 @@ from simulator.fsrs6_adr_policy import (
 )
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
-from simulator.short_term_config import resolve_short_term_config
 from simulator.batched_engine.multiuser_engine import simulate_multiuser
 from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
 

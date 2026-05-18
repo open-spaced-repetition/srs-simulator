@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +9,7 @@ import torch
 
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
-from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
+from simulator.experiment_infra.schemas import ExperimentConfig
 from simulator.math.fsrs import Bounds
 from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
 from simulator.short_term_config import resolve_short_term_config

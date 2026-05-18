@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
 from pathlib import Path
 import threading
 
@@ -322,7 +321,10 @@ def _run_command(
         progress_bar = local_bar
     if progress_bar is not None:
         if suppress_output:
-            write_line = lambda _line: None
+
+            def write_line(_line: str) -> None:
+                pass
+
         else:
             write_line = progress_bar.write
     try:

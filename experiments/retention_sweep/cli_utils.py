@@ -19,7 +19,6 @@ from simulator.defaults import (
     DEFAULT_START_RETENTION,
     DEFAULT_SHORT_TERM_LOOPS_LIMIT,
 )
-from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 
 def add_user_range_args(

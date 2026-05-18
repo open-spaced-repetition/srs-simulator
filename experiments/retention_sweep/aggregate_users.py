@@ -1390,7 +1390,6 @@ def _print_equiv_report(summaries: List[Dict[str, Any]]) -> None:
         target = _entry_scheduler_label(summary, "target")
         user_count = summary.get("user_count")
         pos_pct = summary.get("pos_pct")
-        neg_pct = summary.get("neg_pct")
         ratio_mean = summary.get("ratio_mean")
         ratio_median = summary.get("ratio_median")
         ratio_q25 = summary.get("ratio_q25")

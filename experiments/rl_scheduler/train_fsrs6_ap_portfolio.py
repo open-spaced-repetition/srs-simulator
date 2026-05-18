@@ -26,7 +26,6 @@ from experiments.rl_scheduler.policy_search_common import (
 )
 from experiments.rl_scheduler.portfolio_selection import (
     ObjectivePoint,
-    SelectionTask,
 )
 from experiments.rl_scheduler.portfolio_training_common import (
     PortfolioFamilyAdapter,

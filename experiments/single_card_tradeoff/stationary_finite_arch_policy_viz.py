@@ -7,7 +7,6 @@ import argparse
 from collections.abc import Mapping, Sequence
 import csv
 from dataclasses import dataclass
-import math
 import os
 from pathlib import Path
 import sys
