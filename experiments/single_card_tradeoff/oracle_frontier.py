@@ -32,9 +32,7 @@ from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
 )
 from experiments.single_card_tradeoff.oracle_dp_cache import (  # noqa: E402
     OracleDPCacheConfig,
-    add_oracle_dp_cache_args,
     load_cache_entry,
-    oracle_dp_cache_config_from_args,
     resolve_oracle_dp_cache_config,
     write_cache_entry,
 )

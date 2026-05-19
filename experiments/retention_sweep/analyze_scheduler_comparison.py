@@ -1359,11 +1359,6 @@ def budget_memory_gain_auc_table(
             for summary in summaries
             if summary.same_budget_memory_lift_auc is not None
         ]
-        baseline_memory_aucs = [
-            summary.baseline_memory_auc
-            for summary in summaries
-            if summary.baseline_memory_auc is not None
-        ]
         relative_gain_auc_values = _relative_gain_auc_percent_values(summaries)
         span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
         relative_gain_auc = (
@@ -1545,11 +1540,6 @@ def memory_target_regret_auc_table(
             summary.same_target_time_saved_auc
             for summary in summaries
             if summary.same_target_time_saved_auc is not None
-        ]
-        baseline_time_aucs = [
-            summary.baseline_time_auc
-            for summary in summaries
-            if summary.baseline_time_auc is not None
         ]
         relative_regret_auc_values = _relative_regret_auc_percent_values(summaries)
         span_coverage = (covered_span / total_span) * 100.0 if total_span else 0.0
