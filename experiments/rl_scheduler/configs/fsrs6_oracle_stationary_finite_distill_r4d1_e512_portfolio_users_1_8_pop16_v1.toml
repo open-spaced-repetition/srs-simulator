@@ -53,6 +53,7 @@ cost_limit_minutes = 720.0
 priority = "new-first"
 scheduler_priority = "low_retrievability"
 fuzz = false
+review_markov_transition = false
 
 [gpu_guard]
 required = true
@@ -151,8 +152,8 @@ seed_cost_weights = [0.0, 16.0, 64.0, 256.0, 1024.0]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6_oracle_stationary_finite_distill"]
-run_id = "fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1"
-fsrs6_oracle_stationary_finite_distill_train_run_root = "artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1"
+run_id = "fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off"
+fsrs6_oracle_stationary_finite_distill_train_run_root = "artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off"
 log_dir = "logs/retention_sweep"
 log_layout = "user"
 batch_size = 8
@@ -204,7 +205,7 @@ no_dedupe = false
 [report]
 enabled = true
 output_path = "docs/rl_scheduler/experiments/2026-05-19-fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1.md"
-comparison_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1"
+comparison_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off"
 candidate_label = "Oracle stationary finite distill r4d1 e512"
 comparison_label = "ADR"
 question = "Evaluate whether per-user FSRS6 oracle stationary finite distill r4d1/e512 policies with searched goal-cost weights can match or improve the matched-budget FSRS6 ADR portfolio on external Pareto metrics."

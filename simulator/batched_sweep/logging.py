@@ -140,6 +140,7 @@ def _build_log_args(
         run_id=getattr(args, "run_id", None),
         user_id=user_id,
         button_usage=str(args.button_usage) if args.button_usage is not None else None,
+        review_markov_transition=bool(getattr(args, "review_markov_transition", False)),
         desired_retention=desired_retention,
         scheduler_priority=args.scheduler_priority,
         sspmmc_policy=None,

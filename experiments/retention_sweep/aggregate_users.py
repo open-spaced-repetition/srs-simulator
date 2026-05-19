@@ -29,6 +29,7 @@ from simulator.retention_sweep.log_filter import LogFilenameFilter
 
 SchedulerSpec = Tuple[str, Optional[float], str]
 EquivPair = Tuple[SchedulerSpec, SchedulerSpec]
+AggregateGroupKey = Tuple[str, str, Optional[float], Optional[float], Optional[bool]]
 
 
 def parse_args() -> argparse.Namespace:
@@ -172,6 +173,16 @@ def parse_args() -> argparse.Namespace:
         choices=["steps", "sched", "any"],
         default="any",
         help="Filter logs by short-term source (steps/sched).",
+    )
+    parser.add_argument(
+        "--review-markov-transition",
+        choices=["on", "off", "legacy", "any"],
+        default="off",
+        help=(
+            "Filter logs by review Markov transition mode. The default off mode "
+            "requires explicit review_markov_transition=false metadata; legacy "
+            "matches logs where the field is missing."
+        ),
     )
     parser.add_argument(
         "--fsrs3-vs-fsrs6-boxplot",
@@ -348,13 +359,19 @@ def _spec_matches_group(
 
 
 def _collect_curve_users(
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    groups: Dict[AggregateGroupKey, Dict[str, Any]],
     *,
     env: str,
     spec: SchedulerSpec,
 ) -> Dict[int, List[Tuple[float, Dict[str, float]]]]:
     users: Dict[int, List[Tuple[float, Dict[str, float]]]] = {}
-    for (group_env, scheduler, desired, fixed_interval), group in groups.items():
+    for (
+        group_env,
+        scheduler,
+        desired,
+        fixed_interval,
+        _review_markov_transition,
+    ), group in groups.items():
         if group_env != env or desired is None:
             continue
         if not _spec_matches_group(
@@ -369,13 +386,19 @@ def _collect_curve_users(
 
 
 def _collect_single_point_users(
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    groups: Dict[AggregateGroupKey, Dict[str, Any]],
     *,
     env: str,
     spec: SchedulerSpec,
 ) -> Dict[int, Dict[str, float]]:
     user_points: Dict[int, List[Dict[str, float]]] = {}
-    for (group_env, scheduler, _desired, fixed_interval), group in groups.items():
+    for (
+        group_env,
+        scheduler,
+        _desired,
+        fixed_interval,
+        _review_markov_transition,
+    ), group in groups.items():
         if group_env != env:
             continue
         if not _spec_matches_group(
@@ -592,7 +615,7 @@ def main() -> None:
         REPO_ROOT / "experiments" / "retention_sweep" / "plots" / "user_averages"
     )
 
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]] = {}
+    groups: Dict[AggregateGroupKey, Dict[str, Any]] = {}
     duplicate_count = 0
     log_filter = LogFilenameFilter(
         envs=envs,
@@ -647,6 +670,17 @@ def main() -> None:
             if short_term_value is not True:
                 continue
 
+        review_markov_value = _normalize_bool(meta.get("review_markov_transition"))
+        if args.review_markov_transition == "on":
+            if review_markov_value is not True:
+                continue
+        elif args.review_markov_transition == "off":
+            if review_markov_value is not False:
+                continue
+        elif args.review_markov_transition == "legacy":
+            if review_markov_value is not None:
+                continue
+
         desired = meta.get("desired_retention")
         fixed_interval = None
         if scheduler == "fixed":
@@ -687,7 +721,13 @@ def main() -> None:
         user_key = user_id if user_id is not None else f"unknown::{path}"
         mtime = path.stat().st_mtime
 
-        key = (environment, scheduler, desired, fixed_interval)
+        key = (
+            environment,
+            scheduler,
+            desired,
+            fixed_interval,
+            review_markov_value,
+        )
         group = groups.setdefault(
             key,
             {
@@ -695,6 +735,7 @@ def main() -> None:
                 "scheduler": scheduler,
                 "desired_retention": desired,
                 "fixed_interval": fixed_interval,
+                "review_markov_transition": review_markov_value,
                 "users": {},
             },
         )
@@ -772,6 +813,7 @@ def main() -> None:
             item[0][1],
             item[0][2] or -1,
             item[0][3] or -1,
+            str(item[0][4]),
         ),
     ):
         users = [
@@ -802,6 +844,7 @@ def main() -> None:
                 "scheduler": group["scheduler"],
                 "desired_retention": group["desired_retention"],
                 "fixed_interval": group["fixed_interval"],
+                "review_markov_transition": group["review_markov_transition"],
                 "user_count": len(common_user_ids),
                 "memorized_average": memorized_average_mean,
                 "memorized_per_minute": memorized_per_minute_mean,
@@ -1064,7 +1107,7 @@ def _is_monotonic_increasing(
 
 
 def _compute_equivalent_dr_distributions(
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    groups: Dict[AggregateGroupKey, Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
     *,
@@ -1135,7 +1178,7 @@ def _compute_equivalent_dr_distributions(
 
 
 def _compute_equivalent_ratio_by_baseline_dr(
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    groups: Dict[AggregateGroupKey, Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
     *,
@@ -1220,7 +1263,7 @@ def _compute_equivalent_ratio_by_baseline_dr(
 
 
 def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    groups: Dict[AggregateGroupKey, Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
     *,
@@ -1237,7 +1280,7 @@ def _compute_fsrs3_vs_fsrs6_ratio_by_fsrs6_dr(
 
 
 def _compute_fsrs6_default_vs_fsrs6_ratio_by_fsrs6_dr(
-    groups: Dict[Tuple[str, str, Optional[float], Optional[float]], Dict[str, Any]],
+    groups: Dict[AggregateGroupKey, Dict[str, Any]],
     envs: List[str],
     common_user_ids: set[int],
     *,

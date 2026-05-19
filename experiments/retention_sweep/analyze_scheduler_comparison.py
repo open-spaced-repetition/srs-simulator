@@ -205,6 +205,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Filter logs by fuzz flag.",
     )
     parser.add_argument(
+        "--review-markov-transition",
+        choices=["on", "off", "legacy", "any"],
+        default="any",
+        help=(
+            "Recorded review Markov transition mode for the analyzed Pareto "
+            "inputs. Formal config-driven runs set this from simulation scope."
+        ),
+    )
+    parser.add_argument(
         "--metric",
         default=DEFAULT_METRIC,
         help="Efficiency metric field to compare.",
@@ -281,6 +290,10 @@ def _merge_config_args(
         cli_args.short_term = analyze.short_term
     if not has_flag(argv, "--fuzz"):
         cli_args.fuzz = analyze.fuzz
+    if not has_flag(argv, "--review-markov-transition"):
+        cli_args.review_markov_transition = (
+            "on" if config.simulation.review_markov_transition else "off"
+        )
     if not has_flag(argv, "--metric"):
         cli_args.metric = analyze.metric
     if analyze.no_dedupe and not has_flag(argv, "--no-dedupe"):
@@ -2170,6 +2183,7 @@ def build_analysis_summary(args: argparse.Namespace) -> dict[str, Any]:
             "engine": args.engine,
             "short_term": args.short_term,
             "fuzz": args.fuzz,
+            "review_markov_transition": args.review_markov_transition,
             "metric": args.metric,
             "dedupe": not args.no_dedupe,
             "baseline_dr_manifest": str(args.baseline_dr_manifest)
@@ -2643,6 +2657,7 @@ def render_summary_report(summary: dict[str, Any]) -> str:
             f"{filters['retention']['end']:.2f}, "
             f"engine={filters['engine']}, short_term={filters['short_term']}, "
             f"fuzz={filters['fuzz']}, "
+            f"review_markov_transition={filters['review_markov_transition']}, "
             "same_budget_memory_lift_auc=common_covered_frontier_interval, "
             "same_target_time_saved_auc=common_covered_frontier_interval"
         )

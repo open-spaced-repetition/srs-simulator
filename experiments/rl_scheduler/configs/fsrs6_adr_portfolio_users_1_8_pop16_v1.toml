@@ -53,6 +53,7 @@ cost_limit_minutes = 720.0
 priority = "new-first"
 scheduler_priority = "low_retrievability"
 fuzz = false
+review_markov_transition = false
 
 [gpu_guard]
 required = true
@@ -121,8 +122,8 @@ hv_epsilon = 0.0
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6_adr"]
-run_id = "fsrs6_adr_portfolio_users_1_8_pop16_v1"
-fsrs6_adr_train_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1"
+run_id = "fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off"
+fsrs6_adr_train_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off"
 log_dir = "logs/retention_sweep"
 log_layout = "user"
 batch_size = 8

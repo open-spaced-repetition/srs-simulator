@@ -136,6 +136,7 @@ def _write_baseline_log(path: Path, *, desired_retention: float) -> None:
             "scheduler": "fsrs6",
             "user_id": 1,
             "desired_retention": desired_retention,
+            "review_markov_transition": False,
         },
     }
     path.write_text(json.dumps(meta) + "\n", encoding="utf-8")

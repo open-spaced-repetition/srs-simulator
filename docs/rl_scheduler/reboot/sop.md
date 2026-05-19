@@ -155,7 +155,8 @@ uv run python experiments/rl_scheduler/validate_artifact.py --metadata <artifact
 
 - Copy or hardlink exact FSRS6 baseline logs into the run-specific root.
 - Validate metadata for user, DR, seed, engine, short-term, fuzz, limits,
-  priority, scheduler priority, days, deck, and button usage.
+  priority, scheduler priority, days, deck, button usage, and review Markov
+  transition mode.
 - Baseline TOML must declare `baseline.desired_retention_values`; staging
   requires every configured user to have exact JSONL logs for those DR points.
 - Do not rerun FSRS6 automatically when exact logs are missing.
@@ -388,6 +389,7 @@ Required report fields:
 - lambda grid
 - seed strategy
 - simulator signature
+- review Markov transition mode
 - Pareto JSON/PNG paths
 - gate summary path
 - whether the run advanced the frontier

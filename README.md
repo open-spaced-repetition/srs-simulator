@@ -34,7 +34,7 @@ uv run experiments/retention_sweep/run_sweep_users_batched.py --start-user 1 --e
 uv run script.py --algo LSTM --weights
 ```
 
-- `Anki-button-usage` repo is required by `simulate.py` and defaults to `../Anki-button-usage/button_usage.jsonl` (override with `--button-usage`). Pass `--user-id` to select the matching per-user row.
+- `Anki-button-usage` repo is required by `simulate.py` and defaults to `../Anki-button-usage/button_usage.jsonl` (override with `--button-usage`). Pass `--user-id` to select the matching per-user row. Button usage loads marginal rating probabilities and costs by default; pass `--review-markov-transition` to opt into `long_term_transition` review-button Markov behavior.
 - SSP-MMC policies require precomputed policy files. Generate them in the sibling repo, then point `SSPMMCScheduler` at the outputs (see [`../SSP-MMC-FSRS`](https://github.com/open-spaced-repetition/SSP-MMC-FSRS)).
 
 ## CLI usage
@@ -55,7 +55,7 @@ uv run simulate.py --sched sspmmc --sspmmc-policy ../SSP-MMC-FSRS/outputs/polici
 Flag notes:
 - `--no-plot` and `--no-progress` disable the Matplotlib dashboard and progress bar.
 - `--log-dir` controls where JSONL logs and daily CSVs are written.
-- `--button-usage` points at a button-usage JSONL file to override default costs and rating probabilities.
+- `--button-usage` points at a button-usage JSONL file to override default costs and rating probabilities. Review-button Markov transitions from `long_term_transition` are ignored unless `--review-markov-transition` is set.
 - `--benchmark-result` and `--benchmark-partition` override which `srs-benchmark` result rows are loaded.
 - `--fuzz` applies Anki-style interval fuzzing to scheduler outputs.
 
@@ -85,7 +85,8 @@ outputs. `preflight` writes a config snapshot, resolved config, command record,
 run record, GPU summary, gate summary, manifest, and preflight summary under the
 configured `output_root`. `stage-baseline` validates FSRS6 JSONL log metadata,
 including configured `baseline.desired_retention_values` or per-user
-`[baseline_dr_selection]` manifest values, and stages exact baseline logs by
+`[baseline_dr_selection]` manifest values, and the configured
+`simulation.review_markov_transition` mode. It stages exact baseline logs by
 copy or hardlink without staging CSV sidecars. `train-overfit`
 runs the user-provided `training.command_template` once per training user and
 lambda value by default; portfolio trainers run once per training user and do
@@ -100,7 +101,10 @@ same TOML and validates the resulting JSONL logs. `build-pareto` fans out
 machine-readable `analysis_summary.json` from those Pareto JSON files. CUDA
 `train-overfit` and `sweep` stages automatically write GPU monitor artifacts
 under `<stage>/gpu_monitor/`; the formal `performance_summary.json` links to
-the monitor summary. Portfolio profiles should use `run_portfolio_workflow.py`
+the monitor summary. Formal Markov mode defaults to
+`simulation.review_markov_transition = false`; new formal logs, artifacts, and
+reports record this field so Markov-off runs are not mixed with legacy Markov-on
+results. Portfolio profiles should use `run_portfolio_workflow.py`
 as the standard entry point so baseline DR selection, baseline sweep, formal
 stages, and any configured `[report]` step run in order. Formal stages fail if
 required inputs are missing. `all` runs the configured stages in order and stops

@@ -141,6 +141,10 @@ class BatchedSweepConfig:
                 "simulation.scheduler_priority",
             ),
             fuzz=_bool(simulation.get("fuzz", False), "simulation.fuzz"),
+            review_markov_transition=_bool(
+                simulation.get("review_markov_transition", False),
+                "simulation.review_markov_transition",
+            ),
             button_usage=_optional_path(
                 paths.get("button_usage", DEFAULT_BUTTON_USAGE_PATH),
                 "paths.button_usage",

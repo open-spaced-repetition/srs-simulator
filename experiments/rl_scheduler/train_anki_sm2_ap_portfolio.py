@@ -721,6 +721,9 @@ def _write_portfolio_artifacts(
                 "scheduler_name": "anki_sm2_ap",
                 "environment": config.simulation.environment,
                 "engine": config.simulation.engine,
+                "review_markov_transition": (
+                    config.simulation.review_markov_transition
+                ),
                 "training_user_ids": [result.job.user_id],
                 "validation_user_ids": list(config.users.validation),
                 "seed": config.seed,

@@ -167,7 +167,21 @@ def add_button_usage_arg(
         "--button-usage",
         type=Path,
         default=default_path,
-        help="Path to Anki button usage JSONL for per-user costs/probabilities.",
+        help=(
+            "Path to Anki button usage JSONL for per-user costs/probabilities. "
+            "Review Markov transitions require --review-markov-transition."
+        ),
+    )
+
+
+def add_review_markov_transition_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--review-markov-transition",
+        action="store_true",
+        help=(
+            "Use long_term_transition from button usage data for review button "
+            "behavior. Defaults to marginal review probabilities only."
+        ),
     )
 
 

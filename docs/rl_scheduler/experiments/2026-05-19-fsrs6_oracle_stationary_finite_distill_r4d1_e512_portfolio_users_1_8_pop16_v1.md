@@ -1,6 +1,6 @@
 # Oracle stationary finite distill r4d1 e512 vs ADR experiment report
 
-Machine summary: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1/report/report_summary.json`
+Machine summary: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off/report/report_summary.json`
 
 ## Question
 
@@ -8,15 +8,15 @@ Evaluate whether per-user FSRS6 oracle stationary finite distill r4d1/e512 polic
 
 ## Runs
 
-| run | scheduler | config | portfolio budget | baseline DR manifest |
-| --- | --- | --- | --- | --- |
-| `fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1` | `fsrs6_oracle_stationary_finite_distill` | `experiments/rl_scheduler/configs/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1.toml` | population=16, offspring=16, generations=20, portfolio=16 | `artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json` |
-| `fsrs6_adr_portfolio_users_1_8_pop16_v1` | `fsrs6_adr` | `experiments/rl_scheduler/configs/fsrs6_adr_portfolio_users_1_8_pop16_v1.toml` | population=16, offspring=16, generations=20, portfolio=16 | `artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json` |
+| run | scheduler | config | portfolio budget | review Markov | baseline DR manifest |
+| --- | --- | --- | --- | --- | --- |
+| `fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off` | `fsrs6_oracle_stationary_finite_distill` | `experiments/rl_scheduler/configs/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1.toml` | population=16, offspring=16, generations=20, portfolio=16 | off | `artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json` |
+| `fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off` | `fsrs6_adr` | `experiments/rl_scheduler/configs/fsrs6_adr_portfolio_users_1_8_pop16_v1.toml` | population=16, offspring=16, generations=20, portfolio=16 | off | `artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json` |
 
 Analysis summaries:
 
-- Oracle stationary finite distill r4d1 e512: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1/analyze-pareto/analyze_pareto_outputs/analysis_summary.json`
-- ADR: `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1/analyze-pareto/analyze_pareto_outputs/analysis_summary.json`
+- Oracle stationary finite distill r4d1 e512: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off/analyze-pareto/analyze_pareto_outputs/analysis_summary.json`
+- ADR: `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off/analyze-pareto/analyze_pareto_outputs/analysis_summary.json`
 
 ## Stage Status
 
@@ -39,25 +39,26 @@ Analysis summaries:
 
 | run | stage | device | elapsed seconds | user-days/s | candidate-days/s |
 | --- | --- | --- | --- | --- | --- |
-| Oracle stationary finite distill r4d1 e512 | sweep | cuda | 95.6 | 152.7 | - |
-| Oracle stationary finite distill r4d1 e512 | train-overfit | cuda | 950.9 | 15.4 | 245.7 |
-| ADR | sweep | cuda | 45.1 | 323.5 | - |
-| ADR | train-overfit | cuda | 328.8 | 44.4 | 710.4 |
+| Oracle stationary finite distill r4d1 e512 | sweep | cuda | 90.4 | 161.5 | - |
+| Oracle stationary finite distill r4d1 e512 | train-overfit | cuda | 971.5 | 15.0 | 240.5 |
+| ADR | sweep | cuda | 44.1 | 330.8 | - |
+| ADR | train-overfit | cuda | 305.7 | 47.8 | 764.3 |
 
 ## Provenance
 
 | run | git commit | dirty | Python | PyTorch | CUDA | device |
 | --- | --- | --- | --- | --- | --- | --- |
-| Oracle stationary finite distill r4d1 e512 | d7155e700e86c522f50a35b159247459778fa432 | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
-| ADR | c1a791b35e56ef777005d8329a11ac42e34ab707 | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
+| Oracle stationary finite distill r4d1 e512 | 54077ffe988aaf74eb90dfb52d3b2eae1300590d | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
+| ADR | 54077ffe988aaf74eb90dfb52d3b2eae1300590d | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
 
 ## GPU Monitor
 
 | run | stage | summary | shared peak MiB | summed peak MiB | spill | nvidia-smi peak MiB |
 | --- | --- | --- | --- | --- | --- | --- |
-| Oracle stationary finite distill r4d1 e512 | sweep | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1/sweep/gpu_monitor/summary.json` | 144.1 | 162.3 | False | 2,637.0 |
-| Oracle stationary finite distill r4d1 e512 | train-overfit | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1/train-overfit/gpu_monitor/summary.json` | 156.1 | 174.3 | False | 1,548.0 |
-| ADR | - | - | - | - | - | - |
+| Oracle stationary finite distill r4d1 e512 | sweep | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off/sweep/gpu_monitor/summary.json` | 173.0 | 191.2 | False | 2,628.0 |
+| Oracle stationary finite distill r4d1 e512 | train-overfit | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 143.0 | 161.3 | False | 1,527.0 |
+| ADR | sweep | `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off/sweep/gpu_monitor/summary.json` | 299.9 | 318.1 | False | 2,664.0 |
+| ADR | train-overfit | `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 158.3 | 176.5 | False | 1,488.0 |
 
 ## Conclusion
 
@@ -65,8 +66,8 @@ Do not promote `fsrs6_oracle_stationary_finite_distill`.
 
 With the matched portfolio budget, Oracle stationary finite distill r4d1 e512 remains behind ADR on HV; same-budget memory lift and same-target time saved deltas are:
 
-- fsrs6: -50,029 HV, -7.5 same-budget memory lift AUC, -1.77 same-target time saved AUC versus comparison.
-- lstm: -45,945 HV, -17.0 same-budget memory lift AUC, -1.94 same-target time saved AUC versus comparison.
+- fsrs6: -58,627 HV, 0.9 same-budget memory lift AUC, -2.19 same-target time saved AUC versus comparison.
+- lstm: -41,066 HV, -6.8 same-budget memory lift AUC, -2.21 same-target time saved AUC versus comparison.
 
 Training HV gains and lower-time sampled policy points do not survive external Pareto evaluation.
 
@@ -76,27 +77,27 @@ Scheduler-only hypervolume values are sums of per-user HV delta against the same
 
 | environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | same-budget memory lift AUC | same-budget memory lift / baseline | budget coverage | same-target time saved AUC | same-target time saved / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fsrs6 | Oracle stationary finite distill r4d1 e512 | 46,851 | +1.684% | 128 | 83.2 | +1.278% | 96/115, 73.835% span | 2.80 | +9.418% | 95/115, 90.504% span |
-| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | 4.57 | +11.555% | 81/115, 78.146% span |
-| fsrs6 | Oracle stationary finite distill r4d1 e512 - ADR | -50,029 | -1.798% | 0 | -7.5 | -0.122% | +8, -7.716 pp span | -1.77 | -2.137% | +14, +12.358 pp span |
-| lstm | Oracle stationary finite distill r4d1 e512 | 9,904 | +0.349% | 127 | 45.1 | +0.692% | 93/111, 70.615% span | -0.12 | +3.356% | 97/111, 95.914% span |
-| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | 1.82 | +5.906% | 81/111, 83.775% span |
-| lstm | Oracle stationary finite distill r4d1 e512 - ADR | -45,945 | -1.617% | 2 | -17.0 | -0.261% | +14, -11.852 pp span | -1.94 | -2.550% | +16, +12.139 pp span |
+| fsrs6 | Oracle stationary finite distill r4d1 e512 | 37,238 | +1.244% | 128 | 82.4 | +1.266% | 90/110, 68.457% span | 2.58 | +8.810% | 91/110, 89.829% span |
+| fsrs6 | ADR | 95,866 | +3.202% | 128 | 81.4 | +1.228% | 80/110, 81.322% span | 4.77 | +11.168% | 78/110, 76.609% span |
+| fsrs6 | Oracle stationary finite distill r4d1 e512 - ADR | -58,627 | -1.958% | 0 | 0.9 | +0.038% | +10, -12.865 pp span | -2.19 | -2.358% | +13, +13.220 pp span |
+| lstm | Oracle stationary finite distill r4d1 e512 | 13,149 | +0.502% | 127 | 42.4 | +0.652% | 95/117, 73.812% span | -0.52 | +2.810% | 98/117, 95.147% span |
+| lstm | ADR | 54,215 | +2.068% | 124 | 49.3 | +0.746% | 83/117, 83.153% span | 1.69 | +4.927% | 79/117, 81.533% span |
+| lstm | Oracle stationary finite distill r4d1 e512 - ADR | -41,066 | -1.567% | 3 | -6.8 | -0.094% | +12, -9.341 pp span | -2.21 | -2.117% | +19, +13.614 pp span |
 
 ## Per-User HV Delta
 
-Candidate-minus-comparison per-user HV delta is negative for 10/16 environment-user rows.
+Candidate-minus-comparison per-user HV delta is negative for 11/16 environment-user rows.
 
 | user | fsrs6 Oracle stationary finite distill r4d1 e512 HV delta | fsrs6 ADR HV delta | fsrs6 delta | lstm Oracle stationary finite distill r4d1 e512 HV delta | lstm ADR HV delta | lstm delta |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 8,044 | 9,894 | -1,851 | 3,351 | 7,161 | -3,810 |
-| 2 | -16,273 | 27,715 | -43,987 | -11,804 | 13,315 | -25,119 |
-| 3 | 4,026 | 3,745 | 281 | 2,492 | 3,364 | -873 |
-| 4 | 32,792 | 37,079 | -4,286 | 6,011 | 19,119 | -13,108 |
-| 5 | 9,332 | 8,964 | 368 | 2,407 | 4,110 | -1,703 |
-| 6 | 7,687 | 6,327 | 1,360 | 7,485 | 6,491 | 993 |
-| 7 | -1,366 | 1,238 | -2,604 | -1,739 | 733 | -2,473 |
-| 8 | 2,607 | 1,918 | 689 | 1,703 | 1,556 | 147 |
+| 1 | 8,285 | 10,832 | -2,546 | 2,288 | 5,399 | -3,112 |
+| 2 | -18,772 | 32,314 | -51,086 | -2,985 | 19,434 | -22,419 |
+| 3 | 4,275 | 4,180 | 94 | 2,216 | 3,203 | -987 |
+| 4 | 28,979 | 33,240 | -4,261 | 5,715 | 18,141 | -12,426 |
+| 5 | 8,388 | 7,748 | 640 | 2,385 | 3,234 | -849 |
+| 6 | 5,274 | 4,474 | 800 | 4,158 | 2,821 | 1,337 |
+| 7 | -1,608 | 1,034 | -2,642 | -1,946 | 516 | -2,462 |
+| 8 | 2,417 | 2,045 | 372 | 1,317 | 1,466 | -148 |
 
 ## Diagnostics
 
@@ -104,41 +105,41 @@ Unweighted policy-point averages describe where sampled policies lie; they are d
 
 | environment | scheduler | policy-point avg memorized | policy-point avg time | policy-point avg efficiency | policy-point avg reviews |
 | --- | --- | --- | --- | --- | --- |
-| fsrs6 | Oracle stationary finite distill r4d1 e512 | 6,539.4 | 52.42 | 24.82 | 201.29 |
-| fsrs6 | ADR | 6,553.0 | 50.42 | 25.42 | 195.90 |
-| lstm | Oracle stationary finite distill r4d1 e512 | 6,394.1 | 62.76 | 21.80 | 253.95 |
-| lstm | ADR | 6,431.5 | 60.86 | 22.88 | 255.29 |
+| fsrs6 | Oracle stationary finite distill r4d1 e512 | 6,542.0 | 52.05 | 25.09 | 203.89 |
+| fsrs6 | ADR | 6,548.2 | 51.96 | 26.14 | 211.25 |
+| lstm | Oracle stationary finite distill r4d1 e512 | 6,390.7 | 63.43 | 22.00 | 262.42 |
+| lstm | ADR | 6,419.7 | 62.39 | 23.37 | 269.98 |
 
 Train-overfit final HV gain by user:
 
 | run | user | final training HV gain |
 | --- | --- | --- |
-| Oracle stationary finite distill r4d1 e512 | 1 | 12,268 |
-| Oracle stationary finite distill r4d1 e512 | 2 | 22,975 |
-| Oracle stationary finite distill r4d1 e512 | 3 | 5,113 |
-| Oracle stationary finite distill r4d1 e512 | 4 | 38,323 |
-| Oracle stationary finite distill r4d1 e512 | 5 | 10,250 |
-| Oracle stationary finite distill r4d1 e512 | 6 | 8,019 |
-| Oracle stationary finite distill r4d1 e512 | 7 | 485 |
-| Oracle stationary finite distill r4d1 e512 | 8 | 3,018 |
-| ADR | 1 | 12,771 |
-| ADR | 2 | 31,067 |
-| ADR | 3 | 4,980 |
-| ADR | 4 | 38,251 |
-| ADR | 5 | 9,555 |
-| ADR | 6 | 7,609 |
-| ADR | 7 | 1,542 |
-| ADR | 8 | 1,971 |
+| Oracle stationary finite distill r4d1 e512 | 1 | 12,958 |
+| Oracle stationary finite distill r4d1 e512 | 2 | 28,318 |
+| Oracle stationary finite distill r4d1 e512 | 3 | 5,376 |
+| Oracle stationary finite distill r4d1 e512 | 4 | 34,128 |
+| Oracle stationary finite distill r4d1 e512 | 5 | 9,040 |
+| Oracle stationary finite distill r4d1 e512 | 6 | 5,840 |
+| Oracle stationary finite distill r4d1 e512 | 7 | 499 |
+| Oracle stationary finite distill r4d1 e512 | 8 | 3,104 |
+| ADR | 1 | 13,563 |
+| ADR | 2 | 37,662 |
+| ADR | 3 | 5,463 |
+| ADR | 4 | 33,770 |
+| ADR | 5 | 8,108 |
+| ADR | 6 | 5,431 |
+| ADR | 7 | 1,294 |
+| ADR | 8 | 2,093 |
 
 ## Training HV
 
 | run | users | final training HV gain sum |
 | --- | --- | --- |
-| Oracle stationary finite distill r4d1 e512 | 8 | 100,452 |
-| ADR | 8 | 107,746 |
+| Oracle stationary finite distill r4d1 e512 | 8 | 99,263 |
+| ADR | 8 | 107,385 |
 
 ## Artifact Paths
 
-- Report summary: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1/report/report_summary.json`
-- Run-local report: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1/report/report.md`
+- Report summary: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off/report/report_summary.json`
+- Run-local report: `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1_markov_off/report/report.md`
 - Published report: `docs/rl_scheduler/experiments/2026-05-19-fsrs6_oracle_stationary_finite_distill_r4d1_e512_portfolio_users_1_8_pop16_v1.md`

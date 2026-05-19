@@ -118,6 +118,7 @@ priority = "review-first"
 scheduler_priority = "low_retrievability"
 short_term_source = "steps"
 fuzz = false
+review_markov_transition = false
 
 [gpu_guard]
 required = {str(gpu_required).lower()}
@@ -164,6 +165,7 @@ def _write_baseline_log(
     user_id: int,
     scheduler: str = "fsrs6",
     desired_retention: float = 0.9,
+    review_markov_transition: bool | None = False,
 ) -> None:
     meta = {
         "type": "meta",
@@ -187,6 +189,8 @@ def _write_baseline_log(
             "short_term_source": "steps",
         },
     }
+    if review_markov_transition is not None:
+        meta["data"]["review_markov_transition"] = review_markov_transition
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(meta) + "\n", encoding="utf-8")
 
@@ -231,6 +235,7 @@ output_dir.mkdir(parents=True, exist_ok=True)
             "created_at": "2026-04-29T00:00:00Z",
             "code_commit": "test",
             "lambda_value": lambda_value,
+            "review_markov_transition": False,
             "capabilities": ["batched"],
         }
     ),
@@ -283,6 +288,7 @@ for desired_retention in (0.8, 0.9):
                 "code_commit": "test",
                 "lambda_value": lambda_value,
                 "baseline_desired_retention": desired_retention,
+                "review_markov_transition": False,
                 "capabilities": ["batched"],
             }
         ),
@@ -361,6 +367,7 @@ meta = {
         "fuzz": False,
         "short_term": True,
         "short_term_source": "steps",
+        "review_markov_transition": False,
     },
 }
 totals = {"type": "totals", "data": {"reviews": 1, "elapsed_minutes": 1.0}}
@@ -538,6 +545,7 @@ for user_id in user_ids:
             "fuzz": False,
             "short_term": True,
             "short_term_source": "steps",
+            "review_markov_transition": False,
         },
     }
     totals = {"type": "totals", "data": {"reviews": 1, "elapsed_minutes": 1.0}}
@@ -1255,6 +1263,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                             "code_commit": "test",
                             "lambda_value": 0.5,
                             "baseline_desired_retention": desired_retention,
+                            "review_markov_transition": False,
                             "capabilities": ["batched"],
                         }
                     ),
@@ -1295,6 +1304,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                             "fuzz": False,
                             "short_term": True,
                             "short_term_source": "steps",
+                            "review_markov_transition": False,
                         },
                     }
                     totals = {"type": "totals", "data": {"reviews": 1}}
@@ -1402,6 +1412,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                                     "fuzz": False,
                                     "short_term": True,
                                     "short_term_source": "steps",
+                                    "review_markov_transition": False,
                                 },
                             }
                             totals = {"type": "totals", "data": {"reviews": 1}}
@@ -1641,6 +1652,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                                 "baseline_desired_retention": (
                                     job.baseline_desired_retention
                                 ),
+                                "review_markov_transition": False,
                                 "training_command_path": str(job.command_record_path),
                                 "capabilities": ["batched"],
                             }
@@ -1761,6 +1773,7 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
                                 "baseline_desired_retention": (
                                     job.baseline_desired_retention
                                 ),
+                                "review_markov_transition": False,
                                 "training_command_path": str(job.command_record_path),
                                 "capabilities": ["batched"],
                             }
@@ -2223,6 +2236,36 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             self.assertFalse(gate["passed"])
             self.assertIn("invalid-baseline", gate["failures"])
             self.assertEqual(list((stage_root / "baseline_logs").rglob("*.jsonl")), [])
+
+    def test_stage_baseline_rejects_missing_review_markov_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                    review_markov_transition=None,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.STAGE_BASELINE,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            stage_root = output_root / "test-run" / "stage-baseline"
+            gate = json.loads((stage_root / "gate_summary.json").read_text())
+            self.assertFalse(gate["passed"])
+            self.assertIn("invalid-baseline", gate["failures"])
 
     def test_stage_baseline_rejects_missing_retention_grid_points(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

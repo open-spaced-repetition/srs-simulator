@@ -111,6 +111,15 @@ def parse_args() -> argparse.Namespace:
         help="Filter logs by simulation engine.",
     )
     parser.add_argument(
+        "--review-markov-transition",
+        choices=["on", "off", "any"],
+        default="any",
+        help=(
+            "Filter logs by review Markov transition mode. Use off for the "
+            "default marginal-button behavior."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -624,6 +633,7 @@ def _iter_log_entries(
     short_term_filter: Optional[bool],
     short_term_source_filter: Optional[str],
     engine_filter: Optional[str],
+    review_markov_filter: Optional[bool],
     seed_filter: Optional[int],
     run_id_filter: Optional[str],
     fixed_interval_filter: Optional[Sequence[float]] = None,
@@ -713,6 +723,14 @@ def _iter_log_entries(
             continue
         if engine_filter is not None:
             if engine_value != engine_filter:
+                continue
+
+        review_markov_value = _normalize_bool(meta.get("review_markov_transition"))
+        if review_markov_filter is not None:
+            if (
+                review_markov_value is None
+                or review_markov_value != review_markov_filter
+            ):
                 continue
 
         fixed_interval = None
@@ -823,6 +841,7 @@ def _iter_log_entries(
             "short_term": short_term_value,
             "short_term_source": meta.get("short_term_source"),
             "engine": engine_value,
+            "review_markov_transition": review_markov_value,
             "run_id": meta.get("run_id"),
         }
         if desired_value is not None:
@@ -955,6 +974,7 @@ def _build_results(
     dedupe_engine: bool = False,
     user_id_filter: Optional[int] = None,
     baseline_dr_manifest: BaselineDRManifest | None = None,
+    review_markov_filter: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     by_retention: Dict[RetentionKey, Dict[str, Any]] = {}
     by_retention_rank: Dict[RetentionKey, int] = {}
@@ -973,6 +993,7 @@ def _build_results(
         short_term_filter,
         short_term_source_filter,
         engine_filter,
+        review_markov_filter,
         seed_filter,
         run_id_filter,
         fixed_interval_filter,
@@ -1478,6 +1499,9 @@ def main() -> None:
         engine_filter = args.engine
     if args.compare_engine and engine_filter is not None:
         raise SystemExit("--compare-engine cannot be combined with --engine.")
+    review_markov_filter = None
+    if args.review_markov_transition != "any":
+        review_markov_filter = args.review_markov_transition == "on"
     fuzz_series = [None]
     if args.compare_fuzz:
         fuzz_series = [False, True]
@@ -1511,6 +1535,7 @@ def main() -> None:
                                 engine_value,
                                 args.seed,
                                 args.run_id,
+                                review_markov_filter=review_markov_filter,
                                 title_prefix=None,
                                 dedupe_fuzz=args.compare_fuzz,
                                 dedupe_short_term=args.compare_short_term,
@@ -1586,6 +1611,7 @@ def main() -> None:
                             engine_value,
                             args.seed,
                             args.run_id,
+                            review_markov_filter=review_markov_filter,
                             fixed_interval_filter=interval_filter,
                             title_prefix=None,
                             dedupe_fuzz=args.compare_fuzz,
@@ -1649,6 +1675,7 @@ def main() -> None:
                             engine_value,
                             args.seed,
                             args.run_id,
+                            review_markov_filter=review_markov_filter,
                             title_prefix=None,
                             dedupe=False,
                             user_id_filter=args.user_id,

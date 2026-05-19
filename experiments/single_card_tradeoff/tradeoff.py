@@ -159,6 +159,7 @@ FSRS6_ADR_SCHEDULERS = frozenset(schedulers_for_policy_source(PolicySource.FSRS6
 @dataclass(frozen=True)
 class MemoryTargetRegretAucSummary:
     environment: str
+    review_markov_transition: bool | None
     baseline_scheduler: str
     scheduler: str
     baseline_point_count: int
@@ -516,7 +517,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Optional Anki button usage JSONL. If omitted, built-in rating and "
-            "cost defaults are used."
+            "cost defaults are used. Review Markov transitions require "
+            "--review-markov-transition."
+        ),
+    )
+    parser.add_argument(
+        "--review-markov-transition",
+        action="store_true",
+        help=(
+            "Use long_term_transition from button usage data for review button "
+            "behavior. Defaults to marginal review probabilities only."
         ),
     )
     parser.add_argument(
@@ -826,7 +836,11 @@ def _make_behavior(
         review_rating_prob=usage["review_rating_prob"],
         learning_rating_prob=usage["learning_rating_prob"],
         relearning_rating_prob=usage["relearning_rating_prob"],
-        review_markov_transition=usage.get("long_term_transition"),
+        review_markov_transition=(
+            usage.get("long_term_transition")
+            if getattr(args, "review_markov_transition", False)
+            else None
+        ),
     )
     cost_model = StatefulCostModel(
         state_costs=StateRatingCosts(
@@ -895,6 +909,9 @@ def _row_from_stats(
         "runtime_s": runtime_s,
         "engine": args.engine,
         "fuzz": bool(args.fuzz),
+        "review_markov_transition": bool(
+            getattr(args, "review_markov_transition", False)
+        ),
     }
 
 
@@ -2198,6 +2215,7 @@ def _row_from_uvfa_metrics(
         "runtime_s": runtime_s,
         "engine": scheduler_name,
         "fuzz": False,
+        "review_markov_transition": False,
     }
 
 
@@ -3684,8 +3702,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "total_lapses",
         "total_cost_seconds",
         "runtime_s",
-        "engine",
         "fuzz",
+        "review_markov_transition",
+        "engine",
         "fsrs6_adr_policy",
         "fsrs6_adr_baseline_desired_retention",
         "fsrs6_adr_lambda_value",
@@ -3747,10 +3766,23 @@ def _pareto_frontier(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def _regret_auc_group_key(row: dict[str, Any]) -> tuple[str, str]:
+def _row_review_markov_transition(row: dict[str, Any]) -> bool | None:
+    value = row.get("review_markov_transition")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _regret_auc_group_key(row: dict[str, Any]) -> tuple[str, bool | None, str]:
     scheduler = str(row["scheduler"])
     scheduler_label = "fixed" if scheduler == "fixed" else str(row["scheduler_spec"])
-    return str(row["environment"]), scheduler_label
+    return str(row["environment"]), _row_review_markov_transition(row), scheduler_label
 
 
 def _frontier_memory_time_points(
@@ -3842,6 +3874,7 @@ def _interpolated_time_for_memory_target(
 def _memory_target_regret_auc_summary(
     *,
     environment: str,
+    review_markov_transition: bool | None,
     baseline_scheduler: str,
     baseline_rows: list[dict[str, Any]],
     scheduler: str,
@@ -3914,6 +3947,7 @@ def _memory_target_regret_auc_summary(
 
     return MemoryTargetRegretAucSummary(
         environment=environment,
+        review_markov_transition=review_markov_transition,
         baseline_scheduler=baseline_scheduler,
         scheduler=scheduler,
         baseline_point_count=len(baseline_rows),
@@ -3954,6 +3988,7 @@ def _summary_to_regret_auc_row(
     )
     return {
         "environment": summary.environment,
+        "review_markov_transition": summary.review_markov_transition,
         "baseline_scheduler": summary.baseline_scheduler,
         "scheduler": summary.scheduler,
         "baseline_point_count": summary.baseline_point_count,
@@ -3974,26 +4009,36 @@ def _summary_to_regret_auc_row(
 
 
 def _build_regret_auc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, bool | None, str], list[dict[str, Any]]] = {}
     for row in rows:
         key = _regret_auc_group_key(row)
         groups.setdefault(key, []).append(row)
 
     output_rows: list[dict[str, Any]] = []
-    environments = sorted({environment for environment, _ in groups})
-    for environment in environments:
+    group_modes = sorted(
+        {(environment, markov) for environment, markov, _scheduler in groups},
+        key=lambda item: (item[0], str(item[1])),
+    )
+    for environment, review_markov_transition in group_modes:
         scheduler_labels = sorted(
-            scheduler for group_env, scheduler in groups if group_env == environment
+            scheduler
+            for group_env, group_markov, scheduler in groups
+            if group_env == environment and group_markov == review_markov_transition
         )
         for baseline_scheduler in scheduler_labels:
-            baseline_rows = groups[(environment, baseline_scheduler)]
+            baseline_rows = groups[
+                (environment, review_markov_transition, baseline_scheduler)
+            ]
             for scheduler in scheduler_labels:
                 summary = _memory_target_regret_auc_summary(
                     environment=environment,
+                    review_markov_transition=review_markov_transition,
                     baseline_scheduler=baseline_scheduler,
                     baseline_rows=baseline_rows,
                     scheduler=scheduler,
-                    scheduler_rows=groups[(environment, scheduler)],
+                    scheduler_rows=groups[
+                        (environment, review_markov_transition, scheduler)
+                    ],
                 )
                 if summary is not None:
                     output_rows.append(_summary_to_regret_auc_row(summary))
@@ -4004,6 +4049,7 @@ def _write_regret_auc_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "environment",
+        "review_markov_transition",
         "baseline_scheduler",
         "scheduler",
         "baseline_point_count",
@@ -4216,6 +4262,7 @@ def _print_regret_auc_summary(rows: list[dict[str, Any]]) -> None:
                 [
                     "same_target_time_saved_auc",
                     f"{row['environment']}/{row['scheduler']}",
+                    f"review_markov={row.get('review_markov_transition')}",
                     f"vs={row['baseline_scheduler']}",
                     f"time_saved={time_text}",
                     f"relative_time_saved={relative_text}",

@@ -37,6 +37,14 @@ def _optional_float(value: Any, field_name: str) -> float | None:
     return float(value)
 
 
+def _optional_bool(value: Any, field_name: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean or null.")
+    return value
+
+
 def _require_sequence(value: Any, field_name: str) -> Sequence[Any]:
     if isinstance(value, str) or not isinstance(value, Sequence):
         raise ValueError(f"{field_name} must be an array.")
@@ -84,6 +92,7 @@ class SchedulerArtifactMetadata:
     code_commit: str
     lambda_value: float | None = None
     baseline_desired_retention: float | None = None
+    review_markov_transition: bool | None = None
     config_snapshot_path: Path | None = None
     training_command_path: Path | None = None
     metrics_path: Path | None = None
@@ -147,6 +156,10 @@ class SchedulerArtifactMetadata:
             baseline_desired_retention=_optional_float(
                 raw.get("baseline_desired_retention"),
                 "baseline_desired_retention",
+            ),
+            review_markov_transition=_optional_bool(
+                raw.get("review_markov_transition"),
+                "review_markov_transition",
             ),
             config_snapshot_path=_optional_path(
                 raw.get("config_snapshot_path"),
@@ -215,6 +228,7 @@ class SchedulerArtifactMetadata:
             "code_commit": self.code_commit,
             "lambda_value": self.lambda_value,
             "baseline_desired_retention": self.baseline_desired_retention,
+            "review_markov_transition": self.review_markov_transition,
             "config_snapshot_path": str(self.config_snapshot_path)
             if self.config_snapshot_path
             else None,

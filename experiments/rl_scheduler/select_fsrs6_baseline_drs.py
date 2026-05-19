@@ -168,6 +168,10 @@ def main() -> int:
                 },
                 "code_commit": _git_commit(),
                 "selection_environment": selection_config.selection_environment,
+                "simulation": selection_experiment.simulation.to_dict(),
+                "button_usage": str(args.button_usage)
+                if args.button_usage is not None
+                else None,
                 "target_count": selection_config.target_count,
                 "reference": selection_config.reference,
                 "objective": {

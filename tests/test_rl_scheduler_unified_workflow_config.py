@@ -683,6 +683,8 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertIn("Loaded 2 records", report)
         self.assertIn("### Primary hypervolume summary vs FSRS6 baseline", report)
         self.assertIn("### Policy-point diagnostics", report)
+        self.assertEqual(summary["filters"]["review_markov_transition"], "off")
+        self.assertIn("review_markov_transition=off", report)
         hv_rows = summary["environments"]["fsrs6"]["primary_hypervolume_summary"]
         self.assertEqual(hv_rows[0]["scheduler"], "fsrs6_adr")
         self.assertIn(

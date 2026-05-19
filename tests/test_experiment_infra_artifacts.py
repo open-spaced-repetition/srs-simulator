@@ -37,6 +37,7 @@ def _metadata(policy_path: str = "policy.pt") -> dict[str, object]:
         "created_at": "2026-04-29T00:00:00Z",
         "code_commit": "abcdef",
         "lambda_value": 0.5,
+        "review_markov_transition": False,
         "capabilities": ["batched"],
     }
 
@@ -48,6 +49,7 @@ class ExperimentInfraArtifactTests(unittest.TestCase):
         self.assertEqual(metadata.engine, EngineName.BATCHED)
         self.assertEqual(metadata.training_user_ids, (1,))
         self.assertEqual(metadata.validation_user_ids, (2,))
+        self.assertFalse(metadata.review_markov_transition)
 
     def test_resolves_relative_paths_from_metadata_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

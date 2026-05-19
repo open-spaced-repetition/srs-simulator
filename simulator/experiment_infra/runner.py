@@ -3578,6 +3578,7 @@ def _performance_workload_shape(
         "deck": config.simulation.deck,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
+        "review_markov_transition": config.simulation.review_markov_transition,
         "train_users": len(config.users.train),
         "validation_users": len(config.users.validation),
         "reserved_test_users": len(config.users.reserved_test),
@@ -3903,6 +3904,7 @@ def _simulation_metadata_errors(
         "fuzz": config.simulation.fuzz,
         "short_term": bool(config.simulation.short_term_source),
         "short_term_source": config.simulation.short_term_source,
+        "review_markov_transition": config.simulation.review_markov_transition,
     }
     if expected_scheduler is not None:
         expected["scheduler"] = expected_scheduler
@@ -4036,6 +4038,9 @@ def _format_train_command(
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "scheduler": config.baseline.scheduler,
         "repo_root": str(repo_root),
         "stage_root": str(stage_root),
@@ -5025,7 +5030,16 @@ def _run_batched_sweep_jobs(
         relearning_rating_prob,
         state_rating_costs,
         review_markov_success_weights,
-    ) = load_usage(lane_user_ids, DEFAULT_BUTTON_USAGE_PATH)
+    ) = load_usage(
+        lane_user_ids,
+        DEFAULT_BUTTON_USAGE_PATH,
+        review_markov_transition=config.simulation.review_markov_transition,
+    )
+    review_markov_success_weights = (
+        review_markov_success_weights.to(device)
+        if review_markov_success_weights is not None
+        else None
+    )
     learn_limit = (
         config.simulation.learn_limit
         if config.simulation.learn_limit is not None
@@ -5054,7 +5068,7 @@ def _run_batched_sweep_jobs(
         learning_rating_prob=learning_rating_prob.to(device),
         relearning_rating_prob=relearning_rating_prob.to(device),
         state_rating_costs=state_rating_costs.to(device),
-        review_markov_success_weights=review_markov_success_weights.to(device),
+        review_markov_success_weights=review_markov_success_weights,
         short_term=bool(short_term_source),
     )
 
@@ -5104,6 +5118,7 @@ def _run_batched_sweep_jobs(
             run_id=run_id,
             user_id=job.user_id,
             button_usage=str(DEFAULT_BUTTON_USAGE_PATH),
+            review_markov_transition=config.simulation.review_markov_transition,
             desired_retention=job.desired_retention,
             scheduler_priority=config.simulation.scheduler_priority,
             sspmmc_policy=None,
@@ -5131,6 +5146,7 @@ def _run_batched_sweep_jobs(
             "scheduler_names": sorted({job.scheduler_name for job in jobs}),
             "environment": config.simulation.environment,
             "engine": config.simulation.engine,
+            "review_markov_transition": (config.simulation.review_markov_transition),
             "device": str(device),
             "seed": config.seed,
             "artifact_metadata_paths": [
@@ -5202,6 +5218,7 @@ def _run_configured_batched_retention_sweep(
         priority=config.simulation.priority,
         scheduler_priority=config.simulation.scheduler_priority,
         button_usage=DEFAULT_BUTTON_USAGE_PATH,
+        review_markov_transition=config.simulation.review_markov_transition,
         no_log=sweep_config.no_log,
         no_progress=sweep_config.no_progress,
         diagnostic_csv_logs=config.performance.diagnostic_csv_logs,
@@ -5574,6 +5591,9 @@ def _format_sweep_command(
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "repo_root": str(repo_root),
         "stage_root": str(stage_root),
         "output_dir": str(output_dir),
@@ -5610,6 +5630,10 @@ def _format_pareto_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "repo_root": str(repo_root),
         "stage_root": str(stage_root),
         "output_dir": str(output_dir),
@@ -5656,6 +5680,10 @@ def _format_build_pareto_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "repo_root": str(repo_root),
         "run_root": str(run_root),
         "stage_root": str(stage_root),
@@ -5721,6 +5749,10 @@ def _format_analyze_pareto_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "repo_root": str(repo_root),
         "run_root": str(run_root),
         "stage_root": str(stage_root),
@@ -5781,6 +5813,10 @@ def _format_select_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "repo_root": str(repo_root),
         "run_root": str(stage_root.parent),
         "stage_root": str(stage_root),
@@ -5824,6 +5860,10 @@ def _format_aggregate_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "repo_root": str(repo_root),
         "run_root": str(stage_root.parent),
         "stage_root": str(stage_root),
@@ -5875,6 +5915,10 @@ def _format_reserved_test_command(
         "seed": config.seed,
         "family": config.family,
         "engine": config.simulation.engine,
+        "environment": config.simulation.environment,
+        "review_markov_transition": str(
+            config.simulation.review_markov_transition
+        ).lower(),
         "repo_root": str(repo_root),
         "run_root": str(stage_root.parent),
         "stage_root": str(stage_root),
@@ -6106,6 +6150,15 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: environment expected "
                 f"{config.simulation.environment!r}, got {metadata.environment!r}."
             )
+        if metadata.review_markov_transition != (
+            config.simulation.review_markov_transition
+        ):
+            return (
+                f"Invalid scheduler artifact metadata {path}: "
+                "review_markov_transition expected "
+                f"{config.simulation.review_markov_transition!r}, got "
+                f"{metadata.review_markov_transition!r}."
+            )
         if metadata.training_user_ids != (user_id,):
             return (
                 f"Invalid scheduler artifact metadata {path}: training_user_ids "
@@ -6269,6 +6322,13 @@ def _validate_sweep_artifact_metadata(
         return (
             f"Invalid scheduler artifact metadata {metadata_path}: environment "
             f"expected {config.simulation.environment!r}, got {metadata.environment!r}."
+        )
+    if metadata.review_markov_transition != config.simulation.review_markov_transition:
+        return (
+            f"Invalid scheduler artifact metadata {metadata_path}: "
+            "review_markov_transition expected "
+            f"{config.simulation.review_markov_transition!r}, got "
+            f"{metadata.review_markov_transition!r}."
         )
     if len(metadata.training_user_ids) != 1:
         return (

@@ -379,7 +379,18 @@ def main() -> None:
         "--button-usage",
         type=Path,
         default=DEFAULT_BUTTON_USAGE_PATH,
-        help="Path to Anki button usage JSONL for per-user costs/probabilities.",
+        help=(
+            "Path to Anki button usage JSONL for per-user costs/probabilities. "
+            "Review Markov transitions require --review-markov-transition."
+        ),
+    )
+    parser.add_argument(
+        "--review-markov-transition",
+        action="store_true",
+        help=(
+            "Use long_term_transition from button usage data for review button "
+            "behavior. Defaults to marginal review probabilities only."
+        ),
     )
     parser.add_argument(
         "--sched",
@@ -508,7 +519,9 @@ def main() -> None:
         review_rating_prob=usage["review_rating_prob"],
         learning_rating_prob=usage["learning_rating_prob"],
         relearning_rating_prob=usage["relearning_rating_prob"],
-        review_markov_transition=usage.get("long_term_transition"),
+        review_markov_transition=(
+            usage.get("long_term_transition") if args.review_markov_transition else None
+        ),
     )
     if short_term_source:
         state_rating_costs = usage["state_rating_costs"]
@@ -691,7 +704,15 @@ def _simulation_log_filename(log_dir: Path, parts: list[str]) -> Path:
         if len(filename) <= _LOG_FILENAME_COMPONENT_LIMIT:
             return log_dir / filename
 
-    for prefix in ("days=", "deck=", "learn=", "review=", "costm=", "sprio="):
+    for prefix in (
+        "goalw=",
+        "days=",
+        "deck=",
+        "learn=",
+        "review=",
+        "costm=",
+        "sprio=",
+    ):
         shortened = [part for part in candidate_parts if not part.startswith(prefix)]
         if len(shortened) == len(candidate_parts):
             continue
@@ -971,6 +992,9 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         "run_id": str(run_id) if run_id else None,
         "user_id": args.user_id or 1,
         "button_usage": str(args.button_usage) if args.button_usage else None,
+        "review_markov_transition": bool(
+            getattr(args, "review_markov_transition", False)
+        ),
         "desired_retention": desired_retention,
         "scheduler_priority": args.scheduler_priority,
         "sspmmc_policy": str(sspmmc_policy) if sspmmc_policy else None,

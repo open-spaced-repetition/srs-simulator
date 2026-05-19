@@ -79,6 +79,7 @@ def _write_log_args(log_dir: Path, write_daily_csv: bool | None) -> argparse.Nam
         "scheduler_spec": "anki_sm2",
         "user_id": 1,
         "button_usage": None,
+        "review_markov_transition": False,
         "desired_retention": None,
         "scheduler_priority": "low_retrievability",
         "sspmmc_policy": None,
@@ -168,6 +169,7 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             self.assertIn("run=run-one", json_logs[0].name)
             meta = json.loads(json_logs[0].read_text().splitlines()[0])
             self.assertEqual(meta["data"]["run_id"], "run/one")
+            self.assertFalse(meta["data"]["review_markov_transition"])
 
     def test_write_log_shortens_redundant_adr_policy_filename_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -200,6 +202,44 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             meta = json.loads(json_logs[0].read_text().splitlines()[0])
             self.assertEqual(meta["data"]["fsrs6_adr_baseline_desired_retention"], 0.5)
             self.assertEqual(meta["data"]["fsrs6_adr_lambda_value"], 0.5)
+
+    def test_write_log_shortens_oracle_distill_goal_weight_filename_field(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            args = _write_log_args(log_dir, False)
+            args.engine = "batched"
+            args.days = 1825
+            args.deck = 10000
+            args.learn_limit = 10
+            args.review_limit = 9999
+            args.cost_limit_minutes = 720.0
+            args.priority = "new-first"
+            args.scheduler = "fsrs6_oracle_stationary_finite_distill"
+            args.scheduler_spec = "fsrs6_oracle_stationary_finite_distill"
+            args.run_id = (
+                "fsrs6_oracle_stationary_finite_distill_r4d1_e512_"
+                "portfolio_users_1_8_pop16_v1_markov_off"
+            )
+            args.fsrs6_oracle_stationary_finite_distill_policy = Path("policy.json")
+            args.fsrs6_oracle_stationary_finite_distill_goal_cost_weight = (
+                14.286568163909225
+            )
+
+            simulate_cli._write_log(args, _stats())
+
+            json_logs = list(log_dir.glob("*.jsonl"))
+            self.assertEqual(len(json_logs), 1)
+            name = json_logs[0].name
+            self.assertLessEqual(len(name), 240)
+            self.assertIn("run=fsrs6_oracle_stationary_finite_distill", name)
+            self.assertNotIn("goalw=", name)
+            meta = json.loads(json_logs[0].read_text().splitlines()[0])
+            self.assertEqual(
+                meta["data"]["fsrs6_oracle_stationary_finite_distill_goal_cost_weight"],
+                14.286568163909225,
+            )
 
     def test_write_log_preserves_default_daily_csv_behavior(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -737,6 +777,69 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
             0.5386559409988914,
         )
         self.assertEqual(results[0]["title"], "DR=53.87%")
+
+    def test_build_pareto_review_markov_filter_excludes_legacy_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "logs" / "retention_sweep"
+            current_dir = root / "user_1" / "sched_fsrs6" / "dr_0p9"
+            current_args = _write_log_args(current_dir, False)
+            current_args.engine = "batched"
+            current_args.scheduler = "fsrs6"
+            current_args.scheduler_spec = "fsrs6"
+            current_args.desired_retention = 0.90
+            simulate_cli._write_log(current_args, _stats(memorized=10.0))
+
+            legacy_dir = root / "user_1" / "sched_fsrs6" / "dr_0p91"
+            legacy_args = _write_log_args(legacy_dir, False)
+            legacy_args.engine = "batched"
+            legacy_args.scheduler = "fsrs6"
+            legacy_args.scheduler_spec = "fsrs6"
+            legacy_args.desired_retention = 0.91
+            simulate_cli._write_log(legacy_args, _stats(memorized=20.0))
+            legacy_path = next(legacy_dir.glob("*.jsonl"))
+            lines = legacy_path.read_text(encoding="utf-8").splitlines()
+            meta = json.loads(lines[0])
+            del meta["data"]["review_markov_transition"]
+            legacy_path.write_text(
+                "\n".join([json.dumps(meta), *lines[1:]]) + "\n",
+                encoding="utf-8",
+            )
+
+            markov_off_results = _build_results(
+                root,
+                "fsrs6",
+                {"fsrs6"},
+                0.50,
+                0.98,
+                [REPO_ROOT, root],
+                None,
+                None,
+                None,
+                "batched",
+                review_markov_filter=False,
+                user_id_filter=1,
+            )
+            any_results = _build_results(
+                root,
+                "fsrs6",
+                {"fsrs6"},
+                0.50,
+                0.98,
+                [REPO_ROOT, root],
+                None,
+                None,
+                None,
+                "batched",
+                user_id_filter=1,
+            )
+
+        self.assertEqual(
+            [entry["desired_retention"] for entry in markov_off_results], [0.90]
+        )
+        self.assertEqual(len(any_results), 2)
+        self.assertIn(
+            None, {entry["review_markov_transition"] for entry in any_results}
+        )
 
     def test_build_pareto_filters_fsrs6_adr_baseline_dr_range(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

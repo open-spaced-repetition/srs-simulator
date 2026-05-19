@@ -517,6 +517,7 @@ class SimulationScope:
     scheduler_priority: str = "low_retrievability"
     short_term_source: str | None = None
     fuzz: bool = False
+    review_markov_transition: bool = False
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> SimulationScope:
@@ -552,6 +553,10 @@ class SimulationScope:
             ),
             short_term_source=short_term_source,
             fuzz=_require_bool(raw.get("fuzz", False), "simulation.fuzz"),
+            review_markov_transition=_require_bool(
+                raw.get("review_markov_transition", False),
+                "simulation.review_markov_transition",
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -583,6 +588,7 @@ class SimulationScope:
             "scheduler_priority": self.scheduler_priority,
             "short_term_source": self.short_term_source,
             "fuzz": self.fuzz,
+            "review_markov_transition": self.review_markov_transition,
         }
 
 

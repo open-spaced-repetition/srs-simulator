@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -23,6 +24,7 @@ def _base_args(policy_path: Path | None) -> argparse.Namespace:
         deck_scale=100,
         env="fsrs6_default",
         button_usage=None,
+        review_markov_transition=False,
         user_id=None,
         benchmark_result=None,
         benchmark_partition="0",
@@ -123,13 +125,22 @@ class SingleCardTradeoffConfigRunnerTests(unittest.TestCase):
         self.assertIn("--fsrs6-adr-train-run-root", command)
         self.assertIn("--oracle-stationary-finite-distill-policy", command)
         self.assertIn("user_3_policy.pt", " ".join(command))
+        self.assertFalse(config.review_markov_transition)
+        self.assertNotIn("--review-markov-transition", command)
         self.assertNotIn("--no-plot", command)
+
+        markov_command = run_tradeoff_config._tradeoff_command(
+            replace(config, review_markov_transition=True),
+            3,
+        )
+        self.assertIn("--review-markov-transition", markov_command)
 
     def test_mean_summary_rows_compare_configured_schedulers(self) -> None:
         rows = [
             {
                 "user_id": 1,
                 "scheduler": "fsrs6_adr",
+                "review_markov_transition": "False",
                 "same_target_time_saved_auc": "2.0",
                 "relative_same_target_time_saved_auc_percent": "10.0",
                 "span_coverage_percent": "80.0",
@@ -137,6 +148,7 @@ class SingleCardTradeoffConfigRunnerTests(unittest.TestCase):
             {
                 "user_id": 2,
                 "scheduler": "fsrs6_adr",
+                "review_markov_transition": "False",
                 "same_target_time_saved_auc": "-1.0",
                 "relative_same_target_time_saved_auc_percent": "-5.0",
                 "span_coverage_percent": "60.0",
@@ -144,6 +156,7 @@ class SingleCardTradeoffConfigRunnerTests(unittest.TestCase):
             {
                 "user_id": 1,
                 "scheduler": "fsrs6_oracle_stationary_finite_distill",
+                "review_markov_transition": "False",
                 "same_target_time_saved_auc": "3.0",
                 "relative_same_target_time_saved_auc_percent": "15.0",
                 "span_coverage_percent": "90.0",
@@ -154,6 +167,7 @@ class SingleCardTradeoffConfigRunnerTests(unittest.TestCase):
 
         by_scheduler = {row["scheduler"]: row for row in summary}
         self.assertEqual(by_scheduler["fsrs6_adr"]["user_count"], 2)
+        self.assertEqual(by_scheduler["fsrs6_adr"]["review_markov_transition"], "False")
         self.assertEqual(by_scheduler["fsrs6_adr"]["positive_user_count"], 1)
         self.assertEqual(
             by_scheduler["fsrs6_adr"]["mean_same_target_time_saved_auc"], 0.5
@@ -161,6 +175,143 @@ class SingleCardTradeoffConfigRunnerTests(unittest.TestCase):
         self.assertEqual(
             by_scheduler["fsrs6_oracle_stationary_finite_distill"]["user_count"], 1
         )
+
+    def test_tradeoff_csv_and_auc_include_review_markov_mode(self) -> None:
+        rows = [
+            {
+                "environment": "fsrs6",
+                "scheduler": "fsrs6",
+                "scheduler_spec": "fsrs6",
+                "desired_retention": 0.5,
+                "fixed_interval": None,
+                "goal_cost_weight": None,
+                "seed": 1,
+                "days": 5,
+                "particles": 16,
+                "deck_scale": 100,
+                "card_expected_retrievability": 0.1,
+                "card_minutes_per_day": 0.1,
+                "card_reviews_per_day": 1.0,
+                "card_total_reviews": 5.0,
+                "card_total_lapses": 0.0,
+                "card_total_cost_seconds": 1.0,
+                "card_final_projected_retrievability": 0.5,
+                "observed_retention": 0.5,
+                "deck_expected_memorized": 100.0,
+                "deck_minutes_per_day": 10.0,
+                "deck_reviews_per_day": 1.0,
+                "total_reviews": 5.0,
+                "total_lapses": 0.0,
+                "total_cost_seconds": 1.0,
+                "runtime_s": 0.1,
+                "engine": "vectorized",
+                "fuzz": False,
+                "review_markov_transition": False,
+            },
+            {
+                "environment": "fsrs6",
+                "scheduler": "fsrs6",
+                "scheduler_spec": "fsrs6",
+                "desired_retention": 0.6,
+                "fixed_interval": None,
+                "goal_cost_weight": None,
+                "seed": 1,
+                "days": 5,
+                "particles": 16,
+                "deck_scale": 100,
+                "card_expected_retrievability": 0.2,
+                "card_minutes_per_day": 0.2,
+                "card_reviews_per_day": 1.0,
+                "card_total_reviews": 5.0,
+                "card_total_lapses": 0.0,
+                "card_total_cost_seconds": 1.0,
+                "card_final_projected_retrievability": 0.6,
+                "observed_retention": 0.6,
+                "deck_expected_memorized": 200.0,
+                "deck_minutes_per_day": 20.0,
+                "deck_reviews_per_day": 1.0,
+                "total_reviews": 5.0,
+                "total_lapses": 0.0,
+                "total_cost_seconds": 1.0,
+                "runtime_s": 0.1,
+                "engine": "vectorized",
+                "fuzz": False,
+                "review_markov_transition": False,
+            },
+            {
+                "environment": "fsrs6",
+                "scheduler": "candidate",
+                "scheduler_spec": "candidate",
+                "desired_retention": None,
+                "fixed_interval": None,
+                "goal_cost_weight": 1.0,
+                "seed": 1,
+                "days": 5,
+                "particles": 16,
+                "deck_scale": 100,
+                "card_expected_retrievability": 0.1,
+                "card_minutes_per_day": 0.08,
+                "card_reviews_per_day": 1.0,
+                "card_total_reviews": 5.0,
+                "card_total_lapses": 0.0,
+                "card_total_cost_seconds": 1.0,
+                "card_final_projected_retrievability": 0.5,
+                "observed_retention": 0.5,
+                "deck_expected_memorized": 100.0,
+                "deck_minutes_per_day": 8.0,
+                "deck_reviews_per_day": 1.0,
+                "total_reviews": 5.0,
+                "total_lapses": 0.0,
+                "total_cost_seconds": 1.0,
+                "runtime_s": 0.1,
+                "engine": "vectorized",
+                "fuzz": False,
+                "review_markov_transition": False,
+            },
+            {
+                "environment": "fsrs6",
+                "scheduler": "candidate",
+                "scheduler_spec": "candidate",
+                "desired_retention": None,
+                "fixed_interval": None,
+                "goal_cost_weight": 2.0,
+                "seed": 1,
+                "days": 5,
+                "particles": 16,
+                "deck_scale": 100,
+                "card_expected_retrievability": 0.2,
+                "card_minutes_per_day": 0.16,
+                "card_reviews_per_day": 1.0,
+                "card_total_reviews": 5.0,
+                "card_total_lapses": 0.0,
+                "card_total_cost_seconds": 1.0,
+                "card_final_projected_retrievability": 0.6,
+                "observed_retention": 0.6,
+                "deck_expected_memorized": 200.0,
+                "deck_minutes_per_day": 16.0,
+                "deck_reviews_per_day": 1.0,
+                "total_reviews": 5.0,
+                "total_lapses": 0.0,
+                "total_cost_seconds": 1.0,
+                "runtime_s": 0.1,
+                "engine": "vectorized",
+                "fuzz": False,
+                "review_markov_transition": False,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "results.csv"
+            tradeoff._write_csv(path, rows)
+            header = path.read_text(encoding="utf-8").splitlines()[0]
+
+        self.assertIn("review_markov_transition", header)
+        auc_rows = tradeoff._build_regret_auc_rows(rows)
+        candidate = next(
+            row
+            for row in auc_rows
+            if row["baseline_scheduler"] == "fsrs6" and row["scheduler"] == "candidate"
+        )
+        self.assertFalse(candidate["review_markov_transition"])
 
 
 if __name__ == "__main__":

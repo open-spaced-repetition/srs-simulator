@@ -83,6 +83,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         )
         self.assertEqual(config.lambda_grid, (0.0, 0.25, 0.5))
         self.assertEqual(config.simulation.environment, "lstm")
+        self.assertFalse(config.simulation.review_markov_transition)
         self.assertEqual(config.training_policy_search["coefficient_min"], -8.0)
         self.assertEqual(config.baseline.desired_retention_values, (0.9,))
         self.assertEqual(config.to_dict()["baseline"]["scheduler"], "fsrs6")
@@ -94,6 +95,20 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertFalse(config.train_batch_baseline_desired_retention_values)
         self.assertFalse(config.training_batch.enabled)
         self.assertFalse(config.report.enabled)
+
+    def test_loads_review_markov_transition_flag(self) -> None:
+        raw = VALID_CONFIG.replace(
+            "fuzz = false",
+            "fuzz = false\nreview_markov_transition = true",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertTrue(config.simulation.review_markov_transition)
+        self.assertTrue(config.to_dict()["simulation"]["review_markov_transition"])
 
     def test_rejects_overlapping_user_splits(self) -> None:
         raw = VALID_CONFIG.replace("validation = [2, 3]", "validation = [1, 3]")

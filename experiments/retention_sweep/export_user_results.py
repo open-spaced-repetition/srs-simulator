@@ -390,6 +390,7 @@ def main() -> None:
             if csv_mean_retention is not None:
                 metrics["mean_retention"] = csv_mean_retention
 
+        review_markov_value = _normalize_bool(meta.get("review_markov_transition"))
         record: Dict[str, Any] = {"user": user_id, "metrics": metrics}
         if not args.no_config:
             record["config"] = {
@@ -409,6 +410,7 @@ def main() -> None:
                 "cost_limit_minutes": meta.get("cost_limit_minutes"),
                 "seed": meta.get("seed"),
                 "fuzz": bool(meta.get("fuzz")),
+                "review_markov_transition": review_markov_value,
             }
 
         output_records = latest_records.setdefault(output_name, {})

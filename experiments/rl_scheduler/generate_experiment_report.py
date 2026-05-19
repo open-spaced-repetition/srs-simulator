@@ -228,6 +228,7 @@ def render_report_from_summary(
                 "scheduler",
                 "config",
                 "portfolio budget",
+                "review Markov",
                 "baseline DR manifest",
             ],
             _run_rows(summary),
@@ -477,6 +478,7 @@ def _run_metadata(
     training = _mapping(resolved.get("training"))
     portfolio = _mapping(training.get("portfolio"))
     baseline_dr_selection = _mapping(resolved.get("baseline_dr_selection"))
+    simulation = _mapping(resolved.get("simulation"))
     users = _mapping(resolved.get("users"))
     analyze_filters = _mapping(analysis.get("filters"))
     command = _mapping(run_record.get("command")).get("command")
@@ -489,6 +491,9 @@ def _run_metadata(
         ),
         "formal_command": command if isinstance(command, list) else [],
         "seed": resolved.get("seed"),
+        "review_markov_transition": bool(
+            simulation.get("review_markov_transition", False)
+        ),
         "users": list(users.get("train", []))
         if isinstance(users.get("train"), list)
         else [],
@@ -923,6 +928,7 @@ def _run_rows(summary: dict[str, Any]) -> list[list[str]]:
                 f"`{metadata['scheduler']}`",
                 f"`{metadata['config_path']}`",
                 str(metadata["portfolio_budget_text"]),
+                "on" if metadata["review_markov_transition"] else "off",
                 f"`{metadata['baseline_dr_manifest']}`",
             ]
         )

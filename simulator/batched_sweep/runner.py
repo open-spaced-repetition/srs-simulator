@@ -1107,7 +1107,18 @@ def run_batch_core(
                 relearning_rating_prob,
                 state_rating_costs,
                 review_markov_success_weights,
-            ) = load_usage(lane_user_ids, args.button_usage)
+            ) = load_usage(
+                lane_user_ids,
+                args.button_usage,
+                review_markov_transition=getattr(
+                    args, "review_markov_transition", False
+                ),
+            )
+            review_markov_success_weights = (
+                review_markov_success_weights.to(env_ops.device)
+                if review_markov_success_weights is not None
+                else None
+            )
 
             behavior, cost_model = build_behavior_cost(
                 len(lane_user_ids),
@@ -1122,9 +1133,7 @@ def run_batch_core(
                 learning_rating_prob=learning_rating_prob.to(env_ops.device),
                 relearning_rating_prob=relearning_rating_prob.to(env_ops.device),
                 state_rating_costs=state_rating_costs.to(env_ops.device),
-                review_markov_success_weights=review_markov_success_weights.to(
-                    env_ops.device
-                ),
+                review_markov_success_weights=review_markov_success_weights,
                 short_term=short_term_enabled,
             )
             sched_ops = _build_mixed_scheduler_ops(

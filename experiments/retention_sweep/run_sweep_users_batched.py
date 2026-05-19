@@ -30,6 +30,7 @@ from experiments.retention_sweep.cli_utils import (
     add_fuzz_arg,
     add_log_args,
     add_retention_range_args,
+    add_review_markov_transition_arg,
     add_short_term_args,
     add_torch_device_arg,
     add_user_range_args,
@@ -94,6 +95,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser,
     )
     add_button_usage_arg(parser, default_path=DEFAULT_BUTTON_USAGE_PATH)
+    add_review_markov_transition_arg(parser)
     add_benchmark_args(parser)
     parser.add_argument(
         "--fsrs6-adr-policy",
@@ -381,6 +383,7 @@ def _merge_config_args(
         "priority": ("--priority",),
         "scheduler_priority": ("--scheduler-priority",),
         "button_usage": ("--button-usage",),
+        "review_markov_transition": ("--review-markov-transition",),
         "benchmark_result": ("--benchmark-result",),
         "benchmark_partition": ("--benchmark-partition",),
         "srs_benchmark_root": ("--srs-benchmark-root",),

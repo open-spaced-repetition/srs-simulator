@@ -711,6 +711,9 @@ def _write_portfolio_artifacts(
                 "scheduler_weight_source": settings.scheduler_weight_source,
                 "environment": config.simulation.environment,
                 "engine": config.simulation.engine,
+                "review_markov_transition": (
+                    config.simulation.review_markov_transition
+                ),
                 "training_user_ids": [result.job.user_id],
                 "validation_user_ids": list(config.users.validation),
                 "seed": config.seed,

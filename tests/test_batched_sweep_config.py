@@ -166,6 +166,23 @@ class BatchedSweepConfigTests(unittest.TestCase):
         self.assertEqual(config.schedulers, ("fsrs6", "anki_sm2"))
         self.assertEqual(config.args.log_layout, "user")
         self.assertFalse(config.args.diagnostic_csv_logs)
+        self.assertFalse(config.args.review_markov_transition)
+
+    def test_loads_review_markov_transition_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sweep.toml"
+            log_dir = Path(tmp) / "logs"
+            path.write_text(
+                _valid_config(log_dir).replace(
+                    "fuzz = false",
+                    "fuzz = false\nreview_markov_transition = true",
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_batched_sweep_config(path)
+
+        self.assertTrue(config.args.review_markov_transition)
 
     def test_loads_rl_scheduler_experiment_config(self) -> None:
         config = load_batched_sweep_config(
@@ -205,7 +222,7 @@ class BatchedSweepConfigTests(unittest.TestCase):
             / "artifacts"
             / "rl_scheduler"
             / "fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8"
-            / "fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1",
+            / "fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1_markov_off",
         )
         self.assertIsNone(config.args.fsrs6_oracle_stationary_finite_distill_policy)
         self.assertFalse(config.args.no_progress)

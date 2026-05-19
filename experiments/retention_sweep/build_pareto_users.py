@@ -81,6 +81,12 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[
         help="Engine filter passed to build_pareto.py.",
     )
     parser.add_argument(
+        "--review-markov-transition",
+        choices=["on", "off", "any"],
+        default="any",
+        help="Review Markov transition filter passed to build_pareto.py.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -235,6 +241,10 @@ def _merge_config_args(
         cli_args.short_term_source = build_config.short_term_source
     if not has_flag(argv, "--engine"):
         cli_args.engine = build_config.engine
+    if not has_flag(argv, "--review-markov-transition"):
+        cli_args.review_markov_transition = (
+            "on" if experiment.simulation.review_markov_transition else "off"
+        )
     if not has_flag(argv, "--seed"):
         cli_args.seed = experiment.seed
     if not has_flag(argv, "--max-parallel"):
@@ -277,6 +287,8 @@ def _build_command(
         cmd.extend(["--short-term-source", args.short_term_source])
     if args.engine != "any":
         cmd.extend(["--engine", args.engine])
+    if args.review_markov_transition != "any":
+        cmd.extend(["--review-markov-transition", args.review_markov_transition])
     if args.seed is not None:
         cmd.extend(["--seed", str(args.seed)])
     if args.run_id is not None:

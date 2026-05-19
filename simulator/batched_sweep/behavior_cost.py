@@ -10,7 +10,10 @@ from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUse
 
 
 def load_usage(
-    user_ids: list[int], button_usage: Path | None
+    user_ids: list[int],
+    button_usage: Path | None,
+    *,
+    review_markov_transition: bool = False,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -19,7 +22,7 @@ def load_usage(
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
-    torch.Tensor,
+    torch.Tensor | None,
 ]:
     learn_costs = []
     review_costs = []
@@ -43,11 +46,12 @@ def load_usage(
         learning_rating_prob.append(usage["learning_rating_prob"])
         relearning_rating_prob.append(usage["relearning_rating_prob"])
         state_rating_costs.append(usage["state_rating_costs"])
-        markov_success.append(
-            _normalize_markov_success(
-                usage.get("long_term_transition"), usage["review_rating_prob"]
+        if review_markov_transition:
+            markov_success.append(
+                _normalize_markov_success(
+                    usage.get("long_term_transition"), usage["review_rating_prob"]
+                )
             )
-        )
     return (
         torch.tensor(learn_costs, dtype=torch.float32),
         torch.tensor(review_costs, dtype=torch.float32),
@@ -56,7 +60,11 @@ def load_usage(
         torch.tensor(learning_rating_prob, dtype=torch.float32),
         torch.tensor(relearning_rating_prob, dtype=torch.float32),
         torch.tensor(state_rating_costs, dtype=torch.float32),
-        torch.tensor(markov_success, dtype=torch.float32),
+        (
+            torch.tensor(markov_success, dtype=torch.float32)
+            if review_markov_transition
+            else None
+        ),
     )
 
 
@@ -101,7 +109,7 @@ def build_behavior_cost(
     learning_rating_prob: torch.Tensor,
     relearning_rating_prob: torch.Tensor,
     state_rating_costs: torch.Tensor,
-    review_markov_success_weights: torch.Tensor,
+    review_markov_success_weights: torch.Tensor | None,
     short_term: bool,
 ) -> tuple[MultiUserBehavior, MultiUserCost]:
     max_reviews = review_limit if review_limit is not None else deck_size

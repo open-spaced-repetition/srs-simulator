@@ -36,6 +36,7 @@ class TradeoffRunConfig:
     deck_scale: int
     target_retentions: tuple[float, ...]
     button_usage: Path | None
+    review_markov_transition: bool
     torch_device: str | None
     scheduler_priority: str
     benchmark_partition: str
@@ -202,6 +203,10 @@ def load_config(path: Path) -> TradeoffRunConfig:
             "experiment.button_usage",
             base_path=base_path,
         ),
+        review_markov_transition=_bool(
+            experiment.get("review_markov_transition", False),
+            "experiment.review_markov_transition",
+        ),
         torch_device=_optional_str(
             experiment.get("torch_device"), "experiment.torch_device"
         ),
@@ -329,6 +334,8 @@ def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
     ]
     if config.button_usage is not None:
         command.extend(["--button-usage", str(config.button_usage)])
+    if config.review_markov_transition:
+        command.append("--review-markov-transition")
     if config.torch_device is not None:
         command.extend(["--torch-device", config.torch_device])
     if config.srs_benchmark_root is not None:
@@ -416,6 +423,7 @@ def _summary_rows(regret_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, An
         rows.append(
             {
                 "user_id": int(str(row["user_id"])),
+                "review_markov_transition": row.get("review_markov_transition"),
                 "scheduler": scheduler,
                 "baseline_scheduler": row["baseline_scheduler"],
                 "same_target_time_saved_auc": row.get("same_target_time_saved_auc"),
@@ -429,7 +437,14 @@ def _summary_rows(regret_rows: Sequence[Mapping[str, Any]]) -> list[dict[str, An
                 "scheduler_frontier_count": row.get("scheduler_frontier_count"),
             }
         )
-    return sorted(rows, key=lambda item: (item["scheduler"], item["user_id"]))
+    return sorted(
+        rows,
+        key=lambda item: (
+            item["scheduler"],
+            str(item.get("review_markov_transition", "")),
+            item["user_id"],
+        ),
+    )
 
 
 def _mean(values: Sequence[float]) -> float | None:
@@ -442,10 +457,20 @@ def _mean(values: Sequence[float]) -> float | None:
 def _mean_summary_rows(
     summary_rows: Sequence[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
-    schedulers = sorted({str(row["scheduler"]) for row in summary_rows})
+    keys = sorted(
+        {
+            (str(row["scheduler"]), str(row.get("review_markov_transition", "")))
+            for row in summary_rows
+        }
+    )
     output: list[dict[str, Any]] = []
-    for scheduler in schedulers:
-        rows = [row for row in summary_rows if row["scheduler"] == scheduler]
+    for scheduler, review_markov_transition in keys:
+        rows = [
+            row
+            for row in summary_rows
+            if row["scheduler"] == scheduler
+            and str(row.get("review_markov_transition", "")) == review_markov_transition
+        ]
         time_saved = [
             value
             for row in rows
@@ -469,6 +494,9 @@ def _mean_summary_rows(
         output.append(
             {
                 "scheduler": scheduler,
+                "review_markov_transition": rows[0].get("review_markov_transition")
+                if rows
+                else review_markov_transition,
                 "user_count": len(rows),
                 "covered_user_count": len(time_saved),
                 "positive_user_count": sum(1 for value in time_saved if value > 0.0),

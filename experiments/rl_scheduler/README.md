@@ -49,8 +49,8 @@ experiment should continue.
 
 - **TOML profile**: the reproducible experiment configuration. User splits,
   seed, days, deck size, limits, engine, environment, short-term mode, fuzz,
-  GPU guard, training settings, sweep, Pareto build, and Pareto analysis
-  settings belong in TOML.
+  review Markov transition mode, GPU guard, training settings, sweep, Pareto
+  build, and Pareto analysis settings belong in TOML.
 - **run id**: the stable identifier for one run. Stage outputs are written to
   `<output_root>/<run_id>/<stage>/`. Use a fixed run id when continuing or
   reproducing a run.
@@ -62,7 +62,9 @@ experiment should continue.
   logs from `baseline.log_root` into the current run. When
   `[baseline_dr_selection].manifest` is configured, staging uses the selected
   per-user DR values from that manifest instead of a global DR grid. Formal
-  workflows should not silently rerun baselines as a fallback.
+  workflows should not silently rerun baselines as a fallback. The configured
+  `simulation.review_markov_transition` value is part of the required log
+  metadata match.
 - **train-overfit**: train a separate policy on the training user and compare it
   against the training-user baseline. If a policy family cannot beat baseline
   even when overfitting is allowed, stop that family before generalization
@@ -70,7 +72,8 @@ experiment should continue.
   sweeps, may omit this stage because they do not produce scheduler artifacts.
 - **scheduler artifact**: the trained policy package. It contains at least
   `metadata.json` and a policy/checkpoint file. Metadata records scheduler name,
-  training users, seed, lambda, baseline DR, config snapshot, and policy path.
+  training users, seed, lambda, baseline DR, review Markov transition mode,
+  config snapshot, and policy path.
 - **sweep**: external simulation of artifacts and baselines. The current
   batched sweep can batch `(user, scheduler, scheduler parameter)` lanes in one
   simulator call, such as several FSRS-6 desired-retention values plus several
@@ -369,6 +372,9 @@ Formal experiments must satisfy these rules:
   rely on shell history for parameters.
 - Record `seed`, `users`, `simulation`, `gpu_guard`, `performance`, `training`,
   `sweep`, `build_pareto`, and `analyze_pareto` settings in TOML.
+- Record `simulation.review_markov_transition` explicitly for formal reruns.
+  The default is `false`, which keeps `button_usage` marginal probabilities and
+  costs but ignores `long_term_transition`.
 - Treat `[sweep].log_dir` and `[build_pareto].log_dir` as standalone
   retention-sweep defaults. The formal runner uses the rest of those tables but
   isolates outputs under the current run root.
@@ -454,7 +460,8 @@ scheduler. Do not read hidden memory state from the environment.
 
 - Before running: `dry-run` and `preflight` pass.
 - Baseline: `stage-baseline` matches exact engine, environment, scheduler, user,
-  and DR metadata; portfolio profiles match the manifest-selected DRs per user.
+  DR, and review Markov metadata; portfolio profiles match the
+  manifest-selected DRs per user.
 - Training: every required user, lambda, and baseline DR combination has an
   artifact or an explicit failure. Portfolio trainers are per-user and
   lambda-less.

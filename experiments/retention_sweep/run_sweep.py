@@ -34,6 +34,7 @@ from experiments.retention_sweep.cli_utils import (
     add_fuzz_arg,
     add_log_args,
     add_retention_range_args,
+    add_review_markov_transition_arg,
     add_short_term_args,
     parse_csv,
 )
@@ -78,6 +79,7 @@ def parse_args() -> argparse.Namespace:
         srs_benchmark_help="Path to the srs-benchmark repo (used for LSTM weights).",
     )
     add_button_usage_arg(parser, default_path=DEFAULT_BUTTON_USAGE_PATH)
+    add_review_markov_transition_arg(parser)
     parser.add_argument(
         "--sspmmc-policy",
         type=Path,
@@ -347,7 +349,11 @@ def _run_once(
         review_rating_prob=usage["review_rating_prob"],
         learning_rating_prob=usage["learning_rating_prob"],
         relearning_rating_prob=usage["relearning_rating_prob"],
-        review_markov_transition=usage.get("long_term_transition"),
+        review_markov_transition=(
+            usage.get("long_term_transition")
+            if getattr(run_args, "review_markov_transition", False)
+            else None
+        ),
     )
     if short_term_source:
         state_rating_costs = usage["state_rating_costs"]
