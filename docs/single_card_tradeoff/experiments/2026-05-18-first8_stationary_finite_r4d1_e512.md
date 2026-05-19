@@ -16,7 +16,7 @@ Source artifacts:
 - `first8_r4d1_e512_distill_train_summary`: `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/train_summary.csv`
 - `first8_r4d1_e512_distill_gpu_monitor_summary`: `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_r4d1_e512_uniform_table_supervision_fsrs6_baseline_gpu/gpu_monitor/summary.json`
 - `first8_r4d1_e512_exact_vs_distill_mean_summary`: `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/mean_summary.csv`
-- `first8_r4d1_e512_exact_vs_distill_regret_auc`: `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/regret_auc.csv`
+- `first8_r4d1_e512_exact_vs_distill_time_saved_auc`: `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/regret_auc.csv`
 - `first8_r4d1_e512_exact_vs_distill_gpu_monitor_summary`: `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users_r4d1_e512/gpu_monitor/summary.json`
 
 ## Results
@@ -25,33 +25,33 @@ The validation trains eight independent 132-parameter students (1,056 total trai
 
 ### Mean vs fsrs6
 
-| model | params/user | epochs | mean coverage | mean time regret AUC | mean relative regret | mean agreement | mean CE |
+| model | params/user | epochs | mean coverage | mean same-target time saved AUC | mean relative time saved | mean agreement | mean CE |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| residual:8:2 | 476 | 128 | 97.55% | -4.9501 | -12.36% | 72.39% | 0.69721 |
-| residual:4:1 | 132 | 512 | 95.52% | -3.9894 | -10.67% | 68.48% | 0.81207 |
-| delta r4d1 - r8d2 | -344 | +384 | -2.04% | +0.9607 | +1.68% | -3.92% | +0.11486 |
+| residual:8:2 | 476 | 128 | 97.55% | 4.9501 | 12.36% | 72.39% | 0.69721 |
+| residual:4:1 | 132 | 512 | 95.52% | 3.9894 | 10.67% | 68.48% | 0.81207 |
+| delta r4d1 - r8d2 | -344 | +384 | -2.04% | -0.9607 | -1.68% | -3.92% | +0.11486 |
 
 ### Per-user deltas
 
-| user | r4d1 coverage | r4d1 relative regret | coverage delta vs 476 | relative regret delta vs 476 |
+| user | r4d1 coverage | r4d1 relative time saved | coverage delta vs 476 | relative time saved delta vs 476 |
 | --- | --- | --- | --- | --- |
-| 1 | 90.54% | -5.34% | -4.42% | +3.69% |
-| 2 | 95.87% | -15.39% | -0.31% | -0.08% |
-| 3 | 99.92% | -11.24% | -0.00% | +0.00% |
-| 4 | 90.61% | -14.12% | -0.28% | +5.24% |
-| 5 | 87.23% | -13.75% | -11.25% | +2.88% |
-| 6 | 99.99% | -13.58% | +0.00% | +0.70% |
-| 7 | 100.00% | -6.88% | +0.00% | +0.98% |
-| 8 | 99.96% | -5.09% | -0.03% | +0.06% |
+| 1 | 90.54% | 5.34% | -4.42% | -3.69% |
+| 2 | 95.87% | 15.39% | -0.31% | +0.08% |
+| 3 | 99.92% | 11.24% | -0.00% | -0.00% |
+| 4 | 90.61% | 14.12% | -0.28% | -5.24% |
+| 5 | 87.23% | 13.75% | -11.25% | -2.88% |
+| 6 | 99.99% | 13.58% | +0.00% | -0.70% |
+| 7 | 100.00% | 6.88% | +0.00% | -0.98% |
+| 8 | 99.96% | 5.09% | -0.03% | -0.06% |
 
 ### Exact-vs-distill check
 
-| scheduler | mean coverage vs fsrs6 | mean time regret AUC vs fsrs6 | mean relative regret vs fsrs6 |
+| scheduler | mean coverage vs fsrs6 | mean same-target time saved AUC vs fsrs6 | mean relative time saved vs fsrs6 |
 | --- | --- | --- | --- |
-| fsrs6_oracle_stationary_finite | 97.91% | -3.2265 | -9.28% |
-| fsrs6_oracle_stationary_finite_distill_per_user | 95.52% | -3.9894 | -10.67% |
+| fsrs6_oracle_stationary_finite | 97.91% | 3.2265 | 9.28% |
+| fsrs6_oracle_stationary_finite_distill_per_user | 95.52% | 3.9894 | 10.67% |
 
-On the exact-teacher shared span, `residual:4:1` has -0.4721 time regret AUC and -0.91% relative regret at 97.27% coverage.
+On the exact-teacher shared span, `residual:4:1` has 0.4721 same-target time saved AUC and 0.91% relative time saved at 97.27% coverage.
 
 ### GPU monitor
 
@@ -71,7 +71,7 @@ The TOML profile records the command and expected outputs used to reproduce this
 
 ## Conclusion
 
-`residual:4:1` at 512 epochs does not validate as a drop-in replacement for the first-eight per-user default. It cuts parameters from 476 to 132 per user, but mean coverage changes by -2.04 points and mean relative regret changes by +1.68 points versus the 476-parameter baseline. The largest coverage loss is user 5, where the change is -11.25 points. Treat the 132-parameter result as promising for the single default-user sweep, but not yet robust across users.
+`residual:4:1` at 512 epochs does not validate as a drop-in replacement for the first-eight per-user default. It cuts parameters from 476 to 132 per user, but mean coverage changes by -2.04 points and mean relative time saved changes by -1.68 points versus the 476-parameter baseline. The largest coverage loss is user 5, where the change is -11.25 points. Treat the 132-parameter result as promising for the single default-user sweep, but not yet robust across users.
 
 ## Artifacts
 

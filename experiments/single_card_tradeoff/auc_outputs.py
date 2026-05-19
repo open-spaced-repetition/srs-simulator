@@ -9,8 +9,8 @@ from typing import Any
 SINGLE_SCHEDULER_AUC_FIELDS = [
     "environment",
     "span_coverage_percent",
-    "time_regret_auc",
-    "relative_regret_auc_percent",
+    "same_target_time_saved_auc",
+    "relative_same_target_time_saved_auc_percent",
     "covered_target_count",
     "target_count",
 ]
@@ -19,8 +19,8 @@ MULTI_SCHEDULER_AUC_FIELDS = [
     "environment",
     "scheduler",
     "span_coverage_percent",
-    "time_regret_auc",
-    "relative_regret_auc_percent",
+    "same_target_time_saved_auc",
+    "relative_same_target_time_saved_auc_percent",
     "covered_target_count",
     "target_count",
 ]
@@ -30,9 +30,9 @@ DETAILED_AUC_FIELDS = [
     "baseline_scheduler",
     "scheduler",
     "span_coverage_percent",
-    "time_regret_auc",
+    "same_target_time_saved_auc",
     "baseline_time_auc",
-    "relative_regret_auc_percent",
+    "relative_same_target_time_saved_auc_percent",
     "covered_target_count",
     "target_count",
 ]
@@ -41,8 +41,8 @@ MEAN_AUC_FIELDS = [
     "scheduler",
     "user_count",
     "mean_span_coverage_percent",
-    "mean_time_regret_auc",
-    "mean_relative_regret_auc_percent",
+    "mean_same_target_time_saved_auc",
+    "mean_relative_same_target_time_saved_auc_percent",
     "covered_target_count_sum",
     "target_count_sum",
 ]
@@ -83,7 +83,7 @@ def write_auc_summary(
         writer = csv.DictWriter(fh, fieldnames=list(fieldnames))
         writer.writeheader()
         for row in selected:
-            writer.writerow({field: row[field] for field in fieldnames})
+            writer.writerow({field: _metric_value(row, field) for field in fieldnames})
 
 
 def build_mean_auc_rows(
@@ -108,9 +108,11 @@ def build_mean_auc_rows(
                 "scheduler": scheduler,
                 "user_count": len(selected),
                 "mean_span_coverage_percent": _mean(selected, "span_coverage_percent"),
-                "mean_time_regret_auc": _mean(selected, "time_regret_auc"),
-                "mean_relative_regret_auc_percent": _mean(
-                    selected, "relative_regret_auc_percent"
+                "mean_same_target_time_saved_auc": _mean(
+                    selected, "same_target_time_saved_auc"
+                ),
+                "mean_relative_same_target_time_saved_auc_percent": _mean(
+                    selected, "relative_same_target_time_saved_auc_percent"
                 ),
                 "covered_target_count_sum": sum(
                     int(row["covered_target_count"]) for row in selected
@@ -151,10 +153,35 @@ def write_mean_auc_summary(
 
 def _mean(rows: Sequence[Mapping[str, Any]], key: str) -> float | None:
     values = [
-        float(row[key])
+        float(value)
         for row in rows
-        if row.get(key) is not None and str(row[key]) != ""
+        if (value := _metric_value(row, key)) is not None and str(value) != ""
     ]
     if not values:
         return None
     return sum(values) / float(len(values))
+
+
+def _metric_value(row: Mapping[str, Any], key: str) -> Any:
+    if key in row:
+        return row[key]
+    legacy_map: dict[str, tuple[str, float]] = {
+        "same_target_time_saved_auc": ("time_regret_auc", -1.0),
+        "relative_same_target_time_saved_auc_percent": (
+            "relative_regret_auc_percent",
+            -1.0,
+        ),
+        "mean_same_target_time_saved_auc": ("mean_time_regret_auc", -1.0),
+        "mean_relative_same_target_time_saved_auc_percent": (
+            "mean_relative_regret_auc_percent",
+            -1.0,
+        ),
+    }
+    legacy = legacy_map.get(key)
+    if legacy is None:
+        return None
+    legacy_key, sign = legacy
+    value = row.get(legacy_key)
+    if value is None or value == "":
+        return value
+    return sign * float(value)

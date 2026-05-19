@@ -84,7 +84,7 @@ experiment should continue.
   run root so staged baselines and run-local sweep outputs are compared without
   stale shared retention-sweep logs. `analyze-pareto` uses scheduler-only HV
   delta, HV delta / baseline HV, per-user HV delta five-number summaries, and
-  coverage-aware budget-memory gain AUC plus memory-target regret AUC over the
+  coverage-aware same-budget memory lift AUC plus same-target time saved AUC over the
   shared covered interval of linearly interpolated scheduler Pareto frontiers as
   primary Pareto evidence.
   Unweighted policy-point averages of memorized cards, time, and efficiency are

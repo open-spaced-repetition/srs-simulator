@@ -349,6 +349,20 @@ def _stdev(values: list[float]) -> float:
     return statistics.stdev(values) if len(values) > 1 else 0.0
 
 
+def _metric_value(row: dict[str, str], key: str) -> float:
+    if key in row and row[key] != "":
+        return float(row[key])
+    legacy_map = {
+        "same_target_time_saved_auc": ("time_regret_auc", -1.0),
+        "relative_same_target_time_saved_auc_percent": (
+            "relative_regret_auc_percent",
+            -1.0,
+        ),
+    }
+    legacy_key, sign = legacy_map[key]
+    return sign * float(row[legacy_key])
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as f:
@@ -365,9 +379,10 @@ def _build_summary_rows(seed_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     summary_rows: list[dict[str, Any]] = []
     for variant_rows in by_variant.values():
         first = variant_rows[0]
-        time_values = [float(row["time_regret_auc"]) for row in variant_rows]
+        time_values = [float(row["same_target_time_saved_auc"]) for row in variant_rows]
         relative_values = [
-            float(row["relative_regret_auc_percent"]) for row in variant_rows
+            float(row["relative_same_target_time_saved_auc_percent"])
+            for row in variant_rows
         ]
         coverage_values = [float(row["span_coverage_percent"]) for row in variant_rows]
         covered_counts = ",".join(
@@ -396,10 +411,14 @@ def _build_summary_rows(seed_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                 ],
                 "eval_teacher_action_agreement": first["eval_teacher_action_agreement"],
                 "seed_count": len(variant_rows),
-                "time_regret_auc_mean": _mean(time_values),
-                "time_regret_auc_std": _stdev(time_values),
-                "relative_regret_auc_percent_mean": _mean(relative_values),
-                "relative_regret_auc_percent_std": _stdev(relative_values),
+                "same_target_time_saved_auc_mean": _mean(time_values),
+                "same_target_time_saved_auc_std": _stdev(time_values),
+                "relative_same_target_time_saved_auc_percent_mean": _mean(
+                    relative_values
+                ),
+                "relative_same_target_time_saved_auc_percent_std": _stdev(
+                    relative_values
+                ),
                 "span_coverage_percent_mean": _mean(coverage_values),
                 "span_coverage_percent_std": _stdev(coverage_values),
                 "covered_target_count_values": covered_counts,
@@ -469,9 +488,14 @@ def main() -> None:
                     ],
                     "seed": seed,
                     "span_coverage_percent": float(row["span_coverage_percent"]),
-                    "time_regret_auc": float(row["time_regret_auc"]),
-                    "relative_regret_auc_percent": float(
-                        row["relative_regret_auc_percent"]
+                    "same_target_time_saved_auc": float(
+                        _metric_value(row, "same_target_time_saved_auc")
+                    ),
+                    "relative_same_target_time_saved_auc_percent": float(
+                        _metric_value(
+                            row,
+                            "relative_same_target_time_saved_auc_percent",
+                        )
                     ),
                     "covered_target_count": int(row["covered_target_count"]),
                     "target_count": int(row["target_count"]),
@@ -495,8 +519,8 @@ def main() -> None:
         "eval_teacher_action_agreement",
         "seed",
         "span_coverage_percent",
-        "time_regret_auc",
-        "relative_regret_auc_percent",
+        "same_target_time_saved_auc",
+        "relative_same_target_time_saved_auc_percent",
         "covered_target_count",
         "target_count",
         "auc_path",
@@ -516,10 +540,10 @@ def main() -> None:
         "train_teacher_action_agreement",
         "eval_teacher_action_agreement",
         "seed_count",
-        "time_regret_auc_mean",
-        "time_regret_auc_std",
-        "relative_regret_auc_percent_mean",
-        "relative_regret_auc_percent_std",
+        "same_target_time_saved_auc_mean",
+        "same_target_time_saved_auc_std",
+        "relative_same_target_time_saved_auc_percent_mean",
+        "relative_same_target_time_saved_auc_percent_std",
         "span_coverage_percent_mean",
         "span_coverage_percent_std",
         "covered_target_count_values",

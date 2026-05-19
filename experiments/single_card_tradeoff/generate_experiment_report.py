@@ -606,7 +606,7 @@ def build_report_summary(
             (
                 "The 476-parameter per-user stationary finite distill remains the "
                 "best compact first-eight-user candidate in these artifacts: it "
-                "beats fsrs6 on mean relative regret while preserving about 98% "
+                "beats fsrs6 on mean relative time saved while preserving about 98% "
                 "coverage."
             ),
             (
@@ -679,16 +679,16 @@ def render_index_report(summary: Mapping[str, Any]) -> str:
             f"`{published['first8_stationary_finite_distill']}`",
             (
                 "Eight independent 476-parameter students average "
-                f"{format_percent(first8['mean_relative_regret_auc_percent'])} "
-                "relative regret vs `fsrs6`."
+                f"{format_percent(first8['mean_relative_same_target_time_saved_auc_percent'])} "
+                "relative time saved vs `fsrs6`."
             ),
         ],
         [
             "first-eight exact vs distill",
             f"`{published['first8_exact_vs_distill']}`",
             (
-                "Direct distill-vs-exact relative regret is "
-                f"{format_percent(distill_vs_exact['mean_relative_regret_auc_percent'])} "
+                "Direct distill-vs-exact relative time saved is "
+                f"{format_percent(distill_vs_exact['mean_relative_same_target_time_saved_auc_percent'])} "
                 "over "
                 f"{format_percent(distill_vs_exact['mean_span_coverage_percent'])} "
                 "shared coverage."
@@ -699,8 +699,8 @@ def render_index_report(summary: Mapping[str, Any]) -> str:
             f"`{published['first8_stationary_finite_r4d1_e512']}`",
             (
                 "The 132-parameter per-user student reaches "
-                f"{format_percent(first8_r4d1['mean_relative_regret_auc_percent'])} "
-                "relative regret at "
+                f"{format_percent(first8_r4d1['mean_relative_same_target_time_saved_auc_percent'])} "
+                "relative time saved at "
                 f"{format_percent(first8_r4d1['mean_span_coverage_percent'])} "
                 "coverage vs `fsrs6`."
             ),
@@ -831,16 +831,16 @@ def render_default_no_sub05_tradeoff_report(summary: Mapping[str, Any]) -> str:
             [
                 "scheduler",
                 "params",
-                "time_regret_auc",
-                "relative_regret_auc_percent",
+                "same_target_time_saved_auc",
+                "relative_same_target_time_saved_auc_percent",
                 "coverage",
             ],
             [
                 [
                     row["scheduler"],
                     format_int(row.get("params")),
-                    format_float(row["time_regret_auc"], digits=4),
-                    format_percent(row["relative_regret_auc_percent"]),
+                    format_float(row["same_target_time_saved_auc"], digits=4),
+                    format_percent(row["relative_same_target_time_saved_auc_percent"]),
                     format_percent(row["span_coverage_percent"]),
                 ]
                 for row in summary["default_fsrs6_comparison"]
@@ -854,15 +854,15 @@ def render_default_no_sub05_tradeoff_report(summary: Mapping[str, Any]) -> str:
         markdown_table(
             [
                 "scheduler",
-                "time_regret_auc",
-                "relative_regret_auc_percent",
+                "same_target_time_saved_auc",
+                "relative_same_target_time_saved_auc_percent",
                 "coverage",
             ],
             [
                 [
                     row["scheduler"],
-                    format_float(row["time_regret_auc"], digits=4),
-                    format_percent(row["relative_regret_auc_percent"]),
+                    format_float(row["same_target_time_saved_auc"], digits=4),
+                    format_percent(row["relative_same_target_time_saved_auc_percent"]),
                     format_percent(row["span_coverage_percent"]),
                 ]
                 for row in summary["default_direct_comparisons"]
@@ -938,12 +938,14 @@ def render_first8_stationary_finite_distill_report(
                     format_percent(first8["mean_span_coverage_percent"]),
                 ],
                 [
-                    "mean time regret AUC",
-                    format_float(first8["mean_time_regret_auc"], digits=4),
+                    "mean same-target time saved AUC",
+                    format_float(first8["mean_same_target_time_saved_auc"], digits=4),
                 ],
                 [
-                    "mean relative regret AUC",
-                    format_percent(first8["mean_relative_regret_auc_percent"]),
+                    "mean relative time saved AUC",
+                    format_percent(
+                        first8["mean_relative_same_target_time_saved_auc_percent"]
+                    ),
                 ],
                 ["teacher_s", format_float(first8["teacher_runtime_s"], digits=2)],
                 ["train_s", format_float(first8["train_runtime_s"], digits=2)],
@@ -975,7 +977,7 @@ def render_first8_stationary_finite_distill_report(
     lines.append(
         "Uniform exact-table supervision fixed the high-cost interpolation failure "
         "without adding teacher cost weights. The current first-eight artifact "
-        "keeps about 98% coverage and improves mean relative regret versus "
+        "keeps about 98% coverage and improves mean relative time saved versus "
         "`fsrs6`."
     )
     lines.append("")
@@ -1004,7 +1006,7 @@ def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
     lines.append("")
     lines.append(
         "Environment `fsrs6`, users 1 through 8. The exact and distill policies "
-        "are both evaluated against `fsrs6`; a direct regret row also compares "
+        "are both evaluated against `fsrs6`; a direct same-target time saved row also compares "
         "the distill to the exact stationary finite teacher on their shared "
         "frontier span."
     )
@@ -1028,15 +1030,17 @@ def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
         markdown_table(
             [
                 "scheduler",
-                "mean time regret AUC vs fsrs6",
-                "mean relative regret vs fsrs6",
+                "mean same-target time saved AUC vs fsrs6",
+                "mean relative time saved vs fsrs6",
                 "mean coverage vs fsrs6",
             ],
             [
                 [
                     row["scheduler"],
-                    format_float(row["mean_time_regret_auc"], digits=4),
-                    format_percent(row["mean_relative_regret_auc_percent"]),
+                    format_float(row["mean_same_target_time_saved_auc"], digits=4),
+                    format_percent(
+                        row["mean_relative_same_target_time_saved_auc_percent"]
+                    ),
                     format_percent(row["mean_span_coverage_percent"]),
                 ]
                 for row in exact["vs_fsrs6"]
@@ -1046,10 +1050,10 @@ def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
     lines.append("")
     lines.append(
         "On the exact-teacher shared span, distill has "
-        f"{format_float(exact['distill_vs_exact']['mean_time_regret_auc'], digits=4)} "
-        "deck-minutes/day time regret AUC and "
-        f"{format_percent(exact['distill_vs_exact']['mean_relative_regret_auc_percent'])} "
-        "relative regret at "
+        f"{format_float(exact['distill_vs_exact']['mean_same_target_time_saved_auc'], digits=4)} "
+        "deck-minutes/day same-target time saved AUC and "
+        f"{format_percent(exact['distill_vs_exact']['mean_relative_same_target_time_saved_auc_percent'])} "
+        "relative time saved at "
         f"{format_percent(exact['distill_vs_exact']['mean_span_coverage_percent'])} "
         "coverage."
     )
@@ -1063,7 +1067,7 @@ def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
     lines.append("")
     lines.append(
         "The per-user distill is not dominated in this sampled tradeoff "
-        "evaluation: direct distill-vs-exact relative regret is negative on the "
+        "evaluation: direct distill-vs-exact relative time saved is positive on the "
         "shared span. The exact table remains the teacher and diagnostic target; "
         "the distill is the compact deployable approximation."
     )
@@ -1129,8 +1133,8 @@ def render_first8_stationary_finite_r4d1_e512_report(
                 "params/user",
                 "epochs",
                 "mean coverage",
-                "mean time regret AUC",
-                "mean relative regret",
+                "mean same-target time saved AUC",
+                "mean relative time saved",
                 "mean agreement",
                 "mean CE",
             ],
@@ -1144,8 +1148,12 @@ def render_first8_stationary_finite_r4d1_e512_report(
                     ),
                     _signed_int_delta(report["epochs"] - baseline["epochs"]),
                     _signed_percent(report["mean_span_coverage_delta_vs_476"]),
-                    _signed_float(report["mean_time_regret_delta_vs_476"], digits=4),
-                    _signed_percent(report["mean_relative_regret_auc_delta_vs_476"]),
+                    _signed_float(
+                        report["mean_same_target_time_saved_delta_vs_476"], digits=4
+                    ),
+                    _signed_percent(
+                        report["mean_relative_same_target_time_saved_auc_delta_vs_476"]
+                    ),
                     _signed_percent(
                         100.0
                         * report["mean_eval_teacher_action_agreement_delta_vs_476"]
@@ -1163,17 +1171,19 @@ def render_first8_stationary_finite_r4d1_e512_report(
             [
                 "user",
                 "r4d1 coverage",
-                "r4d1 relative regret",
+                "r4d1 relative time saved",
                 "coverage delta vs 476",
-                "relative regret delta vs 476",
+                "relative time saved delta vs 476",
             ],
             [
                 [
                     row["user"],
                     format_percent(row["span_coverage_percent"]),
-                    format_percent(row["relative_regret_auc_percent"]),
+                    format_percent(row["relative_same_target_time_saved_auc_percent"]),
                     _signed_percent(row["span_coverage_delta_vs_476"]),
-                    _signed_percent(row["relative_regret_auc_delta_vs_476"]),
+                    _signed_percent(
+                        row["relative_same_target_time_saved_auc_delta_vs_476"]
+                    ),
                 ]
                 for row in report["per_user_rows"]
             ],
@@ -1187,15 +1197,17 @@ def render_first8_stationary_finite_r4d1_e512_report(
             [
                 "scheduler",
                 "mean coverage vs fsrs6",
-                "mean time regret AUC vs fsrs6",
-                "mean relative regret vs fsrs6",
+                "mean same-target time saved AUC vs fsrs6",
+                "mean relative time saved vs fsrs6",
             ],
             [
                 [
                     row["scheduler"],
                     format_percent(row["mean_span_coverage_percent"]),
-                    format_float(row["mean_time_regret_auc"], digits=4),
-                    format_percent(row["mean_relative_regret_auc_percent"]),
+                    format_float(row["mean_same_target_time_saved_auc"], digits=4),
+                    format_percent(
+                        row["mean_relative_same_target_time_saved_auc_percent"]
+                    ),
                 ]
                 for row in exact["vs_fsrs6"]
             ],
@@ -1204,10 +1216,10 @@ def render_first8_stationary_finite_r4d1_e512_report(
     lines.append("")
     lines.append(
         "On the exact-teacher shared span, `residual:4:1` has "
-        f"{format_float(exact['distill_vs_exact']['mean_time_regret_auc'], digits=4)} "
-        "time regret AUC and "
-        f"{format_percent(exact['distill_vs_exact']['mean_relative_regret_auc_percent'])} "
-        "relative regret at "
+        f"{format_float(exact['distill_vs_exact']['mean_same_target_time_saved_auc'], digits=4)} "
+        "same-target time saved AUC and "
+        f"{format_percent(exact['distill_vs_exact']['mean_relative_same_target_time_saved_auc_percent'])} "
+        "relative time saved at "
         f"{format_percent(exact['distill_vs_exact']['mean_span_coverage_percent'])} "
         "coverage."
     )
@@ -1241,8 +1253,8 @@ def render_first8_stationary_finite_r4d1_e512_report(
         f"{format_int(report['params_per_user'])} per user, but mean coverage "
         "changes by "
         f"{_signed_float(report['mean_span_coverage_delta_vs_476'])} points "
-        "and mean relative regret changes by "
-        f"{_signed_float(report['mean_relative_regret_auc_delta_vs_476'])} "
+        "and mean relative time saved changes by "
+        f"{_signed_float(report['mean_relative_same_target_time_saved_auc_delta_vs_476'])} "
         "points versus the 476-parameter baseline. The largest coverage loss "
         "is user 5, where the change is -11.25 points. Treat the 132-parameter "
         "result as promising for the single default-user sweep, but not yet "
@@ -1294,9 +1306,9 @@ def render_low_param_direct_search_report(summary: Mapping[str, Any]) -> str:
                 "run",
                 "params/user",
                 "total params",
-                "vs fsrs6 relative regret",
+                "vs fsrs6 relative time saved",
                 "vs fsrs6 coverage",
-                "vs distill relative regret",
+                "vs distill relative time saved",
                 "vs distill coverage",
             ],
             [
@@ -1357,12 +1369,13 @@ def _artifact_lines(
     missing = summary["input_artifacts"].get("missing") or {}
     lines = ["Source artifacts:"]
     for key in keys:
+        display_key = _display_artifact_key(key)
         if key in available:
-            lines.append(f"- `{key}`: `{available[key]}`")
+            lines.append(f"- `{display_key}`: `{available[key]}`")
         elif key in missing:
-            lines.append(f"- `{key}`: missing `{missing[key]}`")
+            lines.append(f"- `{display_key}`: missing `{missing[key]}`")
         else:
-            lines.append(f"- `{key}`: not configured")
+            lines.append(f"- `{display_key}`: not configured")
     return lines
 
 
@@ -1428,13 +1441,13 @@ def _append_artifacts_footer(
 def _source_lines(input_artifacts: Mapping[str, Any]) -> list[str]:
     lines = ["Available inputs:"]
     for key, path in sorted(input_artifacts["available"].items()):
-        lines.append(f"- `{key}`: `{path}`")
+        lines.append(f"- `{_display_artifact_key(key)}`: `{path}`")
     missing = input_artifacts.get("missing") or {}
     if missing:
         lines.append("")
         lines.append("Missing inputs:")
         for key, path in sorted(missing.items()):
-            lines.append(f"- `{key}`: `{path}`")
+            lines.append(f"- `{_display_artifact_key(key)}`: `{path}`")
     return lines
 
 
@@ -1600,8 +1613,9 @@ def _uvfa_ppo_report(
         ),
         "index_summary": (
             "`uvfa_ppo` reaches "
-            f"{format_percent(current['relative_regret_auc_percent'])} relative "
-            f"regret at {format_percent(current['span_coverage_percent'])} "
+            f"{format_percent(current['relative_same_target_time_saved_auc_percent'])} "
+            "relative time saved at "
+            f"{format_percent(current['span_coverage_percent'])} "
             "coverage, using 27,148 parameters."
         ),
         "evidence": [
@@ -1631,8 +1645,8 @@ def _uvfa_ppo_report(
                 "headers": [
                     "scheduler",
                     "params",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -1693,8 +1707,9 @@ def _recurrent_interval_ppo_report(
         ),
         "index_summary": (
             "`uvfa_ppo_rnn_interval` reaches "
-            f"{format_percent(current['relative_regret_auc_percent'])} relative "
-            f"regret at {format_percent(current['span_coverage_percent'])} "
+            f"{format_percent(current['relative_same_target_time_saved_auc_percent'])} "
+            "relative time saved at "
+            f"{format_percent(current['span_coverage_percent'])} "
             "coverage, but uses 87,559 parameters."
         ),
         "evidence": [
@@ -1726,8 +1741,8 @@ def _recurrent_interval_ppo_report(
                 "headers": [
                     "scheduler",
                     "params",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -1743,8 +1758,8 @@ def _recurrent_interval_ppo_report(
                 "headers": [
                     "variant",
                     "params",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": _ppo_ablation_rows(
@@ -1808,8 +1823,9 @@ def _oracle_distill_report(
         ),
         "index_summary": (
             "`fsrs6_oracle_distill` is the strongest compact default baseline: "
-            f"{format_percent(current['relative_regret_auc_percent'])} relative "
-            f"regret at {format_percent(current['span_coverage_percent'])} coverage."
+            f"{format_percent(current['relative_same_target_time_saved_auc_percent'])} "
+            "relative time saved at "
+            f"{format_percent(current['span_coverage_percent'])} coverage."
         ),
         "evidence": [
             (
@@ -1839,8 +1855,8 @@ def _oracle_distill_report(
                 "headers": [
                     "scheduler",
                     "params",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -1904,7 +1920,7 @@ def _grid_oracle_report(
         ),
         "evidence": [
             (
-                "This report uses the structured regret-AUC output from the "
+                "This report uses the structured same-target time saved AUC output from the "
                 "exact oracle comparison run."
             ),
         ],
@@ -1914,8 +1930,8 @@ def _grid_oracle_report(
                 "title": "Exact policy classes vs fsrs6_default",
                 "headers": [
                     "scheduler",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -1930,7 +1946,7 @@ def _grid_oracle_report(
         "command_names": ("evaluate_grid_oracle_compare",),
         "conclusion": (
             "The stationary finite exact policy gives up a small amount of "
-            "time-regret performance and coverage versus the unrestricted "
+            "time-saved performance and coverage versus the unrestricted "
             "finite-horizon table, but removes the remaining-time policy input."
         ),
     }
@@ -1984,8 +2000,8 @@ def _infinite_stationary_oracles_report(
         "result_paragraphs": [
             (
                 "Directly against `fsrs6_oracle_distill`, infinite distill has "
-                f"{format_percent(infinite_direct['relative_regret_auc_percent'])} "
-                "relative regret over only "
+                f"{format_percent(infinite_direct['relative_same_target_time_saved_auc_percent'])} "
+                "relative time saved over only "
                 f"{format_percent(infinite_direct['span_coverage_percent'])} "
                 "coverage."
             ),
@@ -1995,8 +2011,8 @@ def _infinite_stationary_oracles_report(
                 "title": "Finite-lifecycle evaluation",
                 "headers": [
                     "scheduler",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -2076,12 +2092,12 @@ def _ppo_guide_ablation_report(
         ],
         "tables": [
             {
-                "title": "Clipped regret-AUC ablations",
+                "title": "Clipped same-target time saved AUC ablations",
                 "headers": [
                     "variant",
                     "params",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": _ppo_ablation_rows(
@@ -2138,7 +2154,7 @@ def _ppo_guide_ablation_report(
         "command_names": (),
         "conclusion": (
             "The oracle guide remains the safest PPO recipe in the current "
-            "artifact set. Guide choice changes both regret and frontier span, "
+            "artifact set. Guide choice changes both time saved and frontier span, "
             "so coverage must be reported with AUC."
         ),
     }
@@ -2228,8 +2244,8 @@ def _stationary_finite_model_size_table_row(row: Mapping[str, str]) -> list[str]
         format_percent(100.0 * _float(row, "eval_teacher_action_agreement")),
         _mean_std_percent(
             row,
-            "relative_regret_auc_percent_mean",
-            "relative_regret_auc_percent_std",
+            "relative_same_target_time_saved_auc_percent_mean",
+            "relative_same_target_time_saved_auc_percent_std",
         ),
         _mean_std_percent(
             row,
@@ -2284,9 +2300,9 @@ def _stationary_finite_compression_report(
         model_size_sub216_rows,
         key=lambda row: _float(row, "span_coverage_percent_mean"),
     )
-    best_regret_sub216 = min(
+    best_time_saved_sub216 = max(
         model_size_sub216_rows,
-        key=lambda row: _float(row, "relative_regret_auc_percent_mean"),
+        key=lambda row: _float(row, "relative_same_target_time_saved_auc_percent_mean"),
     )
     residual_floor = next(
         row for row in model_size_rows if row["variant"] == "sf_train5_r6d1_e128"
@@ -2296,7 +2312,7 @@ def _stationary_finite_compression_report(
         "title": "Stationary Finite Compression",
         "question": (
             "How far can the stationary finite distill be compressed while "
-            "preserving relative regret and span coverage?"
+            "preserving relative time saved and span coverage?"
         ),
         "index_summary": (
             "The aligned 128-epoch rerun keeps a strong "
@@ -2324,7 +2340,7 @@ def _stationary_finite_compression_report(
                     "variant",
                     "weights",
                     "params",
-                    "relative_regret",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -2334,8 +2350,8 @@ def _stationary_finite_compression_report(
                         format_int(_int(row, "parameter_count")),
                         _mean_std_percent(
                             row,
-                            "relative_regret_auc_percent_mean",
-                            "relative_regret_auc_percent_std",
+                            "relative_same_target_time_saved_auc_percent_mean",
+                            "relative_same_target_time_saved_auc_percent_std",
                         ),
                         _mean_std_percent(
                             row,
@@ -2354,7 +2370,7 @@ def _stationary_finite_compression_report(
                     "params",
                     "epochs",
                     "agreement",
-                    "relative_regret",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -2371,7 +2387,7 @@ def _stationary_finite_compression_report(
                     "params",
                     "epochs",
                     "agreement",
-                    "relative_regret",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -2386,8 +2402,8 @@ def _stationary_finite_compression_report(
                         ),
                         _mean_std_percent(
                             row,
-                            "relative_regret_auc_percent_mean",
-                            "relative_regret_auc_percent_std",
+                            "relative_same_target_time_saved_auc_percent_mean",
+                            "relative_same_target_time_saved_auc_percent_std",
                         ),
                         _mean_std_percent(
                             row,
@@ -2407,22 +2423,22 @@ def _stationary_finite_compression_report(
             "After aligning epochs and evaluation seeds, the 316-parameter "
             "`residual:8:1` student recovers frontier span and remains competitive "
             "with larger students. The 216-parameter `residual:6:1` student also "
-            "keeps span coverage, but with weaker relative regret in this rerun. "
-            "In the quick sub-216 sweep, the best-regret row is "
-            f"`{best_regret_sub216['arch_label']}` at "
-            f"{format_int(_int(best_regret_sub216, 'parameter_count'))} parameters, "
-            f"{_mean_std_percent(best_regret_sub216, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret, and "
-            f"{_mean_std_percent(best_regret_sub216, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
+            "keeps span coverage, but with weaker relative time saved in this rerun. "
+            "In the quick sub-216 sweep, the best time-saved row is "
+            f"`{best_time_saved_sub216['arch_label']}` at "
+            f"{format_int(_int(best_time_saved_sub216, 'parameter_count'))} parameters, "
+            f"{_mean_std_percent(best_time_saved_sub216, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved, and "
+            f"{_mean_std_percent(best_time_saved_sub216, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
             "coverage. The best coverage row is "
             f"`{best_sub216['arch_label']}` at "
             f"{format_int(_int(best_sub216, 'parameter_count'))} parameters, "
-            f"{_mean_std_percent(best_sub216, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret, and "
+            f"{_mean_std_percent(best_sub216, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved, and "
             f"{_mean_std_percent(best_sub216, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
             "coverage. Both are weaker than "
-            f"{_mean_std_percent(residual_floor, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret and "
+            f"{_mean_std_percent(residual_floor, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved and "
             f"{_mean_std_percent(residual_floor, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
             "coverage for `residual:6:1`. The separate stationary finite epoch "
             "extension report tests whether longer training changes the "
@@ -2448,9 +2464,9 @@ def _stationary_finite_epoch_extension_report(
         "sf_train5_quadratic_e512",
     )
     r3d1_e512 = _find_variant(model_size_sub216_e512_rows, "sf_train5_r3d1_e512")
-    best_long_epoch = min(
+    best_long_epoch = max(
         [*model_size_sub216_e256_rows, *model_size_sub216_e512_rows],
-        key=lambda row: _float(row, "relative_regret_auc_percent_mean"),
+        key=lambda row: _float(row, "relative_same_target_time_saved_auc_percent_mean"),
     )
     epoch_extension_rows = _stationary_finite_epoch_extension_rows(
         [
@@ -2463,12 +2479,12 @@ def _stationary_finite_epoch_extension_report(
         "key": "stationary_finite_epoch_extension",
         "title": "Stationary Finite Epoch Extension",
         "question": (
-            "Can additional distillation epochs recover the relative regret and "
+            "Can additional distillation epochs recover the relative time saved and "
             "span coverage of low-parameter stationary finite students?"
         ),
         "index_summary": (
-            f"`residual:4:1` reaches {_mean_std_percent(r4d1_e512, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret and "
+            f"`residual:4:1` reaches {_mean_std_percent(r4d1_e512, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved and "
             f"{_mean_std_percent(r4d1_e512, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
             "coverage at 512 epochs, but recovery is architecture-dependent."
         ),
@@ -2502,7 +2518,7 @@ def _stationary_finite_epoch_extension_report(
                     "params",
                     "epochs",
                     "agreement",
-                    "relative_regret",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -2518,7 +2534,7 @@ def _stationary_finite_epoch_extension_report(
                     "params",
                     "epochs",
                     "agreement",
-                    "relative_regret",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -2559,26 +2575,26 @@ def _stationary_finite_epoch_extension_report(
             "rerun_stationary_finite_sub216_e512_epoch_extension",
         ),
         "conclusion": (
-            "Increasing epochs can recover low-parameter regret and coverage, "
+            "Increasing epochs can recover low-parameter time saved and coverage, "
             "but not uniformly. `residual:5:1` reaches "
-            f"{_mean_std_percent(r5d1_e256, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret and "
+            f"{_mean_std_percent(r5d1_e256, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved and "
             f"{_mean_std_percent(r5d1_e256, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
-            "coverage at 256 epochs, then loses regret at 512 epochs. "
+            "coverage at 256 epochs, then loses time saved at 512 epochs. "
             "`residual:4:1` needs 512 epochs to reach "
-            f"{_mean_std_percent(r4d1_e512, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret and "
+            f"{_mean_std_percent(r4d1_e512, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved and "
             f"{_mean_std_percent(r4d1_e512, 'span_coverage_percent_mean', 'span_coverage_percent_std')} "
             "coverage, making it the smallest observed candidate that recovers "
             "both metrics in this single-train-seed sweep. The best long-epoch "
-            "regret row is "
+            "time-saved row is "
             f"`{best_long_epoch['arch_label']}` at "
             f"{format_int(_int(best_long_epoch, 'parameter_count'))} parameters, "
-            f"{_mean_std_percent(best_long_epoch, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret, but `mlp:8` is only marginally smaller than the "
+            f"{_mean_std_percent(best_long_epoch, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved, but `mlp:8` is only marginally smaller than the "
             "216-parameter `residual:6:1` baseline. Capacity still matters: "
-            f"`residual:3:1` remains broken at {_mean_std_percent(r3d1_e512, 'relative_regret_auc_percent_mean', 'relative_regret_auc_percent_std')} "
-            "relative regret, and `quadratic` loses coverage at 512 epochs. "
+            f"`residual:3:1` remains broken at {_mean_std_percent(r3d1_e512, 'relative_same_target_time_saved_auc_percent_mean', 'relative_same_target_time_saved_auc_percent_std')} "
+            "relative time saved, and `quadratic` loses coverage at 512 epochs. "
             "The 132-parameter row needs more train seeds and per-user "
             "validation before it should replace the 128-epoch defaults."
         ),
@@ -2665,8 +2681,9 @@ def _interval_oracle_distill_report(
         ),
         "index_summary": (
             "Interval distill reaches "
-            f"{format_percent(distill['relative_regret_auc_percent'])} relative "
-            f"regret at {format_percent(distill['span_coverage_percent'])} "
+            f"{format_percent(distill['relative_same_target_time_saved_auc_percent'])} "
+            "relative time saved at "
+            f"{format_percent(distill['span_coverage_percent'])} "
             "coverage in the rerun comparison."
         ),
         "evidence": [
@@ -2695,8 +2712,8 @@ def _interval_oracle_distill_report(
                 "title": "Interval policies vs fsrs6_default",
                 "headers": [
                     "scheduler",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -2753,8 +2770,9 @@ def _retention_distill_report(
         ),
         "index_summary": (
             "`fsrs6_oracle_retention_distill` reaches "
-            f"{format_percent(current['relative_regret_auc_percent'])} relative "
-            f"regret at {format_percent(current['span_coverage_percent'])} coverage."
+            f"{format_percent(current['relative_same_target_time_saved_auc_percent'])} "
+            "relative time saved at "
+            f"{format_percent(current['span_coverage_percent'])} coverage."
         ),
         "evidence": [
             (
@@ -2784,8 +2802,8 @@ def _retention_distill_report(
                 "headers": [
                     "scheduler",
                     "params",
-                    "time_regret_auc",
-                    "relative_regret",
+                    "same_target_time_saved_auc",
+                    "relative_time_saved",
                     "coverage",
                 ],
                 "rows": [
@@ -3040,11 +3058,15 @@ def _oracle_stationary_finite_cpu_gpu_benchmark_report(
 def _source_refs(source_paths: Mapping[str, Path], *keys: str) -> list[dict[str, str]]:
     return [
         {
-            "key": key,
+            "key": _display_artifact_key(key),
             "path": display_path(source_paths[key]),
         }
         for key in keys
     ]
+
+
+def _display_artifact_key(key: str) -> str:
+    return key.replace("regret_auc", "time_saved_auc")
 
 
 def _device_summary(
@@ -3182,8 +3204,8 @@ def _first8_model_summary_row(label: str, row: Mapping[str, Any]) -> list[str]:
         format_int(row["params_per_user"]),
         format_int(row["epochs"]),
         format_percent(row["mean_span_coverage_percent"]),
-        format_float(row["mean_time_regret_auc"], digits=4),
-        format_percent(row["mean_relative_regret_auc_percent"]),
+        format_float(row["mean_same_target_time_saved_auc"], digits=4),
+        format_percent(row["mean_relative_same_target_time_saved_auc_percent"]),
         format_percent(100.0 * float(row["mean_eval_teacher_action_agreement"])),
         format_float(row["mean_final_ce_loss"], digits=5),
     ]
@@ -3242,8 +3264,8 @@ def _regret_table_row(
     return [
         scheduler,
         format_int(params),
-        format_float(metrics["time_regret_auc"], digits=4),
-        format_percent(metrics["relative_regret_auc_percent"]),
+        format_float(metrics["same_target_time_saved_auc"], digits=4),
+        format_percent(metrics["relative_same_target_time_saved_auc_percent"]),
         format_percent(metrics["span_coverage_percent"]),
     ]
 
@@ -3254,8 +3276,8 @@ def _regret_table_row_no_params(
 ) -> list[str]:
     return [
         scheduler,
-        format_float(metrics["time_regret_auc"], digits=4),
-        format_percent(metrics["relative_regret_auc_percent"]),
+        format_float(metrics["same_target_time_saved_auc"], digits=4),
+        format_percent(metrics["relative_same_target_time_saved_auc_percent"]),
         format_percent(metrics["span_coverage_percent"]),
     ]
 
@@ -3296,8 +3318,8 @@ def _ppo_ablation_rows(
             [
                 label,
                 format_int(PARAM_COUNTS[method]),
-                format_float(metrics["time_regret_auc"], digits=4),
-                format_percent(metrics["relative_regret_auc_percent"]),
+                format_float(metrics["same_target_time_saved_auc"], digits=4),
+                format_percent(metrics["relative_same_target_time_saved_auc_percent"]),
                 format_percent(metrics["span_coverage_percent"]),
             ]
         )
@@ -3612,9 +3634,11 @@ def _first8_distill_summary(
         "params_per_user": _int(train_row, "params_per_user"),
         "ensemble_trainable_params": _int(train_row, "ensemble_trainable_params"),
         "mean_span_coverage_percent": _mean(summary_rows, "span_coverage_percent"),
-        "mean_time_regret_auc": _mean(summary_rows, "time_regret_auc"),
-        "mean_relative_regret_auc_percent": _mean(
-            summary_rows, "relative_regret_auc_percent"
+        "mean_same_target_time_saved_auc": _mean(
+            summary_rows, "same_target_time_saved_auc"
+        ),
+        "mean_relative_same_target_time_saved_auc_percent": _mean(
+            summary_rows, "relative_same_target_time_saved_auc_percent"
         ),
         "teacher_runtime_s": _float(train_row, "teacher_runtime_s"),
         "train_runtime_s": _float(train_row, "train_runtime_s"),
@@ -3639,9 +3663,11 @@ def _first8_exact_vs_distill_summary(
         {
             "scheduler": str(row["scheduler"]),
             "mean_span_coverage_percent": _float(row, "mean_span_coverage_percent"),
-            "mean_time_regret_auc": _float(row, "mean_time_regret_auc"),
-            "mean_relative_regret_auc_percent": _float(
-                row, "mean_relative_regret_auc_percent"
+            "mean_same_target_time_saved_auc": _float(
+                row, "mean_same_target_time_saved_auc"
+            ),
+            "mean_relative_same_target_time_saved_auc_percent": _float(
+                row, "mean_relative_same_target_time_saved_auc_percent"
             ),
         }
         for row in mean_rows
@@ -3657,9 +3683,11 @@ def _first8_exact_vs_distill_summary(
         "distill_vs_exact": {
             "user_count": len(direct_rows),
             "mean_span_coverage_percent": _mean(direct_rows, "span_coverage_percent"),
-            "mean_time_regret_auc": _mean(direct_rows, "time_regret_auc"),
-            "mean_relative_regret_auc_percent": _mean(
-                direct_rows, "relative_regret_auc_percent"
+            "mean_same_target_time_saved_auc": _mean(
+                direct_rows, "same_target_time_saved_auc"
+            ),
+            "mean_relative_same_target_time_saved_auc_percent": _mean(
+                direct_rows, "relative_same_target_time_saved_auc_percent"
             ),
         },
     }
@@ -3686,23 +3714,25 @@ def _first8_r4d1_e512_summary(
             {
                 "user": row["environment"].replace("fsrs6_user_", ""),
                 "span_coverage_percent": _float(row, "span_coverage_percent"),
-                "time_regret_auc": _float(row, "time_regret_auc"),
-                "relative_regret_auc_percent": _float(
+                "same_target_time_saved_auc": _float(row, "same_target_time_saved_auc"),
+                "relative_same_target_time_saved_auc_percent": _float(
                     row,
-                    "relative_regret_auc_percent",
+                    "relative_same_target_time_saved_auc_percent",
                 ),
                 "span_coverage_delta_vs_476": _float(
                     row,
                     "span_coverage_percent",
                 )
                 - _float(baseline_row, "span_coverage_percent"),
-                "time_regret_delta_vs_476": _float(row, "time_regret_auc")
-                - _float(baseline_row, "time_regret_auc"),
-                "relative_regret_auc_delta_vs_476": _float(
-                    row,
-                    "relative_regret_auc_percent",
+                "same_target_time_saved_delta_vs_476": _float(
+                    row, "same_target_time_saved_auc"
                 )
-                - _float(baseline_row, "relative_regret_auc_percent"),
+                - _float(baseline_row, "same_target_time_saved_auc"),
+                "relative_same_target_time_saved_auc_delta_vs_476": _float(
+                    row,
+                    "relative_same_target_time_saved_auc_percent",
+                )
+                - _float(baseline_row, "relative_same_target_time_saved_auc_percent"),
             }
         )
 
@@ -3714,12 +3744,13 @@ def _first8_r4d1_e512_summary(
                 current["mean_span_coverage_percent"]
                 - baseline["mean_span_coverage_percent"]
             ),
-            "mean_time_regret_delta_vs_476": (
-                current["mean_time_regret_auc"] - baseline["mean_time_regret_auc"]
+            "mean_same_target_time_saved_delta_vs_476": (
+                current["mean_same_target_time_saved_auc"]
+                - baseline["mean_same_target_time_saved_auc"]
             ),
-            "mean_relative_regret_auc_delta_vs_476": (
-                current["mean_relative_regret_auc_percent"]
-                - baseline["mean_relative_regret_auc_percent"]
+            "mean_relative_same_target_time_saved_auc_delta_vs_476": (
+                current["mean_relative_same_target_time_saved_auc_percent"]
+                - baseline["mean_relative_same_target_time_saved_auc_percent"]
             ),
             "mean_final_ce_loss_delta_vs_476": (
                 current["mean_final_ce_loss"] - baseline["mean_final_ce_loss"]
@@ -3761,10 +3792,12 @@ def _low_param_summary(metadata: Mapping[str, Any]) -> dict[str, Any]:
 
 def _low_param_baseline_summary(row: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        "mean_span_coverage_percent": float(row["mean_span_coverage_percent"]),
-        "mean_time_regret_auc": float(row["mean_time_regret_auc"]),
-        "mean_relative_regret_auc_percent": float(
-            row["mean_relative_regret_auc_percent"]
+        "mean_span_coverage_percent": _float(row, "mean_span_coverage_percent"),
+        "mean_same_target_time_saved_auc": _float(
+            row, "mean_same_target_time_saved_auc"
+        ),
+        "mean_relative_same_target_time_saved_auc_percent": _float(
+            row, "mean_relative_same_target_time_saved_auc_percent"
         ),
     }
 
@@ -3776,9 +3809,9 @@ def _low_param_row(label: str, row: Mapping[str, Any]) -> list[str]:
         label,
         format_int(row["params_per_user"]),
         format_int(row["ensemble_trainable_params"]),
-        format_percent(vs_fsrs6["mean_relative_regret_auc_percent"]),
+        format_percent(vs_fsrs6["mean_relative_same_target_time_saved_auc_percent"]),
         format_percent(vs_fsrs6["mean_span_coverage_percent"]),
-        format_percent(vs_distill["mean_relative_regret_auc_percent"]),
+        format_percent(vs_distill["mean_relative_same_target_time_saved_auc_percent"]),
         format_percent(vs_distill["mean_span_coverage_percent"]),
     ]
 
@@ -3807,19 +3840,62 @@ def _find_regret_row(
 def _regret_metrics(row: Mapping[str, str]) -> dict[str, float]:
     return {
         "span_coverage_percent": _float(row, "span_coverage_percent"),
-        "time_regret_auc": _float(row, "time_regret_auc"),
+        "same_target_time_saved_auc": _float(row, "same_target_time_saved_auc"),
         "baseline_time_auc": _float(row, "baseline_time_auc"),
-        "relative_regret_auc_percent": _float(row, "relative_regret_auc_percent"),
+        "relative_same_target_time_saved_auc_percent": _float(
+            row, "relative_same_target_time_saved_auc_percent"
+        ),
     }
 
 
 def _float(row: Mapping[str, Any], key: str) -> float:
+    if key not in row:
+        legacy_key, sign = _legacy_metric_key(key)
+        if legacy_key is not None:
+            return sign * _float(row, legacy_key)
     value = row[key]
     if isinstance(value, str):
         return float(value)
     if isinstance(value, int | float):
         return float(value)
     raise TypeError(f"Expected numeric {key}, got {type(value).__name__}.")
+
+
+def _legacy_metric_key(key: str) -> tuple[str | None, float]:
+    legacy_keys: dict[str, tuple[str, float]] = {
+        "same_target_time_saved_auc": ("time_regret_auc", -1.0),
+        "mean_same_target_time_saved_auc": ("mean_time_regret_auc", -1.0),
+        "same_target_time_saved_delta_vs_476": ("time_regret_delta_vs_476", -1.0),
+        "mean_same_target_time_saved_delta_vs_476": (
+            "mean_time_regret_delta_vs_476",
+            -1.0,
+        ),
+        "relative_same_target_time_saved_auc_percent": (
+            "relative_regret_auc_percent",
+            -1.0,
+        ),
+        "mean_relative_same_target_time_saved_auc_percent": (
+            "mean_relative_regret_auc_percent",
+            -1.0,
+        ),
+        "relative_same_target_time_saved_auc_delta_vs_476": (
+            "relative_regret_auc_delta_vs_476",
+            -1.0,
+        ),
+        "mean_relative_same_target_time_saved_auc_delta_vs_476": (
+            "mean_relative_regret_auc_delta_vs_476",
+            -1.0,
+        ),
+        "relative_same_target_time_saved_auc_percent_mean": (
+            "relative_regret_auc_percent_mean",
+            -1.0,
+        ),
+        "relative_same_target_time_saved_auc_percent_std": (
+            "relative_regret_auc_percent_std",
+            1.0,
+        ),
+    }
+    return legacy_keys.get(key, (None, 1.0))
 
 
 def _int(row: Mapping[str, Any], key: str) -> int:

@@ -12,21 +12,21 @@ Does the average-reward infinite oracle transfer well to a finite new-card lifec
 The comparison uses finite-lifecycle tradeoff artifacts for the infinite exact/distill and stationary finite exact policies.
 
 Source artifacts:
-- `stationary_finite_compare_regret_auc`: `artifacts/single_card_tradeoff/stationary_finite_compare/regret_auc.csv`
-- `infinite_distill_compare_regret_auc`: `artifacts/single_card_tradeoff/infinite_distill_compare/regret_auc.csv`
+- `stationary_finite_compare_time_saved_auc`: `artifacts/single_card_tradeoff/stationary_finite_compare/regret_auc.csv`
+- `infinite_distill_compare_time_saved_auc`: `artifacts/single_card_tradeoff/infinite_distill_compare/regret_auc.csv`
 - `infinite_distill_results`: `artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_results.csv`
 
 ## Results
 
-Directly against `fsrs6_oracle_distill`, infinite distill has 13.15% relative regret over only 6.80% coverage.
+Directly against `fsrs6_oracle_distill`, infinite distill has -13.15% relative time saved over only 6.80% coverage.
 
 ### Finite-lifecycle evaluation
 
-| scheduler | time_regret_auc | relative_regret | coverage |
+| scheduler | same_target_time_saved_auc | relative_time_saved | coverage |
 | --- | --- | --- | --- |
-| fsrs6_oracle_infinite | -1.9666 | -7.08% | 7.58% |
-| fsrs6_oracle_infinite_distill | -5.4734 | -16.42% | 5.34% |
-| fsrs6_oracle_stationary_finite | -3.3900 | -27.86% | 78.05% |
+| fsrs6_oracle_infinite | 1.9666 | 7.08% | 7.58% |
+| fsrs6_oracle_infinite_distill | 5.4734 | 16.42% | 5.34% |
+| fsrs6_oracle_stationary_finite | 3.3900 | 27.86% | 78.05% |
 
 ## Reproduction Profile
 

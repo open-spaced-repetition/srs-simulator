@@ -28,26 +28,47 @@ def _analysis_summary(
     hv_delta: float,
     user_delta: float,
     include_relative_metrics: bool = True,
+    legacy_metric_names: bool = False,
 ) -> dict[str, object]:
     budget_row: dict[str, object] = {
         "scheduler": scheduler,
-        "memory_gain_auc_mean": hv_delta / 10.0,
         "baseline_memory_auc_mean": 100.0,
         "covered_budget_count": 2,
         "budget_count": 3,
         "span_coverage_percent": 50.0,
     }
-    regret_row: dict[str, object] = {
+    time_saved_row: dict[str, object] = {
         "scheduler": scheduler,
-        "time_regret_auc_mean": -hv_delta / 1000.0,
         "baseline_time_auc_mean": 10.0,
         "covered_target_count": 2,
         "target_count": 3,
         "span_coverage_percent": 60.0,
     }
+    budget_key = (
+        "budget_memory_gain_auc"
+        if legacy_metric_names
+        else "same_budget_memory_lift_auc"
+    )
+    time_key = (
+        "memory_target_regret_auc"
+        if legacy_metric_names
+        else "same_target_time_saved_auc"
+    )
+    if legacy_metric_names:
+        budget_row["memory_gain_auc_mean"] = hv_delta / 10.0
+        time_saved_row["time_regret_auc_mean"] = -hv_delta / 1000.0
+    else:
+        budget_row["same_budget_memory_lift_auc_mean"] = hv_delta / 10.0
+        time_saved_row["same_target_time_saved_auc_mean"] = hv_delta / 1000.0
     if include_relative_metrics:
-        budget_row["relative_gain_auc_percent"] = hv_delta / 10.0
-        regret_row["relative_regret_auc_percent"] = -hv_delta / 100.0
+        if legacy_metric_names:
+            budget_row["relative_gain_auc_percent"] = hv_delta / 10.0
+            time_saved_row["relative_regret_auc_percent"] = -hv_delta / 100.0
+        else:
+            budget_row["relative_same_budget_memory_lift_auc_percent"] = hv_delta / 10.0
+            time_saved_row["relative_same_target_time_saved_auc_percent"] = (
+                hv_delta / 100.0
+            )
 
     return {
         "type": "scheduler-comparison-analysis",
@@ -62,8 +83,8 @@ def _analysis_summary(
                         "scheduler_frontier_points": 2,
                     }
                 ],
-                "budget_memory_gain_auc": [budget_row],
-                "memory_target_regret_auc": [regret_row],
+                budget_key: [budget_row],
+                time_key: [time_saved_row],
                 "per_user_hypervolume": {
                     scheduler: [
                         {
@@ -97,6 +118,7 @@ def _write_run(
     user_delta: float,
     include_gpu_monitor: bool = True,
     include_relative_metrics: bool = True,
+    legacy_metric_names: bool = False,
 ) -> None:
     _write_json(
         root / "analyze-pareto" / "analyze_pareto_outputs" / "analysis_summary.json",
@@ -105,6 +127,7 @@ def _write_run(
             hv_delta=hv_delta,
             user_delta=user_delta,
             include_relative_metrics=include_relative_metrics,
+            legacy_metric_names=legacy_metric_names,
         ),
     )
     _write_json(
@@ -242,19 +265,31 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertIn("## Conclusion", markdown)
         self.assertIn("## Diagnostics", markdown)
         self.assertIn("policy-point avg memorized", markdown)
-        self.assertIn("budget-memory gain / baseline", markdown)
-        self.assertIn("memory-target regret / baseline", markdown)
+        self.assertIn("same-budget memory lift / baseline", markdown)
+        self.assertIn("same-target time saved / baseline", markdown)
         self.assertIn("+2.000%", markdown)
-        self.assertIn("-0.200%", markdown)
+        self.assertIn("+0.200%", markdown)
         self.assertIn(
             "population=16, offspring=16, generations=20, portfolio=16", markdown
         )
         env = summary["external_pareto"]["environments"][0]
         self.assertEqual(env["delta"]["hv_delta_sum"], 8.0)
-        self.assertEqual(env["candidate"]["relative_gain_auc_percent"], 2.0)
-        self.assertEqual(env["candidate"]["relative_regret_auc_percent"], -0.2)
-        self.assertAlmostEqual(env["delta"]["relative_gain_auc_percent"], 0.8)
-        self.assertAlmostEqual(env["delta"]["relative_regret_auc_percent"], -0.08)
+        self.assertEqual(
+            env["candidate"]["relative_same_budget_memory_lift_auc_percent"],
+            2.0,
+        )
+        self.assertEqual(
+            env["candidate"]["relative_same_target_time_saved_auc_percent"],
+            0.2,
+        )
+        self.assertAlmostEqual(
+            env["delta"]["relative_same_budget_memory_lift_auc_percent"],
+            0.8,
+        )
+        self.assertAlmostEqual(
+            env["delta"]["relative_same_target_time_saved_auc_percent"],
+            0.08,
+        )
         self.assertEqual(
             summary["run_metadata"]["candidate"]["baseline_dr_manifest"],
             "artifacts/rl_scheduler/baseline_dr_selection/test.json",
@@ -306,6 +341,40 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertIn("256.0", markdown)
         self.assertIn("Do not promote `candidate_sched`.", markdown)
 
+    def test_legacy_auc_metric_names_are_converted_to_time_saved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "candidate"
+            comparison = root / "comparison"
+            _write_run(
+                candidate,
+                scheduler="candidate_sched",
+                hv_delta=20.0,
+                user_delta=3.0,
+                legacy_metric_names=True,
+            )
+            _write_run(
+                comparison,
+                scheduler="comparison_sched",
+                hv_delta=12.0,
+                user_delta=1.0,
+                legacy_metric_names=True,
+            )
+
+            _, _, summary = generate_report(
+                run_root=candidate,
+                comparison_run_root=comparison,
+                output_path=root / "docs" / "report.md",
+            )
+
+        env = summary["external_pareto"]["environments"][0]
+        self.assertEqual(env["candidate"]["same_target_time_saved_auc"], 0.02)
+        self.assertEqual(
+            env["candidate"]["relative_same_target_time_saved_auc_percent"],
+            0.2,
+        )
+        self.assertAlmostEqual(env["delta"]["same_target_time_saved_auc"], 0.008)
+
     def test_missing_relative_metrics_are_not_recomputed_from_means(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -337,12 +406,20 @@ class GenerateExperimentReportTests(unittest.TestCase):
             )
 
         env = summary["external_pareto"]["environments"][0]
-        self.assertIsNone(env["candidate"]["relative_gain_auc_percent"])
-        self.assertIsNone(env["comparison"]["relative_gain_auc_percent"])
-        self.assertIsNone(env["delta"]["relative_gain_auc_percent"])
-        self.assertIsNone(env["candidate"]["relative_regret_auc_percent"])
-        self.assertIsNone(env["comparison"]["relative_regret_auc_percent"])
-        self.assertIsNone(env["delta"]["relative_regret_auc_percent"])
+        self.assertIsNone(
+            env["candidate"]["relative_same_budget_memory_lift_auc_percent"]
+        )
+        self.assertIsNone(
+            env["comparison"]["relative_same_budget_memory_lift_auc_percent"]
+        )
+        self.assertIsNone(env["delta"]["relative_same_budget_memory_lift_auc_percent"])
+        self.assertIsNone(
+            env["candidate"]["relative_same_target_time_saved_auc_percent"]
+        )
+        self.assertIsNone(
+            env["comparison"]["relative_same_target_time_saved_auc_percent"]
+        )
+        self.assertIsNone(env["delta"]["relative_same_target_time_saved_auc_percent"])
 
     def test_display_path_is_repo_relative_for_repo_paths(self) -> None:
         self.assertEqual(

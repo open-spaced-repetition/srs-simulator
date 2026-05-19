@@ -685,7 +685,10 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertIn("### Policy-point diagnostics", report)
         hv_rows = summary["environments"]["fsrs6"]["primary_hypervolume_summary"]
         self.assertEqual(hv_rows[0]["scheduler"], "fsrs6_adr")
-        self.assertIn("budget_memory_gain_auc", summary["environments"]["fsrs6"])
+        self.assertIn(
+            "same_budget_memory_lift_auc",
+            summary["environments"]["fsrs6"],
+        )
 
     def test_analyze_scheduler_comparison_reports_hv_and_envelope_metrics(
         self,
@@ -865,14 +868,14 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             "| fsrs6_adr | 2690.00 | 2825.00 | 135.00 | 5.019% | -175.00 | -175.00 | -175.00 | 310.00 | 310.00 | 4 | 2 |",
             report,
         )
-        self.assertIn("### Budget-memory gain AUC vs FSRS6 baseline", report)
+        self.assertIn("### Same-budget memory lift AUC vs FSRS6 baseline", report)
         self.assertIn(
             "| fsrs6_adr | 2/2 | 2/6 | 32.857% | 8.1 | 5.947% |",
             report,
         )
-        self.assertIn("### Memory-target regret AUC vs FSRS6 baseline", report)
+        self.assertIn("### Same-target time saved AUC vs FSRS6 baseline", report)
         self.assertIn(
-            "| fsrs6_adr | 2/2 | 2/6 | 37.500% | -2.96 | -10.797% |",
+            "| fsrs6_adr | 2/2 | 2/6 | 37.500% | 2.96 | 10.797% |",
             report,
         )
 
@@ -998,6 +1001,7 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         self.assertEqual(regret.covered_target_count, 1)
         self.assertEqual(regret.total_span, 200.0)
         self.assertEqual(regret.covered_span, 100.0)
+        self.assertAlmostEqual(regret.same_target_time_saved_auc or 0.0, -3.0)
         self.assertAlmostEqual(regret.time_regret_auc or 0.0, 3.0)
         self.assertAlmostEqual(regret.baseline_time_auc or 0.0, 20.0)
 
@@ -1083,10 +1087,19 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             baseline_scheduler="fsrs6",
         )
 
-        self.assertAlmostEqual(summary["time_regret_auc_mean"] or 0.0, 5.0)
+        self.assertAlmostEqual(
+            summary["same_target_time_saved_auc_mean"] or 0.0,
+            -5.0,
+        )
         self.assertAlmostEqual(summary["baseline_time_auc_mean"] or 0.0, 55.0)
-        self.assertAlmostEqual(summary["relative_regret_auc_percent"] or 0.0, 50.0)
-        self.assertIn("| fsrs6_adr | 2/2 | 4/4 | 100.000% | 5.00 | 50.000% |", table)
+        self.assertAlmostEqual(
+            summary["relative_same_target_time_saved_auc_percent"] or 0.0,
+            -50.0,
+        )
+        self.assertIn(
+            "| fsrs6_adr | 2/2 | 4/4 | 100.000% | -5.00 | -50.000% |",
+            table,
+        )
 
     def test_relative_gain_auc_is_simple_user_average(self) -> None:
         def row(
@@ -1167,9 +1180,15 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             baseline_scheduler="fsrs6",
         )
 
-        self.assertAlmostEqual(summary["memory_gain_auc_mean"] or 0.0, 7.5)
+        self.assertAlmostEqual(
+            summary["same_budget_memory_lift_auc_mean"] or 0.0,
+            7.5,
+        )
         self.assertAlmostEqual(summary["baseline_memory_auc_mean"] or 0.0, 825.0)
-        self.assertAlmostEqual(summary["relative_gain_auc_percent"] or 0.0, 5.0)
+        self.assertAlmostEqual(
+            summary["relative_same_budget_memory_lift_auc_percent"] or 0.0,
+            5.0,
+        )
         self.assertIn("| fsrs6_adr | 2/2 | 4/4 | 100.000% | 7.5 | 5.000% |", table)
 
     def test_analyze_scheduler_comparison_manifest_keeps_exact_baseline_dr(

@@ -767,18 +767,18 @@ def main() -> None:
     )
 
     print(f"Wrote exact-value results: {results_path}")
-    print(f"Wrote exact-value regret AUC: {regret_path}")
+    print(f"Wrote exact-value same-target time saved AUC: {regret_path}")
     print(f"Wrote exact-value summary: {summary_path}")
     print(f"Wrote exact-value mean summary: {mean_summary_path}")
     print(f"Wrote exact-value metadata: {metadata_path}")
     for row in mean_rows:
         if row["baseline_scheduler"] != BASELINE_SCHEDULER:
             continue
-        rel = row["mean_relative_regret_auc_percent"]
+        rel = row["mean_relative_same_target_time_saved_auc_percent"]
         coverage = row["mean_span_coverage_percent"]
         print(
             f"{row['scheduler']} vs fsrs6: "
-            f"relative_regret={float(rel):.2f}% coverage={float(coverage):.2f}%"
+            f"relative_time_saved={float(rel):.2f}% coverage={float(coverage):.2f}%"
         )
 
 

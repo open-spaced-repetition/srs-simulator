@@ -54,8 +54,8 @@ Notes:
 
 | device | wall_s | speedup_vs_cpu | teacher_s | train_s | eval_s |
 | --- | --- | --- | --- | --- | --- |
-| cpu | 465.11 | 1.00x | 196.08 | 32.69 | 234.58 |
-| cuda | 183.93 | 2.53x | 69.45 | 37.81 | 74.74 |
+| cpu | 456.63 | 1.00x | 175.88 | 34.10 | 244.23 |
+| cuda | 175.68 | 2.60x | 60.64 | 42.27 | 70.82 |
 
 ### Multi-user quality guard
 
@@ -68,7 +68,7 @@ Notes:
 
 | device | samples | dedicated MiB | shared peak MiB | spill |
 | --- | --- | --- | --- | --- |
-| cuda | 52 | 7483.0 | 167.9 | no |
+| cuda | 49 | 3255.0 | 211.9 | no |
 
 ## Reproduction Profile
 
@@ -81,7 +81,7 @@ The TOML profile records the command and expected outputs used to reproduce this
 
 ## Conclusion
 
-Single-user: CUDA is slower than CPU for the default stationary finite distill workload in the single observed run: CPU is 2.09x faster. Multi-user: CUDA completes the default stationary finite distill workload 2.53x faster than CPU in the single observed run. Treat both as point estimates until the benchmark is rerun with multiple repeats.
+Single-user: CUDA is slower than CPU for the default stationary finite distill workload in the single observed run: CPU is 2.09x faster. Multi-user: CUDA completes the default stationary finite distill workload 2.60x faster than CPU in the single observed run. Treat both as point estimates until the benchmark is rerun with multiple repeats.
 
 ## Artifacts
 

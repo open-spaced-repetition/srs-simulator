@@ -14,7 +14,7 @@ Pass `--env fsrs6 --user-id <id>` to load per-user FSRS-6 weights from `../srs-b
 
 For supported FSRS-6 sweeps, desired-retention targets are batched in one vectorized run by default. The default targets are `0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98`; override with `--target-retentions`, or pass `--target-retentions ""` to use the range flags. Single-card target and oracle-action retentions must be at least `0.5`. Fixed-interval sweeps are batched the same way. Plain `--sched fixed` runs intervals `8,16,32,64,128,256,512` by default; override with `--fixed-intervals`. Mixed scheduler families are run as one batch per family. Pass `--target-batch-size 1` to run targets/intervals sequentially.
 
-By default, the script writes a pairwise memory-target regret AUC CSV next to the main CSV. `time_regret_auc` is the average extra deck-scaled minutes/day needed by the scheduler versus the baseline over their common covered memory-target interval, and `relative_regret_auc_percent` divides that by the baseline time AUC.
+By default, the script writes a pairwise same-target time saved AUC CSV next to the main CSV. `same_target_time_saved_auc` is the average deck-scaled minutes/day saved by the scheduler versus the baseline over their common covered memory-target interval, and `relative_same_target_time_saved_auc_percent` divides that by the baseline time AUC. Positive values mean the scheduler reaches the same memory target faster.
 
 ## UVFA PPO
 
@@ -63,7 +63,7 @@ uv run experiments/single_card_tradeoff/oracle_distill.py --days 1825 --eval-par
 uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_distill,uvfa_ppo --oracle-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt --uvfa-ppo-policy artifacts/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
-`oracle_distill.py` defaults to the `oracle_rho4` observation (`log remaining/stability ratio`, difficulty, goal cost weight, and stability), the `residual:16:2` architecture, and CUDA when available. Its default teacher weights are `0,1,2,4,8,16,32,64,128,256,512,1024`, so the zero-cost edge is trained directly while the standard tradeoff evaluation still probes intermediate weights. This model has 1,536 parameters, about 30% of the previous `residual:32:2` default. In the default FSRS-6 10k-particle, 3-seed comparison it slightly improved pairwise time-regret AUC against the previous default (`-0.0587` deck-minutes/day with 100% overlap) while preserving the broader frontier coverage that short small-model training missed. Pass `--obs-mode oracle` to train the older 4-feature oracle observation, or `--obs-mode rich` to train on the larger rollout observation instead. The script also accepts the same `--env fsrs6 --user-id <id>` and `--button-usage` options as the single-card tradeoff runner.
+`oracle_distill.py` defaults to the `oracle_rho4` observation (`log remaining/stability ratio`, difficulty, goal cost weight, and stability), the `residual:16:2` architecture, and CUDA when available. Its default teacher weights are `0,1,2,4,8,16,32,64,128,256,512,1024`, so the zero-cost edge is trained directly while the standard tradeoff evaluation still probes intermediate weights. This model has 1,536 parameters, about 30% of the previous `residual:32:2` default. In the default FSRS-6 10k-particle, 3-seed comparison it slightly improved pairwise same-target time saved AUC against the previous default (`+0.0587` deck-minutes/day with 100% overlap) while preserving the broader frontier coverage that short small-model training missed. Pass `--obs-mode oracle` to train the older 4-feature oracle observation, or `--obs-mode rich` to train on the larger rollout observation instead. The script also accepts the same `--env fsrs6 --user-id <id>` and `--button-usage` options as the single-card tradeoff runner.
 
 To rerun the discrete oracle distillation model-size search:
 
@@ -125,7 +125,7 @@ All oracle DP entrypoints now cache per `(user, weight)` under `artifacts/single
 uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --per-user-models --out-dir artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu --no-progress
 ```
 
-On the first eight benchmark users, the uniform-table per-user run wrote `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/` with 8 checkpoints, 476 parameters per checkpoint, 3,808 total trainable ensemble parameters, `teacher_s=58.82`, `train_s=34.89`, `agreement_s=0.01`, `eval_s=66.94`, mean final CE `0.69721`, mean train table agreement `72.41%`, and mean full-table agreement `72.39%` on the CUDA test environment. Mean `fsrs6` baseline span coverage was `97.55%`, and mean relative regret AUC was `-12.36%` over the eight users. The older rollout teacher-forcing per-user artifact `stationary_finite_distill_first8_users_per_user_batched/` had mean span coverage `95.82%`, mean relative regret AUC `-4.32%`, and a user-2 high-cost interpolation failure (`+18.20%` relative regret AUC). Uniform exact-table supervision fixes that failure: user 2 improves to `96.18%` coverage and `-15.30%` relative regret AUC.
+On the first eight benchmark users, the uniform-table per-user run wrote `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/` with 8 checkpoints, 476 parameters per checkpoint, 3,808 total trainable ensemble parameters, `teacher_s=58.82`, `train_s=34.89`, `agreement_s=0.01`, `eval_s=66.94`, mean final CE `0.69721`, mean train table agreement `72.41%`, and mean full-table agreement `72.39%` on the CUDA test environment. Mean `fsrs6` baseline span coverage was `97.55%`, and mean relative time saved AUC was `12.36%` over the eight users. The older rollout teacher-forcing per-user artifact `stationary_finite_distill_first8_users_per_user_batched/` had mean span coverage `95.82%`, mean relative time saved AUC `4.32%`, and a user-2 high-cost interpolation failure (`-18.20%` relative time saved AUC). Uniform exact-table supervision fixes that failure: user 2 improves to `96.18%` coverage and `15.30%` relative time saved AUC.
 
 To reproduce the exact teacher versus per-user distill comparison consumed by the report, run the same multi-user CLI in eval-only mode. This solves the exact stationary finite table at each evaluation cost weight, loads the saved per-user checkpoints, and writes `results.csv`, `regret_auc.csv`, `summary.csv`, and `mean_summary.csv`:
 
@@ -143,9 +143,9 @@ For a direct low-parameter policy-search baseline, `low_param_direct_policy_sear
 uv run experiments/single_card_tradeoff/low_param_direct_policy_search_multiuser.py --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --generations 64 --population-size 32 --elite-count 8 --train-particles 64 --eval-particles 10000 --torch-device cuda --out-dir artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users --no-progress
 ```
 
-The first-eight 7-parameter run wrote `artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/` with 56 total trainable parameters, `train_s=210.81`, and `eval_s=94.11`. Against `fsrs6`, it reached mean span coverage `72.37%`, mean time-regret AUC `-2.7373`, and mean relative regret AUC `-7.50%`. Directly against `fsrs6_oracle_stationary_finite_distill_per_user`, it reached mean span coverage `68.48%`, mean time-regret AUC `+1.1129`, and mean relative regret AUC `+4.43%`. A dense-training-weight rerun at `low_param_direct_policy_search_first8_users_dense_weights/` kept the same 7 parameters but reduced coverage to `66.45%` vs `fsrs6` and `62.74%` vs distill, so the current 7-parameter monotone family is much smaller but too restrictive to match the 476-parameter distill frontier.
+The first-eight 7-parameter run wrote `artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/` with 56 total trainable parameters, `train_s=210.81`, and `eval_s=94.11`. Against `fsrs6`, it reached mean span coverage `72.37%`, mean same-target time saved AUC `2.7373`, and mean relative time saved AUC `7.50%`. Directly against `fsrs6_oracle_stationary_finite_distill_per_user`, it reached mean span coverage `68.48%`, mean same-target time saved AUC `-1.1129`, and mean relative time saved AUC `-4.43%`. A dense-training-weight rerun at `low_param_direct_policy_search_first8_users_dense_weights/` kept the same 7 parameters but reduced coverage to `66.45%` vs `fsrs6` and `62.74%` vs distill, so the current 7-parameter monotone family is much smaller but too restrictive to match the 476-parameter distill frontier.
 
-The shared-student diagnostic artifact is `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_batched/`. It used one 476-parameter model for all eight users and reported mean span coverage `96.71%` and mean relative regret AUC `-6.38%`. The user-2 failure in the rollout per-user path was caused by event-count sampling bias: `w=0` produces many more review events than high cost weights, so the cross-entropy loss was dominated by low-cost actions even though reset-time cost weights were uniform. The current per-user default removes that bias by supervising the exact `[user, cost_weight, stability, difficulty]` table with equal samples per sparse teacher cost weight.
+The shared-student diagnostic artifact is `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_batched/`. It used one 476-parameter model for all eight users and reported mean span coverage `96.71%` and mean relative time saved AUC `6.38%`. The user-2 failure in the rollout per-user path was caused by event-count sampling bias: `w=0` produces many more review events than high cost weights, so the cross-entropy loss was dominated by low-cost actions even though reset-time cost weights were uniform. The current per-user default removes that bias by supervising the exact `[user, cost_weight, stability, difficulty]` table with equal samples per sparse teacher cost weight.
 
 Visualize the solved oracle policy's output distribution over states visited by the policy rollout:
 
@@ -186,7 +186,7 @@ uv run experiments/single_card_tradeoff/oracle_interval_distill.py --days 1825 -
 uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval_distill --oracle-interval-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
 ```
 
-The interval distillation model keeps the same 4D scalar-output network. Its default `residual:64:3` sweet-spot architecture has 25,857 parameters, about 45% of the earlier `residual:96:3` model, while preserving the time-regret advantage in the default FSRS-6 comparison. The more aggressive `residual:32:2` candidate has 4,609 parameters, about 8% of the earlier model, but gives up a small amount of pairwise time-regret AUC against `fsrs6_oracle_distill`. The default training loss weights underpredicted intervals more heavily for high cost weights, mixes in student-rollout states after warmup, and snaps predicted intervals near the remaining horizon to the terminal no-more-review action. These are fixed training/inference rules and do not add learned parameters.
+The interval distillation model keeps the same 4D scalar-output network. Its default `residual:64:3` sweet-spot architecture has 25,857 parameters, about 45% of the earlier `residual:96:3` model, while preserving the time-saved advantage in the default FSRS-6 comparison. The more aggressive `residual:32:2` candidate has 4,609 parameters, about 8% of the earlier model, but gives up a small amount of pairwise same-target time saved AUC against `fsrs6_oracle_distill`. The default training loss weights underpredicted intervals more heavily for high cost weights, mixes in student-rollout states after warmup, and snaps predicted intervals near the remaining horizon to the terminal no-more-review action. These are fixed training/inference rules and do not add learned parameters.
 
 To rerun the model-size search:
 
@@ -223,7 +223,7 @@ experiment from `experiments/single_card_tradeoff/configs/reports/`; the
 first-eight stationary finite profile remains at
 `experiments/single_card_tradeoff/configs/stationary_finite_first8_report.toml`.
 
-The most useful summary metric is `time_regret_auc`, but it is only meaningful together with `span_coverage_percent`. A negative `time_regret_auc` means a scheduler uses fewer deck-scaled minutes/day than the baseline at the same memory target over their common memory interval. Low coverage means the comparison only covers a narrow part of the frontier.
+The most useful summary metric is `same_target_time_saved_auc`, but it is only meaningful together with `span_coverage_percent`. A positive `same_target_time_saved_auc` means a scheduler uses fewer deck-scaled minutes/day than the baseline at the same memory target over their common memory interval. Low coverage means the comparison only covers a narrow part of the frontier.
 
 No-sub-0.5 action-space rerun:
 
@@ -231,18 +231,18 @@ The current default target/action retention grid is `0.5,0.6,0.65,0.7,0.75,0.8,0
 
 The current compact comparison uses `fsrs6_default`, 1825 days, 10,000 particles, `deck_scale=10000`, and the standard scalarization weights for each scheduler implementation. The combined artifacts are in `artifacts/single_card_tradeoff/no_sub05_distill_compare/`. The default desired-retention baseline rows come from `artifacts/single_card_tradeoff/no_sub05_default_vs_stationary_finite_distill/results.csv`; the learned-policy evaluations are `artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_results.csv`, `artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_results.csv`, `artifacts/single_card_tradeoff/uvfa_ppo_results.csv`, and `artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_results.csv`.
 
-| scheduler | policy input | parameters | vs `fsrs6_default` `time_regret_auc` | relative regret | coverage |
+| scheduler | policy input | parameters | vs `fsrs6_default` `same_target_time_saved_auc` | relative time saved | coverage |
 | --- | --- | ---: | ---: | ---: | ---: |
-| `fsrs6_oracle_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | -3.6263 | -24.18% | 86.3% |
-| `fsrs6_oracle_stationary_finite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | -3.4070 | -23.70% | 94.7% |
-| `fsrs6_oracle_retention_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | -3.3248 | -21.79% | 83.5% |
-| `fsrs6_oracle_infinite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | -4.8242 | -14.66% | 9.0% |
-| `uvfa_ppo` | `rich`, `residual:64:3` | 27,148 | -3.4886 | -24.89% | 99.2% |
-| `uvfa_ppo_rnn_interval` | `belief`, `GRU:128` | 87,559 | -3.0423 | -21.67% | 69.2% |
+| `fsrs6_oracle_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | 3.6263 | 24.18% | 86.3% |
+| `fsrs6_oracle_stationary_finite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | 3.4070 | 23.70% | 94.7% |
+| `fsrs6_oracle_retention_distill` | `oracle_rho4`, `residual:16:2` | 1,468 | 3.3248 | 21.79% | 83.5% |
+| `fsrs6_oracle_infinite_distill` | `oracle_stationary`, `residual:16:2` | 1,452 | 4.8242 | 14.66% | 9.0% |
+| `uvfa_ppo` | `rich`, `residual:64:3` | 27,148 | 3.4886 | 24.89% | 99.2% |
+| `uvfa_ppo_rnn_interval` | `belief`, `GRU:128` | 87,559 | 3.0423 | 21.67% | 69.2% |
 
-Directly against `fsrs6_oracle_distill`, the current `fsrs6_oracle_stationary_finite_distill` has `+0.0944` deck-minutes/day time-regret AUC, `+0.83%` relative regret, and `99.997%` coverage. The continuous desired-retention distill has `+0.3542` deck-minutes/day, `+3.07%` relative regret, and `96.7%` coverage. The default `uvfa_ppo` checkpoint has `-0.0639` deck-minutes/day, `-0.56%` relative regret, and `99.9%` coverage against `fsrs6_oracle_distill`; it is slightly ahead on the shared span, but it uses an order of magnitude more parameters. The recurrent interval PPO has `+0.1289` deck-minutes/day, `+1.19%` relative regret, and `80.2%` coverage against `fsrs6_oracle_distill`. Reversing the stationary-finite baseline gives `fsrs6_oracle_distill` `-0.0944` deck-minutes/day over `91.1%` of the stationary-finite-distill span. The stationary finite distill is slightly worse than the unrestricted finite-horizon distill on shared span, but it covers more of the `fsrs6_default` retention span after clipping actions below `0.5`.
+Directly against `fsrs6_oracle_distill`, the current `fsrs6_oracle_stationary_finite_distill` has `-0.0944` deck-minutes/day same-target time saved AUC, `-0.83%` relative time saved, and `99.997%` coverage. The continuous desired-retention distill has `-0.3542` deck-minutes/day, `-3.07%` relative time saved, and `96.7%` coverage. The default `uvfa_ppo` checkpoint has `+0.0639` deck-minutes/day, `+0.56%` relative time saved, and `99.9%` coverage against `fsrs6_oracle_distill`; it is slightly ahead on the shared span, but it uses an order of magnitude more parameters. The recurrent interval PPO has `-0.1289` deck-minutes/day, `-1.19%` relative time saved, and `80.2%` coverage against `fsrs6_oracle_distill`. Reversing the stationary-finite baseline gives `fsrs6_oracle_distill` `+0.0944` deck-minutes/day over `91.1%` of the stationary-finite-distill span. The stationary finite distill is slightly worse than the unrestricted finite-horizon distill on shared span, but it covers more of the `fsrs6_default` retention span after clipping actions below `0.5`.
 
-The average-reward infinite distill should not be judged by its negative default-baseline AUC alone. Its frontier covers only `9.0%` of the default retention span after the action floor is applied, so the AUC is computed over a narrow high-memory region. Directly against `fsrs6_oracle_distill`, it has `+15.59%` relative regret over only `10.4%` of the oracle-distill span.
+The average-reward infinite distill should not be judged by its positive default-baseline AUC alone. Its frontier covers only `9.0%` of the default retention span after the action floor is applied, so the AUC is computed over a narrow high-memory region. Directly against `fsrs6_oracle_distill`, it has `-15.59%` relative time saved over only `10.4%` of the oracle-distill span.
 
 | scheduler | exact policy table entries | distill checkpoint parameters | table-to-distill compression |
 | --- | ---: | ---: | ---: |
@@ -301,7 +301,7 @@ PPO guide ablations after clipping actions:
 
 The no-sub-0.5 ablation artifacts are under `artifacts/single_card_tradeoff/ppo_ablation/`. All six checkpoints were verified to use the clipped 11-action grid with minimum action `0.5`, and the tradeoff CSVs below use the clipped 11-target `fsrs6_default` baseline.
 
-| candidate | guide setup | parameters | train transitions | updates | train time | fixed-baseline check | vs `fsrs6_default` relative regret | coverage |
+| candidate | guide setup | parameters | train transitions | updates | train time | fixed-baseline check | vs `fsrs6_default` relative time saved | coverage |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |
 | `uvfa_ppo_no_guide` | no guide | 27,148 | 2,359,296 | 36 | 28.54s | pass | -22.74% | 85.9% |
 | `uvfa_ppo_static_guide` | static guide | 27,148 | 2,359,296 | 36 | 31.93s | fail | -8.52% | 54.0% |
@@ -310,7 +310,7 @@ The no-sub-0.5 ablation artifacts are under `artifacts/single_card_tradeoff/ppo_
 | `uvfa_ppo_rnn_interval_static_guide` | static guide | 87,559 | 2,359,296 | 36 | 48.80s | fail | -2.22% | 42.7% |
 | `uvfa_ppo_rnn_interval_oracle_warmup_only` | oracle warmup, no PPO updates | 87,559 | 0 | 0 | 196.54s | pass | -21.31% | 72.6% |
 
-The ablation takeaway did not change after removing actions below `0.5`: the default oracle-guided PPO runs remain the strongest PPO checkpoints in the current report. Discrete PPO without a guide still beats `fsrs6_default`, but it trails the default oracle-guided checkpoint on both relative regret and coverage. The RNN interval warmup-only checkpoint is useful as a prior-quality check, but its coverage is lower than the default trained RNN checkpoint.
+The ablation takeaway did not change after removing actions below `0.5`: the default oracle-guided PPO runs remain the strongest PPO checkpoints in the current report. Discrete PPO without a guide still beats `fsrs6_default`, but it trails the default oracle-guided checkpoint on both relative time saved and coverage. The RNN interval warmup-only checkpoint is useful as a prior-quality check, but its coverage is lower than the default trained RNN checkpoint.
 
 Stationary finite action distribution with sub-0.5 actions removed:
 
@@ -340,13 +340,13 @@ Stationary finite sparse-weight and model-size compression:
 
 The newer stationary finite compression artifacts are under `artifacts/single_card_tradeoff/stationary_finite_cost_weight_ablation/` and `artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/`. These runs keep the clipped 11-action grid, evaluate against `fsrs6_default` with 10,000 particles, and use the standard 17 evaluation scalarization weights. The cost-weight ablation changes only the teacher training weights; all three models below use the same 1,452-parameter `oracle_stationary` residual `16x2` architecture.
 
-| train weights | parameters | eval seeds | `time_regret_auc` | relative regret | coverage |
+| train weights | parameters | eval seeds | `same_target_time_saved_auc` | relative time saved | coverage |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `0,1,2,4,8,16,32,64,128,256,512,1024` | 1,452 | 3 | -3.4043 +/- 0.0451 | -23.69% +/- 0.27% | 94.31% +/- 0.31% |
-| `0,4,16,64,256,1024` | 1,452 | 3 | -3.3352 +/- 0.0395 | -23.53% +/- 0.22% | 96.88% +/- 0.17% |
-| `0,16,64,256,1024` | 1,452 | 3 | -3.3904 +/- 0.0572 | -23.67% +/- 0.35% | 95.01% +/- 0.26% |
+| `0,1,2,4,8,16,32,64,128,256,512,1024` | 1,452 | 3 | 3.4043 +/- 0.0451 | 23.69% +/- 0.27% | 94.31% +/- 0.31% |
+| `0,4,16,64,256,1024` | 1,452 | 3 | 3.3352 +/- 0.0395 | 23.53% +/- 0.22% | 96.88% +/- 0.17% |
+| `0,16,64,256,1024` | 1,452 | 3 | 3.3904 +/- 0.0572 | 23.67% +/- 0.35% | 95.01% +/- 0.26% |
 
-The five-weight schedule `0,16,64,256,1024` is a good sparse teacher-weight candidate for stationary finite distillation. It does not reduce checkpoint parameters by itself, but it preserves default-baseline relative regret and span coverage while cutting the number of teacher policies that must be solved.
+The five-weight schedule `0,16,64,256,1024` is a good sparse teacher-weight candidate for stationary finite distillation. It does not reduce checkpoint parameters by itself, but it preserves default-baseline relative time saved and span coverage while cutting the number of teacher policies that must be solved.
 
 Rerun the model-size ablation with all non-network variables aligned to the
 current default stationary finite distill recipe:
@@ -359,14 +359,14 @@ The rerun uses the five-weight teacher schedule, the clipped 11-action grid,
 `uniform_table` supervision, 128 epochs, 64 steps per epoch, 10,000 eval
 particles, and eval seeds `42,43,44` for every network size:
 
-| candidate | parameters | reduction vs 1,452 | epochs | eval seeds | teacher agreement | relative regret | coverage |
+| candidate | parameters | reduction vs 1,452 | epochs | eval seeds | teacher agreement | relative time saved | coverage |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `residual:16:2` | 1,452 | 0.0% | 128 | 3 | 77.45% | -23.00% +/- 0.23% | 96.57% +/- 0.17% |
-| `residual:12:2` | 900 | 38.0% | 128 | 3 | 77.00% | -23.30% +/- 0.33% | 97.60% +/- 0.26% |
-| `residual:10:2` | 672 | 53.7% | 128 | 3 | 75.67% | -23.20% +/- 0.33% | 98.11% +/- 0.25% |
-| `residual:8:2` | 476 | 67.2% | 128 | 3 | 74.98% | -22.15% +/- 0.28% | 98.41% +/- 0.18% |
-| `residual:8:1` | 316 | 78.2% | 128 | 3 | 74.52% | -22.88% +/- 0.45% | 98.53% +/- 0.23% |
-| `residual:6:1` | 216 | 85.1% | 128 | 3 | 73.71% | -22.10% +/- 0.33% | 98.37% +/- 0.17% |
+| `residual:16:2` | 1,452 | 0.0% | 128 | 3 | 77.45% | 23.00% +/- 0.23% | 96.57% +/- 0.17% |
+| `residual:12:2` | 900 | 38.0% | 128 | 3 | 77.00% | 23.30% +/- 0.33% | 97.60% +/- 0.26% |
+| `residual:10:2` | 672 | 53.7% | 128 | 3 | 75.67% | 23.20% +/- 0.33% | 98.11% +/- 0.25% |
+| `residual:8:2` | 476 | 67.2% | 128 | 3 | 74.98% | 22.15% +/- 0.28% | 98.41% +/- 0.18% |
+| `residual:8:1` | 316 | 78.2% | 128 | 3 | 74.52% | 22.88% +/- 0.45% | 98.53% +/- 0.23% |
+| `residual:6:1` | 216 | 85.1% | 128 | 3 | 73.71% | 22.10% +/- 0.33% | 98.37% +/- 0.17% |
 
 Rerun the quick sub-216 and structured sweep with the same recipe:
 
@@ -377,22 +377,22 @@ uv run python experiments/single_card_tradeoff/stationary_finite_model_size_abla
 This adds smaller residual, MLP, linear, and quadratic policies under
 `sub216_summary.csv` without overwriting the aligned residual table:
 
-| candidate | family | parameters | epochs | teacher agreement | relative regret | coverage |
+| candidate | family | parameters | epochs | teacher agreement | relative time saved | coverage |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `residual:5:1` | residual | 172 | 128 | 71.41% | -20.00% +/- 0.34% | 95.30% +/- 0.29% |
-| `residual:4:1` | residual | 132 | 128 | 69.36% | -19.10% +/- 0.32% | 85.80% +/- 0.36% |
-| `residual:3:1` | residual | 96 | 128 | 51.90% | +74.46% +/- 10.13% | 81.88% +/- 0.30% |
-| `mlp:8` | MLP | 212 | 128 | 70.13% | -17.47% +/- 0.11% | 98.56% +/- 0.18% |
-| `mlp:6` | MLP | 150 | 128 | 66.39% | -13.71% +/- 0.22% | 96.66% +/- 0.25% |
-| `mlp:4` | MLP | 96 | 128 | 61.17% | -6.60% +/- 0.83% | 89.78% +/- 0.33% |
-| `linear` | structured | 44 | 128 | 43.15% | +86.56% +/- 2.73% | 98.79% +/- 0.07% |
-| `quadratic` | structured | 110 | 128 | 50.71% | -10.05% +/- 0.63% | 99.36% +/- 0.17% |
+| `residual:5:1` | residual | 172 | 128 | 71.41% | 20.00% +/- 0.34% | 95.30% +/- 0.29% |
+| `residual:4:1` | residual | 132 | 128 | 69.36% | 19.10% +/- 0.32% | 85.80% +/- 0.36% |
+| `residual:3:1` | residual | 96 | 128 | 51.90% | -74.46% +/- 10.13% | 81.88% +/- 0.30% |
+| `mlp:8` | MLP | 212 | 128 | 70.13% | 17.47% +/- 0.11% | 98.56% +/- 0.18% |
+| `mlp:6` | MLP | 150 | 128 | 66.39% | 13.71% +/- 0.22% | 96.66% +/- 0.25% |
+| `mlp:4` | MLP | 96 | 128 | 61.17% | 6.60% +/- 0.83% | 89.78% +/- 0.33% |
+| `linear` | structured | 44 | 128 | 43.15% | -86.56% +/- 2.73% | 98.79% +/- 0.07% |
+| `quadratic` | structured | 110 | 128 | 50.71% | 10.05% +/- 0.63% | 99.36% +/- 0.17% |
 
 The sub-216 sweep did not find a replacement for the 216-parameter
-`residual:6:1` baseline. `residual:5:1` is the best-regret sub-216 row, but it
-loses about 2.1 relative-regret points and 3.1 coverage points versus
+`residual:6:1` baseline. `residual:5:1` is the best time-saved sub-216 row, but it
+loses about 2.1 relative-time-saved points and 3.1 coverage points versus
 `residual:6:1`. `mlp:8`, `linear`, and `quadratic` preserve broad span coverage,
-but their regret AUC is much weaker, so high coverage alone is not enough to
+but their time saved AUC is much weaker, so high coverage alone is not enough to
 justify further compression. The structured policies look like useful lower
 bounds, not practical replacements.
 
@@ -404,7 +404,7 @@ The important correction to the older compression section is that the earlier
 and eval seeds are aligned to the current default recipe, the 316-parameter
 `residual:8:1` student recovers frontier coverage and remains competitive with
 larger students. The 216-parameter `residual:6:1` student also keeps coverage,
-but its relative regret is weaker in this rerun. Because this ablation still
+but its relative time saved is weaker in this rerun. Because this ablation still
 uses one training seed per architecture, the practical default remains
 `oracle_stationary`, `residual:8:2`, 476 parameters, 128 distillation epochs,
 and train weights `0,16,64,256,1024`. The 316-parameter student remains the
@@ -433,15 +433,15 @@ The older `stationary_finite_no_sub05_compression/` teacher-forced and student-r
 
 ## Lessons
 
-- Coverage is a first-class metric. Always report `time_regret_auc`, `span_coverage_percent`, and enough endpoint rows to show whether the frontier covers both high-memory and low-cost regimes.
+- Coverage is a first-class metric. Always report `same_target_time_saved_auc`, `span_coverage_percent`, and enough endpoint rows to show whether the frontier covers both high-memory and low-cost regimes.
 - Desired retention is not a naturally well-conditioned coordinate for an integer-interval teacher. Small retention errors can become large interval errors, especially for high stability, high cost weights, and horizon-terminal actions.
 - For continuous desired-retention distillation, train on the implied interval, not just the retention value. The repaired default keeps retention as the action output but supervises `log(interval(retention))`.
 - Underpredicting intervals is worse than overpredicting intervals at high cost weights. The effective training recipe weights high-cost underprediction and terminal-action underprediction more heavily.
 - Compression claims must be rerun after changing the action grid and after changing the training recipe. The old low-action-space compression sweep overstated the usefulness of small stationary finite students for the clipped action space, while the aligned sparse-teacher rerun shows that 316-parameter `residual:8:1` and 216-parameter `residual:6:1` models recover coverage when trained for 128 epochs.
-- Student rollout is not automatically better. In the older no-sub-0.5 compression check it improved span coverage versus teacher-forcing, but the 476-parameter student-rollout model lost the default-baseline time-regret advantage. The current best small stationary finite per-user result is direct exact-table distillation with sparse cost weights, equal samples per cost weight, and 128 epochs.
+- Student rollout is not automatically better. In the older no-sub-0.5 compression check it improved span coverage versus teacher-forcing, but the 476-parameter student-rollout model lost the default-baseline time-saved advantage. The current best small stationary finite per-user result is direct exact-table distillation with sparse cost weights, equal samples per cost weight, and 128 epochs.
 - Removing remaining time at the oracle layer is a powerful structural compression. With 64x32 grids and 11 clipped actions, the unrestricted finite oracle table has 41,113,600 entries, while the stationary finite table has 22,528 entries before any neural distillation.
 - The exact stationary finite policy is not just a lower-retention version of the finite oracle. Its action table is cost-sensitive and state-sensitive: with sub-0.5 actions removed, `w=256` remains mixed and bimodal, while `w=1024` concentrates on the new cheapest action `0.50` and loses high-cost scalar objective. That explains why very small stationary finite distills need the aligned exact-table recipe and enough epochs despite the smaller teacher table.
 - `oracle_rho4` is a strong compact observation. With the clipped 11-action output head, it gives a 1,468-parameter model enough horizon and stability information to cover the frontier when the loss geometry is right.
-- Train cost weights should be sparse but cover scale. For stationary finite distillation, `0,16,64,256,1024` preserved relative regret and coverage in the current 3-seed evaluation; the broader `0 + 2^0..2^10` schedule remains a conservative default for unrestricted finite-oracle distillation. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
+- Train cost weights should be sparse but cover scale. For stationary finite distillation, `0,16,64,256,1024` preserved relative time saved and coverage in the current 3-seed evaluation; the broader `0 + 2^0..2^10` schedule remains a conservative default for unrestricted finite-oracle distillation. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
 - Do not train stationary finite distills from raw teacher-forcing event counts without rebalancing cost weights. Low-cost policies produce many more review events, so event-level cross-entropy can drown out high-cost policy boundaries. Uniform exact-table supervision over `(cost_weight, stability, difficulty)` fixed the first-8 user-2 high-cost interpolation failure without adding teacher cost weights.
 - Integer interval actions are the most direct continuous-action target for the finite-horizon oracle. Continuous desired retention can work, but it needs interval-aware loss shaping and coverage validation.

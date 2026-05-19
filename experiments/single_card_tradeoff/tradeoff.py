@@ -157,8 +157,14 @@ class MemoryTargetRegretAucSummary:
     covered_target_count: int
     total_span: float
     covered_span: float
-    time_regret_auc: float | None
+    same_target_time_saved_auc: float | None
     baseline_time_auc: float | None
+
+    @property
+    def time_regret_auc(self) -> float | None:
+        if self.same_target_time_saved_auc is None:
+            return None
+        return -self.same_target_time_saved_auc
 
 
 def parse_args() -> argparse.Namespace:
@@ -502,14 +508,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "CSV output path for pairwise memory-target time regret AUC. "
+            "CSV output path for pairwise same-target time saved AUC. "
             "Defaults to the main CSV path with _regret_auc before the suffix."
         ),
     )
     parser.add_argument(
         "--no-regret-auc",
         action="store_true",
-        help="Skip writing the pairwise memory-target regret AUC CSV.",
+        help="Skip writing the pairwise same-target time saved AUC CSV.",
     )
     parser.add_argument(
         "--no-progress",
@@ -3493,7 +3499,7 @@ def _memory_target_regret_auc_summary(
         else 0.0
     )
     covered_span = 0.0
-    time_regret_area = 0.0
+    time_saved_area = 0.0
     baseline_time_area = 0.0
     covered_target_count = 0
 
@@ -3538,9 +3544,9 @@ def _memory_target_regret_auc_summary(
                     or right_scheduler_time is None
                 ):
                     continue
-                left_regret = left_scheduler_time - left_baseline_time
-                right_regret = right_scheduler_time - right_baseline_time
-                time_regret_area += width * ((left_regret + right_regret) / 2.0)
+                left_saved = left_baseline_time - left_scheduler_time
+                right_saved = right_baseline_time - right_scheduler_time
+                time_saved_area += width * ((left_saved + right_saved) / 2.0)
                 baseline_time_area += width * (
                     (left_baseline_time + right_baseline_time) / 2.0
                 )
@@ -3558,7 +3564,9 @@ def _memory_target_regret_auc_summary(
         covered_target_count=covered_target_count,
         total_span=total_span,
         covered_span=covered_span,
-        time_regret_auc=(time_regret_area / covered_span) if covered_span else None,
+        same_target_time_saved_auc=(time_saved_area / covered_span)
+        if covered_span
+        else None,
         baseline_time_auc=(baseline_time_area / covered_span) if covered_span else None,
     )
 
@@ -3577,9 +3585,9 @@ def _summary_to_regret_auc_row(
         if summary.total_span
         else 0.0
     )
-    relative_regret_auc_percent = (
-        (summary.time_regret_auc / summary.baseline_time_auc) * 100.0
-        if summary.time_regret_auc is not None
+    relative_same_target_time_saved_auc_percent = (
+        (summary.same_target_time_saved_auc / summary.baseline_time_auc) * 100.0
+        if summary.same_target_time_saved_auc is not None
         and summary.baseline_time_auc is not None
         and summary.baseline_time_auc
         else None
@@ -3597,9 +3605,11 @@ def _summary_to_regret_auc_row(
         "total_span": _finite_float(summary.total_span),
         "covered_span": _finite_float(summary.covered_span),
         "span_coverage_percent": _finite_float(span_coverage_percent),
-        "time_regret_auc": _finite_float(summary.time_regret_auc),
+        "same_target_time_saved_auc": _finite_float(summary.same_target_time_saved_auc),
         "baseline_time_auc": _finite_float(summary.baseline_time_auc),
-        "relative_regret_auc_percent": _finite_float(relative_regret_auc_percent),
+        "relative_same_target_time_saved_auc_percent": _finite_float(
+            relative_same_target_time_saved_auc_percent
+        ),
     }
 
 
@@ -3645,9 +3655,9 @@ def _write_regret_auc_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "total_span",
         "covered_span",
         "span_coverage_percent",
-        "time_regret_auc",
+        "same_target_time_saved_auc",
         "baseline_time_auc",
-        "relative_regret_auc_percent",
+        "relative_same_target_time_saved_auc_percent",
     ]
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -3814,26 +3824,28 @@ def _print_regret_auc_summary(rows: list[dict[str, Any]]) -> None:
             row for row in rows if row["scheduler"] != row["baseline_scheduler"]
         ]
     for row in filtered:
-        time_regret_auc = row["time_regret_auc"]
-        relative_regret_auc_percent = row["relative_regret_auc_percent"]
+        same_target_time_saved_auc = row["same_target_time_saved_auc"]
+        relative_same_target_time_saved_auc_percent = row[
+            "relative_same_target_time_saved_auc_percent"
+        ]
         time_text = (
-            f"{time_regret_auc:.4f}"
-            if isinstance(time_regret_auc, (int, float))
+            f"{same_target_time_saved_auc:.4f}"
+            if isinstance(same_target_time_saved_auc, (int, float))
             else "n/a"
         )
         relative_text = (
-            f"{relative_regret_auc_percent:.2f}%"
-            if isinstance(relative_regret_auc_percent, (int, float))
+            f"{relative_same_target_time_saved_auc_percent:.2f}%"
+            if isinstance(relative_same_target_time_saved_auc_percent, (int, float))
             else "n/a"
         )
         print(
             " ".join(
                 [
-                    "regret_auc",
+                    "same_target_time_saved_auc",
                     f"{row['environment']}/{row['scheduler']}",
                     f"vs={row['baseline_scheduler']}",
-                    f"time={time_text}",
-                    f"relative={relative_text}",
+                    f"time_saved={time_text}",
+                    f"relative_time_saved={relative_text}",
                     f"span={row['span_coverage_percent']:.1f}%",
                 ]
             )
@@ -4053,7 +4065,7 @@ def main() -> None:
         regret_auc_rows = _build_regret_auc_rows(rows)
         regret_auc_path = _regret_auc_path(args)
         _write_regret_auc_csv(regret_auc_path, regret_auc_rows)
-        print(f"Wrote regret AUC CSV: {regret_auc_path}")
+        print(f"Wrote same-target time saved AUC CSV: {regret_auc_path}")
         _print_regret_auc_summary(regret_auc_rows)
     _print_summary(rows)
 

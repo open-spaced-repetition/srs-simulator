@@ -1,4 +1,4 @@
-# Anki SM2 AP pop16 gen20 experiment report
+# Anki SM2 AP vs ADR experiment report
 
 Machine summary: `artifacts/rl_scheduler/anki_sm2_ap_portfolio_users_1_8/anki_sm2_ap_portfolio_users_1_8_pop16_20_v1/report/report_summary.json`
 
@@ -66,25 +66,25 @@ No automatic GPU monitor artifacts are present for these historical runs. The ta
 
 Do not promote `anki_sm2_ap`.
 
-With the matched portfolio budget, Anki SM2 AP remains behind ADR on HV; budget-memory gain and memory-target regret deltas are:
+With the matched portfolio budget, Anki SM2 AP remains behind ADR on HV; same-budget memory lift and same-target time saved deltas are:
 
-- fsrs6: -354,851 HV, -73.9 budget-memory gain AUC, 4.09 memory-target regret AUC versus comparison.
-- lstm: -400,193 HV, 8.5 budget-memory gain AUC, 4.21 memory-target regret AUC versus comparison.
+- fsrs6: -354,851 HV, -73.9 same-budget memory lift AUC, -4.09 same-target time saved AUC versus comparison.
+- lstm: -400,193 HV, 8.5 same-budget memory lift AUC, -4.21 same-target time saved AUC versus comparison.
 
 Training HV gains and lower-time sampled policy points do not survive external Pareto evaluation.
 
 ## External Pareto Results
 
-Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and budget-memory gain are better. Negative memory-target regret is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
+Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and same-budget memory lift are better. Positive same-target time saved is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
 
-| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget-memory gain / baseline | budget coverage | memory-target regret AUC | memory-target regret / baseline | target coverage |
+| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | same-budget memory lift AUC | same-budget memory lift / baseline | budget coverage | same-target time saved AUC | same-target time saved / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fsrs6 | Anki SM2 AP | -257,971 | -9.272% | 121 | 16.8 | +0.247% | 34/115, 31.091% span | -0.48 | -1.266% | 32/115, 25.999% span |
-| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
-| fsrs6 | Anki SM2 AP - ADR | -354,851 | -12.754% | -7 | -73.9 | -1.153% | -54, -50.459 pp span | 4.09 | +10.289% | -49, -52.147 pp span |
-| lstm | Anki SM2 AP | -344,345 | -12.120% | 107 | 70.6 | +1.071% | 35/111, 27.320% span | 2.39 | +6.331% | 34/111, 27.597% span |
-| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
-| lstm | Anki SM2 AP - ADR | -400,193 | -14.085% | -18 | 8.5 | +0.118% | -44, -55.146 pp span | 4.21 | +12.237% | -47, -56.179 pp span |
+| fsrs6 | Anki SM2 AP | -257,971 | -9.272% | 121 | 16.8 | +0.247% | 34/115, 31.091% span | 0.48 | +1.266% | 32/115, 25.999% span |
+| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | 4.57 | +11.555% | 81/115, 78.146% span |
+| fsrs6 | Anki SM2 AP - ADR | -354,851 | -12.754% | -7 | -73.9 | -1.153% | -54, -50.459 pp span | -4.09 | -10.289% | -49, -52.147 pp span |
+| lstm | Anki SM2 AP | -344,345 | -12.120% | 107 | 70.6 | +1.071% | 35/111, 27.320% span | -2.39 | -6.331% | 34/111, 27.597% span |
+| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | 1.82 | +5.906% | 81/111, 83.775% span |
+| lstm | Anki SM2 AP - ADR | -400,193 | -14.085% | -18 | 8.5 | +0.118% | -44, -55.146 pp span | -4.21 | -12.237% | -47, -56.179 pp span |
 
 ## Per-User HV Delta
 

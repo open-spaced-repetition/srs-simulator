@@ -61,29 +61,27 @@ Analysis summaries:
 
 ## Conclusion
 
-Do not promote `fsrs6_adr_time` over ordinary `fsrs6_adr` for the matched-budget portfolio.
+Promotion decision for `fsrs6_adr_time` is inconclusive.
 
 Candidate-minus-comparison deltas on the primary external Pareto metrics are:
 
-- fsrs6: 520 HV, 13.5 budget-memory gain AUC, -0.05 memory-target regret AUC versus comparison.
-- lstm: -7,419 HV, 14.8 budget-memory gain AUC, 0.86 memory-target regret AUC versus comparison.
-- The FSRS6 gain is marginal, while the LSTM regression is material on HV and absolute memory-target regret. The user-simple relative regret result is close and does not overturn that decision.
-- Training HV is slightly higher for ADR time (`108,373` vs `107,746`), but that extra training objective value does not survive the external LSTM Pareto check.
+- fsrs6: 520 HV, 13.5 same-budget memory lift AUC, 0.05 same-target time saved AUC versus comparison.
+- lstm: -7,419 HV, 14.8 same-budget memory lift AUC, -0.86 same-target time saved AUC versus comparison.
 
 Training HV and sampled policy-point diagnostics should be interpreted against the external Pareto metrics.
 
 ## External Pareto Results
 
-Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and budget-memory gain are better. Negative memory-target regret is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
+Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and same-budget memory lift are better. Positive same-target time saved is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
 
-| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget-memory gain / baseline | budget coverage | memory-target regret AUC | memory-target regret / baseline | target coverage |
+| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | same-budget memory lift AUC | same-budget memory lift / baseline | budget coverage | same-target time saved AUC | same-target time saved / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fsrs6 | ADR time | 97,400 | +3.501% | 128 | 104.2 | +1.620% | 83/115, 79.851% span | -4.62 | -12.061% | 80/115, 77.083% span |
-| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
-| fsrs6 | ADR time - ADR | 520 | +0.019% | 0 | 13.5 | +0.220% | -5, -1.699 pp span | -0.05 | -0.506% | -1, -1.063 pp span |
-| lstm | ADR time | 48,430 | +1.705% | 125 | 76.9 | +1.190% | 79/111, 82.098% span | -0.96 | -6.084% | 80/111, 82.908% span |
-| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
-| lstm | ADR time - ADR | -7,419 | -0.261% | 0 | 14.8 | +0.237% | +0, -0.369 pp span | 0.86 | -0.177% | -1, -0.867 pp span |
+| fsrs6 | ADR time | 97,400 | +3.501% | 128 | 104.2 | +1.620% | 83/115, 79.851% span | 4.62 | +12.061% | 80/115, 77.083% span |
+| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | 4.57 | +11.555% | 81/115, 78.146% span |
+| fsrs6 | ADR time - ADR | 520 | +0.019% | 0 | 13.5 | +0.220% | -5, -1.699 pp span | 0.05 | +0.506% | -1, -1.063 pp span |
+| lstm | ADR time | 48,430 | +1.705% | 125 | 76.9 | +1.190% | 79/111, 82.098% span | 0.96 | +6.084% | 80/111, 82.908% span |
+| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | 1.82 | +5.906% | 81/111, 83.775% span |
+| lstm | ADR time - ADR | -7,419 | -0.261% | 0 | 14.8 | +0.237% | +0, -0.369 pp span | -0.86 | +0.177% | -1, -0.867 pp span |
 
 ## Per-User HV Delta
 
@@ -110,33 +108,6 @@ Unweighted policy-point averages describe where sampled policies lie; they are d
 | fsrs6 | ADR | 6,553.0 | 50.42 | 25.42 | 195.90 |
 | lstm | ADR time | 6,427.0 | 63.15 | 23.30 | 264.54 |
 | lstm | ADR | 6,431.5 | 60.86 | 22.88 | 255.29 |
-
-## Time-Feature Effect
-
-`T_remaining_norm` is `(simulation_days - day) / simulation_days`, clipped to `[0, 1]`. In this 1825-day experiment, `T=0.2` means 365 days remain.
-
-Across the 128 trained portfolio children, the time terms mostly act as an early-horizon retention lift that fades by the last simulation year.
-
-| time comparison | average delta across a 3x3 normalized S/D grid | median delta across child policies |
-| --- | --- | --- |
-| `T=1.0` vs `T=0.0` | +4.64 pp retention | +1.33 pp |
-| `T=1.0` vs `T=0.2` | +3.84 pp retention | +0.96 pp |
-| `T=0.2` vs `T=0.0` | +0.80 pp retention | +0.33 pp |
-
-State dependence is real:
-
-- Weak, hard cards (`S≈1.0d`, `D≈8.2`) see a smaller average early-time lift: `+2.64 pp` from `T=0.0` to `T=1.0`.
-- Mid-state cards (`S≈30.2d`, `D≈5.5`) see `+5.08 pp` on average, with a median `+1.50 pp`.
-- Strong, easy cards (`S≈929d`, `D≈2.8`) see the largest average lift: `+5.76 pp`.
-
-The raw time coefficients are mixed rather than uniformly positive:
-
-- `T` is positive in `80/128` child policies.
-- `S*T` is positive in `92/128`.
-- `D*T` is positive in `70/128`.
-- `T^2` is positive in `56/128`.
-
-So the learned time behavior comes more from interactions and curvature than from a single positive offset. In practice it nudges many policies toward higher retention earlier in the run, which is consistent with the slightly higher policy-point review/time load seen above, but that extra effort does not convert into a better external LSTM Pareto frontier.
 
 Train-overfit final HV gain by user:
 

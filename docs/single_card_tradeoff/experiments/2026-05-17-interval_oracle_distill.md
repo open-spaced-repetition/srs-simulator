@@ -13,7 +13,7 @@ The interval distill training, tradeoff comparison, and model-size search were r
 
 Source artifacts:
 - `interval_distill_results`: `artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill.csv`
-- `interval_compare_regret_auc`: `artifacts/single_card_tradeoff/oracle_interval_compare/regret_auc.csv`
+- `interval_compare_time_saved_auc`: `artifacts/single_card_tradeoff/oracle_interval_compare/regret_auc.csv`
 - `interval_hparam_summary`: `artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_summary.csv`
 
 ## Results
@@ -22,10 +22,10 @@ The rerun interval distill final loss is 0.05573, with eval log-interval MAE 0.2
 
 ### Interval policies vs fsrs6_default
 
-| scheduler | time_regret_auc | relative_regret | coverage |
+| scheduler | same_target_time_saved_auc | relative_time_saved | coverage |
 | --- | --- | --- | --- |
-| fsrs6_oracle_interval | -6.3290 | -22.81% | 7.05% |
-| fsrs6_oracle_interval_distill | -4.2179 | -30.03% | 100.00% |
+| fsrs6_oracle_interval | 6.3290 | 22.81% | 7.05% |
+| fsrs6_oracle_interval_distill | 4.2179 | 30.03% | 100.00% |
 
 ### Interval model-scale search
 

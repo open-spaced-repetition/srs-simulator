@@ -17,10 +17,10 @@ Source artifacts:
 
 ## Results
 
-| run | params/user | total params | vs fsrs6 relative regret | vs fsrs6 coverage | vs distill relative regret | vs distill coverage |
+| run | params/user | total params | vs fsrs6 relative time saved | vs fsrs6 coverage | vs distill relative time saved | vs distill coverage |
 | --- | --- | --- | --- | --- | --- | --- |
-| sparse teacher weights | 7 | 56 | -7.50% | 72.37% | 4.43% | 68.48% |
-| dense teacher weights | 7 | 56 | -9.01% | 66.45% | 3.12% | 62.74% |
+| sparse teacher weights | 7 | 56 | 7.50% | 72.37% | -4.43% | 68.48% |
+| dense teacher weights | 7 | 56 | 9.01% | 66.45% | -3.12% | 62.74% |
 
 ## Reproduction Profile
 

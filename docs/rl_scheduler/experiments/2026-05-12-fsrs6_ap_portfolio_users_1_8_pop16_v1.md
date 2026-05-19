@@ -56,32 +56,32 @@ baseline manifest. Average memorized/time/efficiency are now diagnostic-only in
 | LSTM | AP pop16 | 45,380 | 1.597% | 2,786 | 18,515 | 127 |
 | LSTM | ADR pop16 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
 
-Target LSTM budget-memory gain AUC, target scheduler rows only. It uses linear
+Target LSTM same-budget memory lift AUC, target scheduler rows only. It uses linear
 interpolation over the common covered time-budget interval. Positive values mean
-the scheduler remembers more cards at the same budget. Relative gain AUC is the
-simple average of each user's memory gain AUC divided by that user's covered
+the scheduler remembers more cards at the same budget. Relative same-budget memory lift AUC is the
+simple average of each user's same-budget memory lift AUC divided by that user's covered
 baseline memory AUC.
 
-| run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
+| run | AUC users | budget coverage | span coverage | same-budget memory lift AUC | relative same-budget memory lift AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | AP pop16 | 8/8 | 86/111 | 87.776% | +54.0 | +0.822% |
 | ADR pop16 | 8/8 | 79/111 | 82.466% | +62.2 | +0.953% |
 
-Target LSTM memory-target regret AUC, target scheduler rows only. Negative
+Target LSTM same-target time saved AUC, target scheduler rows only. Positive
 values mean the scheduler reaches the same memorized-card targets faster. It
 uses linear interpolation over the common covered memory-target interval.
 
-| run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
+| run | AUC users | target coverage | span coverage | same-target time saved AUC | relative same-target time saved AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| AP pop16 | 8/8 | 93/111 | 86.495% | -0.80 | -4.717% |
-| ADR pop16 | 8/8 | 81/111 | 83.775% | -1.82 | -5.906% |
+| AP pop16 | 8/8 | 93/111 | 86.495% | +0.80 | +4.717% |
+| ADR pop16 | 8/8 | 81/111 | 83.775% | +1.82 | +5.906% |
 
 AP minus ADR:
 
-| environment | HV delta change | relative change | percent-point change | budget-gain AUC change | target-regret AUC change |
+| environment | HV delta change | relative change | percent-point change | same-budget memory lift AUC change | same-target time saved AUC change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | -16,204 | -16.73% | -0.582 pp | -6.5 | +1.21 |
-| LSTM | -10,469 | -18.74% | -0.368 pp | -8.1 | +1.02 |
+| FSRS6 | -16,204 | -16.73% | -0.582 pp | -6.5 | -1.21 |
+| LSTM | -10,469 | -18.74% | -0.368 pp | -8.1 | -1.02 |
 
 Interpretation:
 
@@ -90,10 +90,10 @@ Interpretation:
 - The LSTM gap is material: AP is behind ADR by 10.5k HV, or 18.7% relative to
   ADR.
 - On the LSTM envelope, AP is positive against the FSRS6 baseline but trails
-  ADR on both corrected AUCs: -8.1 memorized cards in budget-gain AUC and
-  +1.02 minutes in target-regret AUC.
-- FSRS6 remains an HV and AUC loss for AP at -16.2k HV, -6.5 budget-gain AUC,
-  and +1.21 target-regret AUC versus ADR.
+  ADR on both corrected AUCs: -8.1 memorized cards in same-budget memory lift AUC and
+  -1.02 minutes in same-target time saved AUC.
+- FSRS6 remains an HV and AUC loss for AP at -16.2k HV, -6.5 same-budget memory lift AUC,
+  and -1.21 same-target time saved AUC versus ADR.
 
 ## AP Policy Parameter Distribution
 
@@ -192,8 +192,8 @@ than ADR.
 - FSRS6 HV: AP is -16,204 behind ADR.
 - LSTM HV: AP is -10,469 behind ADR.
 - AP's corrected LSTM AUCs are favorable versus the FSRS6 baseline, but still
-  behind ADR: +54.0 vs +62.2 budget-memory gain and -0.80 vs -1.82
-  memory-target regret.
+  behind ADR: +54.0 vs +62.2 same-budget memory lift and +0.80 vs +1.82
+  same-target time saved.
 - AP parameters show substantial movement and frequent bounds, so the result is
   not just a no-op version of FSRS6.
 

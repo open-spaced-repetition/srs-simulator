@@ -82,8 +82,12 @@ class BudgetMemoryGainAucUserSummary:
     covered_budget_count: int
     total_span: float
     covered_span: float
-    memory_gain_auc: float | None
+    same_budget_memory_lift_auc: float | None
     baseline_memory_auc: float | None
+
+    @property
+    def memory_gain_auc(self) -> float | None:
+        return self.same_budget_memory_lift_auc
 
 
 @dataclass(frozen=True)
@@ -93,8 +97,14 @@ class MemoryTargetRegretAucUserSummary:
     covered_target_count: int
     total_span: float
     covered_span: float
-    time_regret_auc: float | None
+    same_target_time_saved_auc: float | None
     baseline_time_auc: float | None
+
+    @property
+    def time_regret_auc(self) -> float | None:
+        if self.same_target_time_saved_auc is None:
+            return None
+        return -self.same_target_time_saved_auc
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1292,7 +1302,7 @@ def budget_memory_gain_auc_user_summaries(
                 covered_budget_count=covered_budget_count,
                 total_span=total_span,
                 covered_span=covered_span,
-                memory_gain_auc=(memory_gain_area / covered_span)
+                same_budget_memory_lift_auc=(memory_gain_area / covered_span)
                 if covered_span
                 else None,
                 baseline_memory_auc=(baseline_memory_area / covered_span)
@@ -1308,11 +1318,16 @@ def _relative_gain_auc_percent_values(
 ) -> list[float]:
     values: list[float] = []
     for summary in summaries:
-        if summary.memory_gain_auc is None or summary.baseline_memory_auc is None:
+        if (
+            summary.same_budget_memory_lift_auc is None
+            or summary.baseline_memory_auc is None
+        ):
             continue
         if math.isclose(summary.baseline_memory_auc, 0.0):
             continue
-        values.append((summary.memory_gain_auc / summary.baseline_memory_auc) * 100.0)
+        values.append(
+            (summary.same_budget_memory_lift_auc / summary.baseline_memory_auc) * 100.0
+        )
     return values
 
 
@@ -1339,10 +1354,10 @@ def budget_memory_gain_auc_table(
         )
         total_span = sum(summary.total_span for summary in summaries)
         covered_span = sum(summary.covered_span for summary in summaries)
-        memory_gain_aucs = [
-            summary.memory_gain_auc
+        same_budget_memory_lift_aucs = [
+            summary.same_budget_memory_lift_auc
             for summary in summaries
-            if summary.memory_gain_auc is not None
+            if summary.same_budget_memory_lift_auc is not None
         ]
         baseline_memory_aucs = [
             summary.baseline_memory_auc
@@ -1359,10 +1374,10 @@ def budget_memory_gain_auc_table(
         output_rows.append(
             [
                 scheduler,
-                f"{len(memory_gain_aucs)}/{len(summaries)}",
+                f"{len(same_budget_memory_lift_aucs)}/{len(summaries)}",
                 f"{covered_budget_count}/{budget_count}",
                 fmt_percent(span_coverage),
-                fmt_float(average(memory_gain_aucs), 1),
+                fmt_float(average(same_budget_memory_lift_aucs), 1),
                 fmt_percent(relative_gain_auc),
             ]
         )
@@ -1374,8 +1389,8 @@ def budget_memory_gain_auc_table(
             "AUC users",
             "budget coverage",
             "span coverage",
-            f"memory gain AUC vs {baseline_scheduler}",
-            f"relative gain AUC vs {baseline_scheduler}",
+            f"same-budget memory lift AUC vs {baseline_scheduler}",
+            f"relative same-budget memory lift AUC vs {baseline_scheduler}",
         ],
         output_rows,
     )
@@ -1415,7 +1430,7 @@ def memory_target_regret_auc_user_summaries(
             else 0.0
         )
         covered_span = 0.0
-        time_regret_area = 0.0
+        time_saved_area = 0.0
         baseline_time_area = 0.0
         covered_target_count = 0
         if target_frontier:
@@ -1459,9 +1474,9 @@ def memory_target_regret_auc_user_summaries(
                         or right_target_time is None
                     ):
                         continue
-                    left_regret = left_target_time - left_baseline_time
-                    right_regret = right_target_time - right_baseline_time
-                    time_regret_area += width * ((left_regret + right_regret) / 2.0)
+                    left_saved = left_baseline_time - left_target_time
+                    right_saved = right_baseline_time - right_target_time
+                    time_saved_area += width * ((left_saved + right_saved) / 2.0)
                     baseline_time_area += width * (
                         (left_baseline_time + right_baseline_time) / 2.0
                     )
@@ -1474,7 +1489,7 @@ def memory_target_regret_auc_user_summaries(
                 covered_target_count=covered_target_count,
                 total_span=total_span,
                 covered_span=covered_span,
-                time_regret_auc=(time_regret_area / covered_span)
+                same_target_time_saved_auc=(time_saved_area / covered_span)
                 if covered_span
                 else None,
                 baseline_time_auc=(baseline_time_area / covered_span)
@@ -1490,11 +1505,16 @@ def _relative_regret_auc_percent_values(
 ) -> list[float]:
     values: list[float] = []
     for summary in summaries:
-        if summary.time_regret_auc is None or summary.baseline_time_auc is None:
+        if (
+            summary.same_target_time_saved_auc is None
+            or summary.baseline_time_auc is None
+        ):
             continue
         if math.isclose(summary.baseline_time_auc, 0.0):
             continue
-        values.append((summary.time_regret_auc / summary.baseline_time_auc) * 100.0)
+        values.append(
+            (summary.same_target_time_saved_auc / summary.baseline_time_auc) * 100.0
+        )
     return values
 
 
@@ -1521,10 +1541,10 @@ def memory_target_regret_auc_table(
         )
         total_span = sum(summary.total_span for summary in summaries)
         covered_span = sum(summary.covered_span for summary in summaries)
-        time_regret_aucs = [
-            summary.time_regret_auc
+        same_target_time_saved_aucs = [
+            summary.same_target_time_saved_auc
             for summary in summaries
-            if summary.time_regret_auc is not None
+            if summary.same_target_time_saved_auc is not None
         ]
         baseline_time_aucs = [
             summary.baseline_time_auc
@@ -1541,10 +1561,10 @@ def memory_target_regret_auc_table(
         output_rows.append(
             [
                 scheduler,
-                f"{len(time_regret_aucs)}/{len(summaries)}",
+                f"{len(same_target_time_saved_aucs)}/{len(summaries)}",
                 f"{covered_target_count}/{target_count}",
                 fmt_percent(span_coverage),
-                fmt_float(average(time_regret_aucs), 2),
+                fmt_float(average(same_target_time_saved_aucs), 2),
                 fmt_percent(relative_regret_auc),
             ]
         )
@@ -1556,8 +1576,8 @@ def memory_target_regret_auc_table(
             "AUC users",
             "target coverage",
             "span coverage",
-            f"time regret AUC vs {baseline_scheduler}",
-            f"relative regret AUC vs {baseline_scheduler}",
+            f"same-target time saved AUC vs {baseline_scheduler}",
+            f"relative same-target time saved AUC vs {baseline_scheduler}",
         ],
         output_rows,
     )
@@ -1896,18 +1916,20 @@ def build_budget_memory_gain_auc_summary(
         )
         total_span = sum(summary.total_span for summary in summaries)
         covered_span = sum(summary.covered_span for summary in summaries)
-        memory_gain_aucs = [
-            summary.memory_gain_auc
+        same_budget_memory_lift_aucs = [
+            summary.same_budget_memory_lift_auc
             for summary in summaries
-            if summary.memory_gain_auc is not None
+            if summary.same_budget_memory_lift_auc is not None
         ]
         baseline_memory_aucs = [
             summary.baseline_memory_auc
             for summary in summaries
             if summary.baseline_memory_auc is not None
         ]
-        mean_memory_gain_auc = (
-            average(memory_gain_aucs) if memory_gain_aucs else float("nan")
+        mean_same_budget_memory_lift_auc = (
+            average(same_budget_memory_lift_aucs)
+            if same_budget_memory_lift_aucs
+            else float("nan")
         )
         mean_baseline_memory_auc = (
             average(baseline_memory_aucs) if baseline_memory_aucs else float("nan")
@@ -1923,16 +1945,20 @@ def build_budget_memory_gain_auc_summary(
             {
                 "scheduler": scheduler,
                 "baseline_scheduler": baseline_scheduler,
-                "auc_users": len(memory_gain_aucs),
+                "auc_users": len(same_budget_memory_lift_aucs),
                 "users": len(summaries),
                 "budget_count": budget_count,
                 "covered_budget_count": covered_budget_count,
                 "total_span": finite_float(total_span),
                 "covered_span": finite_float(covered_span),
                 "span_coverage_percent": finite_float(span_coverage),
-                "memory_gain_auc_mean": finite_float(mean_memory_gain_auc),
+                "same_budget_memory_lift_auc_mean": finite_float(
+                    mean_same_budget_memory_lift_auc
+                ),
                 "baseline_memory_auc_mean": finite_float(mean_baseline_memory_auc),
-                "relative_gain_auc_percent": finite_float(relative_gain_auc),
+                "relative_same_budget_memory_lift_auc_percent": finite_float(
+                    relative_gain_auc
+                ),
             }
         )
     return output_rows
@@ -1961,10 +1987,10 @@ def build_memory_target_regret_auc_summary(
         )
         total_span = sum(summary.total_span for summary in summaries)
         covered_span = sum(summary.covered_span for summary in summaries)
-        time_regret_aucs = [
-            summary.time_regret_auc
+        same_target_time_saved_aucs = [
+            summary.same_target_time_saved_auc
             for summary in summaries
-            if summary.time_regret_auc is not None
+            if summary.same_target_time_saved_auc is not None
         ]
         baseline_time_aucs = [
             summary.baseline_time_auc
@@ -1972,8 +1998,10 @@ def build_memory_target_regret_auc_summary(
             if summary.baseline_time_auc is not None
         ]
         relative_regret_auc_values = _relative_regret_auc_percent_values(summaries)
-        mean_time_regret_auc = (
-            average(time_regret_aucs) if time_regret_aucs else float("nan")
+        mean_same_target_time_saved_auc = (
+            average(same_target_time_saved_aucs)
+            if same_target_time_saved_aucs
+            else float("nan")
         )
         mean_baseline_time_auc = (
             average(baseline_time_aucs) if baseline_time_aucs else float("nan")
@@ -1988,16 +2016,20 @@ def build_memory_target_regret_auc_summary(
             {
                 "scheduler": scheduler,
                 "baseline_scheduler": baseline_scheduler,
-                "auc_users": len(time_regret_aucs),
+                "auc_users": len(same_target_time_saved_aucs),
                 "users": len(summaries),
                 "target_count": target_count,
                 "covered_target_count": covered_target_count,
                 "total_span": finite_float(total_span),
                 "covered_span": finite_float(covered_span),
                 "span_coverage_percent": finite_float(span_coverage),
-                "time_regret_auc_mean": finite_float(mean_time_regret_auc),
+                "same_target_time_saved_auc_mean": finite_float(
+                    mean_same_target_time_saved_auc
+                ),
                 "baseline_time_auc_mean": finite_float(mean_baseline_time_auc),
-                "relative_regret_auc_percent": finite_float(relative_regret_auc),
+                "relative_same_target_time_saved_auc_percent": finite_float(
+                    relative_regret_auc
+                ),
             }
         )
     return output_rows
@@ -2071,7 +2103,7 @@ def build_analysis_summary(args: argparse.Namespace) -> dict[str, Any]:
                     target_schedulers=target_schedulers,
                 )
             )
-            env_summary["budget_memory_gain_auc"] = (
+            env_summary["same_budget_memory_lift_auc"] = (
                 build_budget_memory_gain_auc_summary(
                     rows,
                     env,
@@ -2079,7 +2111,7 @@ def build_analysis_summary(args: argparse.Namespace) -> dict[str, Any]:
                     baseline_scheduler="fsrs6",
                 )
             )
-            env_summary["memory_target_regret_auc"] = (
+            env_summary["same_target_time_saved_auc"] = (
                 build_memory_target_regret_auc_summary(
                     rows,
                     env,
@@ -2098,8 +2130,8 @@ def build_analysis_summary(args: argparse.Namespace) -> dict[str, Any]:
             }
         else:
             env_summary["primary_hypervolume_summary"] = []
-            env_summary["budget_memory_gain_auc"] = []
-            env_summary["memory_target_regret_auc"] = []
+            env_summary["same_budget_memory_lift_auc"] = []
+            env_summary["same_target_time_saved_auc"] = []
             env_summary["per_user_hypervolume"] = {}
 
         env_summary["policy_point_diagnostics"] = build_policy_point_diagnostics(
@@ -2341,8 +2373,8 @@ def render_budget_memory_gain_auc_summary(
             "AUC users",
             "budget coverage",
             "span coverage",
-            f"memory gain AUC vs {baseline_scheduler}",
-            f"relative gain AUC vs {baseline_scheduler}",
+            f"same-budget memory lift AUC vs {baseline_scheduler}",
+            f"relative same-budget memory lift AUC vs {baseline_scheduler}",
         ],
         [
             [
@@ -2350,8 +2382,21 @@ def render_budget_memory_gain_auc_summary(
                 f"{row['auc_users']}/{row['users']}",
                 f"{row['covered_budget_count']}/{row['budget_count']}",
                 fmt_percent_optional(row["span_coverage_percent"]),
-                fmt_float_optional(row["memory_gain_auc_mean"], 1),
-                fmt_percent_optional(row["relative_gain_auc_percent"]),
+                fmt_float_optional(
+                    _metric_value(
+                        row,
+                        "same_budget_memory_lift_auc_mean",
+                        "memory_gain_auc_mean",
+                    ),
+                    1,
+                ),
+                fmt_percent_optional(
+                    _metric_value(
+                        row,
+                        "relative_same_budget_memory_lift_auc_percent",
+                        "relative_gain_auc_percent",
+                    )
+                ),
             ]
             for row in rows
         ],
@@ -2371,8 +2416,8 @@ def render_memory_target_regret_auc_summary(
             "AUC users",
             "target coverage",
             "span coverage",
-            f"time regret AUC vs {baseline_scheduler}",
-            f"relative regret AUC vs {baseline_scheduler}",
+            f"same-target time saved AUC vs {baseline_scheduler}",
+            f"relative same-target time saved AUC vs {baseline_scheduler}",
         ],
         [
             [
@@ -2380,12 +2425,52 @@ def render_memory_target_regret_auc_summary(
                 f"{row['auc_users']}/{row['users']}",
                 f"{row['covered_target_count']}/{row['target_count']}",
                 fmt_percent_optional(row["span_coverage_percent"]),
-                fmt_float_optional(row["time_regret_auc_mean"], 2),
-                fmt_percent_optional(row["relative_regret_auc_percent"]),
+                fmt_float_optional(
+                    _metric_value(
+                        row,
+                        "same_target_time_saved_auc_mean",
+                        "time_regret_auc_mean",
+                        legacy_sign=-1.0,
+                    ),
+                    2,
+                ),
+                fmt_percent_optional(
+                    _metric_value(
+                        row,
+                        "relative_same_target_time_saved_auc_percent",
+                        "relative_regret_auc_percent",
+                        legacy_sign=-1.0,
+                    )
+                ),
             ]
             for row in rows
         ],
     )
+
+
+def _metric_value(
+    row: dict[str, Any],
+    key: str,
+    legacy_key: str,
+    *,
+    legacy_sign: float = 1.0,
+) -> Any:
+    if key in row:
+        return row[key]
+    value = row.get(legacy_key)
+    if value is None:
+        return None
+    if isinstance(value, int | float):
+        return legacy_sign * float(value)
+    return value
+
+
+def _summary_rows(
+    summary: dict[str, Any],
+    key: str,
+    legacy_key: str,
+) -> list[dict[str, Any]]:
+    return summary.get(key) or summary.get(legacy_key, [])
 
 
 def render_per_user_hypervolume_summary(
@@ -2458,36 +2543,44 @@ def render_env_summary(
                     )
                 )
 
-                print("\n### Budget-memory gain AUC vs FSRS6 baseline\n")
+                print("\n### Same-budget memory lift AUC vs FSRS6 baseline\n")
                 print(
-                    "Gain AUC integrates memorized-card gain over the common "
+                    "Same-budget memory lift AUC integrates memorized-card lift over the common "
                     "covered time-budget interval between the FSRS6 baseline "
                     "frontier and each scheduler frontier, using linear "
                     "interpolation only. Positive values mean the scheduler "
-                    "remembers more cards at the same budget. Relative gain "
-                    "is the simple average of each user's memory gain AUC divided "
+                    "remembers more cards at the same budget. Relative lift "
+                    "is the simple average of each user's memory lift AUC divided "
                     "by that user's covered baseline memory AUC.\n"
                 )
                 print(
                     render_budget_memory_gain_auc_summary(
-                        summary["budget_memory_gain_auc"],
+                        _summary_rows(
+                            summary,
+                            "same_budget_memory_lift_auc",
+                            "budget_memory_gain_auc",
+                        ),
                         baseline_scheduler="fsrs6",
                     )
                 )
 
-                print("\n### Memory-target regret AUC vs FSRS6 baseline\n")
+                print("\n### Same-target time saved AUC vs FSRS6 baseline\n")
                 print(
-                    "Regret AUC integrates time regret over the common covered "
+                    "Same-target time saved AUC integrates saved time over the common covered "
                     "memory-target interval between the FSRS6 baseline frontier "
                     "and each scheduler frontier, using linear interpolation only. "
-                    "Negative values mean the scheduler reaches the same "
-                    "memorized-card targets faster. Relative regret is the simple "
-                    "average of each user's time regret AUC divided by that user's "
+                    "Positive values mean the scheduler reaches the same "
+                    "memorized-card targets faster. Relative time saved is the simple "
+                    "average of each user's time saved AUC divided by that user's "
                     "covered baseline time AUC.\n"
                 )
                 print(
                     render_memory_target_regret_auc_summary(
-                        summary["memory_target_regret_auc"],
+                        _summary_rows(
+                            summary,
+                            "same_target_time_saved_auc",
+                            "memory_target_regret_auc",
+                        ),
                         baseline_scheduler="fsrs6",
                     )
                 )
@@ -2560,8 +2653,8 @@ def render_summary_report(summary: dict[str, Any]) -> str:
             f"{filters['retention']['end']:.2f}, "
             f"engine={filters['engine']}, short_term={filters['short_term']}, "
             f"fuzz={filters['fuzz']}, "
-            "budget_gain_auc=common_covered_frontier_interval, "
-            "memory_target_regret_auc=common_covered_frontier_interval"
+            "same_budget_memory_lift_auc=common_covered_frontier_interval, "
+            "same_target_time_saved_auc=common_covered_frontier_interval"
         )
         loaded = coverage["loaded_records"]
         candidate_count = coverage["candidate_records"]
@@ -2616,14 +2709,14 @@ def print_env_report(
                 )
             )
 
-            print("\n### Budget-memory gain AUC vs FSRS6 baseline\n")
+            print("\n### Same-budget memory lift AUC vs FSRS6 baseline\n")
             print(
-                "Gain AUC integrates memorized-card gain over the common covered "
+                "Same-budget memory lift AUC integrates memorized-card lift over the common covered "
                 "time-budget interval between the FSRS6 baseline frontier and each "
                 "scheduler frontier, using linear interpolation only. Positive "
                 "values mean the scheduler remembers more cards at the same "
-                "budget. Relative gain is the simple average of each user's memory "
-                "gain AUC divided by that user's covered baseline memory AUC.\n"
+                "budget. Relative lift is the simple average of each user's memory "
+                "lift AUC divided by that user's covered baseline memory AUC.\n"
             )
             print(
                 budget_memory_gain_auc_table(
@@ -2634,14 +2727,14 @@ def print_env_report(
                 )
             )
 
-            print("\n### Memory-target regret AUC vs FSRS6 baseline\n")
+            print("\n### Same-target time saved AUC vs FSRS6 baseline\n")
             print(
-                "Regret AUC integrates time regret over the common covered "
+                "Same-target time saved AUC integrates saved time over the common covered "
                 "memory-target interval between the FSRS6 baseline frontier and "
                 "each scheduler frontier, using linear interpolation only. "
-                "Negative values mean the scheduler reaches the same memorized-card "
-                "targets faster. Relative regret is the simple average of each "
-                "user's time regret AUC divided by that user's covered baseline "
+                "Positive values mean the scheduler reaches the same memorized-card "
+                "targets faster. Relative time saved is the simple average of each "
+                "user's time saved AUC divided by that user's covered baseline "
                 "time AUC.\n"
             )
             print(

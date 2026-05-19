@@ -22,8 +22,8 @@ The per-user stationary finite distill trains eight independent 476-parameter st
 | metric | value |
 | --- | --- |
 | mean span coverage | 97.55% |
-| mean time regret AUC | -4.9501 |
-| mean relative regret AUC | -12.36% |
+| mean same-target time saved AUC | 4.9501 |
+| mean relative time saved AUC | 12.36% |
 | teacher_s | 58.82 |
 | train_s | 34.89 |
 | eval_s | 66.94 |
@@ -41,7 +41,7 @@ The TOML profile records the command and expected outputs used to reproduce this
 
 ## Conclusion
 
-Uniform exact-table supervision fixed the high-cost interpolation failure without adding teacher cost weights. The current first-eight artifact keeps about 98% coverage and improves mean relative regret versus `fsrs6`.
+Uniform exact-table supervision fixed the high-cost interpolation failure without adding teacher cost weights. The current first-eight artifact keeps about 98% coverage and improves mean relative time saved versus `fsrs6`.
 
 ## Artifacts
 

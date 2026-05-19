@@ -12,29 +12,29 @@ How do the clipped compact single-card policies compare against `fsrs6_default` 
 Environment `fsrs6_default`, 1825 days, 10,000 particles, `deck_scale=10000`, no sub-0.5 actions.
 
 Source artifacts:
-- `default_regret_auc`: `artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv`
+- `default_time_saved_auc`: `artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv`
 - `default_results`: `artifacts/single_card_tradeoff/no_sub05_distill_compare/results.csv`
 
 ## Results
 
-| scheduler | params | time_regret_auc | relative_regret_auc_percent | coverage |
+| scheduler | params | same_target_time_saved_auc | relative_same_target_time_saved_auc_percent | coverage |
 | --- | --- | --- | --- | --- |
-| fsrs6_oracle_distill | 1,468 | -3.6263 | -24.18% | 86.29% |
-| fsrs6_oracle_stationary_finite_distill | 1,452 | -3.4070 | -23.70% | 94.67% |
-| fsrs6_oracle_retention_distill | 1,468 | -3.3248 | -21.79% | 83.51% |
-| fsrs6_oracle_infinite_distill | 1,452 | -4.8242 | -14.66% | 9.01% |
-| uvfa_ppo | 27,148 | -3.4886 | -24.89% | 99.16% |
-| uvfa_ppo_rnn_interval | 87,559 | -3.0423 | -21.67% | 69.18% |
+| fsrs6_oracle_distill | 1,468 | 3.6263 | 24.18% | 86.29% |
+| fsrs6_oracle_stationary_finite_distill | 1,452 | 3.4070 | 23.70% | 94.67% |
+| fsrs6_oracle_retention_distill | 1,468 | 3.3248 | 21.79% | 83.51% |
+| fsrs6_oracle_infinite_distill | 1,452 | 4.8242 | 14.66% | 9.01% |
+| uvfa_ppo | 27,148 | 3.4886 | 24.89% | 99.16% |
+| uvfa_ppo_rnn_interval | 87,559 | 3.0423 | 21.67% | 69.18% |
 
 Direct comparisons against `fsrs6_oracle_distill`:
 
-| scheduler | time_regret_auc | relative_regret_auc_percent | coverage |
+| scheduler | same_target_time_saved_auc | relative_same_target_time_saved_auc_percent | coverage |
 | --- | --- | --- | --- |
-| fsrs6_oracle_stationary_finite_distill | 0.0944 | 0.83% | 100.00% |
-| fsrs6_oracle_retention_distill | 0.3542 | 3.07% | 96.71% |
-| fsrs6_oracle_infinite_distill | 3.7877 | 15.59% | 10.44% |
-| uvfa_ppo | -0.0639 | -0.56% | 99.91% |
-| uvfa_ppo_rnn_interval | 0.1289 | 1.19% | 80.18% |
+| fsrs6_oracle_stationary_finite_distill | -0.0944 | -0.83% | 100.00% |
+| fsrs6_oracle_retention_distill | -0.3542 | -3.07% | 96.71% |
+| fsrs6_oracle_infinite_distill | -3.7877 | -15.59% | 10.44% |
+| uvfa_ppo | 0.0639 | 0.56% | 99.91% |
+| uvfa_ppo_rnn_interval | -0.1289 | -1.19% | 80.18% |
 
 ## Reproduction Profile
 

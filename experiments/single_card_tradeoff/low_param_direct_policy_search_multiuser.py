@@ -984,7 +984,7 @@ def main() -> None:
 
     print(f"Wrote policy: {policy_path}")
     print(f"Wrote CSV: {results_path}")
-    print(f"Wrote regret AUC CSV: {regret_path}")
+    print(f"Wrote same-target time saved AUC CSV: {regret_path}")
     print(f"Wrote summary CSV: {summary_path}")
     print(f"Wrote mean summary CSV: {mean_summary_path}")
     print(f"Wrote train history CSV: {history_path}")
@@ -1000,10 +1000,10 @@ def main() -> None:
         print(
             f"vs={row['baseline_scheduler']} "
             f"coverage={row['mean_span_coverage_percent']:.2f}% "
-            "time_regret_auc="
-            f"{format_optional_float(row['mean_time_regret_auc'], digits=4)} "
-            "relative_regret="
-            f"{format_optional_float(row['mean_relative_regret_auc_percent'], digits=2)}%"
+            "same_target_time_saved_auc="
+            f"{format_optional_float(row['mean_same_target_time_saved_auc'], digits=4)} "
+            "relative_time_saved="
+            f"{format_optional_float(row['mean_relative_same_target_time_saved_auc_percent'], digits=2)}%"
         )
 
 

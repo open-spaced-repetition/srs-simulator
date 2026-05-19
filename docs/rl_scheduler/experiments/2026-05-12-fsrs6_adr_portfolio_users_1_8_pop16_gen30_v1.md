@@ -56,42 +56,42 @@ diagnostic-only in `analysis.md`.
 | LSTM | pop16 gen20 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
 | LSTM | pop16 gen30 | 52,781 | 1.858% | 3,924 | 15,470 | 125 |
 
-Target LSTM budget-memory gain AUC, target scheduler rows only. It uses linear
+Target LSTM same-budget memory lift AUC, target scheduler rows only. It uses linear
 interpolation over the common covered time-budget interval. Positive values mean
-the scheduler remembers more cards at the same budget. Relative gain AUC is the
-simple average of each user's memory gain AUC divided by that user's covered
+the scheduler remembers more cards at the same budget. Relative same-budget memory lift AUC is the
+simple average of each user's same-budget memory lift AUC divided by that user's covered
 baseline memory AUC.
 
-| run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
+| run | AUC users | budget coverage | span coverage | same-budget memory lift AUC | relative same-budget memory lift AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | v3 64/64 gen20 | 8/8 | 83/111 | 83.110% | +60.8 | +0.933% |
 | pop16 gen20 | 8/8 | 79/111 | 82.466% | +62.2 | +0.953% |
 | pop16 gen30 | 8/8 | 80/111 | 82.451% | +58.2 | +0.886% |
 
-Target LSTM memory-target regret AUC, target scheduler rows only. Negative
+Target LSTM same-target time saved AUC, target scheduler rows only. Positive
 values mean the scheduler reaches the same memorized-card targets faster. It
 uses linear interpolation over the common covered memory-target interval.
 
-| run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
+| run | AUC users | target coverage | span coverage | same-target time saved AUC | relative same-target time saved AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 64/64 gen20 | 8/8 | 89/111 | 88.298% | -1.32 | -5.589% |
-| pop16 gen20 | 8/8 | 81/111 | 83.775% | -1.82 | -5.906% |
-| pop16 gen30 | 8/8 | 86/111 | 86.052% | -1.64 | -5.674% |
+| v3 64/64 gen20 | 8/8 | 89/111 | 88.298% | +1.32 | +5.589% |
+| pop16 gen20 | 8/8 | 81/111 | 83.775% | +1.82 | +5.906% |
+| pop16 gen30 | 8/8 | 86/111 | 86.052% | +1.64 | +5.674% |
 
 Delta from pop16 gen20 to pop16 gen30:
 
-| environment | HV delta sum change | HV delta percent change | budget-gain AUC change | target-regret AUC change | scheduler frontier point change |
+| environment | HV delta sum change | HV delta percent change | same-budget memory lift AUC change | same-target time saved AUC change | scheduler frontier point change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | +7,480 | +7.72% | +3.2 | -0.32 | 0 |
-| LSTM | -3,068 | -5.49% | -3.9 | +0.18 | 0 |
+| FSRS6 | +7,480 | +7.72% | +3.2 | +0.32 | 0 |
+| LSTM | -3,068 | -5.49% | -3.9 | -0.18 | 0 |
 
 Interpretation:
 
 - Increasing pop16 from 20 to 30 generations improved the FSRS6 external Pareto
   HV and improved the FSRS6 interpolated AUCs.
 - The same change hurt the LSTM external Pareto HV, which is the metric we care
-  about most for this decision. Under interpolation, LSTM budget-gain AUC
-  worsens by 3.9 memorized cards, and target-regret AUC worsens by 0.18
+  about most for this decision. Under interpolation, LSTM same-budget memory lift AUC
+  worsens by 3.9 memorized cards, and same-target time saved AUC worsens by 0.18
   minutes.
 - The LSTM result for pop16 gen30 remains above the 64/64 v3 run, but it loses
   much of the HV advantage that pop16 gen20 had and no longer improves the
@@ -146,8 +146,8 @@ external validation regressed relative to pop16 gen20:
 - pop16 gen20 LSTM HV delta sum: 55,849
 - pop16 gen30 LSTM HV delta sum: 52,781
 - regression: -3,068 HV, or -5.49%
-- LSTM budget-memory gain AUC also falls from +62.2 to +58.2.
-- LSTM memory-target regret AUC weakens from -1.82 to -1.64 minutes.
+- LSTM same-budget memory lift AUC also falls from +62.2 to +58.2.
+- LSTM same-target time saved AUC weakens from +1.82 to +1.64 minutes.
 
 The current best setting for the LSTM-focused comparison remains pop16/off16
 with 20 generations. A 25-generation run could still be tested as a compromise,

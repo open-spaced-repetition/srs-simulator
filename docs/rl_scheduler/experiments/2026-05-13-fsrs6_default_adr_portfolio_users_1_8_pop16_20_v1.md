@@ -57,27 +57,27 @@ signal.
 
 Scheduler-only hypervolume values are sums of per-user `HV delta` from
 `analyze-pareto`, comparing the scheduler against the same FSRS6 baseline
-manifest. Positive budget-memory gain AUC means more remembered cards at the
-same time budget. Negative memory-target regret AUC means reaching the same
+manifest. Positive same-budget memory lift AUC means more remembered cards at the
+same time budget. Positive same-target time saved AUC means reaching the same
 memory target faster.
 
-| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget coverage | memory-target regret AUC | target coverage |
+| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | same-budget memory lift AUC | budget coverage | same-target time saved AUC | target coverage |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | --- |
-| FSRS6 | default ADR | -17,411 | -0.626% | 127 | +45.2 | 80/115, 56.951% span | -1.72 | 70/115, 65.859% span |
-| FSRS6 | ADR | +96,880 | +3.482% | 128 | +90.7 | 88/115, 81.550% span | -4.57 | 81/115, 78.146% span |
-| FSRS6 | default ADR - ADR | -114,291 | -4.108 pp | -1 | -45.5 | -8 budgets | +2.85 | -11 targets |
-| LSTM | default ADR | -72,379 | -2.547% | 123 | +43.0 | 75/111, 51.513% span | +3.99 | 72/111, 71.649% span |
-| LSTM | ADR | +55,849 | +1.966% | 125 | +62.2 | 79/111, 82.466% span | -1.82 | 81/111, 83.775% span |
-| LSTM | default ADR - ADR | -128,227 | -4.513 pp | -2 | -19.2 | -4 budgets | +5.81 | -9 targets |
+| FSRS6 | default ADR | -17,411 | -0.626% | 127 | +45.2 | 80/115, 56.951% span | +1.72 | 70/115, 65.859% span |
+| FSRS6 | ADR | +96,880 | +3.482% | 128 | +90.7 | 88/115, 81.550% span | +4.57 | 81/115, 78.146% span |
+| FSRS6 | default ADR - ADR | -114,291 | -4.108 pp | -1 | -45.5 | -8 budgets | -2.85 | -11 targets |
+| LSTM | default ADR | -72,379 | -2.547% | 123 | +43.0 | 75/111, 51.513% span | -3.99 | 72/111, 71.649% span |
+| LSTM | ADR | +55,849 | +1.966% | 125 | +62.2 | 79/111, 82.466% span | +1.82 | 81/111, 83.775% span |
+| LSTM | default ADR - ADR | -128,227 | -4.513 pp | -2 | -19.2 | -4 budgets | -5.81 | -9 targets |
 
 The result is not close. Default-ADR loses to ordinary ADR on every primary
 external metric in both environments:
 
 - FSRS6 HV moves from `+96,880` for ADR to `-17,411` for default ADR.
 - LSTM HV moves from `+55,849` for ADR to `-72,379` for default ADR.
-- LSTM budget-memory gain AUC remains positive versus the FSRS6 baseline, but
+- LSTM same-budget memory lift AUC remains positive versus the FSRS6 baseline, but
   trails ordinary ADR: `+62.2` for ADR versus `+43.0` for default ADR.
-- LSTM memory-target regret AUC moves from `-1.82` for ADR to `+3.99` for
+- LSTM same-target time saved AUC moves from `+1.82` for ADR to `-3.99` for
   default ADR.
 
 ## Per-User HV Delta
@@ -138,8 +138,8 @@ portfolio from a positive external HV result into a negative one:
 
 - FSRS6: `-114,291` HV versus ordinary ADR.
 - LSTM: `-128,227` HV versus ordinary ADR.
-- LSTM budget-memory gain AUC: `-19.2` versus ordinary ADR.
-- LSTM memory-target regret AUC: `+5.81` minutes versus ordinary ADR.
+- LSTM same-budget memory lift AUC: `-19.2` versus ordinary ADR.
+- LSTM same-target time saved AUC: `-5.81` minutes versus ordinary ADR.
 
 The ordinary `fsrs6_adr` variant remains the correct pop16/off16/gen20 baseline.
 `fsrs6_default_adr` is useful as a negative control showing that ADR's

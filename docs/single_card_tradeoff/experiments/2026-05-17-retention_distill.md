@@ -12,7 +12,7 @@ How does the continuous desired-retention distill compare with the clipped discr
 The deployment row comes from the current no-sub-0.5 default comparison; training/evaluation loss fields come from the structured retention-distill results CSV.
 
 Source artifacts:
-- `default_regret_auc`: `artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv`
+- `default_time_saved_auc`: `artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv`
 - `retention_distill_results`: `artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_results.csv`
 
 ## Results
@@ -21,9 +21,9 @@ The structured result reports final loss 0.4610, eval retention MAE 0.0038, and 
 
 ### Current clipped tradeoff
 
-| scheduler | params | time_regret_auc | relative_regret | coverage |
+| scheduler | params | same_target_time_saved_auc | relative_time_saved | coverage |
 | --- | --- | --- | --- | --- |
-| fsrs6_oracle_retention_distill | 1,468 | -3.3248 | -21.79% | 83.51% |
+| fsrs6_oracle_retention_distill | 1,468 | 3.3248 | 21.79% | 83.51% |
 
 ## Reproduction Profile
 

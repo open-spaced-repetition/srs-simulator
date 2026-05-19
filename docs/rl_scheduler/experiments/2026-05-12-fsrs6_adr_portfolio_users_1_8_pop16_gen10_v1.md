@@ -59,43 +59,43 @@ diagnostic-only in `analysis.md`.
 | LSTM | pop16 gen20 | 55,849 | 1.966% | 4,110 | 19,119 | 125 |
 | LSTM | pop16 gen30 | 52,781 | 1.858% | 3,924 | 15,470 | 125 |
 
-Target LSTM budget-memory gain AUC, target scheduler rows only. It uses linear
+Target LSTM same-budget memory lift AUC, target scheduler rows only. It uses linear
 interpolation over the common covered time-budget interval. Positive values mean
-the scheduler remembers more cards at the same budget. Relative gain AUC is the
-simple average of each user's memory gain AUC divided by that user's covered
+the scheduler remembers more cards at the same budget. Relative same-budget memory lift AUC is the
+simple average of each user's same-budget memory lift AUC divided by that user's covered
 baseline memory AUC.
 
-| run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
+| run | AUC users | budget coverage | span coverage | same-budget memory lift AUC | relative same-budget memory lift AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | v3 64/64 gen20 | 8/8 | 83/111 | 83.110% | +60.8 | +0.933% |
 | pop16 gen10 | 8/8 | 82/111 | 82.927% | +35.4 | +0.533% |
 | pop16 gen20 | 8/8 | 79/111 | 82.466% | +62.2 | +0.953% |
 | pop16 gen30 | 8/8 | 80/111 | 82.451% | +58.2 | +0.886% |
 
-Target LSTM memory-target regret AUC, target scheduler rows only. Negative
+Target LSTM same-target time saved AUC, target scheduler rows only. Positive
 values mean the scheduler reaches the same memorized-card targets faster. It
 uses linear interpolation over the common covered memory-target interval.
 
-| run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
+| run | AUC users | target coverage | span coverage | same-target time saved AUC | relative same-target time saved AUC |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| v3 64/64 gen20 | 8/8 | 89/111 | 88.298% | -1.32 | -5.589% |
-| pop16 gen10 | 8/8 | 83/111 | 83.264% | -0.91 | -3.425% |
-| pop16 gen20 | 8/8 | 81/111 | 83.775% | -1.82 | -5.906% |
-| pop16 gen30 | 8/8 | 86/111 | 86.052% | -1.64 | -5.674% |
+| v3 64/64 gen20 | 8/8 | 89/111 | 88.298% | +1.32 | +5.589% |
+| pop16 gen10 | 8/8 | 83/111 | 83.264% | +0.91 | +3.425% |
+| pop16 gen20 | 8/8 | 81/111 | 83.775% | +1.82 | +5.906% |
+| pop16 gen30 | 8/8 | 86/111 | 86.052% | +1.64 | +5.674% |
 
 Delta from pop16 gen10 to pop16 gen20:
 
-| environment | HV delta sum change | HV delta percent-point change | budget-gain AUC change | target-regret AUC change |
+| environment | HV delta sum change | HV delta percent-point change | same-budget memory lift AUC change | same-target time saved AUC change |
 | --- | ---: | ---: | ---: | ---: |
-| FSRS6 | +21,998 | +0.791 pp | +24.1 | -1.47 |
-| LSTM | +13,131 | +0.462 pp | +26.8 | -0.91 |
+| FSRS6 | +21,998 | +0.791 pp | +24.1 | +1.47 |
+| LSTM | +13,131 | +0.462 pp | +26.8 | +0.91 |
 
 Interpretation:
 
 - Gen10 is materially undertrained versus gen20 on the target LSTM metric.
 - The earlier average-efficiency comparison was a policy-point diagnostic; the
-  more relevant LSTM budget-gain AUC also favors gen20 by +26.8 memorized cards.
-- Gen10's corrected target-regret AUC is now favorable versus the FSRS6
+  more relevant LSTM same-budget memory lift AUC also favors gen20 by +26.8 memorized cards.
+- Gen10's corrected same-target time saved AUC is now favorable versus the FSRS6
   baseline, but gen20 still reaches the same targets 0.91 minutes faster.
 - Gen10 also falls below the comparable 64/64 v3 run on LSTM HV and AUC, while
   gen20 remains the strongest target-LSTM run in this comparison.
@@ -142,8 +142,8 @@ The 10-generation run is faster, but it cuts too much search:
 
 - LSTM HV delta sum: 42,718 for gen10 vs 55,849 for gen20
 - LSTM regression from gen20: -13,131 HV, or -23.51%
-- LSTM budget-memory gain AUC: +35.4 for gen10 vs +62.2 for gen20
-- LSTM memory-target regret AUC: -0.91 for gen10 vs -1.82 for gen20
+- LSTM same-budget memory lift AUC: +35.4 for gen10 vs +62.2 for gen20
+- LSTM same-target time saved AUC: +0.91 for gen10 vs +1.82 for gen20
 - LSTM result also falls below the comparable 64/64 v3 run by -4,379 HV
 - Training HV is still rising quickly at generation 9
 

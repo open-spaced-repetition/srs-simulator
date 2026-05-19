@@ -12,7 +12,7 @@ How strong is the unrestricted finite-horizon FSRS-6 oracle distillation baselin
 The tradeoff row is the current clipped default comparison. The model-size facts come from the rerun oracle-distill hparam-search summary.
 
 Source artifacts:
-- `default_regret_auc`: `artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv`
+- `default_time_saved_auc`: `artifacts/single_card_tradeoff/no_sub05_distill_compare/regret_auc.csv`
 - `oracle_distill_results`: `artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv`
 - `oracle_distill_hparam_summary`: `artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_summary.csv`
 
@@ -22,9 +22,9 @@ The current compact default is `res16d2` with 1,468 parameters, final CE 0.6043,
 
 ### Current clipped tradeoff
 
-| scheduler | params | time_regret_auc | relative_regret | coverage |
+| scheduler | params | same_target_time_saved_auc | relative_time_saved | coverage |
 | --- | --- | --- | --- | --- |
-| fsrs6_oracle_distill | 1,468 | -3.6263 | -24.18% | 86.29% |
+| fsrs6_oracle_distill | 1,468 | 3.6263 | 24.18% | 86.29% |
 
 ### Model-scale search
 

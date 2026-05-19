@@ -55,47 +55,47 @@ generated analysis, not as primary Pareto quality metrics.
 | LSTM | FSRS-trained pop16 gen20 | 55,849 | 1.966% | 733 | 1,556 | 4,110 | 7,161 | 19,119 | 125 |
 | LSTM | LSTM-trained pop16 gen20 | 91,189 | 3.209% | 1,089 | 1,547 | 3,728 | 13,221 | 38,095 | 128 |
 
-Budget-memory gain AUC integrates memorized-card gain over the common covered
+Same-budget memory lift AUC integrates memorized-card gain over the common covered
 time-budget interval between the FSRS6 baseline frontier and each scheduler
 frontier, using linear interpolation only. Positive values mean the scheduler
-remembers more cards at the same budget. Relative gain AUC is the simple
-average of each user's memory gain AUC divided by that user's covered baseline
+remembers more cards at the same budget. Relative same-budget memory lift AUC is the simple
+average of each user's same-budget memory lift AUC divided by that user's covered baseline
 memory AUC.
 
-| environment | run | AUC users | budget coverage | span coverage | memory gain AUC | relative gain AUC |
+| environment | run | AUC users | budget coverage | span coverage | same-budget memory lift AUC | relative same-budget memory lift AUC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | FSRS6 | FSRS-trained | 8/8 | 88/115 | 81.550% | +90.7 | +1.400% |
 | FSRS6 | LSTM-trained | 8/8 | 87/115 | 82.252% | +60.4 | +0.938% |
 | LSTM | FSRS-trained | 8/8 | 79/111 | 82.466% | +62.2 | +0.953% |
 | LSTM | LSTM-trained | 8/8 | 80/111 | 83.370% | +73.5 | +1.118% |
 
-Memory-target regret AUC integrates time regret over the common covered
+Same-target time saved AUC integrates saved time over the common covered
 memory-target interval between the FSRS6 baseline frontier and each scheduler
-frontier, using linear interpolation only. Negative values mean the scheduler
+frontier, using linear interpolation only. Positive values mean the scheduler
 reaches the same memorized-card targets faster.
 
-| environment | run | AUC users | target coverage | span coverage | time regret AUC | relative regret AUC |
+| environment | run | AUC users | target coverage | span coverage | same-target time saved AUC | relative same-target time saved AUC |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | FSRS-trained | 8/8 | 81/115 | 78.146% | -4.57 | -11.555% |
-| FSRS6 | LSTM-trained | 8/8 | 83/115 | 79.690% | -2.32 | -6.923% |
-| LSTM | FSRS-trained | 8/8 | 81/111 | 83.775% | -1.82 | -5.906% |
-| LSTM | LSTM-trained | 8/8 | 80/111 | 85.141% | -7.39 | -11.321% |
+| FSRS6 | FSRS-trained | 8/8 | 81/115 | 78.146% | +4.57 | +11.555% |
+| FSRS6 | LSTM-trained | 8/8 | 83/115 | 79.690% | +2.32 | +6.923% |
+| LSTM | FSRS-trained | 8/8 | 81/111 | 83.775% | +1.82 | +5.906% |
+| LSTM | LSTM-trained | 8/8 | 80/111 | 85.141% | +7.39 | +11.321% |
 
 LSTM-trained minus FSRS-trained:
 
-| environment | HV delta change | relative change | percent-point change | budget-gain AUC change | target-regret AUC change |
+| environment | HV delta change | relative change | percent-point change | same-budget memory lift AUC change | same-target time saved AUC change |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| FSRS6 | -42,174 | -43.53% | -1.516 pp | -30.3 | +2.25 |
-| LSTM | +35,340 | +63.28% | +1.244 pp | +11.3 | -5.57 |
+| FSRS6 | -42,174 | -43.53% | -1.516 pp | -30.3 | -2.25 |
+| LSTM | +35,340 | +63.28% | +1.244 pp | +11.3 | +5.57 |
 
 Interpretation:
 
 - Training directly in LSTM substantially improves the target LSTM external HV:
   +35.3k HV, or +63.3% relative to the FSRS-trained pop16 run.
 - The gain trades off FSRS6 external performance: FSRS6 HV drops by 42.2k.
-- On the LSTM external envelope, LSTM training moves interpolated budget-gain
-  AUC from +62.2 to +73.5 memorized cards and target-regret AUC from -1.82
-  minutes to -7.39 minutes.
+- On the LSTM external envelope, LSTM training moves interpolated same-budget memory lift
+  AUC from +62.2 to +73.5 memorized cards and same-target time saved AUC from +1.82
+  minutes to +7.39 minutes.
 
 ## Policy Parameter Distribution
 
@@ -214,8 +214,8 @@ pop16 baseline.
 
 - Target LSTM HV improves from 55,849 to 91,189, a +35,340 gain.
 - Relative LSTM HV improvement increases from 1.966% to 3.209%.
-- Target LSTM AUC also improves: budget-memory gain rises from +62.2 to +73.5,
-  and memory-target regret improves from -1.82 to -7.39 minutes.
+- Target LSTM AUC also improves: same-budget memory lift rises from +62.2 to +73.5,
+  and same-target time saved improves from +1.82 to +7.39 minutes.
 - FSRS6 HV regresses from 96,880 to 54,706, so the learned policy is more
   environment-specific.
 - Policy parameters differ materially, especially lower stability slope

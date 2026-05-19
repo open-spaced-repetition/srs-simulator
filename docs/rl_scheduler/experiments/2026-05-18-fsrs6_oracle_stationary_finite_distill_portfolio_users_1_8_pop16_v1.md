@@ -65,39 +65,23 @@ Promotion decision for `fsrs6_oracle_stationary_finite_distill` is inconclusive.
 
 Candidate-minus-comparison deltas on the primary external Pareto metrics are:
 
-- fsrs6: 7,737 HV, 29.4 budget-memory gain AUC, -0.05 memory-target regret AUC versus comparison.
-- lstm: -18,265 HV, 7.7 budget-memory gain AUC, 1.06 memory-target regret AUC versus comparison.
+- fsrs6: 7,737 HV, 29.4 same-budget memory lift AUC, 0.05 same-target time saved AUC versus comparison.
+- lstm: -18,265 HV, 7.7 same-budget memory lift AUC, -1.06 same-target time saved AUC versus comparison.
 
 Training HV and sampled policy-point diagnostics should be interpreted against the external Pareto metrics.
 
-## Interpretation
-
-The train-overfit result confirms that the oracle stationary finite distill workflow can find competitive per-user policies under the matched search budget: final training HV gain is 117,610 versus ADR's 107,746. That is not sufficient evidence for promotion, because the external Pareto evaluation remains split by environment.
-
-On the native FSRS6 environment, the candidate is stronger than ADR on aggregate HV (+7,737, +0.278 percentage points of baseline HV), budget-memory gain AUC (+29.4), memory-target time regret AUC (-0.05), and relative regret AUC (-14.172% versus -11.555%). With the user-simple relative regret aggregation, Oracle is also better for all 8 FSRS6 users.
-
-On the LSTM environment, the relative regret result is much closer after switching to user-simple averaging: Oracle is -5.817% versus ADR's -5.906%, so ADR is better by only 0.090 percentage points. However, LSTM aggregate HV still favors ADR by 18,265, and absolute memory-target regret AUC favors ADR by 1.06. The policy-point diagnostics show the candidate uses less time and fewer reviews on average, but the LSTM Pareto frontier still does not consistently convert that lower workload into better robust memory outcomes.
-
-The per-user breakdown shows the risk is not confined to one small corner case. The candidate is negative in 8/16 environment-user HV rows, including large LSTM losses for users 2 and 4 and an FSRS6 loss for user 2. Users 6 and 7 are consistent relative-regret wins across both environments, so the method may be useful for some user regimes, but the current portfolio is not a reliable ADR replacement.
-
-GPU monitor artifacts do not indicate VRAM spill for the candidate run: train-overfit peaked at 347.2 MiB shared memory on one adapter and sweep peaked at 186.3 MiB, both with `shared_memory_spill_detected=false`. The quality result therefore should be read as an algorithmic robustness issue rather than an obvious GPU spill artifact. The candidate is also slower than ADR in this run: train-overfit took 1,019.5s versus 328.8s, and sweep took 100.9s versus 45.1s.
-
-## Recommendation
-
-Do not promote `fsrs6_oracle_stationary_finite_distill` as a replacement for `fsrs6_adr` based on this 8-user validation. Keep it as an experimental candidate and focus the next iteration on the LSTM transfer failures, especially users 2 and 4, before expanding to a larger user set. A useful follow-up is to compare the selected goal-cost weights and resulting review-load positions for the losing users, then test whether multi-environment selection, robustness regularization, or a constrained workload envelope reduces the LSTM HV/regret regression without giving up the FSRS6 gains.
-
 ## External Pareto Results
 
-Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and budget-memory gain are better. Negative memory-target regret is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
+Scheduler-only hypervolume values are sums of per-user HV delta against the same staged FSRS6 baseline manifest. Positive HV delta and same-budget memory lift are better. Positive same-target time saved is better. The two baseline-relative AUC columns use user-simple averages from the analysis summary.
 
-| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | budget-memory gain AUC | budget-memory gain / baseline | budget coverage | memory-target regret AUC | memory-target regret / baseline | target coverage |
+| environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | same-budget memory lift AUC | same-budget memory lift / baseline | budget coverage | same-target time saved AUC | same-target time saved / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fsrs6 | Oracle stationary finite distill | 104,617 | +3.760% | 128 | 120.1 | +1.857% | 96/115, 70.232% span | -4.62 | -14.172% | 97/115, 88.859% span |
-| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | -4.57 | -11.555% | 81/115, 78.146% span |
-| fsrs6 | Oracle stationary finite distill - ADR | 7,737 | +0.278% | 0 | 29.4 | +0.457% | +8, -11.319 pp span | -0.05 | -2.617% | +16, +10.713 pp span |
-| lstm | Oracle stationary finite distill | 37,584 | +1.323% | 128 | 69.9 | +1.072% | 88/111, 66.183% span | -0.76 | -5.817% | 91/111, 89.146% span |
-| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | -1.82 | -5.906% | 81/111, 83.775% span |
-| lstm | Oracle stationary finite distill - ADR | -18,265 | -0.643% | 3 | 7.7 | +0.119% | +9, -16.283 pp span | 1.06 | +0.090% | +10, +5.371 pp span |
+| fsrs6 | Oracle stationary finite distill | 104,617 | +3.760% | 128 | 120.1 | +1.857% | 96/115, 70.232% span | 4.62 | +14.172% | 97/115, 88.859% span |
+| fsrs6 | ADR | 96,880 | +3.482% | 128 | 90.7 | +1.400% | 88/115, 81.550% span | 4.57 | +11.555% | 81/115, 78.146% span |
+| fsrs6 | Oracle stationary finite distill - ADR | 7,737 | +0.278% | 0 | 29.4 | +0.457% | +8, -11.319 pp span | 0.05 | +2.617% | +16, +10.713 pp span |
+| lstm | Oracle stationary finite distill | 37,584 | +1.323% | 128 | 69.9 | +1.072% | 88/111, 66.183% span | 0.76 | +5.817% | 91/111, 89.146% span |
+| lstm | ADR | 55,849 | +1.966% | 125 | 62.2 | +0.953% | 79/111, 82.466% span | 1.82 | +5.906% | 81/111, 83.775% span |
+| lstm | Oracle stationary finite distill - ADR | -18,265 | -0.643% | 3 | 7.7 | +0.119% | +9, -16.283 pp span | -1.06 | -0.090% | +10, +5.371 pp span |
 
 ## Per-User HV Delta
 
@@ -113,29 +97,6 @@ Candidate-minus-comparison per-user HV delta is negative for 8/16 environment-us
 | 6 | 7,866 | 6,327 | 1,539 | 7,772 | 6,491 | 1,281 |
 | 7 | 2,198 | 1,238 | 959 | 1,569 | 733 | 836 |
 | 8 | 1,788 | 1,918 | -130 | 1,503 | 1,556 | -53 |
-
-## Per-User Relative Time Regret AUC
-
-Relative time regret AUC is `time_regret_auc / baseline_time_auc * 100`, computed per user against the FSRS6 baseline frontier over the common covered memory-target interval. Negative values are better: the scheduler reaches the same memorized-card target faster than the FSRS6 baseline. The delta column is Oracle stationary finite distill minus ADR, so negative means Oracle is better than ADR.
-
-| environment | user | Oracle stationary finite distill relative regret AUC | ADR relative regret AUC | Oracle - ADR |
-| --- | --- | ---: | ---: | ---: |
-| fsrs6 | 1 | -8.07% | -7.00% | -1.07 pp |
-| fsrs6 | 2 | -17.87% | -16.26% | -1.61 pp |
-| fsrs6 | 3 | -10.93% | -10.22% | -0.71 pp |
-| fsrs6 | 4 | -19.47% | -16.86% | -2.61 pp |
-| fsrs6 | 5 | -15.42% | -14.07% | -1.36 pp |
-| fsrs6 | 6 | -15.85% | -14.83% | -1.02 pp |
-| fsrs6 | 7 | -20.97% | -9.17% | -11.81 pp |
-| fsrs6 | 8 | -4.79% | -4.02% | -0.77 pp |
-| lstm | 1 | -0.21% | -2.16% | +1.95 pp |
-| lstm | 2 | +2.76% | -0.85% | +3.61 pp |
-| lstm | 3 | -8.78% | -9.19% | +0.41 pp |
-| lstm | 4 | -1.96% | -6.42% | +4.46 pp |
-| lstm | 5 | -3.22% | -5.10% | +1.88 pp |
-| lstm | 6 | -11.84% | -10.28% | -1.56 pp |
-| lstm | 7 | -19.34% | -7.57% | -11.77 pp |
-| lstm | 8 | -3.94% | -5.68% | +1.74 pp |
 
 ## Diagnostics
 

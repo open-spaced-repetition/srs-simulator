@@ -341,7 +341,7 @@ def render_report_from_summary(
     lines.append(
         "Scheduler-only hypervolume values are sums of per-user HV delta against "
         "the same staged FSRS6 baseline manifest. Positive HV delta and "
-        "budget-memory gain are better. Negative memory-target regret is better. "
+        "same-budget memory lift are better. Positive same-target time saved is better. "
         "The two baseline-relative AUC columns use user-simple averages from "
         "the analysis summary."
     )
@@ -354,11 +354,11 @@ def render_report_from_summary(
                 "HV delta sum",
                 "HV delta / baseline HV",
                 "frontier points",
-                "budget-memory gain AUC",
-                "budget-memory gain / baseline",
+                "same-budget memory lift AUC",
+                "same-budget memory lift / baseline",
                 "budget coverage",
-                "memory-target regret AUC",
-                "memory-target regret / baseline",
+                "same-target time saved AUC",
+                "same-target time saved / baseline",
                 "target coverage",
             ],
             _external_pareto_rows(summary),
@@ -773,29 +773,61 @@ def _env_scheduler_metrics(
 ) -> dict[str, Any]:
     env_summary = analysis["environments"][env]
     hv = _find_scheduler_row(env_summary["primary_hypervolume_summary"], scheduler)
-    budget = _find_scheduler_row(env_summary["budget_memory_gain_auc"], scheduler)
-    regret = _find_scheduler_row(env_summary["memory_target_regret_auc"], scheduler)
+    budget = _find_scheduler_row(
+        _summary_rows(
+            env_summary,
+            "same_budget_memory_lift_auc",
+            "budget_memory_gain_auc",
+        ),
+        scheduler,
+    )
+    time_saved = _find_scheduler_row(
+        _summary_rows(
+            env_summary,
+            "same_target_time_saved_auc",
+            "memory_target_regret_auc",
+        ),
+        scheduler,
+    )
     return {
         "scheduler": scheduler,
         "hv_delta_sum": hv.get("hv_delta_sum"),
         "hv_delta_baseline_ratio_percent": hv.get("hv_delta_baseline_ratio_percent"),
         "frontier_points": hv.get("scheduler_frontier_points"),
-        "budget_memory_gain_auc": budget.get("memory_gain_auc_mean"),
+        "same_budget_memory_lift_auc": _metric_value(
+            budget,
+            "same_budget_memory_lift_auc_mean",
+            "memory_gain_auc_mean",
+        ),
         "baseline_memory_auc": budget.get("baseline_memory_auc_mean"),
-        "relative_gain_auc_percent": _existing_relative_percent(
-            budget.get("relative_gain_auc_percent")
+        "relative_same_budget_memory_lift_auc_percent": _existing_relative_percent(
+            _metric_value(
+                budget,
+                "relative_same_budget_memory_lift_auc_percent",
+                "relative_gain_auc_percent",
+            )
         ),
         "covered_budget_count": budget.get("covered_budget_count"),
         "budget_count": budget.get("budget_count"),
         "budget_span_coverage_percent": budget.get("span_coverage_percent"),
-        "memory_target_regret_auc": regret.get("time_regret_auc_mean"),
-        "baseline_time_auc": regret.get("baseline_time_auc_mean"),
-        "relative_regret_auc_percent": _existing_relative_percent(
-            regret.get("relative_regret_auc_percent")
+        "same_target_time_saved_auc": _metric_value(
+            time_saved,
+            "same_target_time_saved_auc_mean",
+            "time_regret_auc_mean",
+            legacy_sign=-1.0,
         ),
-        "covered_target_count": regret.get("covered_target_count"),
-        "target_count": regret.get("target_count"),
-        "target_span_coverage_percent": regret.get("span_coverage_percent"),
+        "baseline_time_auc": time_saved.get("baseline_time_auc_mean"),
+        "relative_same_target_time_saved_auc_percent": _existing_relative_percent(
+            _metric_value(
+                time_saved,
+                "relative_same_target_time_saved_auc_percent",
+                "relative_regret_auc_percent",
+                legacy_sign=-1.0,
+            )
+        ),
+        "covered_target_count": time_saved.get("covered_target_count"),
+        "target_count": time_saved.get("target_count"),
+        "target_span_coverage_percent": time_saved.get("span_coverage_percent"),
     }
 
 
@@ -804,6 +836,29 @@ def _find_scheduler_row(rows: list[dict[str, Any]], scheduler: str) -> dict[str,
         if row.get("scheduler") == scheduler:
             return row
     return {}
+
+
+def _summary_rows(
+    env_summary: dict[str, Any],
+    key: str,
+    legacy_key: str,
+) -> list[dict[str, Any]]:
+    return env_summary.get(key) or env_summary.get(legacy_key, [])
+
+
+def _metric_value(
+    row: dict[str, Any],
+    key: str,
+    legacy_key: str,
+    *,
+    legacy_sign: float = 1.0,
+) -> Any:
+    if key in row:
+        return row[key]
+    value = row.get(legacy_key)
+    if isinstance(value, int | float):
+        return legacy_sign * float(value)
+    return value
 
 
 def _pareto_delta(
@@ -821,13 +876,13 @@ def _pareto_delta(
         "frontier_points": _subtract(
             candidate.get("frontier_points"), comparison.get("frontier_points")
         ),
-        "budget_memory_gain_auc": _subtract(
-            candidate.get("budget_memory_gain_auc"),
-            comparison.get("budget_memory_gain_auc"),
+        "same_budget_memory_lift_auc": _subtract(
+            candidate.get("same_budget_memory_lift_auc"),
+            comparison.get("same_budget_memory_lift_auc"),
         ),
-        "relative_gain_auc_percent": _subtract(
-            candidate.get("relative_gain_auc_percent"),
-            comparison.get("relative_gain_auc_percent"),
+        "relative_same_budget_memory_lift_auc_percent": _subtract(
+            candidate.get("relative_same_budget_memory_lift_auc_percent"),
+            comparison.get("relative_same_budget_memory_lift_auc_percent"),
         ),
         "covered_budget_count": _subtract(
             candidate.get("covered_budget_count"),
@@ -838,13 +893,13 @@ def _pareto_delta(
             candidate.get("budget_span_coverage_percent"),
             comparison.get("budget_span_coverage_percent"),
         ),
-        "memory_target_regret_auc": _subtract(
-            candidate.get("memory_target_regret_auc"),
-            comparison.get("memory_target_regret_auc"),
+        "same_target_time_saved_auc": _subtract(
+            candidate.get("same_target_time_saved_auc"),
+            comparison.get("same_target_time_saved_auc"),
         ),
-        "relative_regret_auc_percent": _subtract(
-            candidate.get("relative_regret_auc_percent"),
-            comparison.get("relative_regret_auc_percent"),
+        "relative_same_target_time_saved_auc_percent": _subtract(
+            candidate.get("relative_same_target_time_saved_auc_percent"),
+            comparison.get("relative_same_target_time_saved_auc_percent"),
         ),
         "covered_target_count": _subtract(
             candidate.get("covered_target_count"),
@@ -981,8 +1036,8 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
     if all_hv_negative:
         interpretation = (
             f"With the matched portfolio budget, {candidate_label} remains behind "
-            f"{comparison_label} on HV; budget-memory gain and memory-target "
-            "regret deltas are:"
+            f"{comparison_label} on HV; same-budget memory lift and same-target "
+            "time saved deltas are:"
         )
         diagnostic_note = (
             "Training HV gains and lower-time sampled policy points do not survive "
@@ -1011,10 +1066,10 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
             "- "
             f"{env['environment']}: "
             f"{fmt_number(delta.get('hv_delta_sum'), digits=0)} HV, "
-            f"{fmt_number(delta.get('budget_memory_gain_auc'), digits=1)} "
-            "budget-memory gain AUC, "
-            f"{fmt_number(delta.get('memory_target_regret_auc'), digits=2)} "
-            "memory-target regret AUC versus comparison."
+            f"{fmt_number(delta.get('same_budget_memory_lift_auc'), digits=1)} "
+            "same-budget memory lift AUC, "
+            f"{fmt_number(delta.get('same_target_time_saved_auc'), digits=2)} "
+            "same-target time saved AUC versus comparison."
         )
     lines.extend(
         [
@@ -1047,15 +1102,17 @@ def _external_pareto_rows(summary: dict[str, Any]) -> list[list[str]]:
                     fmt_number(row.get("hv_delta_sum"), digits=0),
                     fmt_percent(row.get("hv_delta_baseline_ratio_percent")),
                     fmt_number(row.get("frontier_points"), digits=0),
-                    fmt_number(row.get("budget_memory_gain_auc"), digits=1),
-                    fmt_percent(row.get("relative_gain_auc_percent")),
+                    fmt_number(row.get("same_budget_memory_lift_auc"), digits=1),
+                    fmt_percent(
+                        row.get("relative_same_budget_memory_lift_auc_percent")
+                    ),
                     coverage_formatter(
                         row.get("covered_budget_count"),
                         row.get("budget_count"),
                         row.get("budget_span_coverage_percent"),
                     ),
-                    fmt_number(row.get("memory_target_regret_auc"), digits=2),
-                    fmt_percent(row.get("relative_regret_auc_percent")),
+                    fmt_number(row.get("same_target_time_saved_auc"), digits=2),
+                    fmt_percent(row.get("relative_same_target_time_saved_auc_percent")),
                     coverage_formatter(
                         row.get("covered_target_count"),
                         row.get("target_count"),

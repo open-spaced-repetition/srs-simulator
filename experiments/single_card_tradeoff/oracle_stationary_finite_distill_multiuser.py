@@ -2570,7 +2570,7 @@ def evaluate_exact_vs_distill(
     )
 
     print(f"Wrote CSV: {results_path}")
-    print(f"Wrote regret AUC CSV: {regret_path}")
+    print(f"Wrote same-target time saved AUC CSV: {regret_path}")
     print(f"Wrote summary CSV: {summary_path}")
     print(f"Wrote mean summary CSV: {mean_summary_path}")
     print(
@@ -2821,7 +2821,7 @@ def main() -> None:
             flush=True,
         )
         print(f"Wrote CSV: {results_path}")
-        print(f"Wrote regret AUC CSV: {regret_path}")
+        print(f"Wrote same-target time saved AUC CSV: {regret_path}")
         print(f"Wrote summary CSV: {summary_path}")
         print(f"Wrote train summary CSV: {train_summary_path}")
         print(
@@ -2948,7 +2948,7 @@ def main() -> None:
 
     print(f"Wrote model: {model_out}")
     print(f"Wrote CSV: {results_path}")
-    print(f"Wrote regret AUC CSV: {regret_path}")
+    print(f"Wrote same-target time saved AUC CSV: {regret_path}")
     print(f"Wrote summary CSV: {summary_path}")
     print(f"Wrote train summary CSV: {train_summary_path}")
     print(
