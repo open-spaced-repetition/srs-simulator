@@ -60,7 +60,13 @@ from simulator.math.fsrs import Bounds
 from simulator.models.fsrs import FSRS6BatchEnvOps
 from simulator.models.lstm import _resolve_benchmark_weights as _resolve_lstm_weights
 from simulator.models.lstm_batch import PackedLSTMWeights
+from simulator.batched_sweep.fsrs6_adr_policy import (
+    FSRS6ADRPolicySpec,
+    resolve_fsrs6_adr_policy_specs,
+)
+from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.retention_sweep.grid import dr_values
+from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
 from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
@@ -70,6 +76,7 @@ from simulator.scheduler_spec import (
 from simulator.schedulers.anki_sm2 import AnkiSM2BatchSchedulerOps
 from simulator.schedulers.fixed import FixedBatchSchedulerOps
 from simulator.schedulers.fsrs import FSRS3BatchSchedulerOps, FSRS6BatchSchedulerOps
+from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.schedulers.hlr import HLRBatchSchedulerOps
 from simulator.schedulers.lstm import LSTMBatchSchedulerOps
 from simulator.schedulers.memrise import MemriseBatchSchedulerOps
@@ -129,6 +136,10 @@ DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY = Path(
 DEFAULT_FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_POLICY = Path(
     "artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt"
 )
+DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT = Path(
+    "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/"
+    "fsrs6_adr_portfolio_users_1_8_pop16_v1"
+)
 FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
 FSRS6_ORACLE_INFINITE_SCHEDULER = "fsrs6_oracle_infinite"
 FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER = "fsrs6_oracle_stationary_finite"
@@ -142,6 +153,7 @@ FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER = "fsrs6_oracle_interval_distill"
 FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER = "fsrs6_oracle_retention_distill"
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
 UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
+FSRS6_ADR_SCHEDULERS = frozenset(schedulers_for_policy_source(PolicySource.FSRS6_ADR))
 
 
 @dataclass(frozen=True)
@@ -226,6 +238,48 @@ def parse_args() -> argparse.Namespace:
             "Comma-separated fixed intervals to run when --sched contains plain "
             "'fixed'. Defaults to 8,16,32,64,128,256,512. "
             "Ignored for fixed@<days> specs."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adr-policy",
+        type=Path,
+        default=None,
+        help=(
+            "Path to one FSRS6 ADR policy JSON when --sched contains fsrs6_adr, "
+            "fsrs6_adr_time, or fsrs6_default_adr."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adr-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing expanded FSRS6 ADR policy JSONs, usually "
+            "train-overfit/train_outputs."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adr-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "Experiment run root for expanded FSRS6 ADR policies. When no ADR "
+            "policy source is passed, tradeoff.py uses the local "
+            f"{DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT} artifact if it exists."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adr-policy-manifest",
+        type=Path,
+        default=None,
+        help="TOML manifest with explicit FSRS6 ADR policy entries.",
+    )
+    parser.add_argument(
+        "--fsrs6-adr-lambda-values",
+        default=None,
+        help=(
+            "Comma-separated lambda values to keep when using an expanded FSRS6 "
+            "ADR policy source."
         ),
     )
     parser.add_argument(
@@ -608,6 +662,7 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER,
             UVFA_PPO_SCHEDULER,
             UVFA_PPO_RNN_INTERVAL_SCHEDULER,
+            *FSRS6_ADR_SCHEDULERS,
         }
         if (
             name not in simulate_cli.SCHEDULER_FACTORIES
@@ -642,6 +697,113 @@ def _retention_grid(args: argparse.Namespace) -> list[float]:
         raise SystemExit(str(exc)) from exc
     validate_retention_values(values, name="Target retention")
     return values
+
+
+def _fsrs6_adr_lambda_values(args: argparse.Namespace) -> tuple[float, ...] | None:
+    raw = getattr(args, "fsrs6_adr_lambda_values", None)
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        if not raw.strip():
+            return None
+        return tuple(_parse_float_list(raw, label="FSRS6 ADR lambda value"))
+    values = tuple(float(value) for value in raw)
+    if not values:
+        return None
+    if any(not math.isfinite(value) for value in values):
+        raise SystemExit("FSRS6 ADR lambda values must be finite.")
+    return values
+
+
+def _sort_fsrs6_adr_policy_specs(
+    specs: Sequence[FSRS6ADRPolicySpec],
+) -> tuple[FSRS6ADRPolicySpec, ...]:
+    def key(spec: FSRS6ADRPolicySpec) -> tuple[int, int, float, float, str]:
+        if spec.baseline_desired_retention is not None:
+            return (
+                spec.user_id,
+                0,
+                float(spec.baseline_desired_retention),
+                float("-inf")
+                if spec.lambda_value is None
+                else float(spec.lambda_value),
+                str(spec.path),
+            )
+        if spec.policy_index is not None:
+            return (spec.user_id, 1, float(spec.policy_index), 0.0, str(spec.path))
+        return (spec.user_id, 2, 0.0, 0.0, str(spec.path))
+
+    return tuple(sorted(specs, key=key))
+
+
+def _load_single_fsrs6_adr_policy_spec(
+    args: argparse.Namespace,
+) -> tuple[FSRS6ADRPolicySpec, ...]:
+    policy_path = Path(args.fsrs6_adr_policy).expanduser()
+    if not policy_path.exists():
+        raise SystemExit(f"FSRS6 ADR policy not found: {policy_path}")
+    policy = FSRS6ADRPolicy.from_json(policy_path)
+    return (
+        FSRS6ADRPolicySpec(
+            user_id=int(args.user_id or 1),
+            baseline_desired_retention=policy.baseline_desired_retention,
+            lambda_value=None,
+            policy_index=None,
+            path=policy_path.resolve(),
+        ),
+    )
+
+
+def _load_fsrs6_adr_policy_specs(
+    args: argparse.Namespace,
+    *,
+    retention_values: Sequence[float],
+) -> tuple[FSRS6ADRPolicySpec, ...]:
+    policy_path = getattr(args, "fsrs6_adr_policy", None)
+    policy_root = getattr(args, "fsrs6_adr_policy_root", None)
+    train_run_root = getattr(args, "fsrs6_adr_train_run_root", None)
+    policy_manifest = getattr(args, "fsrs6_adr_policy_manifest", None)
+    expanded_sources = [
+        policy_root is not None,
+        train_run_root is not None,
+        policy_manifest is not None,
+    ]
+    if policy_path is not None and any(expanded_sources):
+        raise SystemExit(
+            "--fsrs6-adr-policy cannot be combined with "
+            "--fsrs6-adr-policy-root, --fsrs6-adr-train-run-root, or "
+            "--fsrs6-adr-policy-manifest."
+        )
+    if sum(expanded_sources) > 1:
+        raise SystemExit(
+            "Configure only one expanded FSRS6 ADR policy source: "
+            "--fsrs6-adr-policy-root, --fsrs6-adr-train-run-root, or "
+            "--fsrs6-adr-policy-manifest."
+        )
+    if policy_path is not None:
+        return _load_single_fsrs6_adr_policy_spec(args)
+    if not any(expanded_sources):
+        if DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT.exists():
+            train_run_root = DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT
+        else:
+            raise SystemExit(
+                "FSRS6 ADR tradeoff requires one policy source: "
+                "--fsrs6-adr-policy, --fsrs6-adr-policy-root, "
+                "--fsrs6-adr-train-run-root, or --fsrs6-adr-policy-manifest."
+            )
+    try:
+        return _sort_fsrs6_adr_policy_specs(
+            resolve_fsrs6_adr_policy_specs(
+                user_ids=[int(args.user_id or 1)],
+                dr_values=retention_values,
+                policy_root=policy_root,
+                train_run_root=train_run_root,
+                policy_manifest=policy_manifest,
+                lambda_values=_fsrs6_adr_lambda_values(args),
+            )
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _make_behavior(
@@ -1360,6 +1522,193 @@ def _run_fixed_batch(
         )
         for (scheduler_spec, interval), stats in zip(fixed_specs, stats_by_interval)
     ]
+
+
+def _policy_batches(
+    specs: Sequence[FSRS6ADRPolicySpec],
+    *,
+    batch_size: int,
+) -> list[list[FSRS6ADRPolicySpec]]:
+    if not specs:
+        return []
+    chunk_size = len(specs) if batch_size <= 0 else batch_size
+    return [
+        list(specs[idx : idx + chunk_size]) for idx in range(0, len(specs), chunk_size)
+    ]
+
+
+def _same_bounds(left: Bounds, right: Bounds) -> bool:
+    return (
+        math.isclose(left.s_min, right.s_min, rel_tol=0.0, abs_tol=1e-12)
+        and math.isclose(left.s_max, right.s_max, rel_tol=0.0, abs_tol=1e-12)
+        and math.isclose(left.d_min, right.d_min, rel_tol=0.0, abs_tol=1e-12)
+        and math.isclose(left.d_max, right.d_max, rel_tol=0.0, abs_tol=1e-12)
+    )
+
+
+def _validate_fsrs6_adr_policy_batch(
+    policies: Sequence[FSRS6ADRPolicy],
+    specs: Sequence[FSRS6ADRPolicySpec],
+) -> None:
+    if not policies:
+        raise ValueError("FSRS6 ADR policy batch must not be empty.")
+    first = policies[0]
+    for policy, spec in zip(policies[1:], specs[1:], strict=True):
+        if policy.feature_version != first.feature_version:
+            raise SystemExit(
+                "Cannot batch FSRS6 ADR policies with mixed feature versions: "
+                f"{first.feature_version!r} and {policy.feature_version!r} "
+                f"({spec.path})."
+            )
+        if not math.isclose(
+            policy.retention_min,
+            first.retention_min,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ) or not math.isclose(
+            policy.retention_max,
+            first.retention_max,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise SystemExit(
+                "Cannot batch FSRS6 ADR policies with mixed retention bounds: "
+                f"{spec.path}."
+            )
+        if not _same_bounds(policy.bounds, first.bounds):
+            raise SystemExit(
+                "Cannot batch FSRS6 ADR policies with mixed FSRS state bounds: "
+                f"{spec.path}."
+            )
+
+
+def _fsrs6_adr_point_label(spec: FSRS6ADRPolicySpec) -> str:
+    if spec.policy_index is not None:
+        return f"policy_{spec.policy_index}"
+    if spec.baseline_desired_retention is not None:
+        label = f"dr_{format_float(spec.baseline_desired_retention)}"
+        if spec.lambda_value is not None:
+            label += f"_lambda_{format_float(spec.lambda_value)}"
+        return label
+    if spec.path.name == "policy.json":
+        return spec.path.parent.name
+    return spec.path.stem
+
+
+def _run_fsrs6_adr(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_name: str,
+    scheduler_spec: str,
+    seed: int,
+    retention_values: Sequence[float],
+) -> list[dict[str, Any]]:
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6 in single-card tradeoff."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+
+    specs = _load_fsrs6_adr_policy_specs(args, retention_values=retention_values)
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    dtype = torch.float64
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
+
+    rows: list[dict[str, Any]] = []
+    for batch_index, batch_specs in enumerate(
+        _policy_batches(specs, batch_size=args.target_batch_size)
+    ):
+        policies = [FSRS6ADRPolicy.from_json(spec.path) for spec in batch_specs]
+        _validate_fsrs6_adr_policy_batch(policies, batch_specs)
+        row_count = len(batch_specs)
+        first_policy = policies[0]
+        env_weights = torch.tensor(
+            [fsrs_config.fsrs_weights for _ in range(row_count)],
+            device=device,
+            dtype=dtype,
+        )
+        env_ops = FSRS6BatchEnvOps(
+            weights=env_weights,
+            bounds=Bounds(),
+            device=device,
+            dtype=dtype,
+        )
+        sched_weights = torch.tensor(
+            [fsrs_config.fsrs_weights for _ in range(row_count)],
+            device=device,
+            dtype=dtype,
+        )
+        coefficients = torch.tensor(
+            [policy.coefficients for policy in policies],
+            device=device,
+            dtype=dtype,
+        )
+        sched_ops = FSRS6ADRBatchSchedulerOps(
+            weights=sched_weights,
+            policy=first_policy,
+            coefficients=coefficients,
+            bounds=first_policy.bounds,
+            priority_mode=args.scheduler_priority,
+            device=device,
+            dtype=dtype,
+        )
+        behavior, cost_model = _make_multiuser_behavior_cost(
+            args, rows=row_count, device=device, dtype=dtype
+        )
+        label_suffix = (
+            " policies" if len(specs) == row_count else f" policies {batch_index + 1}"
+        )
+        start = time.perf_counter()
+        stats_by_policy = simulate_multiuser(
+            days=args.days,
+            deck_size=args.particles,
+            env_ops=env_ops,
+            sched_ops=sched_ops,
+            behavior=behavior,
+            cost_model=cost_model,
+            priority_mode="new-first",
+            seed=seed,
+            device=device,
+            dtype=dtype,
+            fuzz=args.fuzz,
+            progress=not args.no_progress,
+            progress_label=f"{environment_name}/{scheduler_spec}{label_suffix}",
+        )
+        runtime_per_policy = (time.perf_counter() - start) / max(1, row_count)
+        for spec, policy, stats in zip(
+            batch_specs, policies, stats_by_policy, strict=True
+        ):
+            row = _row_from_stats(
+                args,
+                environment_name=environment_name,
+                scheduler_name=scheduler_name,
+                scheduler_spec=scheduler_spec,
+                fixed_interval=None,
+                desired_retention=None,
+                seed=seed,
+                stats=stats,
+                runtime_s=runtime_per_policy,
+            )
+            row.update(
+                {
+                    "fsrs6_adr_policy": str(spec.path),
+                    "fsrs6_adr_baseline_desired_retention": (
+                        spec.baseline_desired_retention
+                    ),
+                    "fsrs6_adr_lambda_value": spec.lambda_value,
+                    "fsrs6_adr_policy_index": spec.policy_index,
+                    "fsrs6_adr_policy_title": policy.title,
+                    "fsrs6_adr_feature_version": policy.feature_version,
+                    "fsrs6_adr_point_label": _fsrs6_adr_point_label(spec),
+                }
+            )
+            rows.append(row)
+    return rows
 
 
 def _load_policy_checkpoint(
@@ -3337,6 +3686,13 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "runtime_s",
         "engine",
         "fuzz",
+        "fsrs6_adr_policy",
+        "fsrs6_adr_baseline_desired_retention",
+        "fsrs6_adr_lambda_value",
+        "fsrs6_adr_policy_index",
+        "fsrs6_adr_policy_title",
+        "fsrs6_adr_feature_version",
+        "fsrs6_adr_point_label",
     ]
     with path.open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -3349,6 +3705,10 @@ def _point_label(row: dict[str, Any]) -> str:
     goal_cost_weight = row.get("goal_cost_weight")
     if goal_cost_weight is not None and goal_cost_weight != "":
         return f"w={format_float(float(goal_cost_weight))}"
+    if row.get("scheduler") in FSRS6_ADR_SCHEDULERS:
+        point_label = row.get("fsrs6_adr_point_label")
+        if point_label is not None and point_label != "":
+            return str(point_label)
     desired_retention = row["desired_retention"]
     if desired_retention is not None:
         return format_float(float(desired_retention))
@@ -3683,6 +4043,19 @@ def _plot_sort_key(row: dict[str, Any]) -> tuple[float, float]:
     goal_cost_weight = row.get("goal_cost_weight")
     if goal_cost_weight is not None and goal_cost_weight != "":
         return 0.5, float(goal_cost_weight)
+    if row.get("scheduler") in FSRS6_ADR_SCHEDULERS:
+        policy_index = row.get("fsrs6_adr_policy_index")
+        if policy_index is not None and policy_index != "":
+            return 0.75, float(policy_index)
+        baseline_dr = row.get("fsrs6_adr_baseline_desired_retention")
+        if baseline_dr is not None and baseline_dr != "":
+            lambda_value = row.get("fsrs6_adr_lambda_value")
+            lambda_offset = (
+                0.0
+                if lambda_value is None or lambda_value == ""
+                else float(lambda_value)
+            )
+            return 0.75, float(baseline_dr) + lambda_offset * 1e-6
     fixed_interval = row["fixed_interval"]
     if fixed_interval is not None:
         return 1.0, float(fixed_interval)
@@ -4009,6 +4382,18 @@ def main() -> None:
                         environment_name=environment,
                         scheduler_spec=scheduler_spec,
                         seed=args.seed,
+                    )
+                )
+                continue
+            if scheduler_name in FSRS6_ADR_SCHEDULERS:
+                rows.extend(
+                    _run_fsrs6_adr(
+                        args,
+                        environment_name=environment,
+                        scheduler_name=scheduler_name,
+                        scheduler_spec=scheduler_spec,
+                        seed=args.seed,
+                        retention_values=retention_values,
                     )
                 )
                 continue

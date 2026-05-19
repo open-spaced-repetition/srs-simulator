@@ -16,6 +16,29 @@ For supported FSRS-6 sweeps, desired-retention targets are batched in one vector
 
 By default, the script writes a pairwise same-target time saved AUC CSV next to the main CSV. `same_target_time_saved_auc` is the average deck-scaled minutes/day saved by the scheduler versus the baseline over their common covered memory-target interval, and `relative_same_target_time_saved_auc_percent` divides that by the baseline time AUC. Positive values mean the scheduler reaches the same memory target faster.
 
+## FSRS6 ADR Policies
+
+`tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.
+
+```bash
+uv run experiments/single_card_tradeoff/tradeoff.py \
+  --env fsrs6 --user-id 1 \
+  --sched fsrs6,fsrs6_adr,fsrs6_oracle_stationary_finite_distill \
+  --fsrs6-adr-train-run-root artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1 \
+  --oracle-stationary-finite-distill-policy artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/user_1_policy.pt
+```
+
+ADR rows include `fsrs6_adr_policy`, `fsrs6_adr_baseline_desired_retention`, `fsrs6_adr_lambda_value`, and `fsrs6_adr_policy_index` columns so a portfolio frontier can be compared directly with static baseline DR rows and the 476-parameter stationary finite distill frontier.
+
+The first-eight ADR versus 476-parameter distill comparison is configured in TOML and writes per-user Pareto PNGs plus combined cross-user summary plots:
+
+```bash
+uv run python experiments/single_card_tradeoff/run_tradeoff_config.py \
+  --config experiments/single_card_tradeoff/configs/adr_vs_476_tradeoff_first8_users.toml
+```
+
+This writes `combined_results.csv`, `combined_regret_auc.csv`, `summary.csv`, `mean_summary.csv`, `same_target_time_saved_auc_by_user.png`, `relative_time_saved_by_user.png`, and `span_coverage_by_user.png` under `artifacts/single_card_tradeoff/adr_vs_476_tradeoff_first8_users/`. Each `user_<id>/` subdirectory also contains that user's `results.csv`, `regret_auc.csv`, and Pareto `results.png`.
+
 ## UVFA PPO
 
 UVFA PPO single-card experiment, goal-conditioned over FSRS-6 target-retention actions:
