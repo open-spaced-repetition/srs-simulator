@@ -4664,6 +4664,8 @@ class FSRS6AverageRewardOracle(FSRS6GridOracle):
 
 
 class FSRS6IntervalOracle(FSRS6GridOracle):
+    TRANSITION_VALUE_LOOKUP_VERSION = "bilinear_log_s_linear_d_v1"
+
     def __init__(
         self,
         *,
@@ -4716,7 +4718,7 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
                     oracle_kind="interval",
                     method="solve_policies",
                     cost_weight=float(weight),
-                    extra={"interval_chunk_size": self.interval_chunk_size},
+                    extra=self._cache_extra(),
                 ),
                 map_location=self.device,
             )
@@ -4739,7 +4741,7 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
                         oracle_kind="interval",
                         method="solve_policies",
                         cost_weight=weight,
-                        extra={"interval_chunk_size": self.interval_chunk_size},
+                        extra=self._cache_extra(),
                     ),
                     data={"policy": policy},
                 )
@@ -4823,6 +4825,12 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
 
         return policy.permute(3, 0, 1, 2).contiguous()
 
+    def _cache_extra(self) -> dict[str, Any]:
+        return {
+            "interval_chunk_size": self.interval_chunk_size,
+            "transition_value_lookup": self.TRANSITION_VALUE_LOOKUP_VERSION,
+        }
+
     def _candidate_interval_value_batch(
         self,
         *,
@@ -4865,17 +4873,58 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
                 prob = 1.0 - retrievability
             else:
                 prob = retrievability * self.review_rating_prob[rating_idx - 1]
-            s_idx, d_idx = self._next_state_interval_candidates(
+            next_s, next_d = self._next_state_interval_candidates(
                 elapsed=elapsed,
                 retrievability=retrievability,
                 rating=rating,
             )
-            future_value = value[future_rem_idx, s_idx, d_idx]
+            future_value = self._interpolate_interval_value(
+                value=value,
+                rem_idx=future_rem_idx,
+                s=next_s,
+                d=next_d,
+            )
             review_minutes = self.review_cost_minutes[rating - 1]
             weighted = (prob * cont_weight)[:, :, None, None]
             candidate_value += weighted * (future_value - cost_weights * review_minutes)
 
         return candidate_value
+
+    def _interpolate_interval_value(
+        self,
+        *,
+        value: torch.Tensor,
+        rem_idx: torch.Tensor,
+        s: torch.Tensor,
+        d: torch.Tensor,
+    ) -> torch.Tensor:
+        s_count = int(self.s_grid.numel())
+        d_count = int(self.d_grid.numel())
+
+        log_s = torch.log(torch.clamp(s, self.bounds.s_min, self.bounds.s_max))
+        s_pos = (log_s - self.log_s_min) / (self.log_s_max - self.log_s_min)
+        s_pos = torch.clamp(s_pos * float(s_count - 1), 0.0, float(s_count - 1))
+        s0 = torch.floor(s_pos).to(torch.int64)
+        s1 = torch.clamp(s0 + 1, max=s_count - 1)
+        sw = (s_pos - s0.to(dtype=self.dtype))[..., None]
+
+        d_pos = torch.clamp(d, self.bounds.d_min, self.bounds.d_max)
+        d_pos = (d_pos - self.bounds.d_min) / (self.bounds.d_max - self.bounds.d_min)
+        d_pos = torch.clamp(d_pos * float(d_count - 1), 0.0, float(d_count - 1))
+        d0 = torch.floor(d_pos).to(torch.int64)
+        d1 = torch.clamp(d0 + 1, max=d_count - 1)
+        dw = (d_pos - d0.to(dtype=self.dtype))[..., None]
+
+        v00 = value[rem_idx, s0, d0]
+        v10 = value[rem_idx, s1, d0]
+        v01 = value[rem_idx, s0, d1]
+        v11 = value[rem_idx, s1, d1]
+        return (
+            v00 * (1.0 - sw) * (1.0 - dw)
+            + v10 * sw * (1.0 - dw)
+            + v01 * (1.0 - sw) * dw
+            + v11 * sw * dw
+        )
 
     def _memorized_sum_for_interval_candidates(
         self,
@@ -4937,8 +4986,8 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
             new_s = self._stability_after_failure(s, r, d)
         new_d = self._next_d(d, rating_tensor)
         return (
-            self._s_to_idx(torch.clamp(new_s, self.bounds.s_min, self.bounds.s_max)),
-            self._d_to_idx(torch.clamp(new_d, self.bounds.d_min, self.bounds.d_max)),
+            torch.clamp(new_s, self.bounds.s_min, self.bounds.s_max),
+            torch.clamp(new_d, self.bounds.d_min, self.bounds.d_max),
         )
 
 
