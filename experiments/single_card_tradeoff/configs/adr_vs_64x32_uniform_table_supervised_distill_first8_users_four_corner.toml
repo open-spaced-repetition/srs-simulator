@@ -1,0 +1,52 @@
+schema_version = 1
+name = "adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner"
+family = "single_card_tradeoff"
+seed = 42
+
+[experiment]
+env = "fsrs6"
+user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+schedulers = ["fsrs6", "fsrs6_adr", "fsrs6_oracle_stationary_finite_distill"]
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+days = 1825
+particles = 10000
+deck_scale = 10000
+target_retentions = [0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.93, 0.96, 0.98]
+torch_device = "cuda"
+scheduler_priority = "low_retrievability"
+benchmark_partition = "0"
+review_markov_transition = false
+no_plot = false
+no_progress = true
+
+[fsrs6_adr]
+train_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off"
+
+[stationary_finite_distill]
+policy_template = "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_four_corner_64x32_teacher_per_user_uniform_table_supervision_markov_off/user_{user_id}_policy.pt"
+cost_weights = [0, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
+
+[outputs]
+root = "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off"
+
+[[commands]]
+name = "evaluate_adr_vs_64x32_uniform_table_supervised_distill_first8_four_corner_tradeoff"
+description = "Evaluate first-eight FSRS6 baseline, ADR portfolio, and 476-parameter stationary finite distill trained with uniform-table supervision from the four-corner 64x32 S/D teacher."
+command = [
+  "uv",
+  "run",
+  "python",
+  "experiments/single_card_tradeoff/run_tradeoff_config.py",
+  "--config",
+  "experiments/single_card_tradeoff/configs/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner.toml",
+  "--force",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off/combined_results.csv",
+  "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off/combined_regret_auc.csv",
+  "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off/summary.csv",
+  "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off/mean_summary.csv",
+  "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off/same_target_time_saved_auc_by_user.png",
+  "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off/relative_time_saved_by_user.png",
+  "artifacts/single_card_tradeoff/adr_vs_64x32_uniform_table_supervised_distill_first8_users_four_corner_markov_off/span_coverage_by_user.png",
+]
