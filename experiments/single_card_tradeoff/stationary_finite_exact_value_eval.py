@@ -69,10 +69,21 @@ from experiments.single_card_tradeoff.uvfa_ppo import (  # noqa: E402
     parse_csv_floats,
 )
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED  # noqa: E402
+from simulator.batched_sweep.fsrs6_adr_policy import (  # noqa: E402
+    FSRS6ADRPolicySpec,
+    resolve_fsrs6_adr_policy_specs,
+)
+from simulator.fsrs6_adr_policy import (  # noqa: E402
+    FEATURE_VERSION_LOG_LINEAR,
+    FEATURE_VERSION_LOG_POLY,
+    FEATURE_VERSION_LOG_POLY_TIME,
+    FSRS6ADRPolicy,
+)
 from simulator.scheduler_spec import format_float  # noqa: E402
 
 
 EXACT_SCHEDULER = "fsrs6_oracle_stationary_finite"
+ADR_SCHEDULER = "fsrs6_adr"
 DEFAULT_OUT_DIR = Path(
     "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users"
 )
@@ -165,6 +176,36 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fsrs6-adr-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing expanded FSRS6 ADR policy JSONs. When set, ADR "
+            "policies are evaluated as fixed continuous interval policies with "
+            "deterministic occupancy."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adr-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "ADR train run root containing train-overfit/train_outputs. Mutually "
+            "exclusive with --fsrs6-adr-policy-root and --fsrs6-adr-policy-manifest."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-adr-policy-manifest",
+        type=Path,
+        default=None,
+        help="TOML manifest with explicit FSRS6 ADR policy entries.",
+    )
+    parser.add_argument(
+        "--fsrs6-adr-lambda-values",
+        default=None,
+        help="Optional comma-separated lambda filter for ADR policy discovery.",
+    )
+    parser.add_argument(
         "--skip-default-policies",
         action="store_true",
         help="Evaluate only explicitly supplied --distill-policy/--direct-policy specs.",
@@ -209,6 +250,17 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--oracle-stationary-finite-max-iterations must be > 0.")
     if args.oracle_stationary_finite_tolerance <= 0.0:
         raise SystemExit("--oracle-stationary-finite-tolerance must be > 0.")
+    adr_sources = [
+        args.fsrs6_adr_policy_root is not None,
+        args.fsrs6_adr_train_run_root is not None,
+        args.fsrs6_adr_policy_manifest is not None,
+    ]
+    if sum(adr_sources) > 1:
+        raise SystemExit(
+            "Configure at most one ADR policy source: "
+            "--fsrs6-adr-policy-root, --fsrs6-adr-train-run-root, or "
+            "--fsrs6-adr-policy-manifest."
+        )
 
 
 def _build_oracle(
@@ -273,6 +325,7 @@ def _metric_row(
         "total_lapses": metrics.card_total_lapses * particles,
         "total_cost_seconds": metrics.card_total_cost_seconds * particles,
         "runtime_s": runtime_s,
+        "review_markov_transition": False,
         "engine": engine,
         "fuzz": False,
     }
@@ -380,6 +433,508 @@ def _evaluate_policy_table(
     if oracle.device.type == "cuda":
         torch.cuda.synchronize()
     return metrics, time.perf_counter() - start
+
+
+def _parse_optional_csv_floats(
+    value: str | None, *, name: str
+) -> tuple[float, ...] | None:
+    if value is None or not value.strip():
+        return None
+    return tuple(parse_csv_floats(value, name=name))
+
+
+def _adr_policy_key(
+    spec: FSRS6ADRPolicySpec,
+) -> tuple[int, str, str, str]:
+    if spec.policy_index is not None:
+        return (0, "", "", f"{int(spec.policy_index):012d}")
+    if spec.baseline_desired_retention is not None:
+        lambda_token = (
+            "" if spec.lambda_value is None else format_float(float(spec.lambda_value))
+        )
+        return (
+            1,
+            format_float(float(spec.baseline_desired_retention)),
+            lambda_token,
+            "",
+        )
+    lambda_token = "" if spec.lambda_value is None else format_float(spec.lambda_value)
+    return (2, "", lambda_token, str(spec.path))
+
+
+def _adr_point_label(spec: FSRS6ADRPolicySpec) -> str:
+    if spec.policy_index is not None:
+        return f"policy_{spec.policy_index}"
+    if spec.baseline_desired_retention is not None:
+        label = f"dr_{format_float(spec.baseline_desired_retention)}"
+        if spec.lambda_value is not None:
+            label += f"_lambda_{format_float(spec.lambda_value)}"
+        return label
+    return spec.path.parent.name if spec.path.name == "policy.json" else spec.path.stem
+
+
+def _load_adr_policy_grid(
+    args: argparse.Namespace,
+    *,
+    user_ids: Sequence[int],
+    action_retentions: Sequence[float],
+) -> tuple[list[list[FSRS6ADRPolicySpec]], list[list[FSRS6ADRPolicy]]]:
+    if (
+        args.fsrs6_adr_policy_root is None
+        and args.fsrs6_adr_train_run_root is None
+        and args.fsrs6_adr_policy_manifest is None
+    ):
+        return [], []
+    lambda_values = _parse_optional_csv_floats(
+        args.fsrs6_adr_lambda_values,
+        name="--fsrs6-adr-lambda-values",
+    )
+    try:
+        specs = resolve_fsrs6_adr_policy_specs(
+            user_ids=user_ids,
+            dr_values=action_retentions,
+            policy_root=args.fsrs6_adr_policy_root,
+            train_run_root=args.fsrs6_adr_train_run_root,
+            policy_manifest=args.fsrs6_adr_policy_manifest,
+            lambda_values=lambda_values,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise SystemExit(str(exc)) from exc
+
+    specs_by_user: dict[int, list[FSRS6ADRPolicySpec]] = {
+        int(user_id): [] for user_id in user_ids
+    }
+    for spec in specs:
+        specs_by_user.setdefault(int(spec.user_id), []).append(spec)
+    missing_users = [user_id for user_id in user_ids if not specs_by_user[user_id]]
+    if missing_users:
+        raise SystemExit(f"ADR policy source is missing users: {missing_users}")
+
+    ordered_specs: list[list[FSRS6ADRPolicySpec]] = []
+    reference_keys: list[tuple[int, str, str, str]] | None = None
+    for user_id in user_ids:
+        user_specs = sorted(specs_by_user[int(user_id)], key=_adr_policy_key)
+        keys = [_adr_policy_key(spec) for spec in user_specs]
+        if reference_keys is None:
+            reference_keys = keys
+        elif keys != reference_keys:
+            raise SystemExit(
+                "ADR policy source does not expose the same policy points for "
+                f"all users; first mismatch is user {user_id}."
+            )
+        ordered_specs.append(user_specs)
+
+    policies = [
+        [FSRS6ADRPolicy.from_json(spec.path) for spec in user_specs]
+        for user_specs in ordered_specs
+    ]
+    _validate_adr_fixed_policy_grid(policies)
+    return ordered_specs, policies
+
+
+def _validate_adr_fixed_policy_grid(
+    policies: Sequence[Sequence[FSRS6ADRPolicy]],
+) -> None:
+    if not policies or not policies[0]:
+        return
+    point_count = len(policies[0])
+    for user_policies in policies:
+        if len(user_policies) != point_count:
+            raise ValueError("ADR policy grid must have the same width for all users.")
+        for policy in user_policies:
+            if policy.feature_version == FEATURE_VERSION_LOG_POLY_TIME:
+                raise ValueError(
+                    "Exact ADR fixed-policy evaluation currently supports "
+                    "stationary ADR policies only; time-dependent ADR needs "
+                    "finite-horizon transition tables."
+                )
+            if policy.feature_version not in {
+                FEATURE_VERSION_LOG_POLY,
+                FEATURE_VERSION_LOG_LINEAR,
+            }:
+                raise ValueError(
+                    f"Unsupported ADR feature_version: {policy.feature_version}"
+                )
+
+
+def _round_half_up_tensor(values: torch.Tensor) -> torch.Tensor:
+    return torch.floor(values + 0.5)
+
+
+def _adr_retention_grid(
+    policy: FSRS6ADRPolicy,
+    oracle: FSRS6BatchedStationaryFiniteOracle,
+) -> torch.Tensor:
+    bounds = policy.bounds
+    s = torch.clamp(oracle.s_mesh, bounds.s_min, bounds.s_max)
+    d = torch.clamp(oracle.d_mesh, bounds.d_min, bounds.d_max)
+    log_s_min = math.log(bounds.s_min)
+    log_s_span = math.log(bounds.s_max) - log_s_min
+    x_s = torch.clamp((torch.log(s) - log_s_min) / log_s_span, 0.0, 1.0)
+    x_d = torch.clamp((d - bounds.d_min) / (bounds.d_max - bounds.d_min), 0.0, 1.0)
+    if policy.feature_version == FEATURE_VERSION_LOG_POLY:
+        features = torch.stack(
+            [
+                torch.ones_like(x_s),
+                x_s,
+                x_d,
+                x_s * x_d,
+                x_s.square(),
+                x_d.square(),
+            ],
+            dim=0,
+        )
+    elif policy.feature_version == FEATURE_VERSION_LOG_LINEAR:
+        features = torch.stack([torch.ones_like(x_s), x_s, x_d], dim=0)
+    else:
+        raise ValueError(f"Unsupported ADR feature_version: {policy.feature_version}")
+
+    coeffs = torch.tensor(
+        policy.coefficients,
+        device=oracle.device,
+        dtype=oracle.dtype,
+    )
+    logit = (coeffs.view(-1, 1, 1) * features).sum(dim=0)
+    return policy.retention_min + (
+        policy.retention_max - policy.retention_min
+    ) * torch.sigmoid(logit)
+
+
+def _adr_transition_tables(
+    oracle: FSRS6BatchedStationaryFiniteOracle,
+    *,
+    policies: Sequence[Sequence[FSRS6ADRPolicy]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    user_count = len(policies)
+    if user_count != oracle.user_count:
+        raise ValueError("ADR policy user count does not match oracle user count.")
+    if user_count == 0 or not policies[0]:
+        raise ValueError("ADR policy grid must not be empty.")
+    point_count = len(policies[0])
+    interval = torch.empty(
+        (oracle.user_count, point_count, oracle.state_count),
+        device=oracle.device,
+        dtype=torch.int64,
+    )
+    for user_idx, user_policies in enumerate(policies):
+        for point_idx, policy in enumerate(user_policies):
+            retention = _adr_retention_grid(policy, oracle)
+            interval_float = (
+                oracle.s_mesh
+                / oracle.factor[user_idx]
+                * (torch.pow(retention, 1.0 / oracle.decay[user_idx]) - 1.0)
+            )
+            interval[user_idx, point_idx] = (
+                torch.clamp(
+                    _round_half_up_tensor(interval_float),
+                    min=1.0,
+                )
+                .to(torch.int64)
+                .reshape(-1)
+            )
+
+    return interval, *_transition_tables_for_interval(oracle, interval)
+
+
+def _transition_tables_for_interval(
+    oracle: FSRS6BatchedStationaryFiniteOracle,
+    interval: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    user_count, point_count, state_count = interval.shape
+    if user_count != oracle.user_count or state_count != oracle.state_count:
+        raise ValueError("Interval table shape does not match oracle state shape.")
+    elapsed = interval.to(dtype=oracle.dtype)
+    s_flat = oracle.s_mesh.reshape(1, 1, oracle.state_count)
+    d_flat = oracle.d_mesh.reshape(1, 1, oracle.state_count)
+    retrievability = oracle._forgetting_curve(elapsed, s_flat)
+    prob = torch.stack(
+        [
+            1.0 - retrievability,
+            retrievability * oracle.review_rating_prob[:, 0].view(user_count, 1, 1),
+            retrievability * oracle.review_rating_prob[:, 1].view(user_count, 1, 1),
+            retrievability * oracle.review_rating_prob[:, 2].view(user_count, 1, 1),
+        ],
+        dim=2,
+    )
+    rating = torch.empty(
+        (user_count, point_count, state_count),
+        device=oracle.device,
+        dtype=torch.int64,
+    )
+    next_idx: list[torch.Tensor] = []
+    next_weight: list[torch.Tensor] = []
+    for rating_value in range(1, 5):
+        rating.fill_(rating_value)
+        if rating_value > 1:
+            new_s = oracle._stability_after_success(
+                s_flat,
+                retrievability,
+                d_flat,
+                rating,
+            )
+        else:
+            new_s = oracle._stability_after_failure(
+                s_flat,
+                retrievability,
+                d_flat,
+            )
+        new_d = oracle._next_d(d_flat, rating)
+        kernel_idx, kernel_weight = oracle._state_kernel(new_s, new_d)
+        next_idx.append(kernel_idx)
+        next_weight.append(kernel_weight)
+    return (
+        prob,
+        torch.stack(next_idx, dim=2)
+        .permute(1, 3, 2, 0, 4)
+        .reshape(
+            user_count,
+            point_count,
+            4,
+            4,
+            state_count,
+        ),
+        torch.stack(next_weight, dim=2)
+        .permute(1, 3, 2, 0, 4)
+        .reshape(
+            user_count,
+            point_count,
+            4,
+            4,
+            state_count,
+        ),
+    )
+
+
+def _rollout_fixed_transition_occupancy(
+    oracle: FSRS6BatchedStationaryFiniteOracle,
+    *,
+    interval: torch.Tensor,
+    prob: torch.Tensor,
+    next_idx: torch.Tensor,
+    next_weight: torch.Tensor,
+) -> torch.Tensor:
+    point_count = int(interval.shape[1])
+    occupancy = torch.zeros(
+        (
+            oracle.user_count,
+            point_count,
+            oracle.horizon + 1,
+            oracle.state_count,
+        ),
+        device=oracle.device,
+        dtype=oracle.dtype,
+    )
+    batch_offset = (
+        torch.arange(
+            oracle.user_count * point_count,
+            device=oracle.device,
+            dtype=torch.int64,
+        )
+        .view(oracle.user_count, point_count, 1)
+        .mul((oracle.horizon + 1) * oracle.state_count)
+    )
+
+    for rating_value in range(1, 5):
+        initial_prob = oracle.first_rating_prob[:, rating_value - 1]
+        s0, d0 = oracle._init_state_scalar(rating_value)
+        state_idx, state_weight = oracle._state_kernel(s0, d0)
+        for corner_idx in range(4):
+            target = (
+                batch_offset
+                + oracle.horizon * oracle.state_count
+                + state_idx[corner_idx].view(oracle.user_count, 1, 1)
+            )
+            amount = (initial_prob[:, None] * state_weight[corner_idx][:, None]).expand(
+                oracle.user_count, point_count
+            )
+            occupancy.reshape(-1).scatter_add_(
+                0,
+                target.reshape(-1),
+                amount.reshape(-1),
+            )
+
+    flat_occupancy = occupancy.reshape(-1)
+    for rem in range(oracle.horizon, 0, -1):
+        current = occupancy[:, :, rem, :]
+        if not bool(current.sum().item()):
+            continue
+        cont_mask = interval <= rem
+        if not bool(cont_mask.any().item()):
+            continue
+        source = current * cont_mask.to(dtype=oracle.dtype)
+        if not bool(source.sum().item()):
+            continue
+        future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
+        base = batch_offset + future_rem * oracle.state_count
+        for rating_idx in range(4):
+            for corner_idx in range(4):
+                amount = (
+                    source
+                    * prob[:, :, rating_idx, :]
+                    * next_weight[:, :, rating_idx, corner_idx, :]
+                )
+                target = base + next_idx[:, :, rating_idx, corner_idx, :]
+                flat_occupancy.scatter_add_(0, target.reshape(-1), amount.reshape(-1))
+
+    return occupancy
+
+
+def _metrics_from_fixed_transition_tables(
+    oracle: FSRS6BatchedStationaryFiniteOracle,
+    *,
+    interval: torch.Tensor,
+    prob: torch.Tensor,
+    next_idx: torch.Tensor,
+    next_weight: torch.Tensor,
+    cost_weights: torch.Tensor,
+) -> list[list[OracleMetrics]]:
+    occupancy = _rollout_fixed_transition_occupancy(
+        oracle,
+        interval=interval,
+        prob=prob,
+        next_idx=next_idx,
+        next_weight=next_weight,
+    )
+    point_count = int(interval.shape[1])
+    total_mem = torch.zeros(
+        (oracle.user_count, point_count),
+        device=oracle.device,
+        dtype=oracle.dtype,
+    )
+    total_minutes = (
+        (oracle.first_rating_prob * oracle.learning_cost_minutes)
+        .sum(dim=1)[:, None]
+        .expand_as(total_mem)
+        .clone()
+    )
+    total_reviews = torch.zeros_like(total_mem)
+    total_lapses = torch.zeros_like(total_mem)
+    for rem in range(1, oracle.horizon + 1):
+        current = occupancy[:, :, rem, :]
+        if not bool(current.sum().item()):
+            continue
+        active_days = torch.minimum(interval, torch.full_like(interval, rem))
+        total_mem += (current * oracle._memorized_sum_batch(active_days)).sum(dim=2)
+        cont_mask = interval <= rem
+        source = current * cont_mask.to(dtype=oracle.dtype)
+        if not bool(source.sum().item()):
+            continue
+        expected_review_minutes = (
+            prob * oracle.review_cost_minutes[:, None, :, None]
+        ).sum(dim=2)
+        total_minutes += (source * expected_review_minutes).sum(dim=2)
+        total_reviews += source.sum(dim=2)
+        total_lapses += (source * prob[:, :, 0, :]).sum(dim=2)
+
+    day_count = float(oracle.days)
+    objectives = total_mem / day_count - cost_weights.view(1, -1) * (
+        total_minutes / day_count
+    )
+    metrics: list[list[OracleMetrics]] = []
+    for user_idx in range(oracle.user_count):
+        row: list[OracleMetrics] = []
+        for point_idx in range(point_count):
+            reviews_float = float(total_reviews[user_idx, point_idx].item())
+            lapses_float = float(total_lapses[user_idx, point_idx].item())
+            observed_retention = (
+                1.0 - lapses_float / reviews_float if reviews_float > 0.0 else None
+            )
+            row.append(
+                OracleMetrics(
+                    card_expected_retrievability=float(
+                        total_mem[user_idx, point_idx].item() / day_count
+                    ),
+                    card_minutes_per_day=float(
+                        total_minutes[user_idx, point_idx].item() / day_count
+                    ),
+                    card_reviews_per_day=float(
+                        total_reviews[user_idx, point_idx].item() / day_count
+                    ),
+                    card_total_reviews=reviews_float,
+                    card_total_lapses=lapses_float,
+                    card_total_cost_seconds=float(
+                        total_minutes[user_idx, point_idx].item() * 60.0
+                    ),
+                    observed_retention=observed_retention,
+                    scalar_objective=float(objectives[user_idx, point_idx].item()),
+                    runtime_s=0.0,
+                )
+            )
+        metrics.append(row)
+    return metrics
+
+
+@torch.inference_mode()
+def _evaluate_adr_fixed_policies(
+    oracle: FSRS6BatchedStationaryFiniteOracle,
+    *,
+    policies: Sequence[Sequence[FSRS6ADRPolicy]],
+) -> tuple[list[list[OracleMetrics]], float]:
+    start = time.perf_counter()
+    interval, prob, next_idx, next_weight = _adr_transition_tables(
+        oracle,
+        policies=policies,
+    )
+    cost_weights = torch.zeros(
+        int(interval.shape[1]),
+        device=oracle.device,
+        dtype=oracle.dtype,
+    )
+    metrics = _metrics_from_fixed_transition_tables(
+        oracle,
+        interval=interval,
+        prob=prob,
+        next_idx=next_idx,
+        next_weight=next_weight,
+        cost_weights=cost_weights,
+    )
+    if oracle.device.type == "cuda":
+        torch.cuda.synchronize()
+    return metrics, time.perf_counter() - start
+
+
+def _append_adr_rows(
+    rows: list[dict[str, Any]],
+    args: argparse.Namespace,
+    *,
+    user_ids: Sequence[int],
+    specs: Sequence[Sequence[FSRS6ADRPolicySpec]],
+    policies: Sequence[Sequence[FSRS6ADRPolicy]],
+    metrics_by_user: Sequence[Sequence[OracleMetrics]],
+    runtime_s: float,
+) -> None:
+    point_count = len(specs[0])
+    runtime_per_group = runtime_s / float(max(1, len(user_ids) * point_count))
+    for point_idx in range(point_count):
+        for user_idx, user_id in enumerate(user_ids):
+            spec = specs[user_idx][point_idx]
+            policy = policies[user_idx][point_idx]
+            row = _metric_row(
+                args,
+                user_id=user_id,
+                scheduler=ADR_SCHEDULER,
+                scheduler_spec=ADR_SCHEDULER,
+                desired_retention=None,
+                goal_cost_weight=None,
+                metrics=metrics_by_user[user_idx][point_idx],
+                runtime_s=runtime_per_group,
+                engine="stationary_finite_exact_value_adr_fixed_policy",
+            )
+            row.update(
+                {
+                    "review_markov_transition": False,
+                    "fsrs6_adr_policy": str(spec.path),
+                    "fsrs6_adr_baseline_desired_retention": (
+                        spec.baseline_desired_retention
+                    ),
+                    "fsrs6_adr_lambda_value": spec.lambda_value,
+                    "fsrs6_adr_policy_index": spec.policy_index,
+                    "fsrs6_adr_policy_title": policy.title,
+                    "fsrs6_adr_feature_version": policy.feature_version,
+                    "fsrs6_adr_point_label": _adr_point_label(spec),
+                }
+            )
+            rows.append(row)
 
 
 @torch.inference_mode()
@@ -606,6 +1161,11 @@ def main() -> None:
         DEFAULT_DIRECT_POLICIES,
         skip_defaults=args.skip_default_policies,
     )
+    adr_specs, adr_policies = _load_adr_policy_grid(
+        args,
+        user_ids=user_ids,
+        action_retentions=action_retentions,
+    )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
@@ -689,6 +1249,34 @@ def main() -> None:
         )
         metadata["runtime_s"] = runtime_s
         policy_metadata.append(metadata)
+
+    if adr_specs:
+        adr_metrics, adr_runtime_s = _evaluate_adr_fixed_policies(
+            oracle,
+            policies=adr_policies,
+        )
+        _append_adr_rows(
+            rows,
+            args,
+            user_ids=user_ids,
+            specs=adr_specs,
+            policies=adr_policies,
+            metrics_by_user=adr_metrics,
+            runtime_s=adr_runtime_s,
+        )
+        policy_metadata.append(
+            {
+                "label": "fsrs6_adr",
+                "type": "fsrs6_adr",
+                "scheduler_spec": ADR_SCHEDULER,
+                "engine": "stationary_finite_exact_value_adr_fixed_policy",
+                "runtime_s": adr_runtime_s,
+                "policy_count_per_user": len(adr_specs[0]),
+                "policy_paths_by_user": [
+                    [str(spec.path) for spec in user_specs] for user_specs in adr_specs
+                ],
+            }
+        )
 
     for label, policy_path in direct_specs:
         policy, metadata = _direct_policy_table(
