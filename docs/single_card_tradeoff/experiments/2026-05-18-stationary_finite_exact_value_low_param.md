@@ -41,10 +41,10 @@ Source artifacts:
 
 | policy | params/user | sampled rollout relative time saved vs fsrs6 | sampled rollout coverage vs fsrs6 |
 | --- | ---: | ---: | ---: |
-| exact stationary finite | table | +9.28% | 97.91% |
-| 476-param distill | 476 | +12.36% | 97.55% |
+| exact stationary finite | table | +13.13% | 98.90% |
+| 476-param distill | 476 | +8.76% | 97.20% |
 
-On the exact-teacher shared span in the sampled rollout comparison, the 476-param distill has +3.03% relative time saved at 96.60% coverage versus exact. This should not be interpreted as proof that the distill is better than the teacher in the teacher's discrete DP problem. It does show that, in the continuous rollout simulator where exact tables require grid lookup and distills act as smooth functions of `S`, `D`, and `W`, the 476-param distill is already deployment-competitive with the exact stationary finite table.
+On the exact-teacher shared span in the sampled rollout comparison, the 476-param distill has -5.12% relative time saved at 98.04% coverage versus exact. This rerun matches the deterministic teacher-gap direction after the stationary finite interpolation repair: the distill remains positive versus `fsrs6` on average, but it no longer appears deployment-competitive with the repaired exact stationary finite table on this sampled comparison.
 
 ### Direct-search rollout comparison
 
@@ -84,6 +84,6 @@ The TOML profile records the commands and expected outputs used to reproduce thi
 
 ## Conclusion
 
-The exact-value evaluator resolves the sampled-evaluation ambiguity for the teacher's discrete DP problem: the distills do not exceed the exact stationary finite teacher under deterministic DP evaluation. This does not imply that the exact table is the better practical continuous-simulator policy. Existing sampled rollout results show the 476-parameter distill is already comparable to exact stationary finite, with similar coverage and slightly higher sampled same-target time saved AUC versus `fsrs6`.
+The exact-value evaluator resolves the sampled-evaluation ambiguity for the teacher's discrete DP problem: the distills do not exceed the exact stationary finite teacher under deterministic DP evaluation. The repaired sampled rollout comparison now points the same way. The 476-parameter distill remains positive versus `fsrs6`, but it trails the repaired exact stationary finite table on the shared span.
 
 The direct-search capacity curve does not support the hypothesis that 64 or fewer parameters, in these monotone basis families, can closely match the oracle. The 15-parameter monotone interaction family improves coverage over the 7-parameter floor, but only to about 82% exact-value coverage versus `fsrs6` and about 80% versus the exact teacher. The 32- and 64-parameter basis families are not better in this run. Next work should either redesign the low-parameter family around the exact endpoint failures, or move the practical compression target back to the 96-172 parameter long-trained distill range.

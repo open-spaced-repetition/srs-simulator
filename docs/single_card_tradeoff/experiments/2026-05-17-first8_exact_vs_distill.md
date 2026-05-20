@@ -9,7 +9,7 @@ How does the evaluated tradeoff change when replacing exact stationary finite po
 
 ## Evidence
 
-Environment `fsrs6`, users 1 through 8. The exact and distill policies are both evaluated against `fsrs6`; a direct same-target time saved row also compares the distill to the exact stationary finite teacher on their shared frontier span.
+Environment `fsrs6`, users 1 through 8. The exact and distill policies are both evaluated against `fsrs6`; a direct same-target time saved row also compares the distill to the exact stationary finite teacher on their shared frontier span. This 2026-05-20 rerun uses the stationary finite four-corner and bilinear interpolation repair.
 
 Source artifacts:
 - `first8_exact_vs_distill_mean_summary`: `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/mean_summary.csv`
@@ -21,10 +21,19 @@ Exact stationary finite teacher versus per-user distill:
 
 | scheduler | mean same-target time saved AUC vs fsrs6 | mean relative time saved vs fsrs6 | mean coverage vs fsrs6 |
 | --- | --- | --- | --- |
-| fsrs6_oracle_stationary_finite | 3.2265 | 9.28% | 97.91% |
-| fsrs6_oracle_stationary_finite_distill_per_user | 4.9501 | 12.36% | 97.55% |
+| fsrs6_oracle_stationary_finite | 5.1976 | 13.13% | 98.90% |
+| fsrs6_oracle_stationary_finite_distill_per_user | 3.1652 | 8.76% | 97.20% |
 
-On the exact-teacher shared span, distill has 1.5077 deck-minutes/day same-target time saved AUC and 3.03% relative time saved at 96.60% coverage.
+On the exact-teacher shared span, distill has -2.1209 deck-minutes/day same-target time saved AUC and -5.12% relative time saved at 98.04% coverage.
+
+Visualization outputs:
+- `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/same_target_time_saved_auc_by_user.png`
+- `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/relative_time_saved_by_user.png`
+- `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/span_coverage_by_user.png`
+- `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/direct_distill_vs_exact_by_user.png`
+- `artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/tradeoff_frontiers_first8_users.png`
+
+GPU monitor summary: training peak dedicated memory was 8,607 MiB and exact-vs-distill evaluation peak dedicated memory was 18,310 MiB. Both runs stayed below the 1 GiB shared-memory spill threshold.
 
 ## Reproduction Profile
 
@@ -36,7 +45,7 @@ The TOML profile records the command and expected outputs used to reproduce this
 
 ## Conclusion
 
-The per-user distill is not dominated in this sampled tradeoff evaluation: direct distill-vs-exact relative time saved is positive on the shared span. The exact table remains the teacher and diagnostic target; the distill is the compact deployable approximation.
+The repaired exact stationary finite table is ahead in this sampled tradeoff evaluation. The per-user distill still improves on `fsrs6` on average, but direct distill-vs-exact relative time saved is negative on the shared span, so the previous non-dominance interpretation no longer holds.
 
 ## Artifacts
 

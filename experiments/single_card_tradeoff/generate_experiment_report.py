@@ -604,10 +604,10 @@ def build_report_summary(
         ),
         "conclusions": [
             (
-                "The 476-parameter per-user stationary finite distill remains the "
-                "best compact first-eight-user candidate in these artifacts: it "
-                "beats fsrs6 on mean relative time saved while preserving about 98% "
-                "coverage."
+                "The 476-parameter per-user stationary finite distill remains "
+                "positive versus fsrs6 on mean relative time saved while "
+                "preserving broad coverage, but the repaired exact stationary "
+                "finite table is the stronger teacher-side reference."
             ),
             (
                 "The 7-parameter direct policy-search family is useful as a "
@@ -975,10 +975,10 @@ def render_first8_stationary_finite_distill_report(
     lines.append("## Conclusion")
     lines.append("")
     lines.append(
-        "Uniform exact-table supervision fixed the high-cost interpolation failure "
-        "without adding teacher cost weights. The current first-eight artifact "
-        "keeps about 98% coverage and improves mean relative time saved versus "
-        "`fsrs6`."
+        "The current first-eight artifact remains positive on average versus "
+        "`fsrs6`, but the result should be read together with the exact-vs-distill "
+        "comparison: the compact student is an approximation of the repaired "
+        "stationary finite table, not a replacement for the teacher."
     )
     lines.append("")
     _append_artifacts_footer(
@@ -1058,6 +1058,19 @@ def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
         "coverage."
     )
     lines.append("")
+    lines.append("Visualization outputs:")
+    visualization_root = (
+        "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users"
+    )
+    for filename in (
+        "same_target_time_saved_auc_by_user.png",
+        "relative_time_saved_by_user.png",
+        "span_coverage_by_user.png",
+        "direct_distill_vs_exact_by_user.png",
+        "tradeoff_frontiers_first8_users.png",
+    ):
+        lines.append(f"- `{visualization_root}/{filename}`")
+    lines.append("")
     _append_reproduction_profile(
         lines,
         summary,
@@ -1065,12 +1078,25 @@ def render_first8_exact_vs_distill_report(summary: Mapping[str, Any]) -> str:
     )
     lines.append("## Conclusion")
     lines.append("")
-    lines.append(
-        "The per-user distill is not dominated in this sampled tradeoff "
-        "evaluation: direct distill-vs-exact relative time saved is positive on the "
-        "shared span. The exact table remains the teacher and diagnostic target; "
-        "the distill is the compact deployable approximation."
-    )
+    direct_relative = exact["distill_vs_exact"][
+        "mean_relative_same_target_time_saved_auc_percent"
+    ]
+    if direct_relative >= 0.0:
+        lines.append(
+            "The per-user distill is not dominated in this sampled tradeoff "
+            "evaluation: direct distill-vs-exact relative time saved is positive "
+            "on the shared span. The exact table remains the teacher and "
+            "diagnostic target; the distill is the compact deployable "
+            "approximation."
+        )
+    else:
+        lines.append(
+            "The repaired exact stationary finite table is ahead in this sampled "
+            "tradeoff evaluation. The per-user distill still improves on `fsrs6` "
+            "on average, but direct distill-vs-exact relative time saved is "
+            "negative on the shared span, so the previous non-dominance "
+            "interpretation no longer holds."
+        )
     lines.append("")
     _append_artifacts_footer(lines, summary, report_key="first8_exact_vs_distill")
     return "\n".join(lines)

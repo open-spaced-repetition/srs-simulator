@@ -21,14 +21,14 @@ The per-user stationary finite distill trains eight independent 476-parameter st
 
 | metric | value |
 | --- | --- |
-| mean span coverage | 97.55% |
-| mean same-target time saved AUC | 4.9501 |
-| mean relative time saved AUC | 12.36% |
-| teacher_s | 58.82 |
-| train_s | 34.89 |
-| eval_s | 66.94 |
-| mean final CE | 0.69721 |
-| mean table agreement | 72.39% |
+| mean span coverage | 97.20% |
+| mean same-target time saved AUC | 3.1652 |
+| mean relative time saved AUC | 8.76% |
+| teacher_s | 140.88 |
+| train_s | 33.86 |
+| eval_s | 87.95 |
+| mean final CE | 0.48618 |
+| mean table agreement | 82.92% |
 
 ## Reproduction Profile
 
@@ -41,7 +41,7 @@ The TOML profile records the command and expected outputs used to reproduce this
 
 ## Conclusion
 
-Uniform exact-table supervision fixed the high-cost interpolation failure without adding teacher cost weights. The current first-eight artifact keeps about 98% coverage and improves mean relative time saved versus `fsrs6`.
+The current first-eight artifact remains positive on average versus `fsrs6`, but the stationary finite interpolation repair changes the shape of the comparison. The compact student should be read as an approximation of the repaired teacher; user 2 is negative versus `fsrs6` in this rerun, and the exact-vs-distill report shows the repaired exact table ahead on the shared span.
 
 ## Artifacts
 
