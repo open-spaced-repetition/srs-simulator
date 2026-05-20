@@ -35,6 +35,7 @@ class TradeoffRunConfig:
     particles: int
     deck_scale: int
     target_retentions: tuple[float, ...]
+    oracle_cost_weights: tuple[float, ...] | None
     button_usage: Path | None
     review_markov_transition: bool
     torch_device: str | None
@@ -198,6 +199,10 @@ def load_config(path: Path) -> TradeoffRunConfig:
             experiment.get("target_retentions"),
             "experiment.target_retentions",
         ),
+        oracle_cost_weights=_optional_float_list(
+            experiment.get("oracle_cost_weights"),
+            "experiment.oracle_cost_weights",
+        ),
         button_usage=_optional_path(
             experiment.get("button_usage"),
             "experiment.button_usage",
@@ -338,6 +343,10 @@ def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
         command.append("--review-markov-transition")
     if config.torch_device is not None:
         command.extend(["--torch-device", config.torch_device])
+    if config.oracle_cost_weights is not None:
+        command.extend(
+            ["--oracle-cost-weights", _csv_token(config.oracle_cost_weights)]
+        )
     if config.srs_benchmark_root is not None:
         command.extend(["--srs-benchmark-root", str(config.srs_benchmark_root)])
     if config.fsrs6_adr_policy is not None:

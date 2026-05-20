@@ -1,0 +1,26 @@
+schema_version = 1
+name = "adr_vs_stationary_finite_exact_first8_users"
+family = "single_card_tradeoff"
+seed = 42
+
+[experiment]
+env = "fsrs6"
+user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+schedulers = ["fsrs6", "fsrs6_adr", "fsrs6_oracle_stationary_finite"]
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+days = 1825
+particles = 10000
+deck_scale = 10000
+target_retentions = [0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.93, 0.96, 0.98]
+torch_device = "cuda"
+scheduler_priority = "low_retrievability"
+benchmark_partition = "0"
+review_markov_transition = false
+no_plot = true
+no_progress = true
+
+[fsrs6_adr]
+train_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off"
+
+[outputs]
+root = "artifacts/single_card_tradeoff/adr_vs_stationary_finite_exact_first8_users_markov_off"
