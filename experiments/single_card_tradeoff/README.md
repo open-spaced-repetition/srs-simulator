@@ -10,9 +10,9 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 
 When CUDA is available, `tradeoff.py` uses `cuda` by default; pass `--torch-device cpu` to force CPU.
 
-Pass `--env fsrs6 --user-id <id>` to load per-user FSRS-6 weights from `../srs-benchmark`; add `--button-usage ../Anki-button-usage/button_usage.jsonl` to use that user's first/review rating probabilities and learning/review costs in the single-card oracle, PPO, and distillation rollouts. Review-button `long_term_transition` Markov behavior is opt-in with `--review-markov-transition`; the default uses marginal review probabilities only. `--env fsrs6_default` keeps the built-in FSRS-6 parameters and default costs.
+Pass `--env fsrs6 --user-id <id>` to load per-user FSRS-6 weights from `../srs-benchmark`; use `--user-ids 1,2,3` to evaluate multiple users in one vectorized batch. Add `--button-usage ../Anki-button-usage/button_usage.jsonl` to use each user's first/review rating probabilities and learning/review costs in the single-card oracle, PPO, and distillation rollouts. Review-button `long_term_transition` Markov behavior is opt-in with `--review-markov-transition`; the default uses marginal review probabilities only. `--env fsrs6_default` keeps the built-in FSRS-6 parameters while still applying per-user button usage when provided.
 
-For supported FSRS-6 sweeps, desired-retention targets are batched in one vectorized run by default. The default targets are `0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98`; override with `--target-retentions`, or pass `--target-retentions ""` to use the range flags. Single-card target and oracle-action retentions must be at least `0.5`. Fixed-interval sweeps are batched the same way. Plain `--sched fixed` runs intervals `8,16,32,64,128,256,512` by default; override with `--fixed-intervals`. Mixed scheduler families are run as one batch per family. Pass `--target-batch-size 1` to run targets/intervals sequentially.
+For supported FSRS-6 sweeps, desired-retention targets are batched in one vectorized run by default. Multi-user vectorized scheduler runs batch rows over `(user_id, scheduler point)`, where a point is a desired-retention target, fixed interval, or ADR policy. The default targets are `0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98`; override with `--target-retentions`, or pass `--target-retentions ""` to use the range flags. Single-card target and oracle-action retentions must be at least `0.5`. Fixed-interval sweeps are batched the same way. Plain `--sched fixed` runs intervals `8,16,32,64,128,256,512` by default; override with `--fixed-intervals`. Mixed scheduler families are run as one batch per family. Pass `--target-batch-size 1` to run rows sequentially, or `--target-batch-size 0` to run all rows for a scheduler family in one chunk.
 
 By default, the script writes a pairwise same-target time saved AUC CSV next to the main CSV. `same_target_time_saved_auc` is the average deck-scaled minutes/day saved by the scheduler versus the baseline over their common covered memory-target interval, and `relative_same_target_time_saved_auc_percent` divides that by the baseline time AUC. Positive values mean the scheduler reaches the same memory target faster.
 
@@ -30,14 +30,14 @@ uv run experiments/single_card_tradeoff/tradeoff.py \
 
 ADR rows include `fsrs6_adr_policy`, `fsrs6_adr_baseline_desired_retention`, `fsrs6_adr_lambda_value`, and `fsrs6_adr_policy_index` columns so a portfolio frontier can be compared directly with static baseline DR rows and the 476-parameter stationary finite distill frontier.
 
-The first-eight ADR versus 476-parameter distill comparison is configured in TOML and writes per-user Pareto PNGs plus combined cross-user summary plots:
+The first-eight ADR versus 476-parameter distill comparison is configured in TOML and writes combined cross-user summary tables and plots:
 
 ```bash
 uv run python experiments/single_card_tradeoff/run_tradeoff_config.py \
   --config experiments/single_card_tradeoff/configs/adr_vs_476_tradeoff_first8_users.toml
 ```
 
-This writes `combined_results.csv`, `combined_regret_auc.csv`, `summary.csv`, `mean_summary.csv`, `same_target_time_saved_auc_by_user.png`, `relative_time_saved_by_user.png`, and `span_coverage_by_user.png` under `artifacts/single_card_tradeoff/adr_vs_476_tradeoff_first8_users_markov_off/` for the checked-in Markov-off config. Each `user_<id>/` subdirectory also contains that user's `results.csv`, `regret_auc.csv`, and Pareto `results.png`.
+For configs with multiple users, `run_tradeoff_config.py` now calls `tradeoff.py --user-ids ...` once by default, then splits the combined CSVs back into per-user compatibility files. Pass `--no-multiuser-batch` to use the old one-subprocess-per-user mode. This writes `combined_results.csv`, `combined_regret_auc.csv`, `summary.csv`, `mean_summary.csv`, `same_target_time_saved_auc_by_user.png`, `relative_time_saved_by_user.png`, and `span_coverage_by_user.png` under `artifacts/single_card_tradeoff/adr_vs_476_tradeoff_first8_users_markov_off/` for the checked-in Markov-off config. Each `user_<id>/` subdirectory also contains that user's `results.csv` and `regret_auc.csv`.
 
 ## UVFA PPO
 

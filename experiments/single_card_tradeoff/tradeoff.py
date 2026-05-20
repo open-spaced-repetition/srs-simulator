@@ -158,6 +158,7 @@ FSRS6_ADR_SCHEDULERS = frozenset(schedulers_for_policy_source(PolicySource.FSRS6
 
 @dataclass(frozen=True)
 class MemoryTargetRegretAucSummary:
+    user_id: int
     environment: str
     review_markov_transition: bool | None
     baseline_scheduler: str
@@ -178,6 +179,28 @@ class MemoryTargetRegretAucSummary:
         if self.same_target_time_saved_auc is None:
             return None
         return -self.same_target_time_saved_auc
+
+
+@dataclass(frozen=True)
+class UserContext:
+    user_id: int
+    args: argparse.Namespace
+    fsrs_config: SingleCardFSRS6Config
+    behavior: StochasticBehavior
+    cost_model: StatefulCostModel
+
+
+@dataclass(frozen=True)
+class SchedulerPoint:
+    scheduler_spec: str
+    fixed_interval: float | None = None
+    desired_retention: float | None = None
+
+
+@dataclass(frozen=True)
+class BatchRow:
+    user_context: UserContext
+    point: SchedulerPoint
 
 
 def parse_args() -> argparse.Namespace:
@@ -381,6 +404,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--oracle-stationary-finite-distill-policy-template",
+        default=None,
+        help=(
+            "Per-user FSRS6 stationary finite-lifecycle oracle distillation "
+            "checkpoint template for multi-user runs. Must contain "
+            "{user_id}, for example artifacts/.../user_{user_id}_policy.pt. "
+            "When omitted, --oracle-stationary-finite-distill-policy is shared."
+        ),
+    )
+    parser.add_argument(
         "--oracle-stationary-finite-distill-cost-weights",
         default=",".join(
             format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
@@ -510,6 +543,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Load benchmark weights and button usage for this user ID when requested.",
     )
+    parser.add_argument(
+        "--user-ids",
+        default=None,
+        help=(
+            "Comma-separated user IDs to evaluate in one vectorized run. "
+            "Use --user-id for the current single-user behavior."
+        ),
+    )
     add_benchmark_args(parser)
     parser.add_argument(
         "--button-usage",
@@ -619,6 +660,95 @@ def _parse_float_list(value: str, *, label: str) -> list[float]:
     if not values:
         raise SystemExit(f"{label} must include at least one value.")
     return values
+
+
+def _parse_user_ids_csv(value: str, *, label: str = "--user-ids") -> list[int]:
+    user_ids: list[int] = []
+    for item in parse_csv(value):
+        try:
+            user_id = int(item)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid {label} value '{item}'.") from exc
+        if user_id <= 0:
+            raise SystemExit(f"{label} must contain positive integers.")
+        user_ids.append(user_id)
+    if not user_ids:
+        raise SystemExit(f"{label} must contain at least one user ID.")
+    if len(set(user_ids)) != len(user_ids):
+        raise SystemExit(f"{label} contains duplicate user IDs.")
+    return user_ids
+
+
+def _resolve_user_ids(args: argparse.Namespace) -> list[int]:
+    raw_user_ids = getattr(args, "user_ids", None)
+    if raw_user_ids is None or not str(raw_user_ids).strip():
+        user_ids = [int(args.user_id or 1)]
+    else:
+        user_ids = _parse_user_ids_csv(str(raw_user_ids))
+        if args.user_id is not None and (
+            len(user_ids) > 1 or user_ids[0] != args.user_id
+        ):
+            raise SystemExit(
+                "--user-id cannot be combined with multi-value --user-ids."
+            )
+    if len(user_ids) > 1 and args.engine == "event":
+        raise SystemExit(
+            "--engine event supports only one user; use --engine vectorized."
+        )
+    return user_ids
+
+
+def _user_args(args: argparse.Namespace, user_id: int) -> argparse.Namespace:
+    user_args = argparse.Namespace(**vars(args))
+    user_args.user_id = int(user_id)
+    return user_args
+
+
+def _load_user_contexts(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    user_ids: Sequence[int],
+) -> list[UserContext]:
+    contexts: list[UserContext] = []
+    for user_id in user_ids:
+        user_args = _user_args(args, user_id)
+        fsrs_config = load_single_card_fsrs6_config(
+            user_args,
+            environment=environment_name,
+        )
+        behavior, cost_model = _make_behavior(user_args)
+        contexts.append(
+            UserContext(
+                user_id=int(user_id),
+                args=user_args,
+                fsrs_config=fsrs_config,
+                behavior=behavior,
+                cost_model=cost_model,
+            )
+        )
+    return contexts
+
+
+def _resolve_user_policy_template(template: str, *, user_id: int) -> Path:
+    if "{user_id}" not in template:
+        raise SystemExit("Per-user policy templates must contain {user_id}.")
+    path = Path(template.format(user_id=int(user_id))).expanduser()
+    return path
+
+
+def _resolve_stationary_finite_distill_policy_path(
+    args: argparse.Namespace,
+    *,
+    user_id: int,
+    multiuser: bool,
+) -> Path:
+    template = getattr(args, "oracle_stationary_finite_distill_policy_template", None)
+    if template is not None and str(template).strip():
+        return _resolve_user_policy_template(str(template), user_id=user_id)
+    if multiuser:
+        return Path(args.oracle_stationary_finite_distill_policy)
+    return Path(args.oracle_stationary_finite_distill_policy)
 
 
 def _resolve_torch_device(
@@ -748,19 +878,22 @@ def _sort_fsrs6_adr_policy_specs(
 
 def _load_single_fsrs6_adr_policy_spec(
     args: argparse.Namespace,
+    *,
+    user_ids: Sequence[int],
 ) -> tuple[FSRS6ADRPolicySpec, ...]:
     policy_path = Path(args.fsrs6_adr_policy).expanduser()
     if not policy_path.exists():
         raise SystemExit(f"FSRS6 ADR policy not found: {policy_path}")
     policy = FSRS6ADRPolicy.from_json(policy_path)
-    return (
+    return tuple(
         FSRS6ADRPolicySpec(
-            user_id=int(args.user_id or 1),
+            user_id=int(user_id),
             baseline_desired_retention=policy.baseline_desired_retention,
             lambda_value=None,
             policy_index=None,
             path=policy_path.resolve(),
-        ),
+        )
+        for user_id in user_ids
     )
 
 
@@ -768,6 +901,7 @@ def _load_fsrs6_adr_policy_specs(
     args: argparse.Namespace,
     *,
     retention_values: Sequence[float],
+    user_ids: Sequence[int] | None = None,
 ) -> tuple[FSRS6ADRPolicySpec, ...]:
     policy_path = getattr(args, "fsrs6_adr_policy", None)
     policy_root = getattr(args, "fsrs6_adr_policy_root", None)
@@ -791,7 +925,10 @@ def _load_fsrs6_adr_policy_specs(
             "--fsrs6-adr-policy-manifest."
         )
     if policy_path is not None:
-        return _load_single_fsrs6_adr_policy_spec(args)
+        return _load_single_fsrs6_adr_policy_spec(
+            args,
+            user_ids=user_ids or [int(args.user_id or 1)],
+        )
     if not any(expanded_sources):
         if DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT.exists():
             train_run_root = DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT
@@ -804,7 +941,9 @@ def _load_fsrs6_adr_policy_specs(
     try:
         return _sort_fsrs6_adr_policy_specs(
             resolve_fsrs6_adr_policy_specs(
-                user_ids=[int(args.user_id or 1)],
+                user_ids=[
+                    int(user_id) for user_id in (user_ids or [int(args.user_id or 1)])
+                ],
                 dr_values=retention_values,
                 policy_root=policy_root,
                 train_run_root=train_run_root,
@@ -855,6 +994,7 @@ def _make_behavior(
 def _row_from_stats(
     args: argparse.Namespace,
     *,
+    user_id: int | None = None,
     environment_name: str,
     scheduler_name: str,
     scheduler_spec: str,
@@ -880,6 +1020,7 @@ def _row_from_stats(
     )
     deck_scale = float(args.deck_scale)
     return {
+        "user_id": int(user_id if user_id is not None else (args.user_id or 1)),
         "environment": environment_name,
         "scheduler": scheduler_name,
         "scheduler_spec": scheduler_spec,
@@ -1048,7 +1189,8 @@ def _hlr_weights(obj: Any, *, label: str) -> tuple[float, ...]:
 def _lstm_batch_weights(
     args: argparse.Namespace,
     *,
-    rows: int,
+    rows: int | None = None,
+    user_ids: Sequence[int] | None = None,
     device: torch.device,
     dtype: torch.dtype,
 ) -> PackedLSTMWeights:
@@ -1057,18 +1199,25 @@ def _lstm_batch_weights(
         if args.srs_benchmark_root is not None
         else REPO_ROOT.parent / "srs-benchmark"
     )
-    path = _resolve_lstm_weights(
-        args.user_id or 1,
-        benchmark_root,
-        short_term=False,
-    )
-    if path is None:
-        raise FileNotFoundError(
-            f"LSTM weights for user {args.user_id or 1} not found under "
-            f"{benchmark_root / 'weights'}"
+    if user_ids is None:
+        if rows is None:
+            raise ValueError("rows is required when user_ids is not provided.")
+        user_ids = [int(args.user_id or 1) for _ in range(rows)]
+    paths: list[Path] = []
+    for user_id in user_ids:
+        path = _resolve_lstm_weights(
+            int(user_id),
+            benchmark_root,
+            short_term=False,
         )
+        if path is None:
+            raise FileNotFoundError(
+                f"LSTM weights for user {int(user_id)} not found under "
+                f"{benchmark_root / 'weights'}"
+            )
+        paths.append(path)
     return PackedLSTMWeights.from_paths(
-        [path for _ in range(rows)],
+        paths,
         use_duration_feature=False,
         device=device,
         dtype=dtype,
@@ -1092,15 +1241,30 @@ def _make_multiuser_behavior_cost(
     rows: int,
     device: torch.device,
     dtype: torch.dtype,
+    user_contexts: Sequence[UserContext] | None = None,
 ) -> tuple[MultiUserBehavior, MultiUserCost]:
-    behavior, cost_model = _make_behavior(args)
-    markov_success = behavior.review_markov_success
-    markov_tensor = (
-        _repeat_rows(markov_success, rows=rows, device=device, dtype=dtype)
-        if markov_success is not None
-        else None
-    )
-    state_costs = cost_model.state_costs
+    if user_contexts is None:
+        behavior, cost_model = _make_behavior(args)
+        behaviors = [behavior for _ in range(rows)]
+        cost_models = [cost_model for _ in range(rows)]
+    else:
+        if len(user_contexts) != rows:
+            raise ValueError("user_contexts length must match rows.")
+        behaviors = [context.behavior for context in user_contexts]
+        cost_models = [context.cost_model for context in user_contexts]
+
+    if any(behavior.review_markov_success is not None for behavior in behaviors):
+        markov_rows = []
+        for behavior in behaviors:
+            if behavior.review_markov_success is not None:
+                markov_rows.append(behavior.review_markov_success)
+            else:
+                fallback = list(behavior.success_dist.success_weights)
+                markov_rows.append([fallback, fallback, fallback, fallback])
+        markov_tensor = torch.tensor(markov_rows, device=device, dtype=dtype)
+    else:
+        markov_tensor = None
+
     multi_behavior = MultiUserBehavior(
         attendance_prob=torch.full((rows,), 1.0, device=device, dtype=dtype),
         lazy_good_bias=torch.zeros(rows, device=device, dtype=dtype),
@@ -1111,27 +1275,26 @@ def _make_multiuser_behavior_cost(
             (rows,), args.particles, device=device, dtype=torch.int64
         ),
         max_cost_per_day=torch.full((rows,), math.inf, device=device, dtype=dtype),
-        success_weights=_repeat_rows(
-            behavior.success_dist.success_weights,
-            rows=rows,
+        success_weights=torch.tensor(
+            [behavior.success_dist.success_weights for behavior in behaviors],
             device=device,
             dtype=dtype,
         ),
-        learning_success_weights=_repeat_rows(
-            behavior.learning_success_dist.success_weights,
-            rows=rows,
+        learning_success_weights=torch.tensor(
+            [behavior.learning_success_dist.success_weights for behavior in behaviors],
             device=device,
             dtype=dtype,
         ),
-        relearning_success_weights=_repeat_rows(
-            behavior.relearning_success_dist.success_weights,
-            rows=rows,
+        relearning_success_weights=torch.tensor(
+            [
+                behavior.relearning_success_dist.success_weights
+                for behavior in behaviors
+            ],
             device=device,
             dtype=dtype,
         ),
-        first_rating_prob=_repeat_rows(
-            behavior.first_rating_prob,
-            rows=rows,
+        first_rating_prob=torch.tensor(
+            [behavior.first_rating_prob for behavior in behaviors],
             device=device,
             dtype=dtype,
         ),
@@ -1140,32 +1303,328 @@ def _make_multiuser_behavior_cost(
     multi_cost = MultiUserCost(
         base=torch.zeros(rows, device=device, dtype=dtype),
         penalty=torch.zeros(rows, device=device, dtype=dtype),
-        learn_costs=_repeat_rows(
-            state_costs.learning,
-            rows=rows,
+        learn_costs=torch.tensor(
+            [cost_model.state_costs.learning for cost_model in cost_models],
             device=device,
             dtype=dtype,
         ),
-        review_costs=_repeat_rows(
-            state_costs.review,
-            rows=rows,
+        review_costs=torch.tensor(
+            [cost_model.state_costs.review for cost_model in cost_models],
             device=device,
             dtype=dtype,
         ),
-        learning_review_costs=_repeat_rows(
-            state_costs.learning,
-            rows=rows,
+        learning_review_costs=torch.tensor(
+            [cost_model.state_costs.learning for cost_model in cost_models],
             device=device,
             dtype=dtype,
         ),
-        relearning_review_costs=_repeat_rows(
-            state_costs.relearning,
-            rows=rows,
+        relearning_review_costs=torch.tensor(
+            [cost_model.state_costs.relearning for cost_model in cost_models],
             device=device,
             dtype=dtype,
         ),
     )
     return multi_behavior, multi_cost
+
+
+def _point_run_args(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_name: str,
+    point: SchedulerPoint,
+) -> argparse.Namespace:
+    run_args = argparse.Namespace(**vars(args))
+    run_args.env = environment_name
+    run_args.environment = environment_name
+    run_args.scheduler = scheduler_name
+    run_args.sched = point.scheduler_spec
+    run_args.scheduler_spec = point.scheduler_spec
+    run_args.fixed_interval = point.fixed_interval
+    run_args.desired_retention = point.desired_retention
+    run_args.short_term_source = None
+    run_args.short_term = False
+    run_args.sspmmc_policy = None
+    run_args.lstm_interval_mode = "integer"
+    run_args.lstm_min_interval = 1.0
+    return run_args
+
+
+def _batch_row_chunks(
+    rows: Sequence[BatchRow],
+    *,
+    batch_size: int,
+) -> list[list[BatchRow]]:
+    if not rows:
+        return []
+    chunk_size = len(rows) if batch_size <= 0 else batch_size
+    return [
+        list(rows[idx : idx + chunk_size]) for idx in range(0, len(rows), chunk_size)
+    ]
+
+
+def _expand_batch_rows(
+    user_contexts: Sequence[UserContext],
+    points: Sequence[SchedulerPoint],
+) -> list[BatchRow]:
+    return [
+        BatchRow(user_context=context, point=point)
+        for point in points
+        for context in user_contexts
+    ]
+
+
+def _build_batch_scheduler_ops(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_name: str,
+    batch_rows: Sequence[BatchRow],
+    device: torch.device,
+    dtype: torch.dtype,
+) -> Any:
+    def desired_values() -> list[float]:
+        values: list[float] = []
+        for row in batch_rows:
+            if row.point.desired_retention is None:
+                raise ValueError(f"{scheduler_name} requires desired_retention.")
+            values.append(float(row.point.desired_retention))
+        return values
+
+    if scheduler_name == "fixed":
+        intervals = []
+        for row in batch_rows:
+            if row.point.fixed_interval is None:
+                raise ValueError("fixed scheduler requires fixed_interval.")
+            intervals.append(float(row.point.fixed_interval))
+        return FixedBatchSchedulerOps(
+            interval=torch.tensor(intervals, device=device, dtype=dtype),
+            device=device,
+            dtype=dtype,
+        )
+
+    if scheduler_name in {"fsrs6", "fsrs6_default"}:
+        schedulers = [
+            simulate_cli.SCHEDULER_FACTORIES[scheduler_name](
+                _point_run_args(
+                    row.user_context.args,
+                    environment_name=environment_name,
+                    scheduler_name=scheduler_name,
+                    point=row.point,
+                )
+            )
+            for row in batch_rows
+        ]
+        desired = desired_values()
+        return FSRS6BatchSchedulerOps(
+            weights=torch.tensor(
+                [
+                    _fsrs6_weights(scheduler, label=scheduler_name)
+                    for scheduler in schedulers
+                ],
+                device=device,
+                dtype=dtype,
+            ),
+            desired_retention=torch.tensor(desired, device=device, dtype=dtype),
+            bounds=Bounds(),
+            priority_mode=args.scheduler_priority,
+            device=device,
+            dtype=dtype,
+        )
+
+    if scheduler_name in {"fsrs3", "fsrs3_default"}:
+        schedulers = [
+            simulate_cli.SCHEDULER_FACTORIES[scheduler_name](
+                _point_run_args(
+                    row.user_context.args,
+                    environment_name=environment_name,
+                    scheduler_name=scheduler_name,
+                    point=row.point,
+                )
+            )
+            for row in batch_rows
+        ]
+        desired = desired_values()
+        return FSRS3BatchSchedulerOps(
+            weights=torch.tensor(
+                [
+                    _fsrs3_weights(scheduler, label=scheduler_name)
+                    for scheduler in schedulers
+                ],
+                device=device,
+                dtype=dtype,
+            ),
+            desired_retention=torch.tensor(desired, device=device, dtype=dtype),
+            bounds=Bounds(),
+            device=device,
+            dtype=dtype,
+        )
+
+    if scheduler_name == "hlr":
+        schedulers = [
+            simulate_cli.SCHEDULER_FACTORIES[scheduler_name](
+                _point_run_args(
+                    row.user_context.args,
+                    environment_name=environment_name,
+                    scheduler_name=scheduler_name,
+                    point=row.point,
+                )
+            )
+            for row in batch_rows
+        ]
+        desired = desired_values()
+        return HLRBatchSchedulerOps(
+            weights=torch.tensor(
+                [
+                    _hlr_weights(scheduler, label=scheduler_name)
+                    for scheduler in schedulers
+                ],
+                device=device,
+                dtype=dtype,
+            ),
+            desired_retention=torch.tensor(desired, device=device, dtype=dtype),
+            device=device,
+            dtype=dtype,
+        )
+
+    if scheduler_name == "lstm":
+        desired = desired_values()
+        return LSTMBatchSchedulerOps(
+            _lstm_batch_weights(
+                args,
+                user_ids=[row.user_context.user_id for row in batch_rows],
+                device=device,
+                dtype=dtype,
+            ),
+            desired_retention=torch.tensor(desired, device=device, dtype=dtype),
+            interval_mode="integer",
+            min_interval=1.0,
+            device=device,
+            dtype=dtype,
+        )
+
+    if scheduler_name == "anki_sm2":
+        scheduler = simulate_cli.SCHEDULER_FACTORIES[scheduler_name](
+            _point_run_args(
+                batch_rows[0].user_context.args,
+                environment_name=environment_name,
+                scheduler_name=scheduler_name,
+                point=batch_rows[0].point,
+            )
+        )
+        return AnkiSM2BatchSchedulerOps(
+            graduating_interval=scheduler.graduating_interval,
+            easy_interval=scheduler.easy_interval,
+            easy_bonus=scheduler.easy_bonus,
+            hard_interval_factor=scheduler.hard_interval_factor,
+            ease_start=scheduler.ease_start,
+            ease_min=scheduler.ease_min,
+            ease_max=scheduler.ease_max,
+            new_interval_factor=scheduler.new_interval_factor,
+            interval_multiplier=scheduler.interval_multiplier,
+            device=device,
+            dtype=dtype,
+        )
+
+    if scheduler_name == "memrise":
+        scheduler = simulate_cli.SCHEDULER_FACTORIES[scheduler_name](
+            _point_run_args(
+                batch_rows[0].user_context.args,
+                environment_name=environment_name,
+                scheduler_name=scheduler_name,
+                point=batch_rows[0].point,
+            )
+        )
+        return MemriseBatchSchedulerOps(scheduler, device=device, dtype=dtype)
+
+    raise SystemExit(
+        f"{scheduler_name} is not supported by single-card --engine vectorized."
+    )
+
+
+def _run_vectorized_batch_rows(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_name: str,
+    points: Sequence[SchedulerPoint],
+    user_contexts: Sequence[UserContext],
+    seed: int,
+    progress_label: str,
+) -> list[dict[str, Any]]:
+    if environment_name not in {"fsrs6", "fsrs6_default"}:
+        raise SystemExit(
+            f"{environment_name} is not supported by single-card --engine vectorized."
+        )
+    device = (
+        torch.device(args.torch_device) if args.torch_device else torch.device("cpu")
+    )
+    dtype = torch.float64
+    rows = _expand_batch_rows(user_contexts, points)
+    output_rows: list[dict[str, Any]] = []
+    for batch_index, batch_rows in enumerate(
+        _batch_row_chunks(rows, batch_size=args.target_batch_size)
+    ):
+        row_count = len(batch_rows)
+        env_ops = FSRS6BatchEnvOps(
+            weights=torch.tensor(
+                [row.user_context.fsrs_config.fsrs_weights for row in batch_rows],
+                device=device,
+                dtype=dtype,
+            ),
+            bounds=Bounds(),
+            device=device,
+            dtype=dtype,
+        )
+        sched_ops = _build_batch_scheduler_ops(
+            args,
+            environment_name=environment_name,
+            scheduler_name=scheduler_name,
+            batch_rows=batch_rows,
+            device=device,
+            dtype=dtype,
+        )
+        behavior, cost_model = _make_multiuser_behavior_cost(
+            args,
+            rows=row_count,
+            device=device,
+            dtype=dtype,
+            user_contexts=[row.user_context for row in batch_rows],
+        )
+        label_suffix = "" if len(rows) == row_count else f" batch {batch_index + 1}"
+        start = time.perf_counter()
+        stats_by_row = simulate_multiuser(
+            days=args.days,
+            deck_size=args.particles,
+            env_ops=env_ops,
+            sched_ops=sched_ops,
+            behavior=behavior,
+            cost_model=cost_model,
+            priority_mode="new-first",
+            seed=seed,
+            device=device,
+            dtype=dtype,
+            fuzz=args.fuzz,
+            progress=not args.no_progress,
+            progress_label=f"{progress_label}{label_suffix}",
+        )
+        runtime_per_row = (time.perf_counter() - start) / max(1, row_count)
+        for batch_row, stats in zip(batch_rows, stats_by_row, strict=True):
+            output_rows.append(
+                _row_from_stats(
+                    args,
+                    user_id=batch_row.user_context.user_id,
+                    environment_name=environment_name,
+                    scheduler_name=scheduler_name,
+                    scheduler_spec=batch_row.point.scheduler_spec,
+                    fixed_interval=batch_row.point.fixed_interval,
+                    desired_retention=batch_row.point.desired_retention,
+                    seed=seed,
+                    stats=stats,
+                    runtime_s=runtime_per_row,
+                )
+            )
+    return output_rows
 
 
 def _run_single_batched_point(
@@ -1620,6 +2079,7 @@ def _run_fsrs6_adr(
     scheduler_spec: str,
     seed: int,
     retention_values: Sequence[float],
+    user_contexts: Sequence[UserContext] | None = None,
 ) -> list[dict[str, Any]]:
     if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise SystemExit(
@@ -1631,10 +2091,20 @@ def _run_fsrs6_adr(
             f"{scheduler_name} is supported only with --engine vectorized."
         )
 
-    specs = _load_fsrs6_adr_policy_specs(args, retention_values=retention_values)
+    if user_contexts is None:
+        user_contexts = _load_user_contexts(
+            args,
+            environment_name=environment_name,
+            user_ids=[int(args.user_id or 1)],
+        )
+    context_by_user_id = {context.user_id: context for context in user_contexts}
+    specs = _load_fsrs6_adr_policy_specs(
+        args,
+        retention_values=retention_values,
+        user_ids=[context.user_id for context in user_contexts],
+    )
     device = _resolve_torch_device(args, prefer_cuda=True)
     dtype = torch.float64
-    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
 
     rows: list[dict[str, Any]] = []
     for batch_index, batch_specs in enumerate(
@@ -1644,8 +2114,16 @@ def _run_fsrs6_adr(
         _validate_fsrs6_adr_policy_batch(policies, batch_specs)
         row_count = len(batch_specs)
         first_policy = policies[0]
+        batch_contexts = []
+        for spec in batch_specs:
+            context = context_by_user_id.get(int(spec.user_id))
+            if context is None:
+                raise SystemExit(
+                    f"No user context loaded for ADR policy user {spec.user_id}."
+                )
+            batch_contexts.append(context)
         env_weights = torch.tensor(
-            [fsrs_config.fsrs_weights for _ in range(row_count)],
+            [context.fsrs_config.fsrs_weights for context in batch_contexts],
             device=device,
             dtype=dtype,
         )
@@ -1656,7 +2134,7 @@ def _run_fsrs6_adr(
             dtype=dtype,
         )
         sched_weights = torch.tensor(
-            [fsrs_config.fsrs_weights for _ in range(row_count)],
+            [context.fsrs_config.fsrs_weights for context in batch_contexts],
             device=device,
             dtype=dtype,
         )
@@ -1675,7 +2153,11 @@ def _run_fsrs6_adr(
             dtype=dtype,
         )
         behavior, cost_model = _make_multiuser_behavior_cost(
-            args, rows=row_count, device=device, dtype=dtype
+            args,
+            rows=row_count,
+            device=device,
+            dtype=dtype,
+            user_contexts=batch_contexts,
         )
         label_suffix = (
             " policies" if len(specs) == row_count else f" policies {batch_index + 1}"
@@ -1702,6 +2184,7 @@ def _run_fsrs6_adr(
         ):
             row = _row_from_stats(
                 args,
+                user_id=spec.user_id,
                 environment_name=environment_name,
                 scheduler_name=scheduler_name,
                 scheduler_spec=scheduler_spec,
@@ -2175,6 +2658,7 @@ def _oracle_interval_distill_cost_weights(
 def _row_from_uvfa_metrics(
     args: argparse.Namespace,
     *,
+    user_id: int | None = None,
     environment_name: str,
     scheduler_name: str,
     scheduler_spec: str,
@@ -2188,6 +2672,7 @@ def _row_from_uvfa_metrics(
     total_lapses = metrics.card_total_lapses * args.particles
     total_cost_seconds = metrics.card_total_cost_seconds * args.particles
     return {
+        "user_id": int(user_id if user_id is not None else (args.user_id or 1)),
         "environment": environment_name,
         "scheduler": scheduler_name,
         "scheduler_spec": scheduler_spec,
@@ -3677,6 +4162,7 @@ def _run_fsrs6_oracle_interval_distill(
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
+        "user_id",
         "environment",
         "scheduler",
         "scheduler_spec",
@@ -3779,10 +4265,22 @@ def _row_review_markov_transition(row: dict[str, Any]) -> bool | None:
     return None
 
 
-def _regret_auc_group_key(row: dict[str, Any]) -> tuple[str, bool | None, str]:
+def _row_user_id(row: dict[str, Any]) -> int:
+    value = row.get("user_id", 1)
+    if value is None or value == "":
+        return 1
+    return int(value)
+
+
+def _regret_auc_group_key(row: dict[str, Any]) -> tuple[int, str, bool | None, str]:
     scheduler = str(row["scheduler"])
     scheduler_label = "fixed" if scheduler == "fixed" else str(row["scheduler_spec"])
-    return str(row["environment"]), _row_review_markov_transition(row), scheduler_label
+    return (
+        _row_user_id(row),
+        str(row["environment"]),
+        _row_review_markov_transition(row),
+        scheduler_label,
+    )
 
 
 def _frontier_memory_time_points(
@@ -3873,6 +4371,7 @@ def _interpolated_time_for_memory_target(
 
 def _memory_target_regret_auc_summary(
     *,
+    user_id: int,
     environment: str,
     review_markov_transition: bool | None,
     baseline_scheduler: str,
@@ -3946,6 +4445,7 @@ def _memory_target_regret_auc_summary(
                 covered_span += width
 
     return MemoryTargetRegretAucSummary(
+        user_id=user_id,
         environment=environment,
         review_markov_transition=review_markov_transition,
         baseline_scheduler=baseline_scheduler,
@@ -3987,6 +4487,7 @@ def _summary_to_regret_auc_row(
         else None
     )
     return {
+        "user_id": summary.user_id,
         "environment": summary.environment,
         "review_markov_transition": summary.review_markov_transition,
         "baseline_scheduler": summary.baseline_scheduler,
@@ -4009,35 +4510,41 @@ def _summary_to_regret_auc_row(
 
 
 def _build_regret_auc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[tuple[str, bool | None, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[int, str, bool | None, str], list[dict[str, Any]]] = {}
     for row in rows:
         key = _regret_auc_group_key(row)
         groups.setdefault(key, []).append(row)
 
     output_rows: list[dict[str, Any]] = []
     group_modes = sorted(
-        {(environment, markov) for environment, markov, _scheduler in groups},
-        key=lambda item: (item[0], str(item[1])),
+        {
+            (user_id, environment, markov)
+            for user_id, environment, markov, _scheduler in groups
+        },
+        key=lambda item: (item[0], item[1], str(item[2])),
     )
-    for environment, review_markov_transition in group_modes:
+    for user_id, environment, review_markov_transition in group_modes:
         scheduler_labels = sorted(
             scheduler
-            for group_env, group_markov, scheduler in groups
-            if group_env == environment and group_markov == review_markov_transition
+            for group_user_id, group_env, group_markov, scheduler in groups
+            if group_user_id == user_id
+            and group_env == environment
+            and group_markov == review_markov_transition
         )
         for baseline_scheduler in scheduler_labels:
             baseline_rows = groups[
-                (environment, review_markov_transition, baseline_scheduler)
+                (user_id, environment, review_markov_transition, baseline_scheduler)
             ]
             for scheduler in scheduler_labels:
                 summary = _memory_target_regret_auc_summary(
+                    user_id=user_id,
                     environment=environment,
                     review_markov_transition=review_markov_transition,
                     baseline_scheduler=baseline_scheduler,
                     baseline_rows=baseline_rows,
                     scheduler=scheduler,
                     scheduler_rows=groups[
-                        (environment, review_markov_transition, scheduler)
+                        (user_id, environment, review_markov_transition, scheduler)
                     ],
                 )
                 if summary is not None:
@@ -4048,6 +4555,7 @@ def _build_regret_auc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _write_regret_auc_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
+        "user_id",
         "environment",
         "review_markov_transition",
         "baseline_scheduler",
@@ -4079,10 +4587,10 @@ def _regret_auc_path(args: argparse.Namespace) -> Path:
     return args.out.with_name(f"{args.out.stem}_regret_auc{suffix}")
 
 
-def _plot_group_key(row: dict[str, Any]) -> tuple[str, str]:
+def _plot_group_key(row: dict[str, Any]) -> tuple[int, str, str]:
     scheduler = str(row["scheduler"])
     scheduler_label = "fixed" if scheduler == "fixed" else str(row["scheduler_spec"])
-    return str(row["environment"]), scheduler_label
+    return _row_user_id(row), str(row["environment"]), scheduler_label
 
 
 def _plot_sort_key(row: dict[str, Any]) -> tuple[float, float]:
@@ -4115,16 +4623,16 @@ def _write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
     os.environ.setdefault("MPLBACKEND", "Agg")
     import matplotlib.pyplot as plt
 
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[int, str, str], list[dict[str, Any]]] = {}
     for row in rows:
         key = _plot_group_key(row)
         groups.setdefault(key, []).append(row)
 
-    frontier = _pareto_frontier(rows)
+    user_ids = sorted({_row_user_id(row) for row in rows})
     label_rows: list[dict[str, Any]] = []
 
     fig, ax = plt.subplots(figsize=(9, 6))
-    for (environment, scheduler_label), group in groups.items():
+    for (user_id, environment, scheduler_label), group in groups.items():
         group = sorted(group, key=_plot_sort_key)
         x = [row["deck_expected_memorized"] for row in group]
         y = [row["deck_minutes_per_day"] for row in group]
@@ -4134,11 +4642,16 @@ def _write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
             marker="o",
             linewidth=1.0,
             alpha=0.45,
-            label=f"{environment}/{scheduler_label}",
+            label=f"user {user_id}/{environment}/{scheduler_label}",
         )
         label_rows.extend(group)
 
-    if frontier:
+    for user_id in user_ids:
+        frontier = _pareto_frontier(
+            [row for row in rows if _row_user_id(row) == user_id]
+        )
+        if not frontier:
+            continue
         ax.plot(
             [row["deck_expected_memorized"] for row in frontier],
             [row["deck_minutes_per_day"] for row in frontier],
@@ -4146,7 +4659,8 @@ def _write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
             marker="o",
             linewidth=2.0,
             markersize=4.5,
-            label=f"Pareto frontier ({len(frontier)} points)",
+            alpha=0.75,
+            label=f"user {user_id} Pareto frontier ({len(frontier)} points)",
         )
 
     ax.margins(x=0.04, y=0.08)
@@ -4217,6 +4731,7 @@ def _print_summary(rows: list[dict[str, Any]]) -> None:
         print(
             " ".join(
                 [
+                    f"user={row.get('user_id', 1)}",
                     f"{row['environment']}/{row['scheduler_spec']}",
                     f"target={target}",
                     f"card_mem={row['card_expected_retrievability']:.4f}",
@@ -4261,6 +4776,7 @@ def _print_regret_auc_summary(rows: list[dict[str, Any]]) -> None:
             " ".join(
                 [
                     "same_target_time_saved_auc",
+                    f"user={row.get('user_id', 1)}",
                     f"{row['environment']}/{row['scheduler']}",
                     f"review_markov={row.get('review_markov_transition')}",
                     f"vs={row['baseline_scheduler']}",
@@ -4282,6 +4798,19 @@ def main() -> None:
         raise SystemExit("--deck-scale must be > 0.")
     if args.target_batch_size < 0:
         raise SystemExit("--target-batch-size must be >= 0.")
+    user_ids = _resolve_user_ids(args)
+    args.user_id = user_ids[0]
+    if (
+        len(user_ids) > 1
+        and getattr(args, "oracle_stationary_finite_distill_policy_template", None)
+        is not None
+        and "{user_id}"
+        not in str(args.oracle_stationary_finite_distill_policy_template)
+    ):
+        raise SystemExit(
+            "--oracle-stationary-finite-distill-policy-template must contain "
+            "{user_id} for multi-user runs."
+        )
     if args.torch_device is None:
         args.torch_device = _default_torch_device()
     register_run_monitor(
@@ -4300,21 +4829,37 @@ def main() -> None:
 
     rows: list[dict[str, Any]] = []
     for environment in environments:
+        user_contexts = _load_user_contexts(
+            args,
+            environment_name=environment,
+            user_ids=user_ids,
+        )
         fixed_specs = [
             (scheduler_spec, normalize_fixed_interval(fixed_interval))
             for scheduler_name, scheduler_spec, fixed_interval in scheduler_specs
             if scheduler_name == "fixed"
         ]
         batched_fixed_specs: set[str] = set()
-        if _fixed_batch_supported(
-            args, environment_name=environment, fixed_specs=fixed_specs
+        if (
+            args.engine == "vectorized"
+            and environment in {"fsrs6", "fsrs6_default"}
+            and fixed_specs
         ):
             rows.extend(
-                _run_fixed_batch(
+                _run_vectorized_batch_rows(
                     args,
                     environment_name=environment,
-                    fixed_specs=fixed_specs,
+                    scheduler_name="fixed",
+                    points=[
+                        SchedulerPoint(
+                            scheduler_spec=scheduler_spec,
+                            fixed_interval=interval,
+                        )
+                        for scheduler_spec, interval in fixed_specs
+                    ],
+                    user_contexts=user_contexts,
                     seed=args.seed,
+                    progress_label=f"{environment}/fixed intervals",
                 )
             )
             batched_fixed_specs = {scheduler_spec for scheduler_spec, _ in fixed_specs}
@@ -4323,114 +4868,133 @@ def main() -> None:
             if scheduler_name == "fixed" and scheduler_spec in batched_fixed_specs:
                 continue
             if scheduler_name == FSRS6_ORACLE_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == FSRS6_ORACLE_INFINITE_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_infinite(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle_infinite(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_stationary_finite(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle_stationary_finite(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == FSRS6_ORACLE_INTERVAL_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_interval(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle_interval(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_interval_distill(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle_interval_distill(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_infinite_distill(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle_infinite_distill(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_stationary_finite_distill(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    user_args = argparse.Namespace(**vars(context.args))
+                    user_args.oracle_stationary_finite_distill_policy = (
+                        _resolve_stationary_finite_distill_policy_path(
+                            args,
+                            user_id=context.user_id,
+                            multiuser=len(user_ids) > 1,
+                        )
                     )
-                )
+                    rows.extend(
+                        _run_fsrs6_oracle_stationary_finite_distill(
+                            user_args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
+                    )
                 continue
             if scheduler_name == FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_retention_distill(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle_retention_distill(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == UVFA_PPO_SCHEDULER:
-                rows.extend(
-                    _run_uvfa_ppo(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_uvfa_ppo(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == FSRS6_ORACLE_DISTILL_SCHEDULER:
-                rows.extend(
-                    _run_fsrs6_oracle_distill(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_fsrs6_oracle_distill(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name == UVFA_PPO_RNN_INTERVAL_SCHEDULER:
-                rows.extend(
-                    _run_uvfa_ppo_rnn_interval(
-                        args,
-                        environment_name=environment,
-                        scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                for context in user_contexts:
+                    rows.extend(
+                        _run_uvfa_ppo_rnn_interval(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_spec=scheduler_spec,
+                            seed=args.seed,
+                        )
                     )
-                )
                 continue
             if scheduler_name in FSRS6_ADR_SCHEDULERS:
                 rows.extend(
@@ -4441,6 +5005,7 @@ def main() -> None:
                         scheduler_spec=scheduler_spec,
                         seed=args.seed,
                         retention_values=retention_values,
+                        user_contexts=user_contexts,
                     )
                 )
                 continue
@@ -4449,43 +5014,59 @@ def main() -> None:
                 desired_values = retention_values
             else:
                 desired_values = [None]
-            if _target_batch_supported(
-                args,
-                environment_name=environment,
-                scheduler_name=scheduler_name,
-                desired_values=desired_values,
+            if (
+                args.engine == "vectorized"
+                and environment in {"fsrs6", "fsrs6_default"}
+                and scheduler_name
+                in {
+                    "fsrs6",
+                    "fsrs6_default",
+                    "fsrs3",
+                    "fsrs3_default",
+                    "hlr",
+                    "lstm",
+                    "anki_sm2",
+                    "memrise",
+                }
             ):
-                target_values: list[float] = []
-                for value in desired_values:
-                    if value is None:
-                        raise AssertionError("Target-batched runs require DR values.")
-                    target_values.append(float(value))
-                for chunk in _chunks(target_values, args.target_batch_size):
-                    rows.extend(
-                        _run_target_batch(
-                            args,
-                            environment_name=environment,
-                            scheduler_name=scheduler_name,
-                            scheduler_spec=scheduler_spec,
-                            desired_values=chunk,
-                            seed=args.seed,
-                        )
+                points = [
+                    SchedulerPoint(
+                        scheduler_spec=scheduler_spec,
+                        desired_retention=(
+                            float(desired_retention)
+                            if desired_retention is not None
+                            else None
+                        ),
                     )
-                continue
-            for desired_retention in desired_values:
-                rows.append(
-                    _run_point(
+                    for desired_retention in desired_values
+                ]
+                rows.extend(
+                    _run_vectorized_batch_rows(
                         args,
                         environment_name=environment,
                         scheduler_name=scheduler_name,
-                        scheduler_spec=scheduler_spec,
-                        fixed_interval=normalize_fixed_interval(fixed_interval)
-                        if scheduler_name == "fixed"
-                        else None,
-                        desired_retention=desired_retention,
+                        points=points,
+                        user_contexts=user_contexts,
                         seed=args.seed,
+                        progress_label=f"{environment}/{scheduler_spec}",
                     )
                 )
+                continue
+            for desired_retention in desired_values:
+                for context in user_contexts:
+                    rows.append(
+                        _run_point(
+                            context.args,
+                            environment_name=environment,
+                            scheduler_name=scheduler_name,
+                            scheduler_spec=scheduler_spec,
+                            fixed_interval=normalize_fixed_interval(fixed_interval)
+                            if scheduler_name == "fixed"
+                            else None,
+                            desired_retention=desired_retention,
+                            seed=args.seed,
+                        )
+                    )
 
     _write_csv(args.out, rows)
     if not args.no_plot:

@@ -75,6 +75,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print the per-user tradeoff commands without running them.",
     )
+    parser.add_argument(
+        "--no-multiuser-batch",
+        action="store_true",
+        help="Use the old one-subprocess-per-user execution mode.",
+    )
     return parser.parse_args()
 
 
@@ -307,6 +312,19 @@ def _distill_policy_path(config: TradeoffRunConfig, user_id: int) -> Path | None
     return path
 
 
+def _distill_policy_template(config: TradeoffRunConfig) -> str | None:
+    if config.distill_policy_template is None:
+        return None
+    if "{user_id}" not in config.distill_policy_template:
+        raise ValueError(
+            "stationary_finite_distill.policy_template must contain {user_id}."
+        )
+    path = Path(config.distill_policy_template).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return str(path)
+
+
 def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
     user_dir = _user_dir(config, user_id)
     command = [
@@ -384,12 +402,101 @@ def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
     return command
 
 
+def _multiuser_tradeoff_command(
+    config: TradeoffRunConfig,
+    user_ids: Sequence[int],
+) -> list[str]:
+    if not user_ids:
+        raise ValueError("user_ids must not be empty.")
+    command = [
+        sys.executable,
+        "experiments/single_card_tradeoff/tradeoff.py",
+        "--env",
+        config.env,
+        "--user-ids",
+        ",".join(str(user_id) for user_id in user_ids),
+        "--sched",
+        ",".join(config.schedulers),
+        "--target-retentions",
+        _csv_token(config.target_retentions),
+        "--days",
+        str(config.days),
+        "--particles",
+        str(config.particles),
+        "--deck-scale",
+        str(config.deck_scale),
+        "--seed",
+        str(config.seed),
+        "--scheduler-priority",
+        config.scheduler_priority,
+        "--benchmark-partition",
+        config.benchmark_partition,
+        "--out",
+        str(config.out_root / "combined_results.csv"),
+        "--regret-auc-out",
+        str(config.out_root / "combined_regret_auc.csv"),
+    ]
+    if config.button_usage is not None:
+        command.extend(["--button-usage", str(config.button_usage)])
+    if config.review_markov_transition:
+        command.append("--review-markov-transition")
+    if config.torch_device is not None:
+        command.extend(["--torch-device", config.torch_device])
+    if config.oracle_cost_weights is not None:
+        command.extend(
+            ["--oracle-cost-weights", _csv_token(config.oracle_cost_weights)]
+        )
+    if config.srs_benchmark_root is not None:
+        command.extend(["--srs-benchmark-root", str(config.srs_benchmark_root)])
+    if config.fsrs6_adr_policy is not None:
+        command.extend(["--fsrs6-adr-policy", str(config.fsrs6_adr_policy)])
+    if config.fsrs6_adr_policy_root is not None:
+        command.extend(["--fsrs6-adr-policy-root", str(config.fsrs6_adr_policy_root)])
+    if config.fsrs6_adr_train_run_root is not None:
+        command.extend(
+            ["--fsrs6-adr-train-run-root", str(config.fsrs6_adr_train_run_root)]
+        )
+    if config.fsrs6_adr_policy_manifest is not None:
+        command.extend(
+            ["--fsrs6-adr-policy-manifest", str(config.fsrs6_adr_policy_manifest)]
+        )
+    if config.fsrs6_adr_lambda_values is not None:
+        command.extend(
+            ["--fsrs6-adr-lambda-values", _csv_token(config.fsrs6_adr_lambda_values)]
+        )
+    distill_policy_template = _distill_policy_template(config)
+    if distill_policy_template is not None:
+        command.extend(
+            [
+                "--oracle-stationary-finite-distill-policy-template",
+                distill_policy_template,
+            ]
+        )
+    if config.distill_cost_weights is not None:
+        command.extend(
+            [
+                "--oracle-stationary-finite-distill-cost-weights",
+                _csv_token(config.distill_cost_weights),
+            ]
+        )
+    if config.no_plot:
+        command.append("--no-plot")
+    if config.no_progress:
+        command.append("--no-progress")
+    return command
+
+
 def _read_csv(path: Path, *, user_id: int) -> list[dict[str, Any]]:
     with path.open("r", newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
     for row in rows:
         row["user_id"] = user_id
     return rows
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, Any]]:
+    with path.open("r", newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
 
 
 def _fieldnames(rows: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -607,13 +714,12 @@ def _write_summary_plots(
     )
 
 
-def _combine_outputs(config: TradeoffRunConfig, user_ids: Sequence[int]) -> None:
-    result_rows: list[dict[str, Any]] = []
-    regret_rows: list[dict[str, Any]] = []
-    for user_id in user_ids:
-        user_dir = _user_dir(config, user_id)
-        result_rows.extend(_read_csv(user_dir / "results.csv", user_id=user_id))
-        regret_rows.extend(_read_csv(user_dir / "regret_auc.csv", user_id=user_id))
+def _write_aggregate_outputs(
+    config: TradeoffRunConfig,
+    *,
+    result_rows: Sequence[Mapping[str, Any]],
+    regret_rows: Sequence[Mapping[str, Any]],
+) -> None:
     _write_csv(config.out_root / "combined_results.csv", result_rows)
     _write_csv(config.out_root / "combined_regret_auc.csv", regret_rows)
     summary = _summary_rows(regret_rows)
@@ -622,10 +728,80 @@ def _combine_outputs(config: TradeoffRunConfig, user_ids: Sequence[int]) -> None
     _write_summary_plots(config.out_root, summary)
 
 
+def _combine_outputs(config: TradeoffRunConfig, user_ids: Sequence[int]) -> None:
+    result_rows: list[dict[str, Any]] = []
+    regret_rows: list[dict[str, Any]] = []
+    for user_id in user_ids:
+        user_dir = _user_dir(config, user_id)
+        result_rows.extend(_read_csv(user_dir / "results.csv", user_id=user_id))
+        regret_rows.extend(_read_csv(user_dir / "regret_auc.csv", user_id=user_id))
+    _write_aggregate_outputs(config, result_rows=result_rows, regret_rows=regret_rows)
+
+
+def _split_combined_outputs(config: TradeoffRunConfig, user_ids: Sequence[int]) -> None:
+    result_rows = _read_csv_rows(config.out_root / "combined_results.csv")
+    regret_rows = _read_csv_rows(config.out_root / "combined_regret_auc.csv")
+    user_set = {int(user_id) for user_id in user_ids}
+    for user_id in user_ids:
+        user_dir = _user_dir(config, int(user_id))
+        user_dir.mkdir(parents=True, exist_ok=True)
+        _write_csv(
+            user_dir / "results.csv",
+            [
+                row
+                for row in result_rows
+                if int(str(row.get("user_id", "0") or "0")) == int(user_id)
+            ],
+        )
+        _write_csv(
+            user_dir / "regret_auc.csv",
+            [
+                row
+                for row in regret_rows
+                if int(str(row.get("user_id", "0") or "0")) == int(user_id)
+            ],
+        )
+    unexpected = sorted(
+        {
+            int(str(row.get("user_id", "0") or "0"))
+            for row in result_rows
+            if int(str(row.get("user_id", "0") or "0")) not in user_set
+        }
+    )
+    if unexpected:
+        raise SystemExit(
+            "Combined results contained unexpected user IDs: "
+            + ",".join(str(user_id) for user_id in unexpected)
+        )
+    _write_aggregate_outputs(config, result_rows=result_rows, regret_rows=regret_rows)
+
+
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     user_ids = _parse_user_subset(args.users, configured=config.user_ids)
+    use_multiuser_batch = len(user_ids) > 1 and not args.no_multiuser_batch
+    if use_multiuser_batch:
+        command = _multiuser_tradeoff_command(config, user_ids)
+        if args.dry_run:
+            print(" ".join(command))
+            return 0
+        results_path = config.out_root / "combined_results.csv"
+        regret_path = config.out_root / "combined_regret_auc.csv"
+        if not args.force and results_path.exists() and regret_path.exists():
+            print("Skipping multi-user batch: combined outputs already exist.")
+        else:
+            config.out_root.mkdir(parents=True, exist_ok=True)
+            print(
+                "Running multi-user batch "
+                + ",".join(str(user_id) for user_id in user_ids),
+                flush=True,
+            )
+            subprocess.run(command, cwd=REPO_ROOT, check=True)
+        _split_combined_outputs(config, user_ids)
+        print(f"Wrote combined outputs under {config.out_root}")
+        return 0
+
     for user_id in user_ids:
         user_dir = _user_dir(config, user_id)
         results_path = user_dir / "results.csv"
