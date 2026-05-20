@@ -3130,7 +3130,7 @@ class FSRS6BatchedStationaryFiniteOracle:
                 entry = load_cache_entry(
                     self.cache_config,
                     key_parts=self._cache_key_parts(
-                        oracle_kind="batched_stationary_finite",
+                        oracle_kind="stationary_finite",
                         method="solve_stationary_finite_policies",
                         user_idx=user_idx,
                         cost_weight=weight,
@@ -3184,7 +3184,7 @@ class FSRS6BatchedStationaryFiniteOracle:
                     write_cache_entry(
                         self.cache_config,
                         key_parts=self._cache_key_parts(
-                            oracle_kind="batched_stationary_finite",
+                            oracle_kind="stationary_finite",
                             method="solve_stationary_finite_policies",
                             user_idx=user_idx,
                             cost_weight=weight_list[weight_idx],
@@ -3301,7 +3301,7 @@ class FSRS6BatchedStationaryFiniteOracle:
                 entry = load_cache_entry(
                     self.cache_config,
                     key_parts=self._cache_key_parts(
-                        oracle_kind="batched_stationary_finite",
+                        oracle_kind="stationary_finite",
                         method="solve_policies",
                         user_idx=user_idx,
                         cost_weight=weight,
@@ -3333,7 +3333,7 @@ class FSRS6BatchedStationaryFiniteOracle:
                     write_cache_entry(
                         self.cache_config,
                         key_parts=self._cache_key_parts(
-                            oracle_kind="batched_stationary_finite",
+                            oracle_kind="stationary_finite",
                             method="solve_policies",
                             user_idx=user_idx,
                             cost_weight=weight_list[weight_idx],

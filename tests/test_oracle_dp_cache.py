@@ -246,6 +246,42 @@ class OracleDpCacheTest(unittest.TestCase):
                 },
             )
 
+    def test_batched_stationary_cache_reuses_single_user_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _cache_config(Path(tmp))
+            single_oracle = FSRS6StationaryFiniteOracle(
+                days=8,
+                action_retentions=[0.5, 0.8],
+                s_grid_size=8,
+                d_grid_size=8,
+                device="cpu",
+                cache_config=config,
+            )
+            single = single_oracle.solve_stationary_finite_policies(
+                [0.0],
+                max_iterations=4,
+                tolerance=1e-8,
+            )
+
+            batched_oracle = _batched_oracle(cache_config=config, user_count=1)
+            reset_oracle_dp_cache_stats()
+            batched = batched_oracle.solve_stationary_finite_policies(
+                [0.0],
+                max_iterations=4,
+                tolerance=1e-8,
+            )
+            self.assertEqual(batched.policy.shape, (1, 1, 8, 8))
+            self.assertTrue(torch.equal(single.policy[0], batched.policy[0, 0]))
+            self.assertEqual(
+                oracle_dp_cache_stats_snapshot(),
+                {
+                    "hits": 1,
+                    "misses": 0,
+                    "writes": 0,
+                    "refreshes": 0,
+                },
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
