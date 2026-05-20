@@ -300,6 +300,7 @@ def _metric_row(
     deck_scale = float(args.deck_scale)
     particles = 1
     return {
+        "user_id": user_id,
         "environment": f"fsrs6_user_{user_id}",
         "scheduler": scheduler,
         "scheduler_spec": scheduler_spec,

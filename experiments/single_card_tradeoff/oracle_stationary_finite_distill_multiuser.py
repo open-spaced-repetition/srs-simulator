@@ -7,6 +7,7 @@ import argparse
 from collections.abc import Sequence
 from dataclasses import dataclass
 import csv
+import json
 import math
 import os
 from pathlib import Path
@@ -2434,6 +2435,55 @@ def write_single_user_train_summary(
             )
 
 
+def write_run_config_snapshot(
+    path: Path,
+    *,
+    args: argparse.Namespace,
+    user_ids: Sequence[int],
+    device: torch.device,
+    cost_weights: Sequence[float],
+    eval_cost_weights: Sequence[float],
+    action_retentions: Sequence[float],
+) -> None:
+    payload = {
+        "experiment": "oracle_stationary_finite_distill_multiuser",
+        "command": sys.argv,
+        "device": str(device),
+        "env": args.env,
+        "user_ids": list(user_ids),
+        "review_markov_transition": False,
+        "days": args.days,
+        "deck_scale": args.deck_scale,
+        "seed": args.seed,
+        "training_cost_weights": list(cost_weights),
+        "eval_cost_weights": list(eval_cost_weights),
+        "action_retentions": list(action_retentions),
+        "per_user_models": bool(args.per_user_models),
+        "per_user_supervision": args.per_user_supervision,
+        "epochs": args.epochs,
+        "steps_per_epoch": args.steps_per_epoch,
+        "table_samples_per_weight": args.table_samples_per_weight,
+        "train_envs_per_user": args.train_envs_per_user,
+        "eval_particles": args.eval_particles,
+        "network": args.network,
+        "hidden_size": args.hidden_size,
+        "network_depth": args.network_depth,
+        "oracle_s_grid_size": args.oracle_s_grid_size,
+        "oracle_d_grid_size": args.oracle_d_grid_size,
+        "oracle_stationary_finite_max_iterations": (
+            args.oracle_stationary_finite_max_iterations
+        ),
+        "oracle_stationary_finite_tolerance": (args.oracle_stationary_finite_tolerance),
+        "button_usage": str(args.button_usage) if args.button_usage else None,
+        "benchmark_partition": args.benchmark_partition,
+        "srs_benchmark_root": (
+            str(args.srs_benchmark_root) if args.srs_benchmark_root else None
+        ),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
 def write_auc_summary(
     path: Path,
     auc_rows: list[dict[str, Any]],
@@ -2616,6 +2666,15 @@ def main() -> None:
         name="--action-retentions",
     )
     validate_retention_values(action_retentions, name="--action-retentions")
+    write_run_config_snapshot(
+        args.out_dir / "run_config.json",
+        args=args,
+        user_ids=user_ids,
+        device=device,
+        cost_weights=cost_weights,
+        eval_cost_weights=eval_cost_weights,
+        action_retentions=action_retentions,
+    )
     configs = load_user_configs(args, user_ids)
 
     if args.eval_exact_vs_distill:

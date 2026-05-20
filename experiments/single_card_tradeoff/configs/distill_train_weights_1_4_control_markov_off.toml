@@ -1,0 +1,336 @@
+schema_version = 1
+name = "distill_train_weights_1_4_control_markov_off"
+family = "single_card_tradeoff"
+seed = 42
+
+[experiment]
+env = "fsrs6"
+user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+days = 1825
+deck_scale = 10000
+review_markov_transition = false
+torch_device = "cuda"
+action_retentions = [0.50, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.93, 0.96, 0.98]
+formal_eval_cost_weights = [0, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
+dense_loww_eval_cost_weights = [0, 0.0625, 0.125, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
+
+[training]
+per_user_models = true
+per_user_supervision = "uniform_table"
+network = "residual"
+hidden_size = 8
+network_depth = 2
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+epochs = 128
+steps_per_epoch = 64
+table_samples_per_weight = 256
+eval_particles = 10000
+
+[fsrs6_adr]
+train_run_root = "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off"
+
+[[treatments]]
+label = "sparse_baseline"
+training_cost_weights = [0, 16, 64, 256, 1024]
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off"
+
+[[treatments]]
+label = "add_1_4"
+training_cost_weights = [0, 1, 4, 16, 64, 256, 1024]
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off"
+
+[[treatments]]
+label = "add_1_only"
+training_cost_weights = [0, 1, 16, 64, 256, 1024]
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off"
+
+[[treatments]]
+label = "add_4_only"
+training_cost_weights = [0, 4, 16, 64, 256, 1024]
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off"
+
+[[treatments]]
+label = "add_1_2_4"
+training_cost_weights = [0, 1, 2, 4, 16, 64, 256, 1024]
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off"
+
+[outputs]
+comparison_root = "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off"
+formal_exact_value_root = "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal"
+dense_loww_exact_value_root = "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww"
+
+[[commands]]
+name = "train_sparse_baseline"
+description = "Train the current sparse stationary finite distill baseline in a new root."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "--env", "fsrs6",
+  "--user-ids", "1,2,3,4,5,6,7,8",
+  "--button-usage", "../Anki-button-usage/button_usage.jsonl",
+  "--per-user-models",
+  "--per-user-supervision", "uniform_table",
+  "--cost-weights", "0,16,64,256,1024",
+  "--eval-cost-weights", "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024",
+  "--action-retentions", "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98",
+  "--network", "residual",
+  "--hidden-size", "8",
+  "--network-depth", "2",
+  "--oracle-s-grid-size", "64",
+  "--oracle-d-grid-size", "32",
+  "--epochs", "128",
+  "--steps-per-epoch", "64",
+  "--table-samples-per-weight", "256",
+  "--eval-particles", "10000",
+  "--seed", "42",
+  "--out-dir", "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off",
+  "--torch-device", "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/user_1_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/user_8_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/train_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/regret_auc.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/performance_summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/gpu_monitor/summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off/run_config.json",
+]
+
+[[commands]]
+name = "train_add_1_4"
+description = "Train the minimal low-cost-weight supervision treatment."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "--env", "fsrs6",
+  "--user-ids", "1,2,3,4,5,6,7,8",
+  "--button-usage", "../Anki-button-usage/button_usage.jsonl",
+  "--per-user-models",
+  "--per-user-supervision", "uniform_table",
+  "--cost-weights", "0,1,4,16,64,256,1024",
+  "--eval-cost-weights", "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024",
+  "--action-retentions", "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98",
+  "--network", "residual",
+  "--hidden-size", "8",
+  "--network-depth", "2",
+  "--oracle-s-grid-size", "64",
+  "--oracle-d-grid-size", "32",
+  "--epochs", "128",
+  "--steps-per-epoch", "64",
+  "--table-samples-per-weight", "256",
+  "--eval-particles", "10000",
+  "--seed", "42",
+  "--out-dir", "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off",
+  "--torch-device", "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/user_1_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/user_8_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/train_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/regret_auc.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/performance_summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/gpu_monitor/summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off/run_config.json",
+]
+
+[[commands]]
+name = "train_add_1_only"
+description = "Optional diagnostic: add only w=1 to isolate the low-weight endpoint."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "--env", "fsrs6",
+  "--user-ids", "1,2,3,4,5,6,7,8",
+  "--button-usage", "../Anki-button-usage/button_usage.jsonl",
+  "--per-user-models",
+  "--per-user-supervision", "uniform_table",
+  "--cost-weights", "0,1,16,64,256,1024",
+  "--eval-cost-weights", "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024",
+  "--action-retentions", "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98",
+  "--network", "residual",
+  "--hidden-size", "8",
+  "--network-depth", "2",
+  "--oracle-s-grid-size", "64",
+  "--oracle-d-grid-size", "32",
+  "--epochs", "128",
+  "--steps-per-epoch", "64",
+  "--table-samples-per-weight", "256",
+  "--eval-particles", "10000",
+  "--seed", "42",
+  "--out-dir", "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off",
+  "--torch-device", "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/user_1_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/user_8_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/train_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/regret_auc.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/performance_summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/gpu_monitor/summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off/run_config.json",
+]
+
+[[commands]]
+name = "train_add_4_only"
+description = "Optional diagnostic: add only w=4 to isolate the mid-low stabilizer."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "--env", "fsrs6",
+  "--user-ids", "1,2,3,4,5,6,7,8",
+  "--button-usage", "../Anki-button-usage/button_usage.jsonl",
+  "--per-user-models",
+  "--per-user-supervision", "uniform_table",
+  "--cost-weights", "0,4,16,64,256,1024",
+  "--eval-cost-weights", "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024",
+  "--action-retentions", "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98",
+  "--network", "residual",
+  "--hidden-size", "8",
+  "--network-depth", "2",
+  "--oracle-s-grid-size", "64",
+  "--oracle-d-grid-size", "32",
+  "--epochs", "128",
+  "--steps-per-epoch", "64",
+  "--table-samples-per-weight", "256",
+  "--eval-particles", "10000",
+  "--seed", "42",
+  "--out-dir", "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off",
+  "--torch-device", "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/user_1_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/user_8_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/train_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/regret_auc.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/performance_summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/gpu_monitor/summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/run_config.json",
+]
+
+[[commands]]
+name = "train_add_1_2_4"
+description = "Optional diagnostic: add w=1,2,4 to test whether w=2 remains missing."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "--env", "fsrs6",
+  "--user-ids", "1,2,3,4,5,6,7,8",
+  "--button-usage", "../Anki-button-usage/button_usage.jsonl",
+  "--per-user-models",
+  "--per-user-supervision", "uniform_table",
+  "--cost-weights", "0,1,2,4,16,64,256,1024",
+  "--eval-cost-weights", "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024",
+  "--action-retentions", "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98",
+  "--network", "residual",
+  "--hidden-size", "8",
+  "--network-depth", "2",
+  "--oracle-s-grid-size", "64",
+  "--oracle-d-grid-size", "32",
+  "--epochs", "128",
+  "--steps-per-epoch", "64",
+  "--table-samples-per-weight", "256",
+  "--eval-particles", "10000",
+  "--seed", "42",
+  "--out-dir", "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off",
+  "--torch-device", "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/user_1_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/user_8_policy.pt",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/train_summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/summary.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/regret_auc.csv",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/performance_summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/gpu_monitor/summary.json",
+  "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off/run_config.json",
+]
+
+[[commands]]
+name = "evaluate_exact_value_formal"
+description = "Direct exact-value comparison on the formal sparse evaluation grid."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/stationary_finite_exact_value_eval.py",
+  "--env", "fsrs6",
+  "--user-ids", "1,2,3,4,5,6,7,8",
+  "--button-usage", "../Anki-button-usage/button_usage.jsonl",
+  "--cost-weights", "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024",
+  "--action-retentions", "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98",
+  "--oracle-s-grid-size", "64",
+  "--oracle-d-grid-size", "32",
+  "--distill-policy", "sparse_baseline=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off",
+  "--distill-policy", "add_1_4=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off",
+  "--distill-policy", "add_1_only=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off",
+  "--distill-policy", "add_4_only=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off",
+  "--distill-policy", "add_1_2_4=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off",
+  "--skip-default-policies",
+  "--fsrs6-adr-train-run-root", "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off",
+  "--out-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal",
+  "--torch-device", "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal/results.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal/regret_auc.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal/summary.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal/metadata.json",
+]
+
+[[commands]]
+name = "evaluate_exact_value_user2_dense_loww"
+description = "Direct exact-value comparison for user 2 on the dense low-weight evaluation grid."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/stationary_finite_exact_value_eval.py",
+  "--env", "fsrs6",
+  "--user-ids", "2",
+  "--button-usage", "../Anki-button-usage/button_usage.jsonl",
+  "--cost-weights", "0,0.0625,0.125,0.25,0.5,0.75,1,1.5,2,3,4,6,8,12,16,24,32,48,64,96,128,192,256,320,384,512,1024",
+  "--action-retentions", "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98",
+  "--oracle-s-grid-size", "64",
+  "--oracle-d-grid-size", "32",
+  "--distill-policy", "sparse_baseline=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off",
+  "--distill-policy", "add_1_4=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off",
+  "--distill-policy", "add_1_only=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off",
+  "--distill-policy", "add_4_only=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off",
+  "--distill-policy", "add_1_2_4=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off",
+  "--skip-default-policies",
+  "--fsrs6-adr-train-run-root", "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off",
+  "--out-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww",
+  "--torch-device", "cuda",
+  "--no-progress",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww/results.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww/regret_auc.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww/summary.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww/metadata.json",
+]
+
+[[commands]]
+name = "analyze_train_weight_control"
+description = "Aggregate gates, direct pairwise checks, dense low-weight user-2 rows, segment AUC, and user-2 frontier plots."
+command = [
+  "uv", "run", "python", "experiments/single_card_tradeoff/train_weight_control_analysis.py",
+  "--treatment", "sparse_baseline=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off",
+  "--treatment", "add_1_4=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off",
+  "--treatment", "add_1_only=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off",
+  "--treatment", "add_4_only=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off",
+  "--treatment", "add_1_2_4=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_2_4_first8_markov_off",
+  "--formal-exact-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal",
+  "--dense-loww-exact-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww",
+  "--out-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off",
+]
+expected_outputs = [
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_summary.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_by_user.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_direct_vs_exact.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_user2_dense_loww.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_user2_segment_auc.csv",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_user2_frontier_formal.png",
+  "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_user2_frontier_dense_loww.png",
+]
