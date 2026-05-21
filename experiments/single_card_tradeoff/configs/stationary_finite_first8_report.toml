@@ -3,6 +3,8 @@ name = "stationary_finite_first8_report"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 first8_stationary_finite_distill = "docs/single_card_tradeoff/experiments/2026-05-17-first8_stationary_finite_distill.md"
 first8_exact_vs_distill = "docs/single_card_tradeoff/experiments/2026-05-17-first8_exact_vs_distill.md"
@@ -23,89 +25,49 @@ teacher_cost_weights = [0, 4, 16, 64, 256, 1024]
 eval_cost_weights = [0, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
 torch_device = "cuda"
 
-[[commands]]
+[[tasks]]
 name = "train_first8_stationary_finite_distill"
+stage = "train"
+kind = "stationary_finite_distill_multiuser"
 description = "Train one 476-parameter stationary finite distill per user with uniform exact-table supervision."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--per-user-models",
-  "--per-user-supervision",
-  "uniform_table",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/train_summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/regret_auc.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/performance_summary.json",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+per_user_models = true
+per_user_supervision = "uniform_table"
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu"
+torch_device = "cuda"
+no_progress = true
+
+[[tasks]]
 name = "evaluate_first8_stationary_finite_distill"
+stage = "train"
+kind = "stationary_finite_distill_multiuser"
 description = "Evaluate the per-user stationary finite distill against fsrs6 on the first eight users."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--per-user-models",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/regret_auc.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/performance_summary.json",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+per_user_models = true
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu"
+torch_device = "cuda"
+no_progress = true
+
+[[tasks]]
 name = "evaluate_first8_exact_vs_distill"
+stage = "evaluate"
+kind = "stationary_finite_distill_multiuser"
 description = "Evaluate exact stationary finite policies and per-user distill checkpoints against fsrs6 on the first eight users."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--eval-exact-vs-distill",
-  "--distill-dir",
-  "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/mean_summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/regret_auc.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/performance_summary.json",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users/gpu_monitor/summary.json",
-]
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+eval_exact_vs_distill = true
+distill_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu"
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users"
+torch_device = "cuda"
+no_progress = true

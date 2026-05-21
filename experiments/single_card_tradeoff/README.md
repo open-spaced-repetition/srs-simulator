@@ -33,11 +33,28 @@ ADR rows include `fsrs6_adr_policy`, `fsrs6_adr_baseline_desired_retention`, `fs
 The first-eight ADR versus 476-parameter distill comparison is configured in TOML and writes combined cross-user summary tables and plots:
 
 ```bash
-uv run python -m experiments.single_card_tradeoff.cli.run_tradeoff_config \
-  --config experiments/single_card_tradeoff/configs/adr_vs_476_tradeoff_first8_users.toml
+uv run python -m experiments.single_card_tradeoff.cli.run_experiment \
+  --config experiments/single_card_tradeoff/configs/adr_vs_476_tradeoff_first8_users.toml \
+  --stage evaluate
 ```
 
-For configs with multiple users, `run_tradeoff_config.py` now calls `tradeoff.py --user-ids ...` once by default, then splits the combined CSVs back into per-user compatibility files. Pass `--no-multiuser-batch` to use the old one-subprocess-per-user mode. This writes `combined_results.csv`, `combined_regret_auc.csv`, `summary.csv`, `mean_summary.csv`, `same_target_time_saved_auc_by_user.png`, `relative_time_saved_by_user.png`, and `span_coverage_by_user.png` under `artifacts/single_card_tradeoff/adr_vs_476_tradeoff_first8_users_markov_off/` for the checked-in Markov-off config. Each `user_<id>/` subdirectory also contains that user's `results.csv` and `regret_auc.csv`.
+The formal runner reads semantic config sections and `[[tasks]]` entries, then
+writes stage records under each workflow root. Supported stages are `dry-run`,
+`preflight`, `train`, `evaluate`, `analyze`, `benchmark`, `visualize`, `report`,
+and `all`. Legacy `run_tradeoff_config.py` remains the implementation behind the
+`tradeoff_config` task kind; checked-in configs no longer use `[[commands]]` or
+`expected_outputs` as the primary contract. For configs with multiple users, that
+task still calls `tradeoff.py --user-ids ...` once by default, then splits the
+combined CSVs back into per-user compatibility files.
+
+The train-weight control workflow is now generated from the compact semantic
+sections in its TOML:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.run_experiment \
+  --config experiments/single_card_tradeoff/configs/distill_train_weights_1_4_control_markov_off.toml \
+  --stage all
+```
 
 ## UVFA PPO
 
@@ -237,8 +254,9 @@ with one independent report per experiment and a short index at
 Regenerate them with:
 
 ```bash
-uv run python -m experiments.single_card_tradeoff.cli.generate_experiment_report \
-  --config experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml
+uv run python -m experiments.single_card_tradeoff.cli.run_experiment \
+  --config experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml \
+  --stage report
 ```
 
 The suite config is intentionally thin and includes one smaller profile per

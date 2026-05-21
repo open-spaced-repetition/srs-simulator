@@ -3,6 +3,8 @@ name = "oracle_distill"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 oracle_distill = "docs/single_card_tradeoff/experiments/2026-05-17-oracle_distill.md"
 
@@ -10,29 +12,17 @@ oracle_distill = "docs/single_card_tradeoff/experiments/2026-05-17-oracle_distil
 oracle_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_distill_results.csv"
 oracle_distill_hparam_summary = "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_summary.csv"
 
-[[commands]]
+[[tasks]]
 name = "search_oracle_distill_hparams"
+stage = "train"
+kind = "oracle_distill_hparam_search"
 description = "Rerun the discrete oracle-distill model-size search."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_distill_hparam_search",
-  "--days",
-  "1825",
-  "--oracle-s-grid-size",
-  "64",
-  "--oracle-d-grid-size",
-  "32",
-  "--eval-particles",
-  "3000",
-  "--save-models",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_summary.csv",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_detail.csv",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_hparam_models",
-]
 
+[tasks.options]
+days = 1825
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+eval_particles = 3000
+save_models = true
+torch_device = "cuda"
+no_progress = true

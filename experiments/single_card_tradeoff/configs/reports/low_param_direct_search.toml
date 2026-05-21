@@ -3,6 +3,8 @@ name = "low_param_direct_search"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 low_param_direct_search = "docs/single_card_tradeoff/experiments/2026-05-17-low_param_direct_search.md"
 
@@ -10,78 +12,41 @@ low_param_direct_search = "docs/single_card_tradeoff/experiments/2026-05-17-low_
 low_param_sparse_metadata = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/metadata.json"
 low_param_dense_metadata = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights/metadata.json"
 
-[[commands]]
+[[tasks]]
 name = "train_low_param_direct_sparse"
+stage = "train"
+kind = "low_param_direct_policy_search_multiuser"
 description = "Train the 7-parameter direct policy-search compression baseline using sparse teacher cost weights."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--generations",
-  "64",
-  "--population-size",
-  "32",
-  "--elite-count",
-  "8",
-  "--train-particles",
-  "64",
-  "--eval-particles",
-  "10000",
-  "--torch-device",
-  "cuda",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/metadata.json",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/mean_summary.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/regret_auc.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/performance_summary.json",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+generations = 64
+population_size = 32
+elite_count = 8
+train_particles = 64
+eval_particles = 10000
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users"
+no_progress = true
+
+[[tasks]]
 name = "train_low_param_direct_dense"
+stage = "train"
+kind = "low_param_direct_policy_search_multiuser"
 description = "Rerun the 7-parameter direct-search baseline with dense teacher cost weights."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--generations",
-  "64",
-  "--population-size",
-  "32",
-  "--elite-count",
-  "8",
-  "--train-particles",
-  "64",
-  "--eval-particles",
-  "10000",
-  "--train-cost-weights",
-  "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024",
-  "--torch-device",
-  "cuda",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights/metadata.json",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights/mean_summary.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights/regret_auc.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights/performance_summary.json",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights/gpu_monitor/summary.json",
-]
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+generations = 64
+population_size = 32
+elite_count = 8
+train_particles = 64
+eval_particles = 10000
+train_cost_weights = "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024"
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_dense_weights"
+no_progress = true

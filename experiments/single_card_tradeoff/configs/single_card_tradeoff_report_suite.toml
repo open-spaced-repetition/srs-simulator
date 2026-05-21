@@ -6,43 +6,16 @@ seed = 42
 [report]
 root = "artifacts/single_card_tradeoff/reports/current"
 output_path = "docs/single_card_tradeoff/experiments/2026-05-17-index.md"
-profile_paths = [
-  "reports/default_no_sub05_tradeoff.toml",
-  "stationary_finite_first8_report.toml",
-  "reports/stationary_finite_first8_r4d1_e512.toml",
-  "reports/low_param_direct_search.toml",
-  "reports/uvfa_ppo.toml",
-  "reports/recurrent_interval_ppo.toml",
-  "reports/oracle_distill.toml",
-  "reports/grid_oracle.toml",
-  "reports/infinite_stationary_oracles.toml",
-  "reports/ppo_guide_ablation.toml",
-  "reports/stationary_finite_policy_viz.toml",
-  "reports/stationary_finite_compression.toml",
-  "reports/stationary_finite_epoch_extension.toml",
-  "reports/oracle_policy_outputs.toml",
-  "reports/interval_oracle_distill.toml",
-  "reports/retention_distill.toml",
-  "reports/multiuser_eval_batching.toml",
-  "reports/oracle_stationary_finite_cpu_gpu_benchmark.toml",
-]
+profile_paths = ["reports/default_no_sub05_tradeoff.toml", "stationary_finite_first8_report.toml", "reports/stationary_finite_first8_r4d1_e512.toml", "reports/low_param_direct_search.toml", "reports/uvfa_ppo.toml", "reports/recurrent_interval_ppo.toml", "reports/oracle_distill.toml", "reports/grid_oracle.toml", "reports/infinite_stationary_oracles.toml", "reports/ppo_guide_ablation.toml", "reports/stationary_finite_policy_viz.toml", "reports/stationary_finite_compression.toml", "reports/stationary_finite_epoch_extension.toml", "reports/oracle_policy_outputs.toml", "reports/interval_oracle_distill.toml", "reports/retention_distill.toml", "reports/multiuser_eval_batching.toml", "reports/oracle_stationary_finite_cpu_gpu_benchmark.toml"]
 
 [report.outputs]
 index = "docs/single_card_tradeoff/experiments/2026-05-17-index.md"
 
-[[commands]]
+[[tasks]]
 name = "generate_report"
+stage = "report"
+kind = "generate_experiment_report"
 description = "Generate the formal report suite from the configured artifacts."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.generate_experiment_report",
-  "--config",
-  "experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/reports/current/report_summary.json",
-  "artifacts/single_card_tradeoff/reports/current/index.md",
-  "docs/single_card_tradeoff/experiments/2026-05-17-index.md",
-]
+
+[tasks.options]
+config = "experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml"

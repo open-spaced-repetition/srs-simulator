@@ -3,6 +3,8 @@ name = "oracle_stationary_finite_cpu_gpu_benchmark"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 oracle_stationary_finite_cpu_gpu_benchmark = "docs/single_card_tradeoff/experiments/2026-05-18-oracle_stationary_finite_cpu_gpu_benchmark.md"
 
@@ -14,58 +16,24 @@ oracle_stationary_finite_multiuser_cpu_gpu_summary = "artifacts/single_card_trad
 oracle_stationary_finite_multiuser_cpu_gpu_runs = "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/runs.csv"
 oracle_stationary_finite_multiuser_cpu_gpu_metadata = "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/metadata.json"
 
-[[commands]]
+[[tasks]]
 name = "benchmark_oracle_stationary_finite_cpu_gpu"
+stage = "benchmark"
+kind = "oracle_stationary_finite_cpu_gpu_benchmark"
 description = "Benchmark oracle_stationary_finite_distill.py with the formal default workload on CPU and CUDA."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_cpu_gpu_benchmark",
-  "--devices",
-  "cpu,cuda",
-  "--repeats",
-  "1",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/summary.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/runs.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/metadata.json",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/cpu/repeat_1/results.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/cpu/repeat_1/policy.pt",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/cpu/repeat_1/performance_summary.json",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/cuda/repeat_1/results.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/cuda/repeat_1/policy.pt",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/cuda/repeat_1/performance_summary.json",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_cpu_gpu_benchmark/cuda/repeat_1/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+devices = "cpu,cuda"
+repeats = 1
+no_progress = true
+
+[[tasks]]
 name = "benchmark_oracle_stationary_finite_multiuser_cpu_gpu"
+stage = "benchmark"
+kind = "oracle_stationary_finite_multiuser_cpu_gpu_benchmark"
 description = "Benchmark oracle_stationary_finite_distill_multiuser.py with first-eight per-user models on CPU and CUDA."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_multiuser_cpu_gpu_benchmark",
-  "--devices",
-  "cpu,cuda",
-  "--repeats",
-  "1",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/summary.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/runs.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/metadata.json",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cpu/repeat_1/results.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cpu/repeat_1/summary.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cpu/repeat_1/train_summary.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cpu/repeat_1/performance_summary.json",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cuda/repeat_1/results.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cuda/repeat_1/summary.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cuda/repeat_1/train_summary.csv",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cuda/repeat_1/performance_summary.json",
-  "artifacts/single_card_tradeoff/oracle_stationary_finite_multiuser_cpu_gpu_benchmark/cuda/repeat_1/gpu_monitor/summary.json",
-]
+
+[tasks.options]
+devices = "cpu,cuda"
+repeats = 1
+no_progress = true

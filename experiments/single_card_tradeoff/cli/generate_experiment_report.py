@@ -26,6 +26,11 @@ from experiments.single_card_tradeoff.core.reporting import (
     read_json_object,
     resolve_repo_path,
 )
+from experiments.single_card_tradeoff.core.workflow_config import (
+    SingleCardWorkflowStage,
+    WorkflowTask,
+)
+from experiments.single_card_tradeoff.core.workflow_tasks import profile_task
 
 
 DEFAULT_CONFIG = Path(
@@ -374,7 +379,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG,
-        help="TOML profile describing report inputs, outputs, and rerun commands.",
+        help="TOML profile describing report inputs, outputs, and rerun tasks.",
     )
     parser.add_argument(
         "--report-root",
@@ -570,7 +575,7 @@ def build_report_summary(
             "available": available,
             "missing": missing,
         },
-        "rerun_commands": _profile_commands(
+        "rerun_tasks": _profile_tasks(
             report_config,
             future_available_paths=future_available_paths,
         ),
@@ -1411,13 +1416,13 @@ def _append_reproduction_profile(
     *,
     command_names: Sequence[str] | None,
 ) -> None:
-    commands = _select_commands(summary["rerun_commands"], command_names)
+    commands = _select_commands(summary["rerun_tasks"], command_names)
     if not commands:
         return
     lines.append("## Reproduction Profile")
     lines.append("")
     lines.append(
-        "The TOML profile records the command and expected outputs used to "
+        "The TOML profile records the formal task and derived outputs used to "
         "reproduce this report input. CUDA reruns write "
         "`performance_summary.json` and `gpu_monitor/` memory samples under "
         "their configured output directories."
@@ -1425,7 +1430,7 @@ def _append_reproduction_profile(
     lines.append("")
     lines.extend(
         markdown_table(
-            ["command", "expected outputs present"],
+            ["task", "derived outputs present"],
             [
                 [
                     row["name"],
@@ -3553,43 +3558,63 @@ def _merge_report_profile(
         sources.update(child_sources)
         merged["source_artifacts"] = sources
 
-    child_commands = child.get("commands", [])
-    if child_commands:
-        if not isinstance(child_commands, list):
-            raise ValueError("commands must be an array of TOML tables.")
-        commands = list(merged.get("commands") or [])
-        commands.extend(child_commands)
-        merged["commands"] = commands
+    child_tasks = child.get("tasks", [])
+    if child_tasks:
+        if not isinstance(child_tasks, list):
+            raise ValueError("tasks must be an array of TOML tables.")
+        tasks = list(merged.get("tasks") or [])
+        tasks.extend(child_tasks)
+        merged["tasks"] = tasks
 
 
-def _profile_commands(
+def _profile_tasks(
     config: Mapping[str, Any],
     *,
     future_available_paths: set[Path] | None = None,
 ) -> list[dict[str, Any]]:
     future_available_paths = future_available_paths or set()
-    commands = config.get("commands", [])
-    if not isinstance(commands, list):
-        raise ValueError("commands must be an array of TOML tables.")
+    if "tasks" in config:
+        tasks = config.get("tasks", [])
+        if not isinstance(tasks, list):
+            raise ValueError("tasks must be an array of TOML tables.")
+        commands = tasks
+    else:
+        commands = config.get("commands", [])
+        if not isinstance(commands, list):
+            raise ValueError("commands must be an array of TOML tables.")
     result: list[dict[str, Any]] = []
     for index, raw in enumerate(commands):
         if not isinstance(raw, Mapping):
-            raise ValueError(f"commands[{index}] must be a TOML table.")
+            raise ValueError(f"tasks[{index}] must be a TOML table.")
+        if "kind" in raw:
+            task = WorkflowTask(
+                name=_required_str(raw.get("name"), f"tasks[{index}].name"),
+                stage=_parse_task_stage(raw.get("stage"), f"tasks[{index}].stage"),
+                kind=_required_str(raw.get("kind"), f"tasks[{index}].kind"),
+                description=_optional_str(
+                    raw.get("description"), f"tasks[{index}].description"
+                ),
+                options=dict(raw.get("options") or {}),
+                config_path=Path("."),
+                enabled=True,
+            )
+            result.append(
+                profile_task(task, future_available_paths=future_available_paths)
+            )
+            continue
         name = raw.get("name")
         command = raw.get("command")
         expected_outputs = raw.get("expected_outputs", [])
         if not isinstance(name, str) or not name.strip():
-            raise ValueError(f"commands[{index}].name must be a non-empty string.")
+            raise ValueError(f"tasks[{index}].name must be a non-empty string.")
         if not isinstance(command, list) or not all(
             isinstance(item, str) for item in command
         ):
-            raise ValueError(f"commands[{index}].command must be a string array.")
+            raise ValueError(f"tasks[{index}].command must be a string array.")
         if not isinstance(expected_outputs, list) or not all(
             isinstance(item, str) for item in expected_outputs
         ):
-            raise ValueError(
-                f"commands[{index}].expected_outputs must be a string array."
-            )
+            raise ValueError(f"tasks[{index}].expected_outputs must be a string array.")
         resolved_outputs = [resolve_repo_path(Path(item)) for item in expected_outputs]
         result.append(
             {
@@ -3608,6 +3633,27 @@ def _profile_commands(
             }
         )
     return result
+
+
+def _required_str(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty string.")
+    return value.strip()
+
+
+def _optional_str(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    return _required_str(value, label)
+
+
+def _parse_task_stage(value: Any, label: str) -> SingleCardWorkflowStage:
+    raw = _required_str(value, label)
+    try:
+        return SingleCardWorkflowStage(raw)
+    except ValueError as exc:
+        allowed = ", ".join(stage.value for stage in SingleCardWorkflowStage)
+        raise ValueError(f"{label} must be one of {allowed}.") from exc
 
 
 def _default_comparison(rows: Sequence[Mapping[str, str]]) -> list[dict[str, Any]]:

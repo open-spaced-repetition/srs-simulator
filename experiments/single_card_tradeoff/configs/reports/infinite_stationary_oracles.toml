@@ -3,6 +3,8 @@ name = "infinite_stationary_oracles"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 infinite_stationary_oracles = "docs/single_card_tradeoff/experiments/2026-05-17-infinite_stationary_oracles.md"
 
@@ -11,33 +13,19 @@ stationary_finite_compare_regret_auc = "artifacts/single_card_tradeoff/stationar
 infinite_distill_compare_regret_auc = "artifacts/single_card_tradeoff/infinite_distill_compare/regret_auc.csv"
 infinite_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_results.csv"
 
-[[commands]]
+[[tasks]]
 name = "evaluate_infinite_stationary_oracles"
+stage = "evaluate"
+kind = "tradeoff"
 description = "Evaluate infinite stationary exact/distill policies and stationary finite exact policies."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.tradeoff",
-  "--env",
-  "fsrs6_default",
-  "--sched",
-  "fsrs6_default,fsrs6_oracle_distill,fsrs6_oracle_infinite,fsrs6_oracle_infinite_distill,fsrs6_oracle_stationary_finite",
-  "--particles",
-  "10000",
-  "--deck-scale",
-  "10000",
-  "--oracle-distill-policy",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt",
-  "--oracle-infinite-distill-policy",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt",
-  "--out",
-  "artifacts/single_card_tradeoff/stationary_finite_compare/results.csv",
-  "--regret-auc-out",
-  "artifacts/single_card_tradeoff/stationary_finite_compare/regret_auc.csv",
-  "--torch-device",
-  "cuda",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/stationary_finite_compare/results.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_compare/regret_auc.csv",
-]
+
+[tasks.options]
+env = "fsrs6_default"
+sched = "fsrs6_default,fsrs6_oracle_distill,fsrs6_oracle_infinite,fsrs6_oracle_infinite_distill,fsrs6_oracle_stationary_finite"
+particles = 10000
+deck_scale = 10000
+oracle_distill_policy = "artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt"
+oracle_infinite_distill_policy = "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt"
+out = "artifacts/single_card_tradeoff/stationary_finite_compare/results.csv"
+regret_auc_out = "artifacts/single_card_tradeoff/stationary_finite_compare/regret_auc.csv"
+torch_device = "cuda"

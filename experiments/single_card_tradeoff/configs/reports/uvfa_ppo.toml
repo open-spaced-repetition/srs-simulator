@@ -3,6 +3,8 @@ name = "uvfa_ppo"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 uvfa_ppo = "docs/single_card_tradeoff/experiments/2026-05-17-uvfa_ppo.md"
 
@@ -10,25 +12,15 @@ uvfa_ppo = "docs/single_card_tradeoff/experiments/2026-05-17-uvfa_ppo.md"
 uvfa_ppo_hparam_summary = "artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_summary.csv"
 uvfa_ppo_results = "artifacts/single_card_tradeoff/uvfa_ppo_results.csv"
 
-[[commands]]
+[[tasks]]
 name = "search_uvfa_ppo_hparams"
+stage = "train"
+kind = "uvfa_ppo_hparam_search"
 description = "Rerun the discrete UVFA PPO model-size search."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.uvfa_ppo_hparam_search",
-  "--days",
-  "1825",
-  "--eval-particles",
-  "3000",
-  "--save-models",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_summary.csv",
-  "artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_detail.csv",
-  "artifacts/single_card_tradeoff/uvfa_ppo_hparam_search_models",
-]
 
+[tasks.options]
+days = 1825
+eval_particles = 3000
+save_models = true
+torch_device = "cuda"
+no_progress = true

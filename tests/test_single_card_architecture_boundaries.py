@@ -113,7 +113,7 @@ class SingleCardArchitectureBoundaryTests(unittest.TestCase):
         for layer in ("core", "models", "oracles"):
             for path in (SINGLE_CARD_ROOT / layer).rglob("*.py"):
                 tree = ast.parse(path.read_text(encoding="utf-8"))
-                if _imports_cli_layer(tree):
+                if _imports_cli_layer(tree) or _dynamically_imports_cli_layer(tree):
                     offenders.append(path.relative_to(PROJECT_ROOT).as_posix())
 
         self.assertEqual(offenders, [])
@@ -129,6 +129,29 @@ def _imports_cli_layer(tree: ast.AST) -> bool:
             for alias in node.names:
                 if alias.name == cli_prefix or alias.name.startswith(f"{cli_prefix}."):
                     return True
+    return False
+
+
+def _dynamically_imports_cli_layer(tree: ast.AST) -> bool:
+    cli_prefix = "experiments.single_card_tradeoff.cli"
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        func_name = None
+        if isinstance(func, ast.Name):
+            func_name = func.id
+        elif isinstance(func, ast.Attribute):
+            func_name = func.attr
+        if func_name != "import_module":
+            continue
+        if not node.args:
+            continue
+        target = node.args[0]
+        if not isinstance(target, ast.Constant) or not isinstance(target.value, str):
+            continue
+        if target.value == cli_prefix or target.value.startswith(f"{cli_prefix}."):
+            return True
     return False
 
 

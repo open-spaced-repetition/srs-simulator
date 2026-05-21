@@ -3,6 +3,8 @@ name = "stationary_finite_exact_value_low_param"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 stationary_finite_exact_value_low_param = "docs/single_card_tradeoff/experiments/2026-05-18-stationary_finite_exact_value_low_param.md"
 
@@ -16,157 +18,77 @@ low_param_direct_interaction15_metadata = "artifacts/single_card_tradeoff/low_pa
 low_param_direct_basis32_metadata = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/metadata.json"
 low_param_direct_basis64_metadata = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/metadata.json"
 
-[[commands]]
+[[tasks]]
 name = "evaluate_stationary_finite_exact_value_first8"
+stage = "evaluate"
+kind = "stationary_finite_exact_value_eval"
 description = "Deterministically evaluate exact stationary finite tables and discretized first-eight distill/direct policies."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.stationary_finite_exact_value_eval",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--torch-device",
-  "cuda",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users",
-  "--direct-policy",
-  "direct_15_interaction=artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/policy.pt",
-  "--direct-policy",
-  "direct_32_basis=artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/policy.pt",
-  "--direct-policy",
-  "direct_64_basis=artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/policy.pt",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/results.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/regret_auc.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/mean_summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/metadata.json",
-  "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_exact_value_first8_users"
+direct_policy = ["direct_15_interaction=artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/policy.pt", "direct_32_basis=artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/policy.pt", "direct_64_basis=artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/policy.pt"]
+no_progress = true
+
+[[tasks]]
 name = "train_low_param_direct_interaction15"
+stage = "train"
+kind = "low_param_direct_policy_search_multiuser"
 description = "Train the 15-parameter monotone interaction direct-search policy on first-eight users."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--policy-family",
-  "interaction15_monotone",
-  "--generations",
-  "64",
-  "--population-size",
-  "32",
-  "--elite-count",
-  "8",
-  "--train-particles",
-  "64",
-  "--eval-particles",
-  "10000",
-  "--torch-device",
-  "cuda",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/policy.pt",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/metadata.json",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/mean_summary.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/regret_auc.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+policy_family = "interaction15_monotone"
+generations = 64
+population_size = 32
+elite_count = 8
+train_particles = 64
+eval_particles = 10000
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_interaction15"
+no_progress = true
+
+[[tasks]]
 name = "train_low_param_direct_basis32"
+stage = "train"
+kind = "low_param_direct_policy_search_multiuser"
 description = "Train the 32-parameter monotone basis direct-search policy on first-eight users."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--policy-family",
-  "basis32_monotone",
-  "--generations",
-  "64",
-  "--population-size",
-  "32",
-  "--elite-count",
-  "8",
-  "--train-particles",
-  "64",
-  "--eval-particles",
-  "10000",
-  "--torch-device",
-  "cuda",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/policy.pt",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/metadata.json",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/mean_summary.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/regret_auc.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+policy_family = "basis32_monotone"
+generations = 64
+population_size = 32
+elite_count = 8
+train_particles = 64
+eval_particles = 10000
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis32"
+no_progress = true
+
+[[tasks]]
 name = "train_low_param_direct_basis64"
+stage = "train"
+kind = "low_param_direct_policy_search_multiuser"
 description = "Train the 64-parameter monotone basis direct-search policy on first-eight users."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser",
-  "--env",
-  "fsrs6",
-  "--user-ids",
-  "1,2,3,4,5,6,7,8",
-  "--button-usage",
-  "../Anki-button-usage/button_usage.jsonl",
-  "--policy-family",
-  "basis64_monotone",
-  "--generations",
-  "64",
-  "--population-size",
-  "32",
-  "--elite-count",
-  "8",
-  "--train-particles",
-  "64",
-  "--eval-particles",
-  "10000",
-  "--torch-device",
-  "cuda",
-  "--out-dir",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/policy.pt",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/metadata.json",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/mean_summary.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/regret_auc.csv",
-  "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64/gpu_monitor/summary.json",
-]
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+policy_family = "basis64_monotone"
+generations = 64
+population_size = 32
+elite_count = 8
+train_particles = 64
+eval_particles = 10000
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users_basis64"
+no_progress = true

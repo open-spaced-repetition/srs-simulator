@@ -59,6 +59,20 @@ class SingleCardRuntimeContext:
     repo_root: Path
 
 
+def fsrs_config_kwargs(
+    fsrs_config: SingleCardFSRS6Config | None,
+) -> dict[str, object]:
+    if fsrs_config is None:
+        return {}
+    return {
+        "fsrs_weights": fsrs_config.fsrs_weights,
+        "first_rating_prob": fsrs_config.first_rating_prob,
+        "review_rating_prob": fsrs_config.review_rating_prob,
+        "learning_costs": fsrs_config.learning_costs,
+        "review_costs": fsrs_config.review_costs,
+    }
+
+
 def add_single_card_fsrs6_config_args(
     parser: argparse.ArgumentParser,
     *,

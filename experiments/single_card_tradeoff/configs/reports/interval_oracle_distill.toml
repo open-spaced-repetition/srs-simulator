@@ -3,6 +3,8 @@ name = "interval_oracle_distill"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 interval_oracle_distill = "docs/single_card_tradeoff/experiments/2026-05-17-interval_oracle_distill.md"
 
@@ -11,96 +13,53 @@ interval_distill_results = "artifacts/single_card_tradeoff/fsrs6_oracle_interval
 interval_compare_regret_auc = "artifacts/single_card_tradeoff/oracle_interval_compare/regret_auc.csv"
 interval_hparam_summary = "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_summary.csv"
 
-[[commands]]
+[[tasks]]
 name = "train_interval_distill"
+stage = "train"
+kind = "oracle_interval_distill"
 description = "Train the interval oracle distill policy and write structured metrics."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_interval_distill",
-  "--days",
-  "1825",
-  "--oracle-s-grid-size",
-  "64",
-  "--oracle-d-grid-size",
-  "32",
-  "--oracle-interval-chunk-size",
-  "64",
-  "--model-out",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt",
-  "--out",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill.csv",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill.csv",
-]
 
-[[commands]]
+[tasks.options]
+days = 1825
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+oracle_interval_chunk_size = 64
+model_out = "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt"
+out = "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill.csv"
+torch_device = "cuda"
+no_progress = true
+
+[[tasks]]
 name = "evaluate_interval_oracle_compare"
+stage = "evaluate"
+kind = "tradeoff"
 description = "Evaluate interval exact and interval distill policies against fsrs6_default."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.tradeoff",
-  "--env",
-  "fsrs6_default",
-  "--sched",
-  "fsrs6_default,fsrs6_oracle_interval,fsrs6_oracle_interval_distill",
-  "--oracle-cost-weights",
-  "16,32,64",
-  "--oracle-interval-chunk-size",
-  "64",
-  "--oracle-interval-distill-policy",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt",
-  "--particles",
-  "10000",
-  "--deck-scale",
-  "10000",
-  "--out",
-  "artifacts/single_card_tradeoff/oracle_interval_compare/results.csv",
-  "--plot-path",
-  "artifacts/single_card_tradeoff/oracle_interval_compare/results.png",
-  "--regret-auc-out",
-  "artifacts/single_card_tradeoff/oracle_interval_compare/regret_auc.csv",
-  "--torch-device",
-  "cuda",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/oracle_interval_compare/results.csv",
-  "artifacts/single_card_tradeoff/oracle_interval_compare/regret_auc.csv",
-  "artifacts/single_card_tradeoff/oracle_interval_compare/results.png",
-  "artifacts/single_card_tradeoff/oracle_interval_compare/performance_summary.json",
-  "artifacts/single_card_tradeoff/oracle_interval_compare/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+env = "fsrs6_default"
+sched = "fsrs6_default,fsrs6_oracle_interval,fsrs6_oracle_interval_distill"
+oracle_cost_weights = "16,32,64"
+oracle_interval_chunk_size = 64
+oracle_interval_distill_policy = "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt"
+particles = 10000
+deck_scale = 10000
+out = "artifacts/single_card_tradeoff/oracle_interval_compare/results.csv"
+plot_path = "artifacts/single_card_tradeoff/oracle_interval_compare/results.png"
+regret_auc_out = "artifacts/single_card_tradeoff/oracle_interval_compare/regret_auc.csv"
+torch_device = "cuda"
+
+[[tasks]]
 name = "search_interval_distill_hparams"
+stage = "train"
+kind = "oracle_interval_distill_hparam_search"
 description = "Rerun the interval distill model-size search."
-command = [
-  "uv",
-  "run",
-  "-m", "experiments.single_card_tradeoff.cli.oracle_interval_distill_hparam_search",
-  "--days",
-  "1825",
-  "--oracle-s-grid-size",
-  "64",
-  "--oracle-d-grid-size",
-  "32",
-  "--oracle-interval-chunk-size",
-  "64",
-  "--eval-particles",
-  "3000",
-  "--save-models",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_summary.csv",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_detail.csv",
-  "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_hparam_models",
-]
+
+[tasks.options]
+days = 1825
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+oracle_interval_chunk_size = 64
+eval_particles = 3000
+save_models = true
+torch_device = "cuda"
+no_progress = true

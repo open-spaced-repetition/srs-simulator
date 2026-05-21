@@ -3,6 +3,8 @@ name = "stationary_finite_compression"
 family = "single_card_tradeoff"
 seed = 42
 
+[report]
+
 [report.outputs]
 stationary_finite_compression = "docs/single_card_tradeoff/experiments/2026-05-17-stationary_finite_compression.md"
 
@@ -11,50 +13,24 @@ stationary_finite_cost_weight_ablation = "artifacts/single_card_tradeoff/station
 stationary_finite_model_size_ablation = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/model_size_ablation_summary.csv"
 stationary_finite_model_size_sub216_ablation = "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_summary.csv"
 
-[[commands]]
+[[tasks]]
 name = "rerun_stationary_finite_model_size_ablation"
+stage = "train"
+kind = "stationary_finite_model_size_ablation"
 description = "Rerun the stationary finite model-size ablation with the current default distillation recipe."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.stationary_finite_model_size_ablation",
-  "--torch-device",
-  "cuda",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/model_size_ablation_summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/model_size_ablation_seed_metrics.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r8d1_e128_policy.pt",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r6d1_e128_policy.pt",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/performance_summary.json",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/gpu_monitor/summary.json",
-]
 
-[[commands]]
+[tasks.options]
+torch_device = "cuda"
+no_progress = true
+
+[[tasks]]
 name = "rerun_stationary_finite_sub216_model_size_ablation"
+stage = "train"
+kind = "stationary_finite_model_size_ablation"
 description = "Run the quick sub-216 stationary finite compression sweep with smaller residual, MLP, and structured policies."
-command = [
-  "uv",
-  "run",
-  "python",
-  "-m", "experiments.single_card_tradeoff.cli.stationary_finite_model_size_ablation",
-  "--torch-device",
-  "cuda",
-  "--candidate-set",
-  "sub216",
-  "--summary-prefix",
-  "sub216",
-  "--no-progress",
-]
-expected_outputs = [
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_summary.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/sub216_seed_metrics.csv",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/r5d1_e128_policy.pt",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/mlp8_e128_policy.pt",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/linear_e128_policy.pt",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/quadratic_e128_policy.pt",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/performance_summary.json",
-  "artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/gpu_monitor/summary.json",
-]
+
+[tasks.options]
+torch_device = "cuda"
+candidate_set = "sub216"
+summary_prefix = "sub216"
+no_progress = true
