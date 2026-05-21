@@ -325,15 +325,21 @@ def _distill_policy_template(config: TradeoffRunConfig) -> str | None:
     return str(path)
 
 
-def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
-    user_dir = _user_dir(config, user_id)
-    command = [
+def _base_tradeoff_command(
+    config: TradeoffRunConfig,
+    *,
+    user_flag: str,
+    user_value: str,
+    out_path: Path,
+    regret_auc_path: Path,
+) -> list[str]:
+    return [
         sys.executable,
         "experiments/single_card_tradeoff/tradeoff.py",
         "--env",
         config.env,
-        "--user-id",
-        str(user_id),
+        user_flag,
+        user_value,
         "--sched",
         ",".join(config.schedulers),
         "--target-retentions",
@@ -351,10 +357,16 @@ def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
         "--benchmark-partition",
         config.benchmark_partition,
         "--out",
-        str(user_dir / "results.csv"),
+        str(out_path),
         "--regret-auc-out",
-        str(user_dir / "regret_auc.csv"),
+        str(regret_auc_path),
     ]
+
+
+def _append_shared_tradeoff_options(
+    command: list[str],
+    config: TradeoffRunConfig,
+) -> None:
     if config.button_usage is not None:
         command.extend(["--button-usage", str(config.button_usage)])
     if config.review_markov_transition:
@@ -383,11 +395,12 @@ def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
         command.extend(
             ["--fsrs6-adr-lambda-values", _csv_token(config.fsrs6_adr_lambda_values)]
         )
-    distill_policy = _distill_policy_path(config, user_id)
-    if distill_policy is not None:
-        command.extend(
-            ["--oracle-stationary-finite-distill-policy", str(distill_policy)]
-        )
+
+
+def _append_distill_cost_and_output_flags(
+    command: list[str],
+    config: TradeoffRunConfig,
+) -> None:
     if config.distill_cost_weights is not None:
         command.extend(
             [
@@ -399,6 +412,24 @@ def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
         command.append("--no-plot")
     if config.no_progress:
         command.append("--no-progress")
+
+
+def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
+    user_dir = _user_dir(config, user_id)
+    command = _base_tradeoff_command(
+        config,
+        user_flag="--user-id",
+        user_value=str(user_id),
+        out_path=user_dir / "results.csv",
+        regret_auc_path=user_dir / "regret_auc.csv",
+    )
+    _append_shared_tradeoff_options(command, config)
+    distill_policy = _distill_policy_path(config, user_id)
+    if distill_policy is not None:
+        command.extend(
+            ["--oracle-stationary-finite-distill-policy", str(distill_policy)]
+        )
+    _append_distill_cost_and_output_flags(command, config)
     return command
 
 
@@ -408,62 +439,14 @@ def _multiuser_tradeoff_command(
 ) -> list[str]:
     if not user_ids:
         raise ValueError("user_ids must not be empty.")
-    command = [
-        sys.executable,
-        "experiments/single_card_tradeoff/tradeoff.py",
-        "--env",
-        config.env,
-        "--user-ids",
-        ",".join(str(user_id) for user_id in user_ids),
-        "--sched",
-        ",".join(config.schedulers),
-        "--target-retentions",
-        _csv_token(config.target_retentions),
-        "--days",
-        str(config.days),
-        "--particles",
-        str(config.particles),
-        "--deck-scale",
-        str(config.deck_scale),
-        "--seed",
-        str(config.seed),
-        "--scheduler-priority",
-        config.scheduler_priority,
-        "--benchmark-partition",
-        config.benchmark_partition,
-        "--out",
-        str(config.out_root / "combined_results.csv"),
-        "--regret-auc-out",
-        str(config.out_root / "combined_regret_auc.csv"),
-    ]
-    if config.button_usage is not None:
-        command.extend(["--button-usage", str(config.button_usage)])
-    if config.review_markov_transition:
-        command.append("--review-markov-transition")
-    if config.torch_device is not None:
-        command.extend(["--torch-device", config.torch_device])
-    if config.oracle_cost_weights is not None:
-        command.extend(
-            ["--oracle-cost-weights", _csv_token(config.oracle_cost_weights)]
-        )
-    if config.srs_benchmark_root is not None:
-        command.extend(["--srs-benchmark-root", str(config.srs_benchmark_root)])
-    if config.fsrs6_adr_policy is not None:
-        command.extend(["--fsrs6-adr-policy", str(config.fsrs6_adr_policy)])
-    if config.fsrs6_adr_policy_root is not None:
-        command.extend(["--fsrs6-adr-policy-root", str(config.fsrs6_adr_policy_root)])
-    if config.fsrs6_adr_train_run_root is not None:
-        command.extend(
-            ["--fsrs6-adr-train-run-root", str(config.fsrs6_adr_train_run_root)]
-        )
-    if config.fsrs6_adr_policy_manifest is not None:
-        command.extend(
-            ["--fsrs6-adr-policy-manifest", str(config.fsrs6_adr_policy_manifest)]
-        )
-    if config.fsrs6_adr_lambda_values is not None:
-        command.extend(
-            ["--fsrs6-adr-lambda-values", _csv_token(config.fsrs6_adr_lambda_values)]
-        )
+    command = _base_tradeoff_command(
+        config,
+        user_flag="--user-ids",
+        user_value=",".join(str(user_id) for user_id in user_ids),
+        out_path=config.out_root / "combined_results.csv",
+        regret_auc_path=config.out_root / "combined_regret_auc.csv",
+    )
+    _append_shared_tradeoff_options(command, config)
     distill_policy_template = _distill_policy_template(config)
     if distill_policy_template is not None:
         command.extend(
@@ -472,17 +455,7 @@ def _multiuser_tradeoff_command(
                 distill_policy_template,
             ]
         )
-    if config.distill_cost_weights is not None:
-        command.extend(
-            [
-                "--oracle-stationary-finite-distill-cost-weights",
-                _csv_token(config.distill_cost_weights),
-            ]
-        )
-    if config.no_plot:
-        command.append("--no-plot")
-    if config.no_progress:
-        command.append("--no-progress")
+    _append_distill_cost_and_output_flags(command, config)
     return command
 
 

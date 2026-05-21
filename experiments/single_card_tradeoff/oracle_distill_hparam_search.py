@@ -42,10 +42,11 @@ from experiments.single_card_tradeoff.oracle_distill import (
 )
 from experiments.single_card_tradeoff.config import (
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.single_card_tradeoff.tradeoff import (
+from experiments.single_card_tradeoff.defaults import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
@@ -396,6 +397,7 @@ def write_csv(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
     if args.deck_scale <= 0:
@@ -436,6 +438,7 @@ def main() -> None:
         device=device,
         progress=not args.no_progress,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
     oracle_solve_runtime_s = time.perf_counter() - oracle_solve_start
 

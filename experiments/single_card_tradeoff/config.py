@@ -8,6 +8,7 @@ from pathlib import Path
 from experiments.retention_sweep.cli_utils import add_benchmark_args
 from experiments.single_card_tradeoff.oracle_dp_cache import (
     add_oracle_dp_cache_args,
+    OracleDPCacheConfig,
     oracle_dp_cache_config_from_args,
     set_default_oracle_dp_cache_config,
 )
@@ -50,6 +51,14 @@ class SingleCardFSRS6Config:
         }
 
 
+@dataclass(frozen=True)
+class SingleCardRuntimeContext:
+    torch_device: str | None
+    dp_cache_config: OracleDPCacheConfig
+    output_dir: Path | None
+    repo_root: Path
+
+
 def add_single_card_fsrs6_config_args(
     parser: argparse.ArgumentParser,
     *,
@@ -85,6 +94,28 @@ def add_single_card_fsrs6_config_args(
     add_oracle_dp_cache_args(parser)
 
 
+def single_card_runtime_context_from_args(
+    args: argparse.Namespace,
+    *,
+    repo_root: Path | None = None,
+    output_dir: Path | None = None,
+) -> SingleCardRuntimeContext:
+    return SingleCardRuntimeContext(
+        torch_device=getattr(args, "torch_device", None),
+        dp_cache_config=oracle_dp_cache_config_from_args(args),
+        output_dir=output_dir,
+        repo_root=repo_root or Path(__file__).resolve().parents[2],
+    )
+
+
+def configure_oracle_dp_cache_from_args(
+    args: argparse.Namespace,
+) -> OracleDPCacheConfig:
+    config = oracle_dp_cache_config_from_args(args)
+    set_default_oracle_dp_cache_config(config)
+    return config
+
+
 def _coerce_tuple(
     values: Sequence[float],
     *,
@@ -103,7 +134,6 @@ def load_single_card_fsrs6_config(
     environment: str | None = None,
     repo_root: Path | None = None,
 ) -> SingleCardFSRS6Config:
-    set_default_oracle_dp_cache_config(oracle_dp_cache_config_from_args(args))
     env_name = environment or str(getattr(args, "env", "fsrs6_default"))
     if env_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise ValueError(

@@ -33,10 +33,14 @@ from experiments.single_card_tradeoff.auc_outputs import (  # noqa: E402
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
 )
-from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
+from experiments.single_card_tradeoff.oracles import (  # noqa: E402
     FSRS6BatchedStationaryFiniteOracle,
+)
+from experiments.single_card_tradeoff.oracle_dp_cache import (  # noqa: E402
+    OracleDPCacheConfig,
 )
 from experiments.single_card_tradeoff.oracle_stationary_finite_distill import (  # noqa: E402
     DEFAULT_DISTILL_EPOCHS,
@@ -56,12 +60,14 @@ from experiments.single_card_tradeoff.run_monitoring import (  # noqa: E402
     add_run_monitoring_args,
     register_run_monitor,
 )
-from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
+from experiments.single_card_tradeoff.defaults import (  # noqa: E402
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
-    _build_regret_auc_rows,
-    _write_csv,
-    _write_regret_auc_csv,
+)
+from experiments.single_card_tradeoff.results import (  # noqa: E402
+    build_regret_auc_rows as _build_regret_auc_rows,
+    write_csv as _write_csv,
+    write_regret_auc_csv as _write_regret_auc_csv,
 )
 from experiments.single_card_tradeoff.uvfa_ppo import (  # noqa: E402
     DEFAULT_LEARNING_RATE,
@@ -772,6 +778,7 @@ class BatchedStationaryFiniteOracleGuide:
         progress: bool,
         configs: Sequence[SingleCardFSRS6Config],
         user_batch_size: int,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         if not configs:
             raise ValueError("configs must contain at least one user.")
@@ -801,6 +808,7 @@ class BatchedStationaryFiniteOracleGuide:
                 s_grid_size=s_grid_size,
                 d_grid_size=d_grid_size,
                 device=device,
+                cache_config=cache_config,
                 fsrs_weights=[
                     tuple(config.fsrs_weights)
                     if config.fsrs_weights
@@ -1091,6 +1099,7 @@ def build_guide(
     configs: Sequence[SingleCardFSRS6Config],
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
+    cache_config: OracleDPCacheConfig | None = None,
 ) -> tuple[BatchedStationaryFiniteOracleGuide, float]:
     start = time.perf_counter()
     guide = BatchedStationaryFiniteOracleGuide(
@@ -1105,6 +1114,7 @@ def build_guide(
         progress=not args.no_progress,
         configs=configs,
         user_batch_size=args.oracle_teacher_user_batch_size,
+        cache_config=cache_config,
     )
     return guide, time.perf_counter() - start
 
@@ -2633,6 +2643,7 @@ def evaluate_exact_vs_distill(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     user_ids = parse_user_ids(args.user_ids)
     if args.env != "fsrs6":
         raise SystemExit("multi-user stationary finite distill requires --env fsrs6.")
@@ -2704,6 +2715,7 @@ def main() -> None:
         configs=configs,
         cost_weights=cost_weights,
         action_retentions=action_retentions,
+        cache_config=cache_config,
     )
     if args.per_user_models:
         if args.model_out is not None:

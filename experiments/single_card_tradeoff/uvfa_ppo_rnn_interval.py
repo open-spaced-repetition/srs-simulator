@@ -22,13 +22,15 @@ if str(REPO_ROOT) not in sys.path:
 
 os.environ.setdefault("MPLBACKEND", "Agg")
 
-from experiments.single_card_tradeoff.oracle_frontier import FSRS6GridOracle
+from experiments.single_card_tradeoff.oracles import FSRS6GridOracle
+from experiments.single_card_tradeoff.oracle_dp_cache import OracleDPCacheConfig
 from experiments.single_card_tradeoff.config import (
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.single_card_tradeoff.tradeoff import (
+from experiments.single_card_tradeoff.defaults import (
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_TARGET_RETENTIONS,
 )
@@ -333,6 +335,7 @@ class OracleIntervalGuide(IntervalGuide):
         device: torch.device,
         progress: bool,
         fsrs_config: SingleCardFSRS6Config | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         self.horizon = int(days - 1)
         self.device = device
@@ -351,6 +354,7 @@ class OracleIntervalGuide(IntervalGuide):
             action_retentions=action_retentions,
             s_grid_size=s_grid_size,
             d_grid_size=d_grid_size,
+            cache_config=cache_config,
             **fsrs_config_kwargs(fsrs_config),
         )
         self.policy_tables: list[torch.Tensor] = []
@@ -448,6 +452,7 @@ def build_interval_guide(
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     fsrs_config: SingleCardFSRS6Config | None = None,
+    cache_config: OracleDPCacheConfig | None = None,
 ) -> IntervalGuide | None:
     if args.guide_policy == "none":
         return None
@@ -462,6 +467,7 @@ def build_interval_guide(
         device=device,
         progress=not args.no_progress,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
 
 
@@ -511,6 +517,7 @@ def train_policy(
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     fsrs_config: SingleCardFSRS6Config | None = None,
+    cache_config: OracleDPCacheConfig | None = None,
 ) -> tuple[RecurrentIntervalPolicyValueNet, TrainStats]:
     torch.manual_seed(args.seed)
     dtype = torch.float32
@@ -549,6 +556,7 @@ def train_policy(
         cost_weights=cost_weights,
         action_retentions=action_retentions,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
     obs, hidden_state = warmup_policy(
         args=args,
@@ -834,6 +842,7 @@ def save_model(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
     if args.deck_scale <= 0:
@@ -875,6 +884,7 @@ def main() -> None:
         cost_weights=cost_weights,
         action_retentions=action_retentions,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
     save_model(
         args.model_out,

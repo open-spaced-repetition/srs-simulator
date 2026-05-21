@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from experiments.single_card_tradeoff.run_tradeoff_config import (
+    _base_tradeoff_command,
     _multiuser_tradeoff_command,
     _split_combined_outputs,
     _tradeoff_command,
@@ -93,6 +94,52 @@ class SingleCardTradeoffRunConfigTests(unittest.TestCase):
         self.assertTrue(any(part.endswith("combined_results.csv") for part in command))
         self.assertTrue(
             any(part.endswith("combined_regret_auc.csv") for part in command)
+        )
+
+    def test_base_command_builder_keeps_shared_tradeoff_flags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.toml"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    schema_version = 1
+                    name = "test_base_builder"
+                    seed = 7
+
+                    [experiment]
+                    env = "fsrs6_default"
+                    user_ids = [1]
+                    schedulers = ["fsrs6", "fixed"]
+                    days = 30
+                    particles = 64
+                    deck_scale = 10000
+                    target_retentions = [0.5, 0.9]
+                    review_markov_transition = false
+                    scheduler_priority = "review_first"
+                    benchmark_partition = "1"
+                    no_plot = true
+                    no_progress = true
+
+                    [outputs]
+                    root = "artifacts/single_card_tradeoff/test_base_builder"
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+            command = _base_tradeoff_command(
+                config,
+                user_flag="--user-id",
+                user_value="1",
+                out_path=Path("results.csv"),
+                regret_auc_path=Path("regret_auc.csv"),
+            )
+
+        self.assertEqual(command[command.index("--sched") + 1], "fsrs6,fixed")
+        self.assertEqual(command[command.index("--seed") + 1], "7")
+        self.assertEqual(
+            command[command.index("--scheduler-priority") + 1], "review_first"
         )
 
     def test_multiuser_command_forwards_policy_template(self) -> None:

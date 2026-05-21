@@ -25,14 +25,15 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
 )
-from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
+from experiments.single_card_tradeoff.oracle_frontier import parse_csv_floats  # noqa: E402
+from experiments.single_card_tradeoff.oracles import (  # noqa: E402
     FSRS6StationaryFiniteOracle,
     StationaryFiniteOracleSolution,
-    parse_csv_floats,
 )
-from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
+from experiments.single_card_tradeoff.defaults import (  # noqa: E402
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
@@ -818,7 +819,7 @@ def _load_distill_policy(
     if not path.exists():
         raise SystemExit(f"--distill-policy not found: {path}")
 
-    from experiments.single_card_tradeoff.uvfa_ppo import PolicyValueNet
+    from experiments.single_card_tradeoff.policy_net import PolicyValueNet
 
     checkpoint = torch.load(path, map_location=device)
     if not isinstance(checkpoint, dict):
@@ -1105,6 +1106,7 @@ def _print_summary(summary_rows: Sequence[dict[str, Any]]) -> None:
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
     if args.s_grid_size < 8 or args.d_grid_size < 8:
@@ -1137,6 +1139,7 @@ def main() -> None:
         s_grid_size=args.s_grid_size,
         d_grid_size=args.d_grid_size,
         device=device,
+        cache_config=cache_config,
         **fsrs_config_kwargs(fsrs_config),
     )
     start = time.perf_counter()

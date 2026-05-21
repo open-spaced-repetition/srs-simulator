@@ -2,19 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-MIN_TARGET_RETENTION = 0.50
-DEFAULT_TARGET_RETENTIONS = [
-    0.50,
-    0.60,
-    0.65,
-    0.70,
-    0.75,
-    0.80,
-    0.85,
-    0.90,
-    0.93,
-    0.96,
-    0.98,
+from experiments.single_card_tradeoff.defaults import (
+    DEFAULT_TARGET_RETENTIONS,
+    MIN_TARGET_RETENTION,
+)
+
+__all__ = [
+    "DEFAULT_TARGET_RETENTIONS",
+    "MIN_TARGET_RETENTION",
+    "retention_range_message",
+    "retention_values_are_supported",
+    "validate_retention_values",
+    "validate_retention_values_for_model",
 ]
 
 

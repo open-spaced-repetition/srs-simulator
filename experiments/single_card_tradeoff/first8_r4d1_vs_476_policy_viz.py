@@ -23,9 +23,9 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff.config import SingleCardFSRS6Config  # noqa: E402
-from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
+from experiments.single_card_tradeoff.oracle_frontier import parse_csv_floats  # noqa: E402
+from experiments.single_card_tradeoff.oracles import (  # noqa: E402
     FSRS6BatchedStationaryFiniteOracle,
-    parse_csv_floats,
 )
 from experiments.single_card_tradeoff.oracle_stationary_finite_policy_viz import (  # noqa: E402
     DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS,
@@ -36,8 +36,8 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_policy_viz import
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
     validate_retention_values,
 )
-from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS  # noqa: E402
-from experiments.single_card_tradeoff.uvfa_ppo import PolicyValueNet  # noqa: E402
+from experiments.single_card_tradeoff.defaults import DEFAULT_TARGET_RETENTIONS  # noqa: E402
+from experiments.single_card_tradeoff.policy_net import PolicyValueNet  # noqa: E402
 from simulator.defaults import DEFAULT_DAYS  # noqa: E402
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS  # noqa: E402
 from simulator.scheduler_spec import format_float  # noqa: E402

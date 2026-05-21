@@ -4,8 +4,7 @@ from __future__ import annotations
 # pyright: reportPrivateImportUsage=false
 
 import argparse
-from collections.abc import Sequence
-import csv
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import math
 import os
@@ -34,16 +33,55 @@ from experiments.retention_sweep.cli_utils import (
 from experiments.single_card_tradeoff.config import (
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
+    SingleCardRuntimeContext,
+    single_card_runtime_context_from_args,
     SUPPORTED_SINGLE_CARD_ENVS,
 )
-from experiments.single_card_tradeoff.retention_space import (
+from experiments.single_card_tradeoff.defaults import (
+    DEFAULT_FIXED_INTERVALS,
+    DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT,
+    DEFAULT_FSRS6_ORACLE_DISTILL_POLICY,
+    DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY,
+    DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY,
+    DEFAULT_FSRS6_ORACLE_RETENTION_DISTILL_POLICY,
+    DEFAULT_FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_POLICY,
+    DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
+    DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
+    DEFAULT_UVFA_PPO_POLICY,
+    DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY,
+    FSRS6_ADR_SCHEDULERS,
+    FSRS6_ORACLE_DISTILL_SCHEDULER,
+    FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER,
+    FSRS6_ORACLE_INFINITE_SCHEDULER,
+    FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER,
+    FSRS6_ORACLE_INTERVAL_SCHEDULER,
+    FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER,
+    FSRS6_ORACLE_SCHEDULER,
+    FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER,
+    FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER,
     MIN_TARGET_RETENTION,
-    validate_retention_values,
+    UVFA_PPO_RNN_INTERVAL_SCHEDULER,
+    UVFA_PPO_SCHEDULER,
+)
+from experiments.single_card_tradeoff.results import (
+    build_regret_auc_rows as _build_regret_auc_rows,
+    pareto_frontier as _pareto_frontier,
+    row_user_id as _row_user_id,
+    write_csv as _write_csv,
+    write_regret_auc_csv as _write_regret_auc_csv,
 )
 from experiments.single_card_tradeoff.run_monitoring import (
     add_run_monitoring_args,
     register_run_monitor,
+)
+from experiments.single_card_tradeoff.retention_space import validate_retention_values
+from experiments.single_card_tradeoff.single_card_env import FSRS6SingleCardBatch
+from experiments.single_card_tradeoff.types import (
+    BatchRow,
+    SchedulerPoint,
+    SimMetrics,
+    UserContext,
 )
 from simulator import simulate as simulate_event
 from simulator.behavior import StochasticBehavior
@@ -66,7 +104,6 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
 )
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.retention_sweep.grid import dr_values
-from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
 from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
@@ -83,124 +120,32 @@ from simulator.schedulers.memrise import MemriseBatchSchedulerOps
 from simulator.batched_engine.multiuser_engine import simulate_multiuser
 from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
 
-DEFAULT_FIXED_INTERVALS = [8, 16, 32, 64, 128, 256, 512]
-DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS = [
-    0,
-    1,
-    2,
-    4,
-    8,
-    16,
-    32,
-    64,
-    128,
-    256,
-    512,
-    1024,
+__all__ = [
+    "DEFAULT_FIXED_INTERVALS",
+    "DEFAULT_FSRS6_ORACLE_DISTILL_POLICY",
+    "DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY",
+    "DEFAULT_FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_POLICY",
+    "DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY",
+    "DEFAULT_FSRS6_ORACLE_RETENTION_DISTILL_POLICY",
+    "DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS",
+    "DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS",
+    "DEFAULT_TARGET_RETENTIONS",
+    "DEFAULT_UVFA_PPO_POLICY",
+    "DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY",
+    "FSRS6_ORACLE_DISTILL_SCHEDULER",
+    "FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER",
+    "FSRS6_ORACLE_INFINITE_SCHEDULER",
+    "FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER",
+    "FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER",
+    "FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER",
+    "FSRS6_ORACLE_INTERVAL_SCHEDULER",
+    "FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER",
+    "FSRS6_ORACLE_SCHEDULER",
+    "MIN_TARGET_RETENTION",
+    "UVFA_PPO_RNN_INTERVAL_SCHEDULER",
+    "UVFA_PPO_SCHEDULER",
+    "main",
 ]
-DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS = [
-    0,
-    1,
-    2,
-    4,
-    8,
-    16,
-    32,
-    48,
-    64,
-    96,
-    128,
-    192,
-    256,
-    320,
-    384,
-    512,
-    1024,
-]
-DEFAULT_UVFA_PPO_POLICY = Path("artifacts/single_card_tradeoff/uvfa_ppo_policy.pt")
-DEFAULT_FSRS6_ORACLE_DISTILL_POLICY = Path(
-    "artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt"
-)
-DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY = Path(
-    "artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt"
-)
-DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY = Path(
-    "artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt"
-)
-DEFAULT_FSRS6_ORACLE_RETENTION_DISTILL_POLICY = Path(
-    "artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt"
-)
-DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY = Path(
-    "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt"
-)
-DEFAULT_FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_POLICY = Path(
-    "artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt"
-)
-DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT = Path(
-    "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/"
-    "fsrs6_adr_portfolio_users_1_8_pop16_v1"
-)
-FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
-FSRS6_ORACLE_INFINITE_SCHEDULER = "fsrs6_oracle_infinite"
-FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER = "fsrs6_oracle_stationary_finite"
-FSRS6_ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_distill"
-FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER = "fsrs6_oracle_infinite_distill"
-FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER = (
-    "fsrs6_oracle_stationary_finite_distill"
-)
-FSRS6_ORACLE_INTERVAL_SCHEDULER = "fsrs6_oracle_interval"
-FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER = "fsrs6_oracle_interval_distill"
-FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER = "fsrs6_oracle_retention_distill"
-UVFA_PPO_SCHEDULER = "uvfa_ppo"
-UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
-FSRS6_ADR_SCHEDULERS = frozenset(schedulers_for_policy_source(PolicySource.FSRS6_ADR))
-
-
-@dataclass(frozen=True)
-class MemoryTargetRegretAucSummary:
-    user_id: int
-    environment: str
-    review_markov_transition: bool | None
-    baseline_scheduler: str
-    scheduler: str
-    baseline_point_count: int
-    scheduler_point_count: int
-    baseline_frontier_count: int
-    scheduler_frontier_count: int
-    target_count: int
-    covered_target_count: int
-    total_span: float
-    covered_span: float
-    same_target_time_saved_auc: float | None
-    baseline_time_auc: float | None
-
-    @property
-    def time_regret_auc(self) -> float | None:
-        if self.same_target_time_saved_auc is None:
-            return None
-        return -self.same_target_time_saved_auc
-
-
-@dataclass(frozen=True)
-class UserContext:
-    user_id: int
-    args: argparse.Namespace
-    fsrs_config: SingleCardFSRS6Config
-    behavior: StochasticBehavior
-    cost_model: StatefulCostModel
-
-
-@dataclass(frozen=True)
-class SchedulerPoint:
-    scheduler_spec: str
-    fixed_interval: float | None = None
-    desired_retention: float | None = None
-
-
-@dataclass(frozen=True)
-class BatchRow:
-    user_context: UserContext
-    point: SchedulerPoint
 
 
 def parse_args() -> argparse.Namespace:
@@ -704,6 +649,18 @@ def _user_args(args: argparse.Namespace, user_id: int) -> argparse.Namespace:
     return user_args
 
 
+def _runtime_context(args: argparse.Namespace) -> SingleCardRuntimeContext:
+    context = getattr(args, "single_card_runtime_context", None)
+    if isinstance(context, SingleCardRuntimeContext):
+        return context
+    out_path = getattr(args, "out", None)
+    return single_card_runtime_context_from_args(
+        args,
+        repo_root=REPO_ROOT,
+        output_dir=out_path.parent if isinstance(out_path, Path) else None,
+    )
+
+
 def _load_user_contexts(
     args: argparse.Namespace,
     *,
@@ -722,6 +679,7 @@ def _load_user_contexts(
             UserContext(
                 user_id=int(user_id),
                 args=user_args,
+                runtime_context=_runtime_context(user_args),
                 fsrs_config=fsrs_config,
                 behavior=behavior,
                 cost_model=cost_model,
@@ -2224,7 +2182,7 @@ def _load_policy_checkpoint(
             f"{policy_label} policy not found: {policy_path}. {train_hint}"
         )
 
-    from experiments.single_card_tradeoff.uvfa_ppo import PolicyValueNet
+    from experiments.single_card_tradeoff.policy_net import PolicyValueNet
 
     checkpoint = torch.load(policy_path, map_location=device)
     if not isinstance(checkpoint, dict):
@@ -2752,11 +2710,6 @@ def _evaluate_fsrs6_oracle_policies(
     seed: int,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.single_card_tradeoff.uvfa_ppo import (
-        FSRS6SingleCardBatch,
-        SimMetrics,
-    )
-
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
 
@@ -2834,11 +2787,6 @@ def _evaluate_fsrs6_oracle_infinite_policies(
     seed: int,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.single_card_tradeoff.uvfa_ppo import (
-        FSRS6SingleCardBatch,
-        SimMetrics,
-    )
-
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
 
@@ -2914,11 +2862,6 @@ def _evaluate_fsrs6_oracle_interval_policies(
     seed: int,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.single_card_tradeoff.uvfa_ppo import (
-        FSRS6SingleCardBatch,
-        SimMetrics,
-    )
-
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
 
@@ -3005,8 +2948,6 @@ def _single_card_metrics_by_weight(
     particles: int,
     device: torch.device,
 ) -> list[Any]:
-    from experiments.single_card_tradeoff.uvfa_ppo import SimMetrics
-
     metrics: list[SimMetrics] = []
     day_count = float(env.days)
     for weight_idx in range(weight_count):
@@ -3067,8 +3008,6 @@ def _evaluate_action_policy_weights(
     progress_label: str,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
-
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
     model_dtype = next(model.parameters()).dtype
@@ -3136,7 +3075,6 @@ def _evaluate_interval_distill_weights(
     from experiments.single_card_tradeoff.oracle_interval_distill import (
         predicted_intervals,
     )
-    from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
 
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -3214,7 +3152,6 @@ def _evaluate_retention_distill_weights(
         predicted_retentions,
         rounded_intervals_for_retentions,
     )
-    from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
 
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -3288,8 +3225,6 @@ def _evaluate_recurrent_interval_weights(
     progress_label: str,
     fsrs_config: SingleCardFSRS6Config | None = None,
 ) -> list[Any]:
-    from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch
-
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
     model_dtype = next(model.parameters()).dtype
@@ -3372,7 +3307,7 @@ def _run_fsrs6_oracle(
     if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
         raise SystemExit("--oracle grid sizes must be >= 8.")
 
-    from experiments.single_card_tradeoff.oracle_frontier import FSRS6GridOracle
+    from experiments.single_card_tradeoff.oracles import FSRS6GridOracle
 
     device = _resolve_torch_device(args, prefer_cuda=True)
     cost_weights = _oracle_cost_weights(args)
@@ -3384,6 +3319,7 @@ def _run_fsrs6_oracle(
         s_grid_size=args.oracle_s_grid_size,
         d_grid_size=args.oracle_d_grid_size,
         device=device,
+        cache_config=_runtime_context(args).dp_cache_config,
         **_fsrs_config_kwargs(fsrs_config),
     )
 
@@ -3443,7 +3379,7 @@ def _run_fsrs6_oracle_infinite(
     if args.oracle_infinite_tolerance <= 0.0:
         raise SystemExit("--oracle-infinite-tolerance must be > 0.")
 
-    from experiments.single_card_tradeoff.oracle_frontier import (
+    from experiments.single_card_tradeoff.oracles import (
         FSRS6AverageRewardOracle,
     )
 
@@ -3456,6 +3392,7 @@ def _run_fsrs6_oracle_infinite(
         s_grid_size=args.oracle_s_grid_size,
         d_grid_size=args.oracle_d_grid_size,
         device=device,
+        cache_config=_runtime_context(args).dp_cache_config,
         **_fsrs_config_kwargs(fsrs_config),
     )
 
@@ -3548,7 +3485,7 @@ def _run_fsrs6_oracle_stationary_finite(
     if args.oracle_stationary_finite_tolerance <= 0.0:
         raise SystemExit("--oracle-stationary-finite-tolerance must be > 0.")
 
-    from experiments.single_card_tradeoff.oracle_frontier import (
+    from experiments.single_card_tradeoff.oracles import (
         FSRS6StationaryFiniteOracle,
     )
 
@@ -3562,6 +3499,7 @@ def _run_fsrs6_oracle_stationary_finite(
         s_grid_size=args.oracle_s_grid_size,
         d_grid_size=args.oracle_d_grid_size,
         device=device,
+        cache_config=_runtime_context(args).dp_cache_config,
         **_fsrs_config_kwargs(fsrs_config),
     )
 
@@ -3652,7 +3590,7 @@ def _run_fsrs6_oracle_interval(
     if args.oracle_interval_chunk_size <= 0:
         raise SystemExit("--oracle-interval-chunk-size must be > 0.")
 
-    from experiments.single_card_tradeoff.oracle_frontier import FSRS6IntervalOracle
+    from experiments.single_card_tradeoff.oracles import FSRS6IntervalOracle
 
     device = _resolve_torch_device(args, prefer_cuda=True)
     cost_weights = _oracle_cost_weights(args)
@@ -3663,6 +3601,7 @@ def _run_fsrs6_oracle_interval(
         d_grid_size=args.oracle_d_grid_size,
         interval_chunk_size=args.oracle_interval_chunk_size,
         device=device,
+        cache_config=_runtime_context(args).dp_cache_config,
         **_fsrs_config_kwargs(fsrs_config),
     )
 
@@ -4159,51 +4098,193 @@ def _run_fsrs6_oracle_interval_distill(
     return rows
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "user_id",
-        "environment",
-        "scheduler",
-        "scheduler_spec",
-        "desired_retention",
-        "fixed_interval",
-        "goal_cost_weight",
-        "seed",
-        "days",
-        "particles",
-        "deck_scale",
-        "card_expected_retrievability",
-        "card_minutes_per_day",
-        "card_reviews_per_day",
-        "card_total_reviews",
-        "card_total_lapses",
-        "card_total_cost_seconds",
-        "card_final_projected_retrievability",
-        "observed_retention",
-        "deck_expected_memorized",
-        "deck_minutes_per_day",
-        "deck_reviews_per_day",
-        "total_reviews",
-        "total_lapses",
-        "total_cost_seconds",
-        "runtime_s",
-        "fuzz",
-        "review_markov_transition",
-        "engine",
-        "fsrs6_adr_policy",
-        "fsrs6_adr_baseline_desired_retention",
-        "fsrs6_adr_lambda_value",
-        "fsrs6_adr_policy_index",
-        "fsrs6_adr_policy_title",
-        "fsrs6_adr_feature_version",
-        "fsrs6_adr_point_label",
-    ]
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+_CUSTOM_SINGLE_USER_RUNNERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
+    FSRS6_ORACLE_SCHEDULER: _run_fsrs6_oracle,
+    FSRS6_ORACLE_INFINITE_SCHEDULER: _run_fsrs6_oracle_infinite,
+    FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER: _run_fsrs6_oracle_stationary_finite,
+    FSRS6_ORACLE_INTERVAL_SCHEDULER: _run_fsrs6_oracle_interval,
+    FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER: _run_fsrs6_oracle_interval_distill,
+    FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER: _run_fsrs6_oracle_infinite_distill,
+    FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER: (
+        _run_fsrs6_oracle_stationary_finite_distill
+    ),
+    FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER: _run_fsrs6_oracle_retention_distill,
+    UVFA_PPO_SCHEDULER: _run_uvfa_ppo,
+    FSRS6_ORACLE_DISTILL_SCHEDULER: _run_fsrs6_oracle_distill,
+    UVFA_PPO_RNN_INTERVAL_SCHEDULER: _run_uvfa_ppo_rnn_interval,
+}
+
+
+@dataclass(frozen=True)
+class TradeoffEvaluationRequest:
+    args: argparse.Namespace
+    environment_name: str
+    scheduler_name: str
+    scheduler_spec: str
+    fixed_interval: float | None
+    retention_values: Sequence[float]
+    user_contexts: Sequence[UserContext]
+    seed: int
+
+
+TradeoffEvaluator = Callable[
+    [TradeoffEvaluationRequest],
+    list[dict[str, Any]] | None,
+]
+
+_VECTORIZED_BATCH_SCHEDULERS = frozenset(
+    {
+        "fsrs6",
+        "fsrs6_default",
+        "fsrs3",
+        "fsrs3_default",
+        "hlr",
+        "lstm",
+        "anki_sm2",
+        "memrise",
+    }
+)
+
+
+def _run_registered_custom_scheduler(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_name: str,
+    scheduler_spec: str,
+    seed: int,
+    user_contexts: Sequence[UserContext],
+) -> list[dict[str, Any]] | None:
+    runner = _CUSTOM_SINGLE_USER_RUNNERS.get(scheduler_name)
+    if runner is None:
+        return None
+
+    output_rows: list[dict[str, Any]] = []
+    for context in user_contexts:
+        run_args = context.args
+        if scheduler_name == FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER:
+            run_args = argparse.Namespace(**vars(context.args))
+            run_args.oracle_stationary_finite_distill_policy = (
+                _resolve_stationary_finite_distill_policy_path(
+                    args,
+                    user_id=context.user_id,
+                    multiuser=len(user_contexts) > 1,
+                )
+            )
+        output_rows.extend(
+            runner(
+                run_args,
+                environment_name=environment_name,
+                scheduler_spec=scheduler_spec,
+                seed=seed,
+            )
+        )
+    return output_rows
+
+
+def _custom_scheduler_evaluator(
+    request: TradeoffEvaluationRequest,
+) -> list[dict[str, Any]] | None:
+    return _run_registered_custom_scheduler(
+        request.args,
+        environment_name=request.environment_name,
+        scheduler_name=request.scheduler_name,
+        scheduler_spec=request.scheduler_spec,
+        seed=request.seed,
+        user_contexts=request.user_contexts,
+    )
+
+
+def _adr_scheduler_evaluator(
+    request: TradeoffEvaluationRequest,
+) -> list[dict[str, Any]] | None:
+    if request.scheduler_name not in FSRS6_ADR_SCHEDULERS:
+        return None
+    return _run_fsrs6_adr(
+        request.args,
+        environment_name=request.environment_name,
+        scheduler_name=request.scheduler_name,
+        scheduler_spec=request.scheduler_spec,
+        seed=request.seed,
+        retention_values=request.retention_values,
+        user_contexts=request.user_contexts,
+    )
+
+
+def _desired_retention_values(
+    scheduler_name: str,
+    retention_values: Sequence[float],
+) -> Sequence[float | None]:
+    if scheduler_uses_desired_retention(scheduler_name):
+        return retention_values
+    return [None]
+
+
+def _standard_scheduler_evaluator(
+    request: TradeoffEvaluationRequest,
+) -> list[dict[str, Any]] | None:
+    desired_values = _desired_retention_values(
+        request.scheduler_name,
+        request.retention_values,
+    )
+    if (
+        request.args.engine == "vectorized"
+        and request.environment_name in {"fsrs6", "fsrs6_default"}
+        and request.scheduler_name in _VECTORIZED_BATCH_SCHEDULERS
+    ):
+        points = [
+            SchedulerPoint(
+                scheduler_spec=request.scheduler_spec,
+                desired_retention=(
+                    float(desired_retention) if desired_retention is not None else None
+                ),
+            )
+            for desired_retention in desired_values
+        ]
+        return _run_vectorized_batch_rows(
+            request.args,
+            environment_name=request.environment_name,
+            scheduler_name=request.scheduler_name,
+            points=points,
+            user_contexts=request.user_contexts,
+            seed=request.seed,
+            progress_label=f"{request.environment_name}/{request.scheduler_spec}",
+        )
+
+    rows: list[dict[str, Any]] = []
+    for desired_retention in desired_values:
+        for context in request.user_contexts:
+            rows.append(
+                _run_point(
+                    context.args,
+                    environment_name=request.environment_name,
+                    scheduler_name=request.scheduler_name,
+                    scheduler_spec=request.scheduler_spec,
+                    fixed_interval=normalize_fixed_interval(request.fixed_interval)
+                    if request.scheduler_name == "fixed"
+                    else None,
+                    desired_retention=desired_retention,
+                    seed=request.seed,
+                )
+            )
+    return rows
+
+
+_SCHEDULER_EVALUATORS: tuple[TradeoffEvaluator, ...] = (
+    _custom_scheduler_evaluator,
+    _adr_scheduler_evaluator,
+    _standard_scheduler_evaluator,
+)
+
+
+def _run_scheduler_spec_rows(
+    request: TradeoffEvaluationRequest,
+) -> list[dict[str, Any]]:
+    for evaluator in _SCHEDULER_EVALUATORS:
+        rows = evaluator(request)
+        if rows is not None:
+            return rows
+    raise RuntimeError(f"No evaluator handled scheduler '{request.scheduler_name}'.")
 
 
 def _point_label(row: dict[str, Any]) -> str:
@@ -4221,363 +4302,6 @@ def _point_label(row: dict[str, Any]) -> str:
     if fixed_interval is not None:
         return f"{format_float(float(fixed_interval))}d"
     return row["scheduler_spec"]
-
-
-def _pareto_frontier(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    frontier: list[dict[str, Any]] = []
-    for candidate in rows:
-        candidate_mem = float(candidate["deck_expected_memorized"])
-        candidate_minutes = float(candidate["deck_minutes_per_day"])
-        dominated = False
-        for other in rows:
-            if other is candidate:
-                continue
-            other_mem = float(other["deck_expected_memorized"])
-            other_minutes = float(other["deck_minutes_per_day"])
-            no_worse = other_mem >= candidate_mem and other_minutes <= candidate_minutes
-            strictly_better = (
-                other_mem > candidate_mem or other_minutes < candidate_minutes
-            )
-            if no_worse and strictly_better:
-                dominated = True
-                break
-        if not dominated:
-            frontier.append(candidate)
-    return sorted(
-        frontier,
-        key=lambda row: (
-            float(row["deck_expected_memorized"]),
-            float(row["deck_minutes_per_day"]),
-        ),
-    )
-
-
-def _row_review_markov_transition(row: dict[str, Any]) -> bool | None:
-    value = row.get("review_markov_transition")
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True
-        if normalized in {"false", "0", "no", "off"}:
-            return False
-    return None
-
-
-def _row_user_id(row: dict[str, Any]) -> int:
-    value = row.get("user_id", 1)
-    if value is None or value == "":
-        return 1
-    return int(value)
-
-
-def _regret_auc_group_key(row: dict[str, Any]) -> tuple[int, str, bool | None, str]:
-    scheduler = str(row["scheduler"])
-    scheduler_label = "fixed" if scheduler == "fixed" else str(row["scheduler_spec"])
-    return (
-        _row_user_id(row),
-        str(row["environment"]),
-        _row_review_markov_transition(row),
-        scheduler_label,
-    )
-
-
-def _frontier_memory_time_points(
-    rows: list[dict[str, Any]],
-) -> list[tuple[float, float]]:
-    min_time_by_memory: dict[float, float] = {}
-    for row in _pareto_frontier(rows):
-        memory = float(row["deck_expected_memorized"])
-        minutes = float(row["deck_minutes_per_day"])
-        if not (math.isfinite(memory) and math.isfinite(minutes)):
-            continue
-        previous = min_time_by_memory.get(memory)
-        if previous is None or minutes < previous:
-            min_time_by_memory[memory] = minutes
-    return sorted(min_time_by_memory.items())
-
-
-def _common_interval(
-    left_min: float,
-    left_max: float,
-    right_min: float,
-    right_max: float,
-) -> tuple[float, float] | None:
-    start = max(left_min, right_min)
-    end = min(left_max, right_max)
-    if end <= start:
-        return None
-    return start, end
-
-
-def _values_in_interval(
-    values: Sequence[float], start: float, end: float
-) -> list[float]:
-    return sorted(
-        {
-            value
-            for value in values
-            if (start < value < end)
-            or math.isclose(value, start)
-            or math.isclose(value, end)
-        }
-    )
-
-
-def _integration_grid(
-    baseline_values: Sequence[float],
-    target_values: Sequence[float],
-    start: float,
-    end: float,
-) -> list[float]:
-    return sorted(
-        {
-            start,
-            end,
-            *_values_in_interval(baseline_values, start, end),
-            *_values_in_interval(target_values, start, end),
-        }
-    )
-
-
-def _interpolated_time_for_memory_target(
-    points: Sequence[tuple[float, float]],
-    target: float,
-) -> float | None:
-    if not points:
-        return None
-    if target < points[0][0] and not math.isclose(target, points[0][0]):
-        return None
-    if math.isclose(target, points[0][0]):
-        return points[0][1]
-    if target > points[-1][0] and not math.isclose(target, points[-1][0]):
-        return None
-    if math.isclose(target, points[-1][0]):
-        return points[-1][1]
-
-    for (left_memory, left_minutes), (
-        right_memory,
-        right_minutes,
-    ) in zip(points[:-1], points[1:]):
-        if not (left_memory <= target <= right_memory):
-            continue
-        if math.isclose(left_memory, right_memory):
-            return min(left_minutes, right_minutes)
-        ratio = (target - left_memory) / (right_memory - left_memory)
-        return left_minutes + ratio * (right_minutes - left_minutes)
-    return None
-
-
-def _memory_target_regret_auc_summary(
-    *,
-    user_id: int,
-    environment: str,
-    review_markov_transition: bool | None,
-    baseline_scheduler: str,
-    baseline_rows: list[dict[str, Any]],
-    scheduler: str,
-    scheduler_rows: list[dict[str, Any]],
-) -> MemoryTargetRegretAucSummary | None:
-    baseline_frontier = _frontier_memory_time_points(baseline_rows)
-    scheduler_frontier = _frontier_memory_time_points(scheduler_rows)
-    if not baseline_frontier:
-        return None
-
-    baseline_targets = [memory for memory, _ in baseline_frontier]
-    total_span = (
-        max(baseline_targets) - min(baseline_targets)
-        if len(baseline_targets) > 1
-        else 0.0
-    )
-    covered_span = 0.0
-    time_saved_area = 0.0
-    baseline_time_area = 0.0
-    covered_target_count = 0
-
-    if scheduler_frontier:
-        interval = _common_interval(
-            baseline_frontier[0][0],
-            baseline_frontier[-1][0],
-            scheduler_frontier[0][0],
-            scheduler_frontier[-1][0],
-        )
-        if interval is not None:
-            start, end = interval
-            covered_target_count = len(
-                _values_in_interval(baseline_targets, start, end)
-            )
-            scheduler_targets = [memory for memory, _ in scheduler_frontier]
-            targets = _integration_grid(baseline_targets, scheduler_targets, start, end)
-            for left_target, right_target in zip(targets[:-1], targets[1:]):
-                width = right_target - left_target
-                if width <= 0.0:
-                    continue
-                left_baseline_time = _interpolated_time_for_memory_target(
-                    baseline_frontier,
-                    left_target,
-                )
-                right_baseline_time = _interpolated_time_for_memory_target(
-                    baseline_frontier,
-                    right_target,
-                )
-                left_scheduler_time = _interpolated_time_for_memory_target(
-                    scheduler_frontier,
-                    left_target,
-                )
-                right_scheduler_time = _interpolated_time_for_memory_target(
-                    scheduler_frontier,
-                    right_target,
-                )
-                if (
-                    left_baseline_time is None
-                    or right_baseline_time is None
-                    or left_scheduler_time is None
-                    or right_scheduler_time is None
-                ):
-                    continue
-                left_saved = left_baseline_time - left_scheduler_time
-                right_saved = right_baseline_time - right_scheduler_time
-                time_saved_area += width * ((left_saved + right_saved) / 2.0)
-                baseline_time_area += width * (
-                    (left_baseline_time + right_baseline_time) / 2.0
-                )
-                covered_span += width
-
-    return MemoryTargetRegretAucSummary(
-        user_id=user_id,
-        environment=environment,
-        review_markov_transition=review_markov_transition,
-        baseline_scheduler=baseline_scheduler,
-        scheduler=scheduler,
-        baseline_point_count=len(baseline_rows),
-        scheduler_point_count=len(scheduler_rows),
-        baseline_frontier_count=len(baseline_frontier),
-        scheduler_frontier_count=len(scheduler_frontier),
-        target_count=len(baseline_targets),
-        covered_target_count=covered_target_count,
-        total_span=total_span,
-        covered_span=covered_span,
-        same_target_time_saved_auc=(time_saved_area / covered_span)
-        if covered_span
-        else None,
-        baseline_time_auc=(baseline_time_area / covered_span) if covered_span else None,
-    )
-
-
-def _finite_float(value: float | None) -> float | None:
-    if value is None or not math.isfinite(value):
-        return None
-    return value
-
-
-def _summary_to_regret_auc_row(
-    summary: MemoryTargetRegretAucSummary,
-) -> dict[str, Any]:
-    span_coverage_percent = (
-        (summary.covered_span / summary.total_span) * 100.0
-        if summary.total_span
-        else 0.0
-    )
-    relative_same_target_time_saved_auc_percent = (
-        (summary.same_target_time_saved_auc / summary.baseline_time_auc) * 100.0
-        if summary.same_target_time_saved_auc is not None
-        and summary.baseline_time_auc is not None
-        and summary.baseline_time_auc
-        else None
-    )
-    return {
-        "user_id": summary.user_id,
-        "environment": summary.environment,
-        "review_markov_transition": summary.review_markov_transition,
-        "baseline_scheduler": summary.baseline_scheduler,
-        "scheduler": summary.scheduler,
-        "baseline_point_count": summary.baseline_point_count,
-        "scheduler_point_count": summary.scheduler_point_count,
-        "baseline_frontier_count": summary.baseline_frontier_count,
-        "scheduler_frontier_count": summary.scheduler_frontier_count,
-        "target_count": summary.target_count,
-        "covered_target_count": summary.covered_target_count,
-        "total_span": _finite_float(summary.total_span),
-        "covered_span": _finite_float(summary.covered_span),
-        "span_coverage_percent": _finite_float(span_coverage_percent),
-        "same_target_time_saved_auc": _finite_float(summary.same_target_time_saved_auc),
-        "baseline_time_auc": _finite_float(summary.baseline_time_auc),
-        "relative_same_target_time_saved_auc_percent": _finite_float(
-            relative_same_target_time_saved_auc_percent
-        ),
-    }
-
-
-def _build_regret_auc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    groups: dict[tuple[int, str, bool | None, str], list[dict[str, Any]]] = {}
-    for row in rows:
-        key = _regret_auc_group_key(row)
-        groups.setdefault(key, []).append(row)
-
-    output_rows: list[dict[str, Any]] = []
-    group_modes = sorted(
-        {
-            (user_id, environment, markov)
-            for user_id, environment, markov, _scheduler in groups
-        },
-        key=lambda item: (item[0], item[1], str(item[2])),
-    )
-    for user_id, environment, review_markov_transition in group_modes:
-        scheduler_labels = sorted(
-            scheduler
-            for group_user_id, group_env, group_markov, scheduler in groups
-            if group_user_id == user_id
-            and group_env == environment
-            and group_markov == review_markov_transition
-        )
-        for baseline_scheduler in scheduler_labels:
-            baseline_rows = groups[
-                (user_id, environment, review_markov_transition, baseline_scheduler)
-            ]
-            for scheduler in scheduler_labels:
-                summary = _memory_target_regret_auc_summary(
-                    user_id=user_id,
-                    environment=environment,
-                    review_markov_transition=review_markov_transition,
-                    baseline_scheduler=baseline_scheduler,
-                    baseline_rows=baseline_rows,
-                    scheduler=scheduler,
-                    scheduler_rows=groups[
-                        (user_id, environment, review_markov_transition, scheduler)
-                    ],
-                )
-                if summary is not None:
-                    output_rows.append(_summary_to_regret_auc_row(summary))
-    return output_rows
-
-
-def _write_regret_auc_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = [
-        "user_id",
-        "environment",
-        "review_markov_transition",
-        "baseline_scheduler",
-        "scheduler",
-        "baseline_point_count",
-        "scheduler_point_count",
-        "baseline_frontier_count",
-        "scheduler_frontier_count",
-        "target_count",
-        "covered_target_count",
-        "total_span",
-        "covered_span",
-        "span_coverage_percent",
-        "same_target_time_saved_auc",
-        "baseline_time_auc",
-        "relative_same_target_time_saved_auc_percent",
-    ]
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
 
 
 def _regret_auc_path(args: argparse.Namespace) -> Path:
@@ -4813,6 +4537,15 @@ def main() -> None:
         )
     if args.torch_device is None:
         args.torch_device = _default_torch_device()
+    setattr(
+        args,
+        "single_card_runtime_context",
+        single_card_runtime_context_from_args(
+            args,
+            repo_root=REPO_ROOT,
+            output_dir=args.out.parent,
+        ),
+    )
     register_run_monitor(
         args,
         device=args.torch_device,
@@ -4867,206 +4600,20 @@ def main() -> None:
         for scheduler_name, scheduler_spec, fixed_interval in scheduler_specs:
             if scheduler_name == "fixed" and scheduler_spec in batched_fixed_specs:
                 continue
-            if scheduler_name == FSRS6_ORACLE_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_INFINITE_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle_infinite(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle_stationary_finite(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_INTERVAL_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle_interval(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle_interval_distill(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle_infinite_distill(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER:
-                for context in user_contexts:
-                    user_args = argparse.Namespace(**vars(context.args))
-                    user_args.oracle_stationary_finite_distill_policy = (
-                        _resolve_stationary_finite_distill_policy_path(
-                            args,
-                            user_id=context.user_id,
-                            multiuser=len(user_ids) > 1,
-                        )
-                    )
-                    rows.extend(
-                        _run_fsrs6_oracle_stationary_finite_distill(
-                            user_args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle_retention_distill(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == UVFA_PPO_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_uvfa_ppo(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == FSRS6_ORACLE_DISTILL_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_fsrs6_oracle_distill(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name == UVFA_PPO_RNN_INTERVAL_SCHEDULER:
-                for context in user_contexts:
-                    rows.extend(
-                        _run_uvfa_ppo_rnn_interval(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_spec=scheduler_spec,
-                            seed=args.seed,
-                        )
-                    )
-                continue
-            if scheduler_name in FSRS6_ADR_SCHEDULERS:
-                rows.extend(
-                    _run_fsrs6_adr(
-                        args,
+            rows.extend(
+                _run_scheduler_spec_rows(
+                    TradeoffEvaluationRequest(
+                        args=args,
                         environment_name=environment,
                         scheduler_name=scheduler_name,
                         scheduler_spec=scheduler_spec,
-                        seed=args.seed,
+                        fixed_interval=fixed_interval,
                         retention_values=retention_values,
                         user_contexts=user_contexts,
-                    )
-                )
-                continue
-            desired_values: Sequence[float | None]
-            if scheduler_uses_desired_retention(scheduler_name):
-                desired_values = retention_values
-            else:
-                desired_values = [None]
-            if (
-                args.engine == "vectorized"
-                and environment in {"fsrs6", "fsrs6_default"}
-                and scheduler_name
-                in {
-                    "fsrs6",
-                    "fsrs6_default",
-                    "fsrs3",
-                    "fsrs3_default",
-                    "hlr",
-                    "lstm",
-                    "anki_sm2",
-                    "memrise",
-                }
-            ):
-                points = [
-                    SchedulerPoint(
-                        scheduler_spec=scheduler_spec,
-                        desired_retention=(
-                            float(desired_retention)
-                            if desired_retention is not None
-                            else None
-                        ),
-                    )
-                    for desired_retention in desired_values
-                ]
-                rows.extend(
-                    _run_vectorized_batch_rows(
-                        args,
-                        environment_name=environment,
-                        scheduler_name=scheduler_name,
-                        points=points,
-                        user_contexts=user_contexts,
                         seed=args.seed,
-                        progress_label=f"{environment}/{scheduler_spec}",
                     )
                 )
-                continue
-            for desired_retention in desired_values:
-                for context in user_contexts:
-                    rows.append(
-                        _run_point(
-                            context.args,
-                            environment_name=environment,
-                            scheduler_name=scheduler_name,
-                            scheduler_spec=scheduler_spec,
-                            fixed_interval=normalize_fixed_interval(fixed_interval)
-                            if scheduler_name == "fixed"
-                            else None,
-                            desired_retention=desired_retention,
-                            seed=args.seed,
-                        )
-                    )
+            )
 
     _write_csv(args.out, rows)
     if not args.no_plot:

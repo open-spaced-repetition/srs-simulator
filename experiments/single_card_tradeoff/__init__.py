@@ -4,7 +4,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from experiments.single_card_tradeoff.tradeoff import (
+    from experiments.single_card_tradeoff.defaults import (
         DEFAULT_FIXED_INTERVALS,
         DEFAULT_FSRS6_ORACLE_DISTILL_POLICY,
         DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY,
@@ -60,5 +60,5 @@ __all__ = [
 def __getattr__(name: str) -> object:
     if name not in __all__:
         raise AttributeError(name)
-    tradeoff = import_module("experiments.single_card_tradeoff.tradeoff")
-    return getattr(tradeoff, name)
+    defaults = import_module("experiments.single_card_tradeoff.defaults")
+    return getattr(defaults, name)

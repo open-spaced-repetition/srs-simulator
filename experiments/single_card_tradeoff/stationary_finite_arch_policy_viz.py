@@ -23,11 +23,12 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
 )
-from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
+from experiments.single_card_tradeoff.oracle_frontier import parse_csv_floats  # noqa: E402
+from experiments.single_card_tradeoff.oracles import (  # noqa: E402
     FSRS6StationaryFiniteOracle,
-    parse_csv_floats,
 )
 from experiments.single_card_tradeoff.oracle_stationary_finite_policy_viz import (  # noqa: E402
     DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS,
@@ -40,7 +41,7 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_policy_viz import
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
     validate_retention_values,
 )
-from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS  # noqa: E402
+from experiments.single_card_tradeoff.defaults import DEFAULT_TARGET_RETENTIONS  # noqa: E402
 from experiments.single_card_tradeoff.uvfa_ppo import fsrs_config_kwargs  # noqa: E402
 from simulator.defaults import DEFAULT_DAYS  # noqa: E402
 from simulator.scheduler_spec import format_float  # noqa: E402
@@ -434,6 +435,7 @@ def _write_findings(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
     if any(value < 0.0 for value in cost_weights):
         raise SystemExit("--cost-weights must be >= 0.")
@@ -457,6 +459,7 @@ def main() -> None:
         s_grid_size=args.s_grid_size,
         d_grid_size=args.d_grid_size,
         device=device,
+        cache_config=cache_config,
         **fsrs_config_kwargs(fsrs_config),
     )
     start = time.perf_counter()

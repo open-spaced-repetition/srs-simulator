@@ -36,7 +36,7 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill import (
     DEFAULT_STEPS_PER_EPOCH,
     DEFAULT_TABLE_SAMPLES_PER_WEIGHT,
 )
-from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS
+from experiments.single_card_tradeoff.defaults import DEFAULT_TARGET_RETENTIONS
 from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,

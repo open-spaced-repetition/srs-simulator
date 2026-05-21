@@ -26,14 +26,18 @@ from experiments.single_card_tradeoff.auc_outputs import (  # noqa: E402
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
 )
 from experiments.single_card_tradeoff.low_param_direct_policy_search_multiuser import (  # noqa: E402
     DIRECT_POLICY_SCHEDULER,
     direct_policy_retention,
 )
-from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
+from experiments.single_card_tradeoff.oracles import (  # noqa: E402
     FSRS6BatchedStationaryFiniteOracle,
     OracleMetrics,
+)
+from experiments.single_card_tradeoff.oracle_dp_cache import (  # noqa: E402
+    OracleDPCacheConfig,
 )
 from experiments.single_card_tradeoff.oracle_stationary_finite_distill import (  # noqa: E402
     DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS,
@@ -56,12 +60,14 @@ from experiments.single_card_tradeoff.run_monitoring import (  # noqa: E402
     add_run_monitoring_args,
     register_run_monitor,
 )
-from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
+from experiments.single_card_tradeoff.defaults import (  # noqa: E402
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
-    _build_regret_auc_rows,
-    _write_csv,
-    _write_regret_auc_csv,
+)
+from experiments.single_card_tradeoff.results import (  # noqa: E402
+    build_regret_auc_rows as _build_regret_auc_rows,
+    write_csv as _write_csv,
+    write_regret_auc_csv as _write_regret_auc_csv,
 )
 from experiments.single_card_tradeoff.uvfa_ppo import (  # noqa: E402
     DEFAULT_ORACLE_D_GRID_SIZE,
@@ -269,6 +275,7 @@ def _build_oracle(
     configs: Sequence[SingleCardFSRS6Config],
     action_retentions: Sequence[float],
     device: torch.device,
+    cache_config: OracleDPCacheConfig | None = None,
 ) -> FSRS6BatchedStationaryFiniteOracle:
     return FSRS6BatchedStationaryFiniteOracle(
         days=args.days,
@@ -282,6 +289,7 @@ def _build_oracle(
         review_costs=[config.review_costs for config in configs],
         dtype=torch.float64,
         device=device,
+        cache_config=cache_config,
     )
 
 
@@ -1136,6 +1144,7 @@ def _write_metadata(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     _validate_args(args)
     user_ids = parse_user_ids(args.user_ids)
     cost_weights = parse_csv_floats(args.cost_weights, name="--cost-weights")
@@ -1178,6 +1187,7 @@ def main() -> None:
         configs=configs,
         action_retentions=action_retentions,
         device=device,
+        cache_config=cache_config,
     )
     static_metrics, static_runtime_s = _evaluate_static_retention_grid(
         oracle,

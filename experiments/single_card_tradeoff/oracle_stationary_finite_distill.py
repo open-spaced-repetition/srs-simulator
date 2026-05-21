@@ -23,12 +23,16 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
 )
-from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
+from experiments.single_card_tradeoff.oracles import (  # noqa: E402
     FSRS6StationaryFiniteOracle,
 )
-from experiments.single_card_tradeoff.tradeoff import (  # noqa: E402
+from experiments.single_card_tradeoff.oracle_dp_cache import (  # noqa: E402
+    OracleDPCacheConfig,
+)
+from experiments.single_card_tradeoff.defaults import (  # noqa: E402
     DEFAULT_TARGET_RETENTIONS,
 )
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
@@ -101,6 +105,7 @@ class StationaryFiniteOracleGuide:
         tolerance: float,
         progress: bool,
         fsrs_config: SingleCardFSRS6Config | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         self.device = device
         self.cost_weights = torch.tensor(
@@ -112,6 +117,7 @@ class StationaryFiniteOracleGuide:
             s_grid_size=s_grid_size,
             d_grid_size=d_grid_size,
             device=device,
+            cache_config=cache_config,
             **fsrs_config_kwargs(fsrs_config),
         )
         solution = self.oracle.solve_stationary_finite_policies(
@@ -343,6 +349,7 @@ def train_distilled_policy(
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     fsrs_config: SingleCardFSRS6Config | None,
+    cache_config: OracleDPCacheConfig | None = None,
 ) -> tuple[PolicyValueNet, StationaryFiniteOracleGuide, DistillStats]:
     torch.manual_seed(args.seed)
     start = time.perf_counter()
@@ -374,6 +381,7 @@ def train_distilled_policy(
         tolerance=args.oracle_stationary_finite_tolerance,
         progress=not args.no_progress,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
 
     obs = env.obs()
@@ -590,6 +598,7 @@ def save_model(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
     if args.deck_scale <= 0:
@@ -636,6 +645,7 @@ def main() -> None:
         cost_weights=cost_weights,
         action_retentions=action_retentions,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
     if args.supervision == "uniform_table":
         agreement = estimate_table_action_agreement(

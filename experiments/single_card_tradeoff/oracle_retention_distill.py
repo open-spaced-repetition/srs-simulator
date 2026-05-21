@@ -25,14 +25,15 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff.config import (
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.single_card_tradeoff.oracle_frontier import FSRS6IntervalOracle
+from experiments.single_card_tradeoff.oracles import FSRS6IntervalOracle
 from experiments.single_card_tradeoff.oracle_interval_distill import (
     interval_oracle_labels,
 )
-from experiments.single_card_tradeoff.tradeoff import (
+from experiments.single_card_tradeoff.defaults import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
@@ -898,6 +899,7 @@ def save_model(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
     if args.deck_scale <= 0:
@@ -957,6 +959,7 @@ def main() -> None:
         d_grid_size=args.oracle_d_grid_size,
         interval_chunk_size=args.oracle_interval_chunk_size,
         device=device,
+        cache_config=cache_config,
         **fsrs_config_kwargs(fsrs_config),
     )
     oracle_start = time.perf_counter()

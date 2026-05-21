@@ -25,7 +25,7 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill import (
     DEFAULT_STEPS_PER_EPOCH,
     DEFAULT_TABLE_SAMPLES_PER_WEIGHT,
 )
-from experiments.single_card_tradeoff.tradeoff import (
+from experiments.single_card_tradeoff.defaults import (
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
     FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER,

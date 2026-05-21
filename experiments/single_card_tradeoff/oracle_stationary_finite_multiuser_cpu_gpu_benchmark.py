@@ -37,7 +37,7 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill_multiuser
     DEFAULT_TRAIN_ENVS_PER_USER,
     DEFAULT_USER_IDS,
 )
-from experiments.single_card_tradeoff.tradeoff import (
+from experiments.single_card_tradeoff.defaults import (
     DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )

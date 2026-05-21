@@ -21,19 +21,22 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff.oracle_frontier import (  # noqa: E402
     DEFAULT_COST_WEIGHTS,
-    FSRS6GridOracle,
     parse_csv_floats,
 )
+from experiments.single_card_tradeoff.oracles import FSRS6GridOracle  # noqa: E402
 from experiments.single_card_tradeoff.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
 )
 from experiments.single_card_tradeoff.retention_space import (  # noqa: E402
     validate_retention_values,
 )
-from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS  # noqa: E402
-from experiments.single_card_tradeoff.uvfa_ppo import FSRS6SingleCardBatch  # noqa: E402
+from experiments.single_card_tradeoff.defaults import DEFAULT_TARGET_RETENTIONS  # noqa: E402
+from experiments.single_card_tradeoff.single_card_env import (  # noqa: E402
+    FSRS6SingleCardBatch,
+)
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_SEED  # noqa: E402
 from simulator.scheduler_spec import format_float  # noqa: E402
 
@@ -746,6 +749,7 @@ def _print_detail_summary(counts: torch.Tensor) -> None:
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
     if args.particles <= 0:
@@ -772,6 +776,7 @@ def main() -> None:
         s_grid_size=args.s_grid_size,
         d_grid_size=args.d_grid_size,
         device=device,
+        cache_config=cache_config,
         **_fsrs_config_kwargs(fsrs_config),
     )
     policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)

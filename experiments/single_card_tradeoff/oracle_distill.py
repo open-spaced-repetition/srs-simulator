@@ -22,13 +22,15 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff.config import (
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
     SingleCardFSRS6Config,
 )
-from experiments.single_card_tradeoff.tradeoff import (
+from experiments.single_card_tradeoff.defaults import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
 )
+from experiments.single_card_tradeoff.oracle_dp_cache import OracleDPCacheConfig
 from experiments.single_card_tradeoff.retention_space import validate_retention_values
 from experiments.single_card_tradeoff.uvfa_ppo import (
     DEFAULT_LEARNING_RATE,
@@ -196,6 +198,7 @@ def train_distilled_policy(
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     fsrs_config: SingleCardFSRS6Config | None,
+    cache_config: OracleDPCacheConfig | None = None,
 ) -> tuple[PolicyValueNet, OracleGridGuide, DistillStats]:
     torch.manual_seed(args.seed)
     start = time.perf_counter()
@@ -225,6 +228,7 @@ def train_distilled_policy(
         device=device,
         progress=not args.no_progress,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
 
     obs = env.obs()
@@ -363,6 +367,7 @@ def save_model(
 
 def main() -> None:
     args = parse_args()
+    cache_config = configure_oracle_dp_cache_from_args(args)
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
     if args.deck_scale <= 0:
@@ -399,6 +404,7 @@ def main() -> None:
         cost_weights=cost_weights,
         action_retentions=action_retentions,
         fsrs_config=fsrs_config,
+        cache_config=cache_config,
     )
     agreement = estimate_teacher_action_agreement(
         model,
