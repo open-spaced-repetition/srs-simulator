@@ -3747,7 +3747,7 @@ def _plot_sort_key(row: dict[str, Any]) -> tuple[float, float]:
     return 2.0, 0.0
 
 
-def _write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
+def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
     os.environ.setdefault("MPLBACKEND", "Agg")
     import matplotlib.pyplot as plt
 
@@ -3844,13 +3844,30 @@ def _write_plot(path: Path, rows: list[dict[str, Any]]) -> None:
 
     ax.set_xlabel("Expected memorized cards per day (deck scaled)")
     ax.set_ylabel("Study minutes per day (deck scaled)")
-    ax.set_title("Single-card lifecycle Pareto frontier")
+    ax.set_title(title)
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=160)
     plt.close(fig)
+
+
+def _write_user_plots(path: Path, rows: list[dict[str, Any]]) -> Path:
+    user_ids = sorted({_row_user_id(row) for row in rows})
+    if len(user_ids) <= 1:
+        _write_plot(path, rows, title="Single-card lifecycle Pareto frontier")
+        return path
+    plot_dir = path if not path.suffix else path.with_name(f"{path.stem}_by_user")
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    for user_id in user_ids:
+        user_rows = [row for row in rows if _row_user_id(row) == user_id]
+        _write_plot(
+            plot_dir / f"user_{user_id}.png",
+            user_rows,
+            title=f"User {user_id} single-card lifecycle Pareto frontier",
+        )
+    return plot_dir
 
 
 def _print_summary(rows: list[dict[str, Any]]) -> None:
@@ -4022,8 +4039,11 @@ def main() -> None:
     _write_csv(args.out, rows)
     if not args.no_plot:
         plot_path = args.plot_path or args.out.with_suffix(".png")
-        _write_plot(plot_path, rows)
-        print(f"Wrote plot: {plot_path}")
+        plot_output = _write_user_plots(plot_path, rows)
+        if len(user_ids) <= 1:
+            print(f"Wrote plot: {plot_output}")
+        else:
+            print(f"Wrote per-user plots: {plot_output}")
     print(f"Wrote CSV: {args.out}")
     if not args.no_regret_auc:
         regret_auc_rows = _build_regret_auc_rows(rows)

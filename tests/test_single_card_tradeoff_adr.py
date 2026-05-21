@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.single_card_tradeoff.cli import run_tradeoff_config
 from experiments.single_card_tradeoff.cli import tradeoff
 from experiments.single_card_tradeoff.core.tradeoff_runner import _plot_sort_key
+from experiments.single_card_tradeoff.core import tradeoff_runner
 from simulator.batched_sweep.fsrs6_adr_policy import format_float_token
 from simulator.experiment_infra import validate_scheduler_artifact
 from simulator.fsrs6_adr_policy import FEATURE_VERSION_LOG_POLY, FSRS6ADRPolicy
@@ -134,6 +135,42 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
         self.assertEqual(
             [row["fsrs6_adr_lambda_value"] for row in sorted_rows],
             ["0", "4", "16", "64", "256", "1024"],
+        )
+
+    def test_multiuser_plot_writes_split_user_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            plot_path = Path(tmp) / "combined_results.png"
+            rows = [{"user_id": 1}, {"user_id": 2}]
+            calls: list[tuple[Path, int, str]] = []
+            original_write_plot = tradeoff_runner._write_plot
+
+            def fake_write_plot(
+                path: Path,
+                rows: list[dict[str, object]],
+                *,
+                title: str,
+            ) -> None:
+                calls.append((path, len(rows), title))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("stub", encoding="utf-8")
+
+            tradeoff_runner._write_plot = fake_write_plot
+            try:
+                output = tradeoff_runner._write_user_plots(plot_path, rows)
+            finally:
+                tradeoff_runner._write_plot = original_write_plot
+
+        self.assertEqual(output, Path(tmp) / "combined_results_by_user")
+        self.assertEqual(
+            {path.name for path, _, _ in calls}, {"user_1.png", "user_2.png"}
+        )
+        self.assertTrue(all(count == 1 for _, count, _ in calls))
+        self.assertTrue(
+            all(
+                title == "User 1 single-card lifecycle Pareto frontier"
+                or title == "User 2 single-card lifecycle Pareto frontier"
+                for _, _, title in calls
+            )
         )
 
     def test_native_adr_train_run_root_and_manifest_discover_multiuser_policies(

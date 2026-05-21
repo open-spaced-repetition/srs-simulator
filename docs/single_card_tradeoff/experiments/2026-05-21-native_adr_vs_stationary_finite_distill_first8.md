@@ -55,7 +55,7 @@ Key files:
 - `combined_regret_auc.csv`
 - `summary.csv`
 - `mean_summary.csv`
-- `combined_results.png`
+- `combined_results_by_user/user_{user_id}.png`
 - `same_target_time_saved_auc_by_user.png`
 - `relative_time_saved_by_user.png`
 - `span_coverage_by_user.png`
