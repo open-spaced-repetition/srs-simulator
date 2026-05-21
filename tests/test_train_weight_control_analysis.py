@@ -19,6 +19,10 @@ class TrainWeightControlAnalysisTests(unittest.TestCase):
             _distill_scheduler_spec("add_1_4"),
             f"{PER_USER_DISTILL_SCHEDULER}_add_1_4",
         )
+        self.assertEqual(
+            _distill_scheduler_spec("add_4_only"),
+            f"{PER_USER_DISTILL_SCHEDULER}_add_4_only",
+        )
 
     def test_segment_auc_integrates_same_target_time_saved(self) -> None:
         rows = [

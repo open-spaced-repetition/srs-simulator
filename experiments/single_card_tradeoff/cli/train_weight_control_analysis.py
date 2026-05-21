@@ -30,8 +30,8 @@ DEFAULT_DENSE_LOWW_EXACT_DIR = DEFAULT_OUT_DIR / "exact_value_user2_dense_loww"
 DEFAULT_TREATMENTS = (
     "sparse_baseline=artifacts/single_card_tradeoff/"
     "stationary_finite_distill_train_weights_sparse_first8_markov_off",
-    "add_1_4=artifacts/single_card_tradeoff/"
-    "stationary_finite_distill_train_weights_add_1_4_first8_markov_off",
+    "add_4_only=artifacts/single_card_tradeoff/"
+    "stationary_finite_distill_train_weights_add_4_only_first8_markov_off",
 )
 DEFAULT_SEGMENT = (9400.0, 9750.0)
 
@@ -51,11 +51,11 @@ def parse_args() -> argparse.Namespace:
         metavar="LABEL=DIR",
         help=(
             "Training artifact root for one treatment. May be repeated. Defaults "
-            "to sparse_baseline and add_1_4 roots."
+            "to sparse_baseline and add_4_only roots."
         ),
     )
     parser.add_argument("--baseline-label", default="sparse_baseline")
-    parser.add_argument("--candidate-label", default="add_1_4")
+    parser.add_argument("--candidate-label", default="add_4_only")
     parser.add_argument(
         "--formal-exact-dir", type=Path, default=DEFAULT_FORMAL_EXACT_DIR
     )
@@ -180,6 +180,16 @@ def _display_scheduler(label: str, scheduler: str) -> str:
     if scheduler == ADR_SCHEDULER:
         return "adr"
     return label
+
+
+def _treatment_display_label(label: str) -> str:
+    return {
+        "sparse_baseline": "Sparse baseline",
+        "add_1_only": "Add 1 only",
+        "add_1_2_4": "Add 1,2,4",
+        "add_1_4": "Add 1,4",
+        "add_4_only": "Add 4 only",
+    }.get(label, label)
 
 
 def _format_csv_floats(values: Sequence[float] | None) -> str | None:
@@ -972,8 +982,12 @@ def main() -> int:
     plot_labels = {
         FSRS6_SCHEDULER: "FSRS6",
         EXACT_SCHEDULER: "Exact",
-        _distill_scheduler_spec(args.baseline_label): "Sparse baseline",
-        _distill_scheduler_spec(args.candidate_label): "Add 1,4",
+        _distill_scheduler_spec(args.baseline_label): _treatment_display_label(
+            args.baseline_label
+        ),
+        _distill_scheduler_spec(args.candidate_label): _treatment_display_label(
+            args.candidate_label
+        ),
         ADR_SCHEDULER: "ADR",
     }
     _write_frontier_plot(

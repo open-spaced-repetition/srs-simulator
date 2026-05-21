@@ -1,5 +1,8 @@
 # Stationary Finite Distill Train-Weight 1 and 4 Control Plan
 
+Status: superseded by the later `add_4_only` selection. This page preserves the
+original pre-decision plan and hypothesis.
+
 ## Question
 
 Does adding low cost weights `1` and `4` to stationary finite distill training

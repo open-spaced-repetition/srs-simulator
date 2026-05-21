@@ -11,7 +11,7 @@ Can additional distillation epochs recover the relative time saved and span cove
 
 The experiment reruns representative sub-216 architectures for 256 epochs and the full sub-216 set for 512 epochs.
 
-All non-epoch variables stay aligned with the current default stationary finite distill recipe: five sparse teacher weights, the clipped 11-action grid, `uniform_table` supervision, 64 steps per epoch, 10,000 evaluation particles, and eval seeds `42,43,44`.
+All non-epoch variables stay aligned with the stationary finite distill recipe used for the ablation: five sparse teacher weights (`0,16,64,256,1024`), the clipped 11-action grid, `uniform_table` supervision, 64 steps per epoch, 10,000 evaluation particles, and eval seeds `42,43,44`.
 
 Source artifacts:
 - `stationary_finite_model_size_ablation`: `artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/model_size_ablation_summary.csv`

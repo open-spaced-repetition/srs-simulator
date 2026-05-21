@@ -19,7 +19,7 @@ user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
 button_usage = "../Anki-button-usage/button_usage.jsonl"
 days = 1825
 deck_scale = 10000
-teacher_cost_weights = [0, 16, 64, 256, 1024]
+teacher_cost_weights = [0, 4, 16, 64, 256, 1024]
 eval_cost_weights = [0, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
 torch_device = "cuda"
 

@@ -2521,8 +2521,9 @@ def _stationary_finite_epoch_extension_report(
             ),
             (
                 "All non-epoch variables stay aligned with the current default "
-                "stationary finite distill recipe: five sparse teacher weights, "
-                "the clipped 11-action grid, `uniform_table` supervision, "
+                "stationary finite distill recipe used for the ablation: five "
+                "sparse teacher weights, the clipped 11-action grid, "
+                "`uniform_table` supervision, "
                 "64 steps per epoch, 10,000 evaluation particles, and eval "
                 "seeds `42,43,44`."
             ),

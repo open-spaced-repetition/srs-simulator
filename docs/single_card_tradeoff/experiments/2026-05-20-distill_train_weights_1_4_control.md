@@ -29,25 +29,28 @@ repair the user-2 high-memory frontier regression without changing the
 
 ## Primary Result
 
-`add_1_4` materially improves the mean FSRS6-relative frontier metric and fixes
-the user-2 low-weight failure, but it does not pass the strict original gate
-because user 7 loses more than 2 relative-time-saved percentage points.
+`add_4_only` is the selected default. It clears every gate and has the best mean
+FSRS6-relative frontier metric among the passing rows, while avoiding the user-7
+regression that blocks `add_1_4`.
 
 | treatment | train weights | mean time saved AUC | mean relative AUC | mean coverage | min coverage | user 2 formal AUC | user 2 dense-loww AUC | passes all gates |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | sparse baseline | `0,16,64,256,1024` | 3.165 | 8.76% | 97.20% | 89.78% | -3.554 | 1.123 | - |
+| add 1 only | `0,1,16,64,256,1024` | 4.548 | 11.82% | 98.72% | 96.05% | 6.067 | 9.497 | yes |
+| add 4 only | `0,4,16,64,256,1024` | 4.764 | 12.02% | 98.31% | 92.15% | 5.366 | 8.099 | yes |
 | add 1,4 | `0,1,4,16,64,256,1024` | 4.753 | 11.79% | 98.19% | 91.96% | 6.254 | 9.893 | no |
 
-Mean relative AUC improves by `+3.03 pp`. User 2 moves from a negative formal
-FSRS6-relative AUC to a positive one and gains `+8.77` deck-minutes/day on the
-dense low-weight grid.
+Mean relative AUC improves by `+3.26 pp` over the sparse baseline. User 2 moves
+from a negative formal FSRS6-relative AUC to a positive one under `add_4_only`
+and gains `+6.98` deck-minutes/day on the dense low-weight grid.
 
-## Gate Failure
+## Gate Comparison
 
-The only failed `add_1_4` gate is the per-user regression limit outside user 2.
-User 7's formal relative AUC drops from `9.71%` to `7.33%`, a `-2.38 pp`
-change. Coverage is not the problem: user 7 stays at `100%` coverage. The loss
-comes from slightly worse same-target time saved on the same FSRS6 memory span.
+`add_1_4` still delivers the strongest user-2 low-weight repair, but it fails
+the other-user gate. User 7's formal relative AUC drops from `9.71%` to
+`7.33%`, a `-2.38 pp` change. Coverage is not the problem: user 7 stays at
+`100%` coverage. The loss comes from slightly worse same-target time saved on
+the same FSRS6 memory span.
 
 At representative user-7 FSRS6 memory targets:
 
@@ -64,22 +67,20 @@ coverage failure.
 
 ## Optional Diagnostics
 
-Because `add_1_4` repaired user 2 but failed the other-user gate, the optional
-diagnostic rows were run.
+The optional `add_1_2_4` diagnostic was also run. It does not recover the
+first-eight aggregate and remains the clearest fail of the extra-low-weight
+variant.
 
 | treatment | train weights | mean relative AUC | min coverage | user 2 dense-loww AUC | worst non-user2 delta | passes all gates |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
-| add 1 only | `0,1,16,64,256,1024` | 11.82% | 96.05% | 9.497 | -0.67 pp | yes |
-| add 4 only | `0,4,16,64,256,1024` | 12.02% | 92.15% | 8.099 | +0.11 pp | yes |
 | add 1,2,4 | `0,1,2,4,16,64,256,1024` | 10.72% | 95.22% | 9.225 | -6.55 pp | no |
-
-The optional rows show that either `1` or `4` alone can pass the strict gates in
-this run. Adding `2` as well is not helpful for the first-eight aggregate.
 
 ## High-Memory Segment
 
-For user 2 over the `9400-9750` memorized-card segment, `add_1_4` almost closes
-the sparse-student failure and approaches the exact/ADR frontiers.
+For user 2 over the `9400-9750` memorized-card segment, `add_1_4` still has the
+strongest local repair, but `add_4_only` is the selected aggregate winner
+because it clears every gate and has the best mean relative AUC among the
+passing rows.
 
 | scheduler | segment AUC vs FSRS6 | relative |
 | --- | ---: | ---: |
@@ -108,14 +109,12 @@ No training or exact-value evaluation run reported shared-memory spill.
 ## Decision
 
 The default stationary finite distill training weights are updated to
-`0,1,4,16,64,256,1024`.
+`0,4,16,64,256,1024`.
 
-This is not a clean strict-gate promotion of the `add_1_4` row because user 7
-regresses by `2.38 pp`, but it is the requested default change and it directly
-addresses the failure mode that motivated the experiment: missing low-weight
-labels around user 2's high-memory frontier bend. Future capacity or loss-shaping
-runs should continue to watch user 7 and compare against the passing `add_1_only`
-and `add_4_only` diagnostics.
+This is a clean promotion of `add_4_only`, not `add_1_4`, because the selected
+row passes every gate while `add_1_4` still regresses user 7 by `2.38 pp`.
+Future capacity or loss-shaping runs should continue to watch user 7 and
+compare against the passing `add_1_only` diagnostic.
 
 ## Artifacts
 

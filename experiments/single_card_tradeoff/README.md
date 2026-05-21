@@ -138,7 +138,7 @@ uv run python -m experiments.single_card_tradeoff.cli.oracle_stationary_finite_d
 uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_stationary_finite,fsrs6_oracle_stationary_finite_distill --oracle-stationary-finite-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
 ```
 
-The stationary finite oracle reports finite-lifecycle objective, policy-iteration count, and residual to stdout. The distilled checkpoint uses `policy_type=fsrs6_oracle_stationary_finite_distill` and defaults to the compressed `oracle_stationary` residual `8x2` policy: 476 parameters, 128 distillation epochs, teacher cost weights `0,1,4,16,64,256,1024`, and `uniform_table` exact-policy supervision. Its observation remains `stability`, `difficulty`, and goal cost weight only.
+The stationary finite oracle reports finite-lifecycle objective, policy-iteration count, and residual to stdout. The distilled checkpoint uses `policy_type=fsrs6_oracle_stationary_finite_distill` and defaults to the compressed `oracle_stationary` residual `8x2` policy: 476 parameters, 128 distillation epochs, teacher cost weights `0,4,16,64,256,1024`, and `uniform_table` exact-policy supervision. Its observation remains `stability`, `difficulty`, and goal cost weight only.
 
 For per-user benchmark distillation, `oracle_stationary_finite_distill_multiuser.py --per-user-models` trains one independent stationary finite distill policy per FSRS-6 user in a single Python process. The exact teacher uses `FSRS6BatchedStationaryFiniteOracle`, whose policy shape is `[user, cost_weight, stability, difficulty]`; `--oracle-teacher-user-batch-size 0` is the default and solves all requested users in one batched DP call. The student training then stacks `U` ordinary `PolicyValueNet` states with `torch.func.stack_module_state` and uses `vmap` over the user dimension, so each user has a separate 476-parameter model while the ensemble trains and evaluates as one batch. The per-user default supervision is `--per-user-supervision uniform_table`: every train step samples the exact stationary policy table with equal mass on each teacher cost weight, rather than weighting labels by rollout event counts. Use `--per-user-supervision rollout` only to reproduce the older teacher-forcing baseline. The default path without `--per-user-models` remains the older shared-student diagnostic baseline.
 
@@ -181,7 +181,7 @@ Pass `--source table` to count every nonterminal `(remaining, stability, difficu
 Visualize the stationary finite-lifecycle oracle directly over its stationary `(stability, difficulty, goal cost weight)` policy table:
 
 ```bash
-uv run python -m experiments.single_card_tradeoff.cli.oracle_stationary_finite_policy_viz --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,1,4,16,64,256,1024 --action-retentions 0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98 --distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.oracle_stationary_finite_policy_viz --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,4,16,64,256,1024 --action-retentions 0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98 --distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
 ```
 
 This writes `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `findings.md`, `action_distribution.png`, and `policy_heatmaps.png` under `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`. When `--distill-policy` is provided it also writes `distill_action_summary.csv`, `distill_binned_actions.csv`, `distill_grid_actions.csv`, `distill_exact_comparison.csv`, `distill_action_distribution.png`, `distill_policy_heatmaps.png`, and `distill_exact_difference_heatmaps.png`. Use `--selected-weights` to choose which weights appear in the `(s,d)` heatmap panel.
@@ -369,7 +369,7 @@ The newer stationary finite compression artifacts are under `artifacts/single_ca
 | `0,4,16,64,256,1024` | 1,452 | 3 | 3.3352 +/- 0.0395 | 23.53% +/- 0.22% | 96.88% +/- 0.17% |
 | `0,16,64,256,1024` | 1,452 | 3 | 3.3904 +/- 0.0572 | 23.67% +/- 0.35% | 95.01% +/- 0.26% |
 
-The historical five-weight schedule `0,16,64,256,1024` is a good sparse teacher-weight candidate for stationary finite distillation. The current default adds `1` and `4` after the first-eight Markov-off control showed a large user-2 low-weight recovery and a higher mean FSRS6-relative AUC, at the cost of a small user-7 regression in that run.
+The historical five-weight schedule `0,16,64,256,1024` is a good sparse teacher-weight candidate for stationary finite distillation. The current default uses `0,4,16,64,256,1024`: the add-4-only row passed all gates, kept the user-2 repair, and had the best mean relative AUC among the passing rows.
 
 Rerun the model-size ablation with all non-network variables aligned to the
 current default stationary finite distill recipe:
@@ -378,9 +378,10 @@ current default stationary finite distill recipe:
 uv run python -m experiments.single_card_tradeoff.cli.stationary_finite_model_size_ablation --torch-device cuda --no-progress
 ```
 
-The rerun uses the five-weight teacher schedule, the clipped 11-action grid,
-`uniform_table` supervision, 128 epochs, 64 steps per epoch, 10,000 eval
-particles, and eval seeds `42,43,44` for every network size:
+The rerun uses the six-weight teacher schedule `0,4,16,64,256,1024`, the
+clipped 11-action grid, `uniform_table` supervision, 128 epochs, 64 steps per
+epoch, 10,000 eval particles, and eval seeds `42,43,44` for every network
+size:
 
 | candidate | parameters | reduction vs 1,452 | epochs | eval seeds | teacher agreement | relative time saved | coverage |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -430,7 +431,7 @@ larger students. The 216-parameter `residual:6:1` student also keeps coverage,
 but its relative time saved is weaker in this rerun. Because this ablation still
 uses one training seed per architecture, the practical default remains
 `oracle_stationary`, `residual:8:2`, 476 parameters, 128 distillation epochs,
-and train weights `0,1,4,16,64,256,1024`. The 316-parameter student remains the
+and train weights `0,4,16,64,256,1024`. The 316-parameter student remains the
 lowest-risk 128-epoch compression candidate.
 
 Visualize the aligned model-size policies side-by-side against the exact
@@ -465,6 +466,6 @@ The older `stationary_finite_no_sub05_compression/` teacher-forced and student-r
 - Removing remaining time at the oracle layer is a powerful structural compression. With 64x32 grids and 11 clipped actions, the unrestricted finite oracle table has 41,113,600 entries, while the stationary finite table has 22,528 entries before any neural distillation.
 - The exact stationary finite policy is not just a lower-retention version of the finite oracle. Its action table is cost-sensitive and state-sensitive: with sub-0.5 actions removed, `w=256` remains mixed and bimodal, while `w=1024` concentrates on the new cheapest action `0.50` and loses high-cost scalar objective. That explains why very small stationary finite distills need the aligned exact-table recipe and enough epochs despite the smaller teacher table.
 - `oracle_rho4` is a strong compact observation. With the clipped 11-action output head, it gives a 1,468-parameter model enough horizon and stability information to cover the frontier when the loss geometry is right.
-- Train cost weights should be sparse but cover scale and the low-weight bend. For stationary finite distillation, the default is now `0,1,4,16,64,256,1024`; the added `1` and `4` repair the first-eight user-2 low-weight interpolation failure without changing model capacity. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
+- Train cost weights should be sparse but cover scale and the low-weight bend. For stationary finite distillation, the default is now `0,4,16,64,256,1024`; `add_4_only` is the chosen row because it passes all gates and has the best mean relative AUC among the passing candidates. Evaluation should remain denser with `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
 - Do not train stationary finite distills from raw teacher-forcing event counts without rebalancing cost weights. Low-cost policies produce many more review events, so event-level cross-entropy can drown out high-cost policy boundaries. Uniform exact-table supervision over `(cost_weight, stability, difficulty)` fixed the earlier first-8 user-2 high-cost interpolation failure; the later low-weight frontier bend required adding direct low-weight labels at `1` and `4`.
 - Integer interval actions are the most direct continuous-action target for the finite-horizon oracle. Continuous desired retention can work, but it needs interval-aware loss shaping and coverage validation.

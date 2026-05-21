@@ -324,6 +324,7 @@ command = [
   "--formal-exact-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_formal",
   "--dense-loww-exact-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/exact_value_user2_dense_loww",
   "--out-dir", "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off",
+  "--candidate-label", "add_4_only",
 ]
 expected_outputs = [
   "artifacts/single_card_tradeoff/train_weight_1_4_control_markov_off/train_weight_summary.csv",
