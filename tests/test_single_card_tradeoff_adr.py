@@ -14,7 +14,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.single_card_tradeoff.cli import run_tradeoff_config
 from experiments.single_card_tradeoff.cli import tradeoff
-from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from experiments.single_card_tradeoff.core.tradeoff_runner import _plot_sort_key
+from simulator.batched_sweep.fsrs6_adr_policy import format_float_token
+from simulator.experiment_infra import validate_scheduler_artifact
+from simulator.fsrs6_adr_policy import FEATURE_VERSION_LOG_POLY, FSRS6ADRPolicy
+from simulator.scheduler_catalog import fsrs6_adr_variant_for_feature_version
 
 
 def _base_args(policy_path: Path | None) -> argparse.Namespace:
@@ -110,6 +114,173 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
         self.assertEqual(rows[0]["fsrs6_adr_policy"], str(policy_path.resolve()))
         self.assertEqual(rows[0]["fsrs6_adr_baseline_desired_retention"], 0.9)
         self.assertGreater(rows[0]["card_total_reviews"], 0.0)
+
+    def test_plot_sort_key_orders_native_adr_by_lambda(self) -> None:
+        rows = [
+            {
+                "scheduler": "fsrs6_adr",
+                "goal_cost_weight": "",
+                "fsrs6_adr_policy_index": "",
+                "fsrs6_adr_baseline_desired_retention": "",
+                "fsrs6_adr_lambda_value": lambda_value,
+                "fixed_interval": "",
+                "desired_retention": "",
+            }
+            for lambda_value in ("0", "1024", "16", "256", "4", "64")
+        ]
+
+        sorted_rows = sorted(rows, key=_plot_sort_key)
+
+        self.assertEqual(
+            [row["fsrs6_adr_lambda_value"] for row in sorted_rows],
+            ["0", "4", "16", "64", "256", "1024"],
+        )
+
+    def test_native_adr_train_run_root_and_manifest_discover_multiuser_policies(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "native_adr_run"
+            train_outputs = root / "train-overfit" / "train_outputs"
+            action_space = fsrs6_adr_variant_for_feature_version(
+                FEATURE_VERSION_LOG_POLY
+            ).action_space
+            created_paths: list[Path] = []
+            manifest_entries: list[str] = [
+                'family = "single_card_tradeoff"',
+                "schema_version = 1",
+                'generated_at = "2026-05-21T00:00:00Z"',
+                f'feature_version = "{FEATURE_VERSION_LOG_POLY}"',
+                'scheduler_name = "fsrs6_adr"',
+                f'action_space = "{action_space}"',
+                "",
+            ]
+
+            for user_id in (1, 2):
+                for lambda_value in (16.0, 32.0):
+                    job_dir = (
+                        train_outputs
+                        / f"user_{user_id}"
+                        / f"lambda_{format_float_token(lambda_value)}"
+                    )
+                    job_dir.mkdir(parents=True)
+                    policy_path = job_dir / "policy.json"
+                    metrics_path = job_dir / "metrics.json"
+                    metadata_path = job_dir / "metadata.json"
+                    FSRS6ADRPolicy(
+                        coefficients=FSRS6ADRPolicy.baseline(
+                            desired_retention=0.9,
+                        ).coefficients,
+                        baseline_desired_retention=None,
+                        feature_version=FEATURE_VERSION_LOG_POLY,
+                    ).write_json(policy_path)
+                    metrics_path.write_text(
+                        json.dumps(
+                            {
+                                "job": {
+                                    "user_id": user_id,
+                                    "lambda_value": lambda_value,
+                                },
+                                "feature_version": FEATURE_VERSION_LOG_POLY,
+                            },
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    metadata_path.write_text(
+                        json.dumps(
+                            {
+                                "schema_version": 1,
+                                "artifact_kind": "scheduler-policy",
+                                "artifact_id": (
+                                    f"single-card-adr-{user_id}-{lambda_value:g}"
+                                ),
+                                "family": "single_card_tradeoff",
+                                "scheduler_name": "fsrs6_adr",
+                                "environment": "fsrs6_default",
+                                "engine": "batched",
+                                "review_markov_transition": False,
+                                "training_user_ids": [user_id],
+                                "validation_user_ids": [],
+                                "seed": 42,
+                                "policy_path": "policy.json",
+                                "feature_version": FEATURE_VERSION_LOG_POLY,
+                                "action_space": action_space,
+                                "created_at": "2026-05-21T00:00:00Z",
+                                "code_commit": "deadbeef",
+                                "lambda_value": lambda_value,
+                                "baseline_desired_retention": None,
+                                "initial_desired_retention": 0.9,
+                                "config_snapshot_path": None,
+                                "training_command_path": None,
+                                "metrics_path": "metrics.json",
+                                "capabilities": ["event", "batched"],
+                            },
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    created_paths.append(policy_path.resolve())
+                    created_paths.append(metrics_path.resolve())
+                    created_paths.append(metadata_path.resolve())
+                    manifest_entries.extend(
+                        [
+                            "[[policies]]",
+                            f"user_id = {user_id}",
+                            f"lambda_value = {lambda_value:g}",
+                            f'path = "train-overfit/train_outputs/user_{user_id}/'
+                            f'lambda_{format_float_token(lambda_value)}/policy.json"',
+                            "",
+                        ]
+                    )
+
+            manifest_path = root / "policy_manifest.toml"
+            manifest_path.write_text(
+                "\n".join(manifest_entries).rstrip() + "\n",
+                encoding="utf-8",
+            )
+
+            args = _base_args(None)
+            args.user_id = None
+            args.fsrs6_adr_train_run_root = root
+            args.fsrs6_adr_policy_manifest = None
+            args.fsrs6_adr_policy_root = None
+            args.fsrs6_adr_lambda_values = None
+
+            train_specs = tradeoff._load_fsrs6_adr_policy_specs(
+                args,
+                retention_values=[0.5, 0.6],
+                user_ids=[1, 2],
+            )
+
+            args.fsrs6_adr_train_run_root = None
+            args.fsrs6_adr_policy_manifest = manifest_path
+            manifest_specs = tradeoff._load_fsrs6_adr_policy_specs(
+                args,
+                retention_values=[0.5, 0.6],
+                user_ids=[1, 2],
+            )
+
+            validated = validate_scheduler_artifact(
+                train_outputs / "user_1" / "lambda_16" / "metadata.json",
+                require_files=True,
+            )
+
+        self.assertCountEqual([spec.path for spec in train_specs], created_paths[0::3])
+        self.assertCountEqual(
+            [spec.path for spec in manifest_specs], created_paths[0::3]
+        )
+        self.assertEqual({spec.user_id for spec in train_specs}, {1, 2})
+        self.assertEqual({spec.lambda_value for spec in train_specs}, {16.0, 32.0})
+        self.assertTrue(
+            all(spec.baseline_desired_retention is None for spec in train_specs)
+        )
+        self.assertIsNone(validated.baseline_desired_retention)
+        self.assertEqual(validated.lambda_value, 16.0)
 
 
 class SingleCardTradeoffConfigRunnerTests(unittest.TestCase):

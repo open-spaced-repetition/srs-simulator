@@ -56,6 +56,27 @@ uv run python -m experiments.single_card_tradeoff.cli.run_experiment \
   --stage all
 ```
 
+## Native FSRS6 ADR Training
+
+Train one FSRS6 ADR policy per `(user, cost weight)` directly on the
+single-card objective:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.fsrs6_adr_train_multiuser \
+  --env fsrs6_default \
+  --user-ids 1,2,3,4,5,6,7,8 \
+  --cost-weights 16,32,64,128,256,512,1024 \
+  --torch-device cuda \
+  --out-dir artifacts/single_card_tradeoff/fsrs6_adr_single_card_direct_multiuser \
+  --no-progress
+```
+
+The trainer writes per-job `train-overfit/train_outputs/user_<id>/lambda_<w>/`
+artifacts, including `policy.json`, `metadata.json`, and `metrics.json`, plus
+root `summary.csv`, `train_history.csv`, and `policy_manifest.toml` files. Point
+`tradeoff.py` at the run root with `--fsrs6-adr-train-run-root ...` or at the
+manifest with `--fsrs6-adr-policy-manifest ...`.
+
 ## UVFA PPO
 
 UVFA PPO single-card experiment, goal-conditioned over FSRS-6 target-retention actions:

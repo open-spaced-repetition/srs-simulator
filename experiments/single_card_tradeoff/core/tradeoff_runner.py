@@ -3735,6 +3735,9 @@ def _plot_sort_key(row: dict[str, Any]) -> tuple[float, float]:
                 else float(lambda_value)
             )
             return 0.75, float(baseline_dr) + lambda_offset * 1e-6
+        lambda_value = row.get("fsrs6_adr_lambda_value")
+        if lambda_value is not None and lambda_value != "":
+            return 0.75, float(lambda_value)
     fixed_interval = row["fixed_interval"]
     if fixed_interval is not None:
         return 1.0, float(fixed_interval)

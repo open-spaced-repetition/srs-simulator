@@ -10,6 +10,7 @@ import unittest
 
 from experiments.single_card_tradeoff.core.workflow_config import (
     SingleCardWorkflowStage,
+    WorkflowTask,
     load_workflow_config,
 )
 from experiments.single_card_tradeoff.core.workflow_runner import (
@@ -98,6 +99,52 @@ class SingleCardWorkflowTests(unittest.TestCase):
         self.assertIn("performance_summary.json", artifact_names)
         self.assertIn(
             "gpu_monitor", {path.parent.name for path in expected_artifacts(task)}
+        )
+
+    def test_native_adr_train_contract_includes_policy_manifest(self) -> None:
+        task = WorkflowTask(
+            name="train_native_adr",
+            stage=SingleCardWorkflowStage.TRAIN,
+            kind="fsrs6_adr_train_multiuser",
+            description="Train native single-card ADR policies.",
+            options={
+                "env": "fsrs6_default",
+                "user_ids": [1, 2],
+                "cost_weights": [16.0, 32.0],
+                "out_dir": (
+                    "artifacts/single_card_tradeoff/"
+                    "fsrs6_adr_single_card_direct_multiuser"
+                ),
+                "no_progress": True,
+            },
+            config_path=CONFIG_ROOT / "native_adr_train.toml",
+        )
+
+        command = task_command(task)
+        artifacts = expected_artifacts(task)
+        artifact_names = {path.name for path in artifacts}
+
+        self.assertIn(
+            "experiments.single_card_tradeoff.cli.fsrs6_adr_train_multiuser",
+            command,
+        )
+        self.assertIn("--cost-weights", command)
+        self.assertEqual(command[command.index("--cost-weights") + 1], "16,32")
+        self.assertIn("summary.csv", artifact_names)
+        self.assertIn("train_history.csv", artifact_names)
+        self.assertIn("policy_manifest.toml", artifact_names)
+        self.assertIn("performance_summary.json", artifact_names)
+        self.assertTrue(
+            any(
+                path.as_posix().endswith("user_1/lambda_16/policy.json")
+                for path in artifacts
+            )
+        )
+        self.assertTrue(
+            any(
+                path.as_posix().endswith("user_2/lambda_32/metadata.json")
+                for path in artifacts
+            )
         )
 
     def test_policy_viz_contract_includes_distill_outputs(self) -> None:

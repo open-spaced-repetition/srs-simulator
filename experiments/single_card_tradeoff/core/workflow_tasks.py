@@ -8,6 +8,7 @@ from typing import Any
 
 from experiments.single_card_tradeoff.core.reporting import REPO_ROOT, resolve_repo_path
 from experiments.single_card_tradeoff.core.workflow_config import WorkflowTask
+from simulator.batched_sweep.fsrs6_adr_policy import format_float_token
 
 
 TASK_MODULES: Mapping[str, str] = {
@@ -31,6 +32,9 @@ TASK_MODULES: Mapping[str, str] = {
     ),
     "low_param_direct_policy_search_multiuser": (
         "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser"
+    ),
+    "fsrs6_adr_train_multiuser": (
+        "experiments.single_card_tradeoff.cli.fsrs6_adr_train_multiuser"
     ),
     "oracle_distill_hparam_search": (
         "experiments.single_card_tradeoff.cli.oracle_distill_hparam_search"
@@ -153,6 +157,8 @@ def expected_artifacts(task: WorkflowTask) -> tuple[Path, ...]:
                 "gpu_monitor/summary.json",
             ],
         )
+    if task.kind == "fsrs6_adr_train_multiuser":
+        return _fsrs6_adr_train_multiuser_artifacts(options)
     if task.kind == "oracle_interval_distill":
         return _explicit_file_artifacts(options, ["model_out", "out"])
     if task.kind == "oracle_interval_distill_hparam_search":
@@ -396,6 +402,46 @@ def _model_size_ablation_artifacts(options: Mapping[str, Any]) -> tuple[Path, ..
     return tuple(_dedupe(paths))
 
 
+def _fsrs6_adr_train_multiuser_artifacts(
+    options: Mapping[str, Any],
+) -> tuple[Path, ...]:
+    out_dir = _option_path(options, "out_dir")
+    if out_dir is None:
+        out_dir = resolve_repo_path(
+            Path(
+                "artifacts/single_card_tradeoff/fsrs6_adr_single_card_direct_multiuser"
+            )
+        )
+    paths = [
+        out_dir / "summary.csv",
+        out_dir / "train_history.csv",
+        out_dir / "metadata.json",
+        out_dir / "policy_manifest.toml",
+        out_dir / "performance_summary.json",
+        out_dir / "gpu_monitor" / "summary.json",
+    ]
+    user_ids = _parse_user_ids(options.get("user_ids"))
+    cost_weights = _parse_csv_floats(options.get("cost_weights"))
+    if user_ids and cost_weights:
+        for user_id in user_ids:
+            for cost_weight in cost_weights:
+                job_root = (
+                    out_dir
+                    / "train-overfit"
+                    / "train_outputs"
+                    / f"user_{user_id}"
+                    / f"lambda_{format_float_token(cost_weight)}"
+                )
+                paths.extend(
+                    [
+                        job_root / "policy.json",
+                        job_root / "metadata.json",
+                        job_root / "metrics.json",
+                    ]
+                )
+    return tuple(_dedupe(paths))
+
+
 def _policy_viz_artifacts(options: Mapping[str, Any]) -> tuple[Path, ...]:
     out_dir = _option_path(options, "out_dir")
     if out_dir is None:
@@ -534,6 +580,14 @@ def _parse_csv_strings(value: Any) -> list[str]:
         return [item.strip() for item in value.split(",") if item.strip()]
     if isinstance(value, list | tuple):
         return [str(item) for item in value]
+    return []
+
+
+def _parse_csv_floats(value: Any) -> list[float]:
+    if isinstance(value, str):
+        return [float(item) for item in value.split(",") if item.strip()]
+    if isinstance(value, list | tuple):
+        return [float(item) for item in value]
     return []
 
 
