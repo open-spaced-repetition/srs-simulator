@@ -39,26 +39,26 @@ Analysis summaries:
 
 | run | stage | device | elapsed seconds | user-days/s | candidate-days/s |
 | --- | --- | --- | --- | --- | --- |
-| Oracle stationary finite distill | sweep | cuda | 94.6 | 154.4 | - |
-| Oracle stationary finite distill | train-overfit | cuda | 917.8 | 15.9 | 254.5 |
-| ADR | sweep | cuda | 44.1 | 330.8 | - |
-| ADR | train-overfit | cuda | 305.7 | 47.8 | 764.3 |
+| Oracle stationary finite distill | sweep | cuda | 94.9 | 153.9 | - |
+| Oracle stationary finite distill | train-overfit | cuda | 1,022.8 | 14.3 | 228.4 |
+| ADR | sweep | cuda | 44.8 | 325.9 | - |
+| ADR | train-overfit | cuda | 302.2 | 48.3 | 773.0 |
 
 ## Provenance
 
 | run | git commit | dirty | Python | PyTorch | CUDA | device |
 | --- | --- | --- | --- | --- | --- | --- |
-| Oracle stationary finite distill | 54077ffe988aaf74eb90dfb52d3b2eae1300590d | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
-| ADR | 54077ffe988aaf74eb90dfb52d3b2eae1300590d | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
+| Oracle stationary finite distill | 88de85231acfebb4e7826cfa726d26f9f6322e95 | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
+| ADR | 88de85231acfebb4e7826cfa726d26f9f6322e95 | false | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
 
 ## GPU Monitor
 
 | run | stage | summary | shared peak MiB | summed peak MiB | spill | nvidia-smi peak MiB |
 | --- | --- | --- | --- | --- | --- | --- |
-| Oracle stationary finite distill | sweep | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1_markov_off/sweep/gpu_monitor/summary.json` | 142.2 | 160.4 | False | 2,554.0 |
-| Oracle stationary finite distill | train-overfit | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 142.2 | 160.4 | False | 1,526.0 |
-| ADR | sweep | `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off/sweep/gpu_monitor/summary.json` | 299.9 | 318.1 | False | 2,664.0 |
-| ADR | train-overfit | `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 158.3 | 176.5 | False | 1,488.0 |
+| Oracle stationary finite distill | sweep | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1_markov_off/sweep/gpu_monitor/summary.json` | 194.9 | 213.2 | False | 3,406.0 |
+| Oracle stationary finite distill | train-overfit | `artifacts/rl_scheduler/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8/fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 377.5 | 395.7 | False | 3,260.0 |
+| ADR | sweep | `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off/sweep/gpu_monitor/summary.json` | 216.6 | 234.8 | False | 3,478.0 |
+| ADR | train-overfit | `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 214.0 | 232.3 | False | 2,258.0 |
 
 ## Conclusion
 
@@ -66,8 +66,8 @@ Promotion decision for `fsrs6_oracle_stationary_finite_distill` is inconclusive.
 
 Candidate-minus-comparison deltas on the primary external Pareto metrics are:
 
-- fsrs6: 3,407 HV, 37.3 same-budget memory lift AUC, -0.30 same-target time saved AUC versus comparison.
-- lstm: -16,347 HV, 16.0 same-budget memory lift AUC, -1.43 same-target time saved AUC versus comparison.
+- fsrs6: 6,990 HV, 30.6 same-budget memory lift AUC, -0.15 same-target time saved AUC versus comparison.
+- lstm: -10,360 HV, 17.0 same-budget memory lift AUC, -1.54 same-target time saved AUC versus comparison.
 
 Training HV and sampled policy-point diagnostics should be interpreted against the external Pareto metrics.
 
@@ -77,27 +77,27 @@ Scheduler-only hypervolume values are sums of per-user HV delta against the same
 
 | environment | scheduler | HV delta sum | HV delta / baseline HV | frontier points | same-budget memory lift AUC | same-budget memory lift / baseline | budget coverage | same-target time saved AUC | same-target time saved / baseline | target coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| fsrs6 | Oracle stationary finite distill | 99,273 | +3.316% | 128 | 118.8 | +1.826% | 90/110, 66.331% span | 4.47 | +13.769% | 89/110, 87.316% span |
-| fsrs6 | ADR | 95,866 | +3.202% | 128 | 81.4 | +1.228% | 80/110, 81.322% span | 4.77 | +11.168% | 78/110, 76.609% span |
-| fsrs6 | Oracle stationary finite distill - ADR | 3,407 | +0.114% | 0 | 37.3 | +0.598% | +10, -14.991 pp span | -0.30 | +2.600% | +11, +10.707 pp span |
-| lstm | Oracle stationary finite distill | 37,867 | +1.445% | 127 | 65.2 | +1.000% | 89/117, 68.771% span | 0.26 | +5.056% | 93/117, 88.296% span |
-| lstm | ADR | 54,215 | +2.068% | 124 | 49.3 | +0.746% | 83/117, 83.153% span | 1.69 | +4.927% | 79/117, 81.533% span |
-| lstm | Oracle stationary finite distill - ADR | -16,347 | -0.624% | 3 | 16.0 | +0.254% | +6, -14.382 pp span | -1.43 | +0.129% | +14, +6.763 pp span |
+| fsrs6 | Oracle stationary finite distill | 103,060 | +3.334% | 128 | 116.2 | +1.788% | 96/112, 81.188% span | 4.41 | +13.457% | 91/112, 82.368% span |
+| fsrs6 | ADR | 96,070 | +3.108% | 127 | 85.7 | +1.302% | 86/112, 83.234% span | 4.56 | +11.371% | 79/112, 74.096% span |
+| fsrs6 | Oracle stationary finite distill - ADR | 6,990 | +0.226% | 1 | 30.6 | +0.486% | +10, -2.047 pp span | -0.15 | +2.086% | +12, +8.272 pp span |
+| lstm | Oracle stationary finite distill | 42,521 | +1.321% | 126 | 67.2 | +1.031% | 96/114, 84.598% span | 0.62 | +5.575% | 96/114, 89.497% span |
+| lstm | ADR | 52,881 | +1.642% | 121 | 50.2 | +0.764% | 81/114, 80.385% span | 2.16 | +5.359% | 85/114, 83.872% span |
+| lstm | Oracle stationary finite distill - ADR | -10,360 | -0.322% | 5 | 17.0 | +0.267% | +15, +4.212 pp span | -1.54 | +0.217% | +11, +5.625 pp span |
 
 ## Per-User HV Delta
 
-Candidate-minus-comparison per-user HV delta is negative for 7/16 environment-user rows.
+Candidate-minus-comparison per-user HV delta is negative for 5/16 environment-user rows.
 
 | user | fsrs6 Oracle stationary finite distill HV delta | fsrs6 ADR HV delta | fsrs6 delta | lstm Oracle stationary finite distill HV delta | lstm ADR HV delta | lstm delta |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 11,897 | 10,832 | 1,066 | 3,470 | 5,399 | -1,929 |
-| 2 | 25,713 | 32,314 | -6,601 | 10,243 | 19,434 | -9,191 |
-| 3 | 4,430 | 4,180 | 249 | 3,028 | 3,203 | -175 |
-| 4 | 38,541 | 33,240 | 5,301 | 11,497 | 18,141 | -6,644 |
-| 5 | 8,968 | 7,748 | 1,219 | 3,238 | 3,234 | 4 |
-| 6 | 5,524 | 4,474 | 1,050 | 3,552 | 2,821 | 731 |
-| 7 | 2,281 | 1,034 | 1,248 | 1,685 | 516 | 1,169 |
-| 8 | 1,919 | 2,045 | -126 | 1,155 | 1,466 | -311 |
+| 1 | 13,325 | 12,081 | 1,243 | 8,395 | 9,639 | -1,245 |
+| 2 | 26,501 | 29,679 | -3,178 | 10,611 | 15,362 | -4,751 |
+| 3 | 4,667 | 3,835 | 832 | 3,225 | 3,144 | 81 |
+| 4 | 39,078 | 34,918 | 4,160 | 9,248 | 16,379 | -7,131 |
+| 5 | 9,006 | 7,564 | 1,442 | 1,605 | 1,933 | -328 |
+| 6 | 5,842 | 4,745 | 1,097 | 6,514 | 4,578 | 1,936 |
+| 7 | 2,435 | 1,222 | 1,213 | 1,697 | 640 | 1,057 |
+| 8 | 2,207 | 2,026 | 181 | 1,227 | 1,206 | 21 |
 
 ## Diagnostics
 
@@ -105,38 +105,38 @@ Unweighted policy-point averages describe where sampled policies lie; they are d
 
 | environment | scheduler | policy-point avg memorized | policy-point avg time | policy-point avg efficiency | policy-point avg reviews |
 | --- | --- | --- | --- | --- | --- |
-| fsrs6 | Oracle stationary finite distill | 6,530.2 | 45.40 | 26.74 | 180.43 |
-| fsrs6 | ADR | 6,548.2 | 51.96 | 26.14 | 211.25 |
-| lstm | Oracle stationary finite distill | 6,389.8 | 54.65 | 24.00 | 228.22 |
-| lstm | ADR | 6,419.7 | 62.39 | 23.37 | 269.98 |
+| fsrs6 | Oracle stationary finite distill | 6,530.0 | 52.84 | 26.37 | 215.48 |
+| fsrs6 | ADR | 6,552.9 | 55.29 | 26.16 | 228.70 |
+| lstm | Oracle stationary finite distill | 6,401.1 | 65.03 | 23.61 | 274.73 |
+| lstm | ADR | 6,422.7 | 67.86 | 23.46 | 297.02 |
 
 Train-overfit final HV gain by user:
 
 | run | user | final training HV gain |
 | --- | --- | --- |
-| Oracle stationary finite distill | 1 | 14,621 |
-| Oracle stationary finite distill | 2 | 34,368 |
-| Oracle stationary finite distill | 3 | 5,634 |
-| Oracle stationary finite distill | 4 | 40,676 |
-| Oracle stationary finite distill | 5 | 9,708 |
-| Oracle stationary finite distill | 6 | 6,234 |
-| Oracle stationary finite distill | 7 | 2,431 |
-| Oracle stationary finite distill | 8 | 2,094 |
-| ADR | 1 | 13,563 |
-| ADR | 2 | 37,662 |
-| ADR | 3 | 5,463 |
-| ADR | 4 | 33,770 |
-| ADR | 5 | 8,108 |
-| ADR | 6 | 5,431 |
-| ADR | 7 | 1,294 |
-| ADR | 8 | 2,093 |
+| Oracle stationary finite distill | 1 | 17,583 |
+| Oracle stationary finite distill | 2 | 32,874 |
+| Oracle stationary finite distill | 3 | 5,668 |
+| Oracle stationary finite distill | 4 | 41,104 |
+| Oracle stationary finite distill | 5 | 9,967 |
+| Oracle stationary finite distill | 6 | 6,317 |
+| Oracle stationary finite distill | 7 | 2,630 |
+| Oracle stationary finite distill | 8 | 2,334 |
+| ADR | 1 | 15,946 |
+| ADR | 2 | 34,901 |
+| ADR | 3 | 5,046 |
+| ADR | 4 | 35,955 |
+| ADR | 5 | 8,286 |
+| ADR | 6 | 5,692 |
+| ADR | 7 | 1,448 |
+| ADR | 8 | 2,044 |
 
 ## Training HV
 
 | run | users | final training HV gain sum |
 | --- | --- | --- |
-| Oracle stationary finite distill | 8 | 115,766 |
-| ADR | 8 | 107,385 |
+| Oracle stationary finite distill | 8 | 118,478 |
+| ADR | 8 | 109,319 |
 
 ## Artifact Paths
 

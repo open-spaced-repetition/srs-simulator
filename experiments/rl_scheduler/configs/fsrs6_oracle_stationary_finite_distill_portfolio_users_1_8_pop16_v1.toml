@@ -120,7 +120,7 @@ distill_dp_cache_dir = "artifacts/single_card_tradeoff/dp_cache"
 distill_refresh_dp_cache = false
 distill_no_progress = true
 distill_goal_norm_max = 1024.0
-distill_cost_weights = [0.0, 16.0, 64.0, 256.0, 1024.0]
+distill_cost_weights = [0.0, 4.0, 16.0, 64.0, 256.0, 1024.0]
 distill_action_retentions = [
   0.50,
   0.60,
@@ -146,7 +146,7 @@ reference_margin_fraction = 0.05
 hv_epsilon = 0.0
 min_goal_cost_weight = 0.0
 max_goal_cost_weight = 1024.0
-seed_cost_weights = [0.0, 16.0, 64.0, 256.0, 1024.0]
+seed_cost_weights = [0.0, 4.0, 16.0, 64.0, 256.0, 1024.0]
 
 [sweep]
 log_glob = "**/*.jsonl"
