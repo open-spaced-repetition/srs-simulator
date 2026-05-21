@@ -5,10 +5,10 @@ from pathlib import Path
 
 import torch
 
-from experiments.single_card_tradeoff.oracle_frontier import (
+from experiments.single_card_tradeoff.oracles import (
     FSRS6BatchedStationaryFiniteOracle,
 )
-from experiments.single_card_tradeoff.stationary_finite_exact_value_eval import (
+from experiments.single_card_tradeoff.cli.stationary_finite_exact_value_eval import (
     _adr_transition_tables,
     _direct_scheduler_spec,
     _distill_scheduler_spec,

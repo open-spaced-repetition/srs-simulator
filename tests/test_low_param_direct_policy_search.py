@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from experiments.single_card_tradeoff.low_param_direct_policy_search_multiuser import (
+from experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser import (
     direct_policy_retention,
     initial_theta,
     parameter_count_for_family,

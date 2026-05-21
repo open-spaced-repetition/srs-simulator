@@ -5,11 +5,11 @@ import unittest
 
 import torch
 
-from experiments.single_card_tradeoff.uvfa_ppo import (
+from experiments.single_card_tradeoff.cli.uvfa_ppo import (
     model_checkpoint_payload,
-    PolicyValueNet,
     TrainStats,
 )
+from experiments.single_card_tradeoff.models.policy_net import PolicyValueNet
 
 
 class PolicyValueNetArchitectureTests(unittest.TestCase):

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
 import unittest
 
-from experiments.single_card_tradeoff.oracle_stationary_finite_cpu_gpu_benchmark import (
+from experiments.single_card_tradeoff.cli.oracle_stationary_finite_cpu_gpu_benchmark import (
     aggregate_summary_rows,
     device_label,
     parse_devices,
 )
-from experiments.single_card_tradeoff.oracle_stationary_finite_multiuser_cpu_gpu_benchmark import (
+from experiments.single_card_tradeoff.cli.oracle_stationary_finite_multiuser_cpu_gpu_benchmark import (
     aggregate_summary_rows as aggregate_multiuser_summary_rows,
+    BenchmarkCell,
+    _child_command as multiuser_child_command,
 )
 
 
@@ -108,6 +112,56 @@ class SingleCardCpuGpuBenchmarkTests(unittest.TestCase):
         self.assertEqual(actual[1]["teacher_runtime_s_mean"], 2.0)
         self.assertEqual(actual[1]["ensemble_trainable_params"], 952)
         self.assertEqual(actual[1]["gpu_monitor_sample_count_max"], 4)
+
+    def test_multiuser_child_command_uses_module_entrypoint(self) -> None:
+        args = argparse.Namespace(
+            env="fsrs6",
+            user_ids="1,2",
+            button_usage=Path("button_usage.jsonl"),
+            per_user_supervision="uniform_table",
+            days=30,
+            deck_scale=10000,
+            cost_weights="0,16",
+            eval_cost_weights="0,16",
+            action_retentions="0.8,0.9",
+            train_envs_per_user=16,
+            epochs=1,
+            steps_per_epoch=1,
+            learning_rate=0.001,
+            table_samples_per_weight=8,
+            network="residual",
+            network_depth=2,
+            hidden_size=8,
+            oracle_s_grid_size=8,
+            oracle_d_grid_size=8,
+            oracle_teacher_user_batch_size=0,
+            oracle_stationary_finite_max_iterations=100,
+            oracle_stationary_finite_tolerance=1e-8,
+            max_grad_norm=0.5,
+            eval_particles=32,
+            gpu_monitor_interval_seconds=2.0,
+            no_gpu_monitor_enabled=True,
+            no_progress=True,
+        )
+        cell = BenchmarkCell(
+            device="cpu",
+            repeat=1,
+            seed=42,
+            run_dir=Path("run"),
+            stdout_path=Path("stdout.log"),
+            stderr_path=Path("stderr.log"),
+            performance_summary_path=Path("performance_summary.json"),
+        )
+
+        command = multiuser_child_command(args, cell)
+
+        self.assertIn("-m", command)
+        self.assertIn(
+            "experiments.single_card_tradeoff.cli."
+            "oracle_stationary_finite_distill_multiuser",
+            command,
+        )
+        self.assertFalse(any(part.endswith(".py") for part in command))
 
 
 if __name__ == "__main__":

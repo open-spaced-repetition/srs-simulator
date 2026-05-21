@@ -17,7 +17,7 @@ description = "Evaluate infinite stationary exact/distill policies and stationar
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/tradeoff.py",
+  "-m", "experiments.single_card_tradeoff.cli.tradeoff",
   "--env",
   "fsrs6_default",
   "--sched",

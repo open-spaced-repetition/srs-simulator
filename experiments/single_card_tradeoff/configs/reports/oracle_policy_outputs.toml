@@ -18,7 +18,7 @@ description = "Rerun finite oracle output-distribution analysis with the clipped
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_policy_outputs.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_policy_outputs",
   "--source",
   "rollout",
   "--days",
@@ -55,7 +55,7 @@ description = "Rerun finite oracle table-weighted output-distribution analysis w
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_policy_outputs.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_policy_outputs",
   "--source",
   "table",
   "--days",

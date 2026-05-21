@@ -17,7 +17,7 @@ description = "Train the interval oracle distill policy and write structured met
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_interval_distill.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_interval_distill",
   "--days",
   "1825",
   "--oracle-s-grid-size",
@@ -45,7 +45,7 @@ description = "Evaluate interval exact and interval distill policies against fsr
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/tradeoff.py",
+  "-m", "experiments.single_card_tradeoff.cli.tradeoff",
   "--env",
   "fsrs6_default",
   "--sched",
@@ -83,7 +83,7 @@ description = "Rerun the interval distill model-size search."
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_interval_distill_hparam_search.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_interval_distill_hparam_search",
   "--days",
   "1825",
   "--oracle-s-grid-size",

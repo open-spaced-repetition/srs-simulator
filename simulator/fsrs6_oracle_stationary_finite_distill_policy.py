@@ -284,7 +284,7 @@ def load_checkpoint_model(
     path: str | Path, *, device: Any
 ) -> tuple[Any, tuple[float, ...]]:
     import torch
-    from experiments.single_card_tradeoff.uvfa_ppo import PolicyValueNet
+    from experiments.single_card_tradeoff.models.policy_net import PolicyValueNet
 
     checkpoint_path = Path(path)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)

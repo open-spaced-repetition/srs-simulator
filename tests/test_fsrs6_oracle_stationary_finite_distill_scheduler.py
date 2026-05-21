@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.single_card_tradeoff.uvfa_ppo import PolicyValueNet
+from experiments.single_card_tradeoff.models.policy_net import PolicyValueNet
 from simulator.core import CardView
 from simulator.fsrs6_oracle_stationary_finite_distill_policy import (
     FSRS6OracleStationaryFiniteDistillBatchPolicy,

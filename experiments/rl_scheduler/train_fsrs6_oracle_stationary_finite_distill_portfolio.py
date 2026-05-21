@@ -46,7 +46,7 @@ from experiments.rl_scheduler.portfolio_training_common import (
     select_survivors_for_generation as _common_select_survivors_for_generation,
     zero_metrics,
 )
-from experiments.single_card_tradeoff.oracle_stationary_finite_distill import (
+from experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill import (
     DEFAULT_DISTILL_EPOCHS,
     DEFAULT_DISTILL_HIDDEN_SIZE,
     DEFAULT_DISTILL_NETWORK_DEPTH,
@@ -56,7 +56,7 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill import (
     DEFAULT_STATIONARY_FINITE_TOLERANCE,
     DEFAULT_TABLE_SAMPLES_PER_WEIGHT,
 )
-from experiments.single_card_tradeoff.oracle_stationary_finite_distill_multiuser import (
+from experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser import (
     DEFAULT_AGREEMENT_ENVS_PER_USER,
     DEFAULT_ORACLE_TEACHER_USER_BATCH_SIZE,
     DEFAULT_TRAIN_ENVS_PER_USER,
@@ -68,15 +68,15 @@ from experiments.single_card_tradeoff.oracle_stationary_finite_distill_multiuser
     save_single_user_checkpoint,
     train_batched_per_user_models,
 )
-from experiments.single_card_tradeoff.tradeoff import DEFAULT_TARGET_RETENTIONS
-from experiments.single_card_tradeoff.uvfa_ppo import (
+from experiments.single_card_tradeoff.core.defaults import DEFAULT_TARGET_RETENTIONS
+from experiments.single_card_tradeoff.cli.uvfa_ppo import (
     DEFAULT_LEARNING_RATE,
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_NETWORK,
     DEFAULT_ORACLE_D_GRID_SIZE,
     DEFAULT_ORACLE_S_GRID_SIZE,
-    PolicyValueNet,
 )
+from experiments.single_card_tradeoff.models.policy_net import PolicyValueNet
 from simulator.batched_engine.multiuser_engine import simulate_multiuser
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION

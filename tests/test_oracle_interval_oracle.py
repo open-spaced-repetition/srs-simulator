@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from experiments.single_card_tradeoff.oracle_frontier import FSRS6IntervalOracle
+from experiments.single_card_tradeoff.oracles import FSRS6IntervalOracle
 
 
 class FSRS6IntervalOracleTests(unittest.TestCase):

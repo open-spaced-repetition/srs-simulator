@@ -29,7 +29,7 @@ description = "Train one 476-parameter stationary finite distill per user with u
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env",
   "fsrs6",
   "--user-ids",
@@ -59,7 +59,7 @@ description = "Evaluate the per-user stationary finite distill against fsrs6 on 
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env",
   "fsrs6",
   "--user-ids",
@@ -86,7 +86,7 @@ description = "Evaluate exact stationary finite policies and per-user distill ch
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env",
   "fsrs6",
   "--user-ids",

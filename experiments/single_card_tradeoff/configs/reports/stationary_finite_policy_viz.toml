@@ -17,7 +17,7 @@ description = "Visualize the clipped exact stationary finite policy and compare 
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/oracle_stationary_finite_policy_viz.py",
+  "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_policy_viz",
   "--days",
   "1825",
   "--s-grid-size",

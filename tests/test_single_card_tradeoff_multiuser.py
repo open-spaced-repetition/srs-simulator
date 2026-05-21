@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from experiments.single_card_tradeoff.tradeoff import (
+from experiments.single_card_tradeoff.cli.tradeoff import (
     _build_regret_auc_rows,
     _parse_user_ids_csv,
     _resolve_user_ids,

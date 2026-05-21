@@ -65,7 +65,7 @@ dense_loww_exact_value_root = "artifacts/single_card_tradeoff/train_weight_1_4_c
 name = "train_sparse_baseline"
 description = "Train the current sparse stationary finite distill baseline in a new root."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env", "fsrs6",
   "--user-ids", "1,2,3,4,5,6,7,8",
   "--button-usage", "../Anki-button-usage/button_usage.jsonl",
@@ -103,7 +103,7 @@ expected_outputs = [
 name = "train_add_1_4"
 description = "Train the minimal low-cost-weight supervision treatment."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env", "fsrs6",
   "--user-ids", "1,2,3,4,5,6,7,8",
   "--button-usage", "../Anki-button-usage/button_usage.jsonl",
@@ -141,7 +141,7 @@ expected_outputs = [
 name = "train_add_1_only"
 description = "Optional diagnostic: add only w=1 to isolate the low-weight endpoint."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env", "fsrs6",
   "--user-ids", "1,2,3,4,5,6,7,8",
   "--button-usage", "../Anki-button-usage/button_usage.jsonl",
@@ -179,7 +179,7 @@ expected_outputs = [
 name = "train_add_4_only"
 description = "Optional diagnostic: add only w=4 to isolate the mid-low stabilizer."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env", "fsrs6",
   "--user-ids", "1,2,3,4,5,6,7,8",
   "--button-usage", "../Anki-button-usage/button_usage.jsonl",
@@ -217,7 +217,7 @@ expected_outputs = [
 name = "train_add_1_2_4"
 description = "Optional diagnostic: add w=1,2,4 to test whether w=2 remains missing."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser",
   "--env", "fsrs6",
   "--user-ids", "1,2,3,4,5,6,7,8",
   "--button-usage", "../Anki-button-usage/button_usage.jsonl",
@@ -255,7 +255,7 @@ expected_outputs = [
 name = "evaluate_exact_value_formal"
 description = "Direct exact-value comparison on the formal sparse evaluation grid."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/stationary_finite_exact_value_eval.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.stationary_finite_exact_value_eval",
   "--env", "fsrs6",
   "--user-ids", "1,2,3,4,5,6,7,8",
   "--button-usage", "../Anki-button-usage/button_usage.jsonl",
@@ -285,7 +285,7 @@ expected_outputs = [
 name = "evaluate_exact_value_user2_dense_loww"
 description = "Direct exact-value comparison for user 2 on the dense low-weight evaluation grid."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/stationary_finite_exact_value_eval.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.stationary_finite_exact_value_eval",
   "--env", "fsrs6",
   "--user-ids", "2",
   "--button-usage", "../Anki-button-usage/button_usage.jsonl",
@@ -315,7 +315,7 @@ expected_outputs = [
 name = "analyze_train_weight_control"
 description = "Aggregate gates, direct pairwise checks, dense low-weight user-2 rows, segment AUC, and user-2 frontier plots."
 command = [
-  "uv", "run", "python", "experiments/single_card_tradeoff/train_weight_control_analysis.py",
+  "uv", "run", "python", "-m", "experiments.single_card_tradeoff.cli.train_weight_control_analysis",
   "--treatment", "sparse_baseline=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_sparse_first8_markov_off",
   "--treatment", "add_1_4=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_4_first8_markov_off",
   "--treatment", "add_1_only=artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_1_only_first8_markov_off",

@@ -37,7 +37,7 @@ command = [
   "uv",
   "run",
   "python",
-  "experiments/single_card_tradeoff/generate_experiment_report.py",
+  "-m", "experiments.single_card_tradeoff.cli.generate_experiment_report",
   "--config",
   "experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml",
 ]

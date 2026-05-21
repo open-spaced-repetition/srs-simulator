@@ -15,7 +15,7 @@ description = "Evaluate finite exact and stationary finite exact grid oracles ag
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/tradeoff.py",
+  "-m", "experiments.single_card_tradeoff.cli.tradeoff",
   "--env",
   "fsrs6_default",
   "--sched",

@@ -5,7 +5,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from experiments.single_card_tradeoff.run_tradeoff_config import (
+from experiments.single_card_tradeoff.cli.run_tradeoff_config import (
     _base_tradeoff_command,
     _multiuser_tradeoff_command,
     _split_combined_outputs,

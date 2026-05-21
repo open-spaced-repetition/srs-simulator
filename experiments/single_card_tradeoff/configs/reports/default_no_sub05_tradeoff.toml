@@ -22,7 +22,7 @@ description = "Evaluate the default FSRS-6 compact-policy comparison with no sub
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/tradeoff.py",
+  "-m", "experiments.single_card_tradeoff.cli.tradeoff",
   "--env",
   "fsrs6_default",
   "--sched",

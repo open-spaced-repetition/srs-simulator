@@ -6,12 +6,12 @@ import unittest
 
 import torch
 
-from experiments.single_card_tradeoff.oracle_dp_cache import (
+from experiments.single_card_tradeoff.oracles.dp_cache import (
     OracleDPCacheConfig,
     oracle_dp_cache_stats_snapshot,
     reset_oracle_dp_cache_stats,
 )
-from experiments.single_card_tradeoff.oracle_frontier import (
+from experiments.single_card_tradeoff.oracles import (
     FSRS6AverageRewardOracle,
     FSRS6BatchedStationaryFiniteOracle,
     FSRS6GridOracle,

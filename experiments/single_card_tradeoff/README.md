@@ -5,7 +5,7 @@ This experiment family simulates an iid single-card lifecycle with no daily stud
 ## Quickstart
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_default --particles 10000 --deck-scale 10000
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_default --particles 10000 --deck-scale 10000
 ```
 
 When CUDA is available, `tradeoff.py` uses `cuda` by default; pass `--torch-device cpu` to force CPU.
@@ -21,7 +21,7 @@ By default, the script writes a pairwise same-target time saved AUC CSV next to 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py \
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff \
   --env fsrs6 --user-id 1 \
   --sched fsrs6,fsrs6_adr,fsrs6_oracle_stationary_finite_distill \
   --fsrs6-adr-train-run-root artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1 \
@@ -33,7 +33,7 @@ ADR rows include `fsrs6_adr_policy`, `fsrs6_adr_baseline_desired_retention`, `fs
 The first-eight ADR versus 476-parameter distill comparison is configured in TOML and writes combined cross-user summary tables and plots:
 
 ```bash
-uv run python experiments/single_card_tradeoff/run_tradeoff_config.py \
+uv run python -m experiments.single_card_tradeoff.cli.run_tradeoff_config \
   --config experiments/single_card_tradeoff/configs/adr_vs_476_tradeoff_first8_users.toml
 ```
 
@@ -44,7 +44,7 @@ For configs with multiple users, `run_tradeoff_config.py` now calls `tradeoff.py
 UVFA PPO single-card experiment, goal-conditioned over FSRS-6 target-retention actions:
 
 ```bash
-uv run experiments/single_card_tradeoff/uvfa_ppo.py --days 1825 --eval-particles 10000 --deck-scale 10000
+uv run python -m experiments.single_card_tradeoff.cli.uvfa_ppo --days 1825 --eval-particles 10000 --deck-scale 10000
 ```
 
 The PPO objective is `card_expected_retrievability - goal_cost_weight * card_minutes_per_day`, with default training goal weights `16,32,64,128,256,512,1024`; the standard tradeoff sweep evaluates scalarized learned policies and oracles at `0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024` by default. It normalizes advantages per goal, uses rich state features and a residual policy/value network with hidden size 64 and depth 3 by default, and uses a finite-horizon FSRS grid oracle as the default warmup/regularization guide. Pass `--guide-policy static` for the older static-FSRS target prior, or `--guide-policy none` for plain PPO. The script writes a comparable CSV/plot under `artifacts/single_card_tradeoff/`, includes fixed-interval and static-FSRS reference curves, and reports whether the learned UVFA policy beats the selected baseline. The default pass/fail baseline is the best fixed interval; use `--baseline fsrs` or `--baseline overall` for stricter static-FSRS comparisons.
@@ -52,13 +52,13 @@ The PPO objective is `card_expected_retrievability - goal_cost_weight * card_min
 After training a policy, include it in the standard single-card Pareto sweep with `--sched uvfa_ppo`:
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo --uvfa-ppo-policy artifacts/single_card_tradeoff/uvfa_ppo_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo --uvfa-ppo-policy artifacts/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
 Search UVFA PPO model-scale hyperparameters:
 
 ```bash
-uv run experiments/single_card_tradeoff/uvfa_ppo_hparam_search.py --days 1825 --eval-particles 3000 --save-models
+uv run python -m experiments.single_card_tradeoff.cli.uvfa_ppo_hparam_search --days 1825 --eval-particles 3000 --save-models
 ```
 
 ## Recurrent Interval PPO
@@ -66,7 +66,7 @@ uv run experiments/single_card_tradeoff/uvfa_ppo_hparam_search.py --days 1825 --
 Recurrent UVFA PPO over continuous log-interval actions:
 
 ```bash
-uv run experiments/single_card_tradeoff/uvfa_ppo_rnn_interval.py --days 1825 --eval-particles 10000 --deck-scale 10000
+uv run python -m experiments.single_card_tradeoff.cli.uvfa_ppo_rnn_interval --days 1825 --eval-particles 10000 --deck-scale 10000
 ```
 
 This variant uses a GRU belief-state encoder over the event observation sequence, concatenates the hidden state with the sampled cost-weight preference, and trains Gaussian PPO in log days. The environment exponentiates the sampled action, rounds it to physical review days, and clamps the interval to `--max-interval-days` (default `days * 4`). Its belief observation does not expose the simulator's internal stability or difficulty state. By default, training uses a finite-horizon FSRS grid oracle as a continuous log-interval warmup and PPO regularization guide; pass `--guide-policy static` or `--guide-policy none` to ablate it.
@@ -74,7 +74,7 @@ This variant uses a GRU belief-state encoder over the event observation sequence
 After training a recurrent interval policy, include it in the standard single-card Pareto sweep with `--sched uvfa_ppo_rnn_interval`:
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo_rnn_interval --uvfa-ppo-rnn-interval-policy artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_default,fixed,uvfa_ppo_rnn_interval --uvfa-ppo-rnn-interval-policy artifacts/single_card_tradeoff/uvfa_ppo_rnn_interval_policy.pt
 ```
 
 ## Discrete Oracle Distillation
@@ -82,8 +82,8 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 Train a pure FSRS-6 oracle distillation baseline, then compare it directly with the DP oracle and UVFA PPO:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_distill.py --days 1825 --eval-particles 10000 --deck-scale 10000
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_distill,uvfa_ppo --oracle-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt --uvfa-ppo-policy artifacts/single_card_tradeoff/uvfa_ppo_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.oracle_distill --days 1825 --eval-particles 10000 --deck-scale 10000
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_distill,uvfa_ppo --oracle-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_distill_policy.pt --uvfa-ppo-policy artifacts/single_card_tradeoff/uvfa_ppo_policy.pt
 ```
 
 `oracle_distill.py` defaults to the `oracle_rho4` observation (`log remaining/stability ratio`, difficulty, goal cost weight, and stability), the `residual:16:2` architecture, and CUDA when available. Its default teacher weights are `0,1,2,4,8,16,32,64,128,256,512,1024`, so the zero-cost edge is trained directly while the standard tradeoff evaluation still probes intermediate weights. This model has 1,536 parameters, about 30% of the previous `residual:32:2` default. In the default FSRS-6 10k-particle, 3-seed comparison it slightly improved pairwise same-target time saved AUC against the previous default (`+0.0587` deck-minutes/day with 100% overlap) while preserving the broader frontier coverage that short small-model training missed. Pass `--obs-mode oracle` to train the older 4-feature oracle observation, or `--obs-mode rich` to train on the larger rollout observation instead. The script also accepts the same `--env fsrs6 --user-id <id>` and `--button-usage` options as the single-card tradeoff runner.
@@ -91,7 +91,7 @@ uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched 
 To rerun the discrete oracle distillation model-size search:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_distill_hparam_search.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --eval-particles 3000 --save-models
+uv run python -m experiments.single_card_tradeoff.cli.oracle_distill_hparam_search --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --eval-particles 3000 --save-models
 ```
 
 ## Grid Oracle
@@ -99,13 +99,13 @@ uv run experiments/single_card_tradeoff/oracle_distill_hparam_search.py --days 1
 Estimate a finite-horizon FSRS-6 grid oracle frontier:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_frontier.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
+uv run python -m experiments.single_card_tradeoff.cli.oracle_frontier --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
 ```
 
 Use the same finite-horizon oracle policy table as a scheduler in the standard single-card sweep:
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle --oracle-cost-weights 16,32,64,128,256,512,1024
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle --oracle-cost-weights 16,32,64,128,256,512,1024
 ```
 
 The oracle script uses expected Bellman backups over a `(log stability, difficulty)` grid and discrete desired-retention actions. In `tradeoff.py`, `fsrs6_oracle` solves all requested scalarization weights in one batched DP pass and evaluates them in one batched Monte Carlo rollout. It writes a single-card CSV/plot under `artifacts/single_card_tradeoff/` and, by default, includes static-FSRS reference rows evaluated with Monte Carlo particles.
@@ -113,14 +113,14 @@ The oracle script uses expected Bellman backups over a `(log stability, difficul
 The same desired-retention action space also has an infinite-horizon average-reward oracle. It removes the remaining-horizon state and solves a stationary SMDP policy over `(log stability, difficulty)`:
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_infinite --oracle-cost-weights 16,32,64,128,256,512,1024
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_infinite --oracle-cost-weights 16,32,64,128,256,512,1024
 ```
 
 Train the stationary oracle distillation policy, then compare it in the same finite lifecycle tradeoff evaluation:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_infinite_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_infinite,fsrs6_oracle_infinite_distill --oracle-infinite-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.oracle_infinite_distill --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle,fsrs6_oracle_infinite,fsrs6_oracle_infinite_distill --oracle-infinite-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt
 ```
 
 The infinite oracle optimizes long-run average `retrievability - goal_cost_weight * minutes` and reports its stationary gain, policy-iteration count, and residual to stdout. The tradeoff CSV still reports the existing finite lifecycle metrics so it remains comparable with the finite-horizon oracle and distilled policies.
@@ -128,14 +128,14 @@ The infinite oracle optimizes long-run average `retrievability - goal_cost_weigh
 For a stationary policy optimized against the finite 1825-day new-card lifecycle, use `fsrs6_oracle_stationary_finite`. It keeps the same `(stability, difficulty, goal cost weight)` policy input as the infinite oracle, initializes from the finite-horizon oracle's visited-state actions, then runs occupancy-weighted policy iteration on the finite lifecycle objective:
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_stationary_finite --oracle-cost-weights 16,32,64,128,256,512,1024
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_stationary_finite --oracle-cost-weights 16,32,64,128,256,512,1024
 ```
 
 Train and compare the corresponding distilled stationary finite-lifecycle policy:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_stationary_finite,fsrs6_oracle_stationary_finite_distill --oracle-stationary-finite-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_stationary_finite,fsrs6_oracle_stationary_finite_distill --oracle-stationary-finite-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
 ```
 
 The stationary finite oracle reports finite-lifecycle objective, policy-iteration count, and residual to stdout. The distilled checkpoint uses `policy_type=fsrs6_oracle_stationary_finite_distill` and defaults to the compressed `oracle_stationary` residual `8x2` policy: 476 parameters, 128 distillation epochs, teacher cost weights `0,1,4,16,64,256,1024`, and `uniform_table` exact-policy supervision. Its observation remains `stability`, `difficulty`, and goal cost weight only.
@@ -145,7 +145,7 @@ For per-user benchmark distillation, `oracle_stationary_finite_distill_multiuser
 All oracle DP entrypoints now cache per `(user, weight)` under `artifacts/single_card_tradeoff/dp_cache` by default. Pass `--no-dp-cache` to disable it or `--refresh-dp-cache` to force recomputation.
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --per-user-models --out-dir artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --per-user-models --out-dir artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu --no-progress
 ```
 
 On the first eight benchmark users, the uniform-table per-user run wrote `artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu/` with 8 checkpoints, 476 parameters per checkpoint, 3,808 total trainable ensemble parameters, `teacher_s=58.82`, `train_s=34.89`, `agreement_s=0.01`, `eval_s=66.94`, mean final CE `0.69721`, mean train table agreement `72.41%`, and mean full-table agreement `72.39%` on the CUDA test environment. Mean `fsrs6` baseline span coverage was `97.55%`, and mean relative time saved AUC was `12.36%` over the eight users. The older rollout teacher-forcing per-user artifact `stationary_finite_distill_first8_users_per_user_batched/` had mean span coverage `95.82%`, mean relative time saved AUC `4.32%`, and a user-2 high-cost interpolation failure (`-18.20%` relative time saved AUC). Uniform exact-table supervision fixes that failure: user 2 improves to `96.18%` coverage and `15.30%` relative time saved AUC.
@@ -153,7 +153,7 @@ On the first eight benchmark users, the uniform-table per-user run wrote `artifa
 To reproduce the exact teacher versus per-user distill comparison consumed by the report, run the same multi-user CLI in eval-only mode. This solves the exact stationary finite table at each evaluation cost weight, loads the saved per-user checkpoints, and writes `results.csv`, `regret_auc.csv`, `summary.csv`, and `mean_summary.csv`:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_stationary_finite_distill_multiuser.py --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --eval-exact-vs-distill --distill-dir artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu --out-dir artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users --torch-device cuda --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --eval-exact-vs-distill --distill-dir artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_per_user_uniform_table_supervision_fsrs6_baseline_gpu --out-dir artifacts/single_card_tradeoff/stationary_finite_exact_vs_distill_first8_users --torch-device cuda --no-progress
 ```
 
 The multi-user evaluator now batches retention and cost-weight groups by default (`--eval-group-batch-size 0`); set `--eval-group-batch-size 1` to reproduce the older per-group rollout shape. On CUDA with the existing first-eight checkpoints and 1,000 particles per user/group, batching reduced static-retention baseline evaluation from `87.21s` to `24.70s` (`3.53x`) and per-user distill cost-weight evaluation from `99.20s` to `21.17s` (`4.69x`). This affects only the multi-user single-card evaluation path; the event and vectorized simulator engines are unchanged.
@@ -163,7 +163,7 @@ When `--torch-device` resolves to CUDA, `tradeoff.py`, the multi-user distill sc
 For a direct low-parameter policy-search baseline, `low_param_direct_policy_search_multiuser.py` optimizes one independent 7-parameter monotone stationary policy per user with cross-entropy-method search. The policy outputs a continuous desired retention in `[0.5,0.98]` from `(stability, difficulty, cost weight)` and is evaluated against `fsrs6` and the per-user stationary finite distill baseline:
 
 ```bash
-uv run experiments/single_card_tradeoff/low_param_direct_policy_search_multiuser.py --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --generations 64 --population-size 32 --elite-count 8 --train-particles 64 --eval-particles 10000 --torch-device cuda --out-dir artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --generations 64 --population-size 32 --elite-count 8 --train-particles 64 --eval-particles 10000 --torch-device cuda --out-dir artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users --no-progress
 ```
 
 The first-eight 7-parameter run wrote `artifacts/single_card_tradeoff/low_param_direct_policy_search_first8_users/` with 56 total trainable parameters, `train_s=210.81`, and `eval_s=94.11`. Against `fsrs6`, it reached mean span coverage `72.37%`, mean same-target time saved AUC `2.7373`, and mean relative time saved AUC `7.50%`. Directly against `fsrs6_oracle_stationary_finite_distill_per_user`, it reached mean span coverage `68.48%`, mean same-target time saved AUC `-1.1129`, and mean relative time saved AUC `-4.43%`. A dense-training-weight rerun at `low_param_direct_policy_search_first8_users_dense_weights/` kept the same 7 parameters but reduced coverage to `66.45%` vs `fsrs6` and `62.74%` vs distill, so the current 7-parameter monotone family is much smaller but too restrictive to match the 476-parameter distill frontier.
@@ -173,7 +173,7 @@ The shared-student diagnostic artifact is `artifacts/single_card_tradeoff/statio
 Visualize the solved oracle policy's output distribution over states visited by the policy rollout:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_policy_outputs.py --source rollout --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
+uv run python -m experiments.single_card_tradeoff.cli.oracle_policy_outputs --source rollout --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 16,32,64,128,256,512,1024
 ```
 
 Pass `--source table` to count every nonterminal `(remaining, stability, difficulty)` grid cell equally instead of weighting by rollout visits. The script writes `artifacts/single_card_tradeoff/fsrs6_oracle_policy_outputs.csv` and `.png`.
@@ -181,7 +181,7 @@ Pass `--source table` to count every nonterminal `(remaining, stability, difficu
 Visualize the stationary finite-lifecycle oracle directly over its stationary `(stability, difficulty, goal cost weight)` policy table:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_stationary_finite_policy_viz.py --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,1,4,16,64,256,1024 --action-retentions 0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98 --distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.oracle_stationary_finite_policy_viz --days 1825 --s-grid-size 64 --d-grid-size 32 --cost-weights 0,1,4,16,64,256,1024 --action-retentions 0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98 --distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_stationary_finite_distill_policy.pt
 ```
 
 This writes `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `findings.md`, `action_distribution.png`, and `policy_heatmaps.png` under `artifacts/single_card_tradeoff/stationary_finite_policy_viz/`. When `--distill-policy` is provided it also writes `distill_action_summary.csv`, `distill_binned_actions.csv`, `distill_grid_actions.csv`, `distill_exact_comparison.csv`, `distill_action_distribution.png`, `distill_policy_heatmaps.png`, and `distill_exact_difference_heatmaps.png`. Use `--selected-weights` to choose which weights appear in the `(s,d)` heatmap panel.
@@ -189,7 +189,7 @@ This writes `action_summary.csv`, `binned_actions.csv`, `grid_actions.csv`, `fin
 To reproduce the first-eight per-user exact, 476-parameter, and residual:4:1 policy-grid comparison:
 
 ```bash
-uv run experiments/single_card_tradeoff/first8_r4d1_vs_476_policy_viz.py --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.first8_r4d1_vs_476_policy_viz --no-progress
 ```
 
 This writes exact, 476-parameter, residual:4:1, and difference heatmaps under `artifacts/single_card_tradeoff/first8_r4d1_vs_476_policy_viz/`, plus pairwise CSV summaries for `476_vs_exact`, `r4d1_vs_exact`, and `r4d1_vs_476`.
@@ -199,14 +199,14 @@ This writes exact, 476-parameter, residual:4:1, and difference heatmaps under `a
 The single-card sweep supports an integer-interval FSRS-6 oracle that enumerates every feasible next interval `1..remaining+1`, where `remaining+1` means no further review before the horizon:
 
 ```bash
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval --oracle-cost-weights 16,32,64 --oracle-interval-chunk-size 64
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_interval --oracle-cost-weights 16,32,64 --oracle-interval-chunk-size 64
 ```
 
 Train the 4D log-interval distillation policy, then include it in the same sweep:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_interval_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_interval_distill --oracle-interval-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.oracle_interval_distill --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_interval_distill --oracle-interval-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_interval_distill_policy.pt
 ```
 
 The interval distillation model keeps the same 4D scalar-output network. Its default `residual:64:3` sweet-spot architecture has 25,857 parameters, about 45% of the earlier `residual:96:3` model, while preserving the time-saved advantage in the default FSRS-6 comparison. The more aggressive `residual:32:2` candidate has 4,609 parameters, about 8% of the earlier model, but gives up a small amount of pairwise same-target time saved AUC against `fsrs6_oracle_distill`. The default training loss weights underpredicted intervals more heavily for high cost weights, mixes in student-rollout states after warmup, and snaps predicted intervals near the remaining horizon to the terminal no-more-review action. These are fixed training/inference rules and do not add learned parameters.
@@ -214,7 +214,7 @@ The interval distillation model keeps the same 4D scalar-output network. Its def
 To rerun the model-size search:
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_interval_distill_hparam_search.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --eval-particles 3000 --save-models
+uv run python -m experiments.single_card_tradeoff.cli.oracle_interval_distill_hparam_search --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --eval-particles 3000 --save-models
 ```
 
 ## Continuous Desired-Retention Distillation
@@ -222,8 +222,8 @@ uv run experiments/single_card_tradeoff/oracle_interval_distill_hparam_search.py
 The integer-interval oracle can also be distilled into a continuous desired-retention policy. This keeps the compact `oracle_rho4` residual `16x2` default and executes by converting the predicted retention into the nearest integer review interval inside the day-level simulator. Its default training is interval-aware: the model still outputs retention, but the loss penalizes the log interval implied by that retention, weights high-cost underprediction heavily, and uses student-rollout states after warmup to preserve frontier coverage.
 
 ```bash
-uv run experiments/single_card_tradeoff/oracle_retention_distill.py --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt
-uv run experiments/single_card_tradeoff/tradeoff.py --env fsrs6_default --sched fsrs6_oracle_distill,fsrs6_oracle_retention_distill --oracle-retention-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.oracle_retention_distill --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_distill,fsrs6_oracle_retention_distill --oracle-retention-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt
 ```
 
 ## Findings
@@ -237,7 +237,7 @@ with one independent report per experiment and a short index at
 Regenerate them with:
 
 ```bash
-uv run python experiments/single_card_tradeoff/generate_experiment_report.py \
+uv run python -m experiments.single_card_tradeoff.cli.generate_experiment_report \
   --config experiments/single_card_tradeoff/configs/single_card_tradeoff_report_suite.toml
 ```
 
@@ -375,7 +375,7 @@ Rerun the model-size ablation with all non-network variables aligned to the
 current default stationary finite distill recipe:
 
 ```bash
-uv run python experiments/single_card_tradeoff/stationary_finite_model_size_ablation.py --torch-device cuda --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.stationary_finite_model_size_ablation --torch-device cuda --no-progress
 ```
 
 The rerun uses the five-weight teacher schedule, the clipped 11-action grid,
@@ -394,7 +394,7 @@ particles, and eval seeds `42,43,44` for every network size:
 Rerun the quick sub-216 and structured sweep with the same recipe:
 
 ```bash
-uv run python experiments/single_card_tradeoff/stationary_finite_model_size_ablation.py --torch-device cuda --candidate-set sub216 --summary-prefix sub216 --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.stationary_finite_model_size_ablation --torch-device cuda --candidate-set sub216 --summary-prefix sub216 --no-progress
 ```
 
 This adds smaller residual, MLP, linear, and quadratic policies under
@@ -437,7 +437,7 @@ Visualize the aligned model-size policies side-by-side against the exact
 stationary finite oracle:
 
 ```bash
-uv run python experiments/single_card_tradeoff/stationary_finite_arch_policy_viz.py --torch-device cuda --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.stationary_finite_arch_policy_viz --torch-device cuda --no-progress
 ```
 
 This writes combined policy heatmaps, exact-difference heatmaps, mean-action
@@ -446,7 +446,7 @@ curves, and `arch_policy_summary.csv` under
 For the sub-216 sweep:
 
 ```bash
-uv run python experiments/single_card_tradeoff/stationary_finite_arch_policy_viz.py --torch-device cuda --candidate-set sub216 --out-dir artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/policy_viz_sub216 --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.stationary_finite_arch_policy_viz --torch-device cuda --candidate-set sub216 --out-dir artifacts/single_card_tradeoff/stationary_finite_model_size_ablation/policy_viz_sub216 --no-progress
 ```
 
 That run wrote the same plot set plus `findings.md`, where `residual:5:1` had

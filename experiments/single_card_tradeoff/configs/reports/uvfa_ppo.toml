@@ -16,7 +16,7 @@ description = "Rerun the discrete UVFA PPO model-size search."
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/uvfa_ppo_hparam_search.py",
+  "-m", "experiments.single_card_tradeoff.cli.uvfa_ppo_hparam_search",
   "--days",
   "1825",
   "--eval-particles",

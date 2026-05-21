@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from experiments.single_card_tradeoff.train_weight_control_analysis import (
+from experiments.single_card_tradeoff.cli.train_weight_control_analysis import (
     PER_USER_DISTILL_SCHEDULER,
     _distill_scheduler_spec,
     _segment_auc,

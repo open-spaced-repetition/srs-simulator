@@ -16,7 +16,7 @@ description = "Train the 7-parameter direct policy-search compression baseline u
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/low_param_direct_policy_search_multiuser.py",
+  "-m", "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser",
   "--env",
   "fsrs6",
   "--user-ids",
@@ -53,7 +53,7 @@ description = "Rerun the 7-parameter direct-search baseline with dense teacher c
 command = [
   "uv",
   "run",
-  "experiments/single_card_tradeoff/low_param_direct_policy_search_multiuser.py",
+  "-m", "experiments.single_card_tradeoff.cli.low_param_direct_policy_search_multiuser",
   "--env",
   "fsrs6",
   "--user-ids",

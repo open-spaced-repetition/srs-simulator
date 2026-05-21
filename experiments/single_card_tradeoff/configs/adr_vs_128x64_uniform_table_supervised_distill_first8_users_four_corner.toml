@@ -36,7 +36,7 @@ command = [
   "uv",
   "run",
   "python",
-  "experiments/single_card_tradeoff/run_tradeoff_config.py",
+  "-m", "experiments.single_card_tradeoff.cli.run_tradeoff_config",
   "--config",
   "experiments/single_card_tradeoff/configs/adr_vs_128x64_uniform_table_supervised_distill_first8_users_four_corner.toml",
   "--force",

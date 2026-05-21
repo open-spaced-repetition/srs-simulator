@@ -12,8 +12,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from experiments.single_card_tradeoff import tradeoff
-from experiments.single_card_tradeoff import run_tradeoff_config
+from experiments.single_card_tradeoff.cli import run_tradeoff_config
+from experiments.single_card_tradeoff.cli import tradeoff
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 
 
