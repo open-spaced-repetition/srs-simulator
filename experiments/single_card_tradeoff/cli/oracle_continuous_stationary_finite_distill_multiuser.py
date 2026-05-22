@@ -117,6 +117,32 @@ PER_USER_SCHEDULER = POLICY_TYPE
 DEFAULT_TRAIN_ENVS_PER_USER = DEFAULT_TRAIN_ENVS
 
 
+def _diagnostic_log(
+    *,
+    enabled: bool,
+    start_s: float,
+    message: str,
+) -> None:
+    if not enabled:
+        return
+    print(
+        f"[continuous-distill +{time.perf_counter() - start_s:.1f}s] {message}",
+        flush=True,
+    )
+
+
+def _progress_log_enabled(args: argparse.Namespace) -> bool:
+    return float(args.progress_log_interval_seconds) > 0.0
+
+
+def _next_progress_deadline(args: argparse.Namespace) -> float:
+    return time.perf_counter() + float(args.progress_log_interval_seconds)
+
+
+def _progress_log_due(args: argparse.Namespace, deadline: float) -> bool:
+    return _progress_log_enabled(args) and time.perf_counter() >= deadline
+
+
 @dataclass(frozen=True)
 class ContinuousSingleUserTrainStats:
     user_id: int
@@ -159,6 +185,7 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         max_iterations: int,
         tolerance: float,
         progress: bool,
+        progress_log_interval_seconds: float,
         configs: Sequence[SingleCardFSRS6Config],
         user_batch_size: int,
         cache_config: OracleDPCacheConfig | None = None,
@@ -178,6 +205,8 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         self.horizon = int(days - 1)
         self.retention_min = float(retention_min)
         self.retention_max = float(retention_max)
+        guide_start_s = time.perf_counter()
+        log_enabled = progress_log_interval_seconds > 0.0
 
         chunk_size = len(configs) if user_batch_size <= 0 else user_batch_size
         policy_chunks: list[torch.Tensor] = []
@@ -192,6 +221,18 @@ class BatchedContinuousStationaryFiniteOracleGuide:
 
         for start in range(0, len(configs), chunk_size):
             chunk_configs = configs[start : start + chunk_size]
+            user_ids = [config.user_id for config in chunk_configs]
+            _diagnostic_log(
+                enabled=log_enabled,
+                start_s=guide_start_s,
+                message=(
+                    "teacher chunk start "
+                    f"users={user_ids} weights={list(cost_weights)} "
+                    f"days={days} grid={s_grid_size}x{d_grid_size} "
+                    f"chunk={interval_chunk_size}"
+                ),
+            )
+            chunk_start_s = time.perf_counter()
             oracle = FSRS6BatchedContinuousStationaryFiniteOracle(
                 days=days,
                 s_grid_size=s_grid_size,
@@ -201,6 +242,7 @@ class BatchedContinuousStationaryFiniteOracleGuide:
                 interval_chunk_size=interval_chunk_size,
                 device=device,
                 cache_config=cache_config,
+                progress_log_interval_seconds=progress_log_interval_seconds,
                 fsrs_weights=[
                     tuple(config.fsrs_weights)
                     if config.fsrs_weights
@@ -225,6 +267,14 @@ class BatchedContinuousStationaryFiniteOracleGuide:
                 max_iterations=max_iterations,
                 tolerance=tolerance,
                 progress=progress,
+            )
+            _diagnostic_log(
+                enabled=log_enabled,
+                start_s=guide_start_s,
+                message=(
+                    "teacher chunk solved "
+                    f"users={user_ids} runtime_s={time.perf_counter() - chunk_start_s:.1f}"
+                ),
             )
             failed = [
                 f"user={chunk_configs[user_idx].user_id}:w={format_float(weight)}"
@@ -376,6 +426,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     add_run_monitoring_args(parser)
+    parser.add_argument(
+        "--progress-log-interval-seconds",
+        type=float,
+        default=30.0,
+        help=(
+            "Print continuous teacher/training diagnostic progress logs at this "
+            "interval. Set to 0 to disable. This is independent of tqdm progress "
+            "bars and still works with --no-progress."
+        ),
+    )
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args()
 
@@ -401,6 +461,7 @@ def build_guide(
         max_iterations=args.oracle_stationary_finite_max_iterations,
         tolerance=args.oracle_stationary_finite_tolerance,
         progress=not args.no_progress,
+        progress_log_interval_seconds=args.progress_log_interval_seconds,
         configs=configs,
         user_batch_size=args.oracle_teacher_user_batch_size,
         cache_config=cache_config,
@@ -608,12 +669,24 @@ def train_batched_per_user_models(
     final_interval_loss_by_user = [math.nan for _ in range(user_count)]
     final_retention_loss_by_user = [math.nan for _ in range(user_count)]
     start = time.perf_counter()
+    next_log_s = _next_progress_deadline(args)
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=start,
+        message=(
+            "train start "
+            f"users={user_count} epochs={args.epochs} "
+            f"steps_per_epoch={args.steps_per_epoch} "
+            f"samples_per_weight={args.table_samples_per_weight} "
+            f"teacher_weights={len(cost_weights)}"
+        ),
+    )
     for epoch in range(args.epochs):
         total_by_user = torch.zeros(user_count, device=device, dtype=torch.float64)
         loss_sum_by_user = torch.zeros_like(total_by_user)
         interval_sum_by_user = torch.zeros_like(total_by_user)
         retention_sum_by_user = torch.zeros_like(total_by_user)
-        for _ in range(args.steps_per_epoch):
+        for step in range(args.steps_per_epoch):
             obs, target_retention, s_values = sample_batched_uniform_table_batch(
                 guide,
                 cost_weights=cost_weights,
@@ -676,6 +749,29 @@ def train_batched_per_user_models(
                 retention_sum_by_user += (
                     retention_loss_by_user.detach().to(dtype=torch.float64) * count
                 )
+            if _progress_log_due(args, next_log_s):
+                partial_loss = loss_sum_by_user / torch.clamp(total_by_user, min=1.0)
+                partial_interval = interval_sum_by_user / torch.clamp(
+                    total_by_user,
+                    min=1.0,
+                )
+                partial_retention = retention_sum_by_user / torch.clamp(
+                    total_by_user,
+                    min=1.0,
+                )
+                _diagnostic_log(
+                    enabled=True,
+                    start_s=start,
+                    message=(
+                        "train progress "
+                        f"epoch={epoch + 1}/{args.epochs} "
+                        f"step={step + 1}/{args.steps_per_epoch} "
+                        f"mean_loss={float(partial_loss.mean().item()):.6f} "
+                        f"mean_interval={float(partial_interval.mean().item()):.6f} "
+                        f"mean_retention={float(partial_retention.mean().item()):.6f}"
+                    ),
+                )
+                next_log_s = _next_progress_deadline(args)
         final_loss = loss_sum_by_user / torch.clamp(total_by_user, min=1.0)
         final_interval = interval_sum_by_user / torch.clamp(total_by_user, min=1.0)
         final_retention = retention_sum_by_user / torch.clamp(total_by_user, min=1.0)
@@ -694,6 +790,17 @@ def train_batched_per_user_models(
                 f"mean_retention={sum(final_retention_loss_by_user) / float(user_count):.6f}",
                 flush=True,
             )
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=start,
+        message=(
+            "train done "
+            f"runtime_s={time.perf_counter() - start:.1f} "
+            f"mean_loss={sum(final_loss_by_user) / float(user_count):.6f} "
+            f"mean_interval={sum(final_interval_loss_by_user) / float(user_count):.6f} "
+            f"mean_retention={sum(final_retention_loss_by_user) / float(user_count):.6f}"
+        ),
+    )
     return (
         ensemble,
         time.perf_counter() - start,
@@ -1042,6 +1149,7 @@ def write_run_config_snapshot(
         ),
         "oracle_stationary_finite_tolerance": args.oracle_stationary_finite_tolerance,
         "oracle_teacher_user_batch_size": args.oracle_teacher_user_batch_size,
+        "progress_log_interval_seconds": args.progress_log_interval_seconds,
         "button_usage": str(args.button_usage) if args.button_usage else None,
         "benchmark_partition": args.benchmark_partition,
         "srs_benchmark_root": (
@@ -1063,6 +1171,7 @@ def write_auc_summary(path: Path, auc_rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> None:
+    run_start_s = time.perf_counter()
     args = parse_args()
     cache_config = configure_oracle_dp_cache_from_args(args)
     user_ids = parse_user_ids(args.user_ids)
@@ -1108,6 +1217,8 @@ def main() -> None:
         raise SystemExit("--oracle-stationary-finite-tolerance must be > 0.")
     if args.oracle_teacher_user_batch_size < 0:
         raise SystemExit("--oracle-teacher-user-batch-size must be >= 0.")
+    if args.progress_log_interval_seconds < 0.0:
+        raise SystemExit("--progress-log-interval-seconds must be >= 0.")
 
     device = resolve_torch_device(args.torch_device)
     register_run_monitor(
@@ -1138,6 +1249,16 @@ def main() -> None:
         action_retentions=action_retentions,
     )
     configs = load_user_configs(args, user_ids)
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=run_start_s,
+        message=(
+            "run configured "
+            f"users={list(user_ids)} train_weights={cost_weights} "
+            f"eval_weights={eval_cost_weights} device={device} "
+            f"out_dir={args.out_dir}"
+        ),
+    )
 
     setup_start = time.perf_counter()
     params_probe = RetentionDistillNet(
@@ -1150,12 +1271,22 @@ def main() -> None:
     params = sum(param.numel() for param in params_probe.parameters())
     setup_runtime_s = time.perf_counter() - setup_start
 
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=run_start_s,
+        message="teacher build start",
+    )
     guide, teacher_runtime_s = build_guide(
         args,
         device=device,
         configs=configs,
         cost_weights=cost_weights,
         cache_config=cache_config,
+    )
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=run_start_s,
+        message=f"teacher build done runtime_s={teacher_runtime_s:.1f}",
     )
     (
         ensemble,
@@ -1172,6 +1303,11 @@ def main() -> None:
         action_retentions=action_retentions,
         params_per_user=params,
     )
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=run_start_s,
+        message="table fit eval start",
+    )
     eval_retention_mae, eval_log_interval_mae, table_eval_runtime_s = (
         evaluate_batched_per_user_table_fit(
             ensemble=ensemble,
@@ -1181,6 +1317,11 @@ def main() -> None:
             retention_min=args.retention_min,
             retention_max=args.retention_max,
         )
+    )
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=run_start_s,
+        message=f"table fit eval done runtime_s={table_eval_runtime_s:.1f}",
     )
 
     train_samples_per_user = args.table_samples_per_weight * len(cost_weights)
@@ -1233,6 +1374,11 @@ def main() -> None:
         model_paths.append(model_path)
 
     rows: list[dict[str, Any]] = []
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=run_start_s,
+        message="rollout eval start",
+    )
     rollout_eval_start = time.perf_counter()
     for retention, metrics_by_user, runtime_s in evaluate_static_retentions_by_user(
         args,
@@ -1283,6 +1429,11 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.synchronize()
     rollout_eval_runtime_s = time.perf_counter() - rollout_eval_start
+    _diagnostic_log(
+        enabled=_progress_log_enabled(args),
+        start_s=run_start_s,
+        message=f"rollout eval done runtime_s={rollout_eval_runtime_s:.1f}",
+    )
 
     results_path = args.out_dir / "results.csv"
     regret_path = args.out_dir / "regret_auc.csv"

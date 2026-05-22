@@ -4625,10 +4625,13 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         dtype: torch.dtype = torch.float64,
         device: torch.device | str | None = None,
         cache_config: OracleDPCacheConfig | None = None,
+        progress_log_interval_seconds: float = 0.0,
     ) -> None:
         validate_continuous_retention_bounds(retention_min, retention_max)
         if interval_chunk_size <= 0:
             raise ValueError("interval_chunk_size must be > 0.")
+        if progress_log_interval_seconds < 0.0:
+            raise ValueError("progress_log_interval_seconds must be >= 0.")
         super().__init__(
             days=days,
             action_retentions=[retention_max],
@@ -4646,6 +4649,23 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         self.retention_min = float(retention_min)
         self.retention_max = float(retention_max)
         self.interval_chunk_size = int(interval_chunk_size)
+        self.progress_log_interval_seconds = float(progress_log_interval_seconds)
+        self._progress_start_s = time.perf_counter()
+
+    def _progress_logging_enabled(self) -> bool:
+        return self.progress_log_interval_seconds > 0.0
+
+    def _progress_log(self, message: str) -> None:
+        if not self._progress_logging_enabled():
+            return
+        elapsed_s = time.perf_counter() - self._progress_start_s
+        print(f"[continuous-oracle +{elapsed_s:.1f}s] {message}", flush=True)
+
+    def _next_progress_log_deadline(self) -> float:
+        return time.perf_counter() + self.progress_log_interval_seconds
+
+    def _progress_log_due(self, deadline: float) -> bool:
+        return self._progress_logging_enabled() and time.perf_counter() >= deadline
 
     def _cache_key_parts(
         self,
@@ -4730,6 +4750,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             dtype=self.dtype,
             device=self.device,
             cache_config=OracleDPCacheConfig(enabled=False),
+            progress_log_interval_seconds=self.progress_log_interval_seconds,
         )
 
     def solve_policies(
@@ -4769,12 +4790,29 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         groups: dict[tuple[int, ...], list[int]] = {}
         for user_idx, missing_weight_indices in missing_by_user.items():
             groups.setdefault(tuple(missing_weight_indices), []).append(user_idx)
+        missing_pairs = sum(len(indices) for indices in missing_by_user.values())
+        self._progress_log(
+            "finite cache scan "
+            f"users={self.user_count} weights={len(weight_list)} "
+            f"hits={self.user_count * len(weight_list) - missing_pairs} "
+            f"missing={missing_pairs} groups={len(groups)}"
+        )
         for missing_weight_indices, user_indices in groups.items():
             suboracle = self._suboracle(user_indices)
             group_weights = [weight_list[idx] for idx in missing_weight_indices]
+            self._progress_log(
+                "finite uncached group start "
+                f"users={list(user_indices)} weights={group_weights}"
+            )
+            group_start_s = time.perf_counter()
             computed = suboracle._solve_continuous_policies_uncached(
                 group_weights,
                 progress=progress,
+            )
+            self._progress_log(
+                "finite uncached group solved "
+                f"users={list(user_indices)} weights={group_weights} "
+                f"runtime_s={time.perf_counter() - group_start_s:.1f}"
             )
             for local_user_idx, user_idx in enumerate(user_indices):
                 for local_weight_idx, weight_idx in enumerate(missing_weight_indices):
@@ -4880,14 +4918,31 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         groups: dict[tuple[int, ...], list[int]] = {}
         for user_idx, missing_weight_indices in missing_by_user.items():
             groups.setdefault(tuple(missing_weight_indices), []).append(user_idx)
+        missing_pairs = sum(len(indices) for indices in missing_by_user.values())
+        self._progress_log(
+            "stationary cache scan "
+            f"users={self.user_count} weights={len(weight_list)} "
+            f"hits={self.user_count * len(weight_list) - missing_pairs} "
+            f"missing={missing_pairs} groups={len(groups)}"
+        )
         for missing_weight_indices, user_indices in groups.items():
             suboracle = self._suboracle(user_indices)
             group_weights = [weight_list[idx] for idx in missing_weight_indices]
+            self._progress_log(
+                "stationary uncached group start "
+                f"users={list(user_indices)} weights={group_weights}"
+            )
+            group_start_s = time.perf_counter()
             solution = suboracle._solve_stationary_finite_policies_uncached(
                 group_weights,
                 max_iterations=max_iterations,
                 tolerance=tolerance,
                 progress=progress,
+            )
+            self._progress_log(
+                "stationary uncached group solved "
+                f"users={list(user_indices)} weights={group_weights} "
+                f"runtime_s={time.perf_counter() - group_start_s:.1f}"
             )
             for local_user_idx, user_idx in enumerate(user_indices):
                 for local_weight_idx, weight_idx in enumerate(missing_weight_indices):
@@ -4994,6 +5049,14 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                 unit="day",
                 leave=False,
             )
+        phase_start_s = time.perf_counter()
+        next_log_s = self._next_progress_log_deadline()
+        self._progress_log(
+            "finite DP start "
+            f"users={self.user_count} weights={weight_count} "
+            f"horizon={self.horizon} states={self.state_count} "
+            f"chunk={self.interval_chunk_size}"
+        )
         try:
             for rem in range(1, self.horizon + 1):
                 best_value = torch.full(
@@ -5038,6 +5101,13 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                         chunk_retention,
                         best_retention,
                     )
+                    if self._progress_log_due(next_log_s):
+                        self._progress_log(
+                            "finite DP progress "
+                            f"rem={rem}/{self.horizon} interval_chunk={start}-{stop - 1} "
+                            f"elapsed_s={time.perf_counter() - phase_start_s:.1f}"
+                        )
+                        next_log_s = self._next_progress_log_deadline()
                 value[:, :, rem, :] = best_value.reshape(
                     self.user_count,
                     weight_count,
@@ -5053,6 +5123,12 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         finally:
             if progress_bar is not None:
                 progress_bar.close()
+
+        self._progress_log(
+            "finite DP done "
+            f"users={self.user_count} weights={weight_count} "
+            f"runtime_s={time.perf_counter() - phase_start_s:.1f}"
+        )
 
         return policy.reshape(
             self.user_count,
@@ -5074,12 +5150,24 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         weight_tensor = torch.tensor(
             list(cost_weights), device=self.device, dtype=self.dtype
         )
+        self._progress_log(
+            "stationary solve start "
+            f"users={self.user_count} weights={int(weight_tensor.numel())} "
+            f"horizon={self.horizon} states={self.state_count} "
+            f"max_iterations={max_iterations} tolerance={tolerance:g}"
+        )
+        finite_start_s = time.perf_counter()
         finite_policies = self.solve_policies(cost_weights, progress=progress)
+        self._progress_log(
+            "stationary finite initialization done "
+            f"runtime_s={time.perf_counter() - finite_start_s:.1f}"
+        )
         policy = torch.clamp(
             finite_policies[:, :, self.horizon],
             min=self.retention_min,
             max=self.retention_max,
         ).contiguous()
+        eval_start_s = time.perf_counter()
         value = self._evaluate_stationary_policy_value_batch(
             policy=policy,
             cost_weights=weight_tensor,
@@ -5088,6 +5176,13 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             value=value,
             cost_weights=weight_tensor,
         )
+        if self._progress_logging_enabled():
+            self._progress_log(
+                "stationary initial policy evaluated "
+                f"runtime_s={time.perf_counter() - eval_start_s:.1f} "
+                f"objective_min={float(objective.min().item()):.6g} "
+                f"objective_max={float(objective.max().item()):.6g}"
+            )
         iterations = torch.zeros(
             (self.user_count, int(weight_tensor.numel())),
             device=self.device,
@@ -5116,13 +5211,21 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             for iteration in range(1, max_iterations + 1):
                 if not bool(active.any().item()):
                     break
+                iteration_start_s = time.perf_counter()
+                log_iteration = self._progress_logging_enabled()
+                active_before = int(active.sum().item()) if log_iteration else 0
+                occupancy_start_s = time.perf_counter()
                 occupancy = self._rollout_occupancy_batch(policy=policy)
+                occupancy_runtime_s = time.perf_counter() - occupancy_start_s
+                improve_start_s = time.perf_counter()
                 new_policy, residual, visited = self._improve_stationary_policy_batch(
                     policy=policy,
                     occupancy=occupancy,
                     value=value,
                     cost_weights=weight_tensor,
+                    iteration=iteration,
                 )
+                improve_runtime_s = time.perf_counter() - improve_start_s
                 changed = (torch.abs(new_policy - policy) > 1e-12) & visited
                 policy_changed = changed.reshape(
                     self.user_count,
@@ -5141,8 +5244,21 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
 
                 candidate = active & ~done
                 if not bool(candidate.any().item()):
+                    if log_iteration:
+                        self._progress_log(
+                            "stationary iteration done "
+                            f"iter={iteration}/{max_iterations} "
+                            f"active_before={active_before} "
+                            f"done={int(done.sum().item())} "
+                            f"remaining={int(active.sum().item())} "
+                            f"max_residual={float(residual.max().item()):.6g} "
+                            f"occupancy_s={occupancy_runtime_s:.1f} "
+                            f"improve_s={improve_runtime_s:.1f} eval_s=0.0 "
+                            f"iteration_s={time.perf_counter() - iteration_start_s:.1f}"
+                        )
                     continue
 
+                eval_start_s = time.perf_counter()
                 candidate_value = self._evaluate_stationary_policy_value_batch(
                     policy=new_policy,
                     cost_weights=weight_tensor,
@@ -5151,6 +5267,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                     value=candidate_value,
                     cost_weights=weight_tensor,
                 )
+                eval_runtime_s = time.perf_counter() - eval_start_s
                 objective_improvement = candidate_objective - objective
                 accepted = candidate & (objective_improvement > tolerance)
                 residuals[candidate] = torch.where(
@@ -5166,6 +5283,22 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                     policy[accepted] = new_policy[accepted]
                     value[accepted] = candidate_value[accepted]
                     objective[accepted] = candidate_objective[accepted]
+                if log_iteration:
+                    self._progress_log(
+                        "stationary iteration done "
+                        f"iter={iteration}/{max_iterations} "
+                        f"active_before={active_before} done={int(done.sum().item())} "
+                        f"accepted={int(accepted.sum().item())} "
+                        f"rejected={int((candidate & ~accepted).sum().item())} "
+                        f"remaining={int(active.sum().item())} "
+                        f"max_residual={float(residual.max().item()):.6g} "
+                        f"max_objective_delta="
+                        f"{float(objective_improvement.max().item()):.6g} "
+                        f"occupancy_s={occupancy_runtime_s:.1f} "
+                        f"improve_s={improve_runtime_s:.1f} "
+                        f"eval_s={eval_runtime_s:.1f} "
+                        f"iteration_s={time.perf_counter() - iteration_start_s:.1f}"
+                    )
         finally:
             if progress_bar is not None:
                 progress_bar.close()
@@ -5177,6 +5310,12 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             policy=policy,
             cost_weights=weight_tensor,
         )
+        if self._progress_logging_enabled():
+            self._progress_log(
+                "stationary solve done "
+                f"runtime_s={time.perf_counter() - start:.1f} "
+                f"converged={int(converged.sum().item())}/{converged.numel()}"
+            )
         return BatchedStationaryFiniteOracleSolution(
             policy=policy,
             metrics=metrics,
@@ -5787,6 +5926,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         occupancy: torch.Tensor,
         value: torch.Tensor,
         cost_weights: torch.Tensor,
+        iteration: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         weight_count = int(policy.shape[1])
         best_score = torch.full(
@@ -5803,8 +5943,14 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         current_interval = self._intervals_for_retention_policy(policy)
         current_score = torch.zeros_like(best_score)
         weight_penalty = cost_weights.view(1, weight_count, 1, 1, 1)
+        improve_start_s = time.perf_counter()
+        next_log_s = self._next_progress_log_deadline()
+        total_chunks = math.ceil((self.horizon + 1) / self.interval_chunk_size)
+        chunk_number = 0
 
         for start in range(1, self.horizon + 2, self.interval_chunk_size):
+            chunk_number += 1
+            chunk_start_s = time.perf_counter()
             stop = min(self.horizon + 2, start + self.interval_chunk_size)
             intervals = torch.arange(
                 start,
@@ -5853,6 +5999,18 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                     torch.zeros_like(candidate),
                 )
                 score += rem_occupancy[:, :, None, :, :] * candidate
+                if self._progress_log_due(next_log_s):
+                    active_mass = float(rem_occupancy.sum().item())
+                    iter_label = "?" if iteration is None else str(iteration)
+                    self._progress_log(
+                        "stationary improve progress "
+                        f"iter={iter_label} chunk={chunk_number}/{total_chunks} "
+                        f"intervals={start}-{stop - 1} rem={rem}/{self.horizon} "
+                        f"active_mass={active_mass:.6g} "
+                        f"chunk_s={time.perf_counter() - chunk_start_s:.1f} "
+                        f"elapsed_s={time.perf_counter() - improve_start_s:.1f}"
+                    )
+                    next_log_s = self._next_progress_log_deadline()
 
             masked_score = torch.where(
                 valid[:, None, :, :, None],
@@ -5876,6 +6034,16 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                 1,
             )
             current_score += (score * current_match.to(dtype=self.dtype)).sum(dim=2)
+            if self._progress_log_due(next_log_s):
+                iter_label = "?" if iteration is None else str(iteration)
+                self._progress_log(
+                    "stationary improve chunk done "
+                    f"iter={iter_label} chunk={chunk_number}/{total_chunks} "
+                    f"intervals={start}-{stop - 1} "
+                    f"chunk_s={time.perf_counter() - chunk_start_s:.1f} "
+                    f"elapsed_s={time.perf_counter() - improve_start_s:.1f}"
+                )
+                next_log_s = self._next_progress_log_deadline()
 
         visited = (
             occupancy[:, :, 1:, :]
