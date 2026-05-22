@@ -4606,7 +4606,8 @@ class FSRS6BatchedStationaryFiniteOracle:
 
 class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteOracle):
     ACTION_POLICY_LOOKUP_VERSION = "bilinear_retention_action_v1"
-    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v1"
+    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v2"
+    STATIONARY_IMPROVE_STATE_BLOCK_SIZE = 4096
 
     def __init__(
         self,
@@ -4715,7 +4716,10 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         return extra
 
     def _suboracle(
-        self, user_indices: Sequence[int]
+        self,
+        user_indices: Sequence[int],
+        *,
+        cache_config: OracleDPCacheConfig | None = None,
     ) -> "FSRS6BatchedContinuousStationaryFiniteOracle":
         return FSRS6BatchedContinuousStationaryFiniteOracle(
             days=self.days,
@@ -4749,7 +4753,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             ],
             dtype=self.dtype,
             device=self.device,
-            cache_config=OracleDPCacheConfig(enabled=False),
+            cache_config=cache_config or OracleDPCacheConfig(enabled=False),
             progress_log_interval_seconds=self.progress_log_interval_seconds,
         )
 
@@ -4832,6 +4836,12 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                         ),
                         data={"policy": policy},
                     )
+            self._progress_log(
+                "finite cache write done "
+                f"users={list(user_indices)} weights={group_weights} "
+                f"entries={len(user_indices) * len(missing_weight_indices)} "
+                f"cache_enabled={self.cache_config.enabled}"
+            )
 
         return torch.stack(
             [
@@ -4926,7 +4936,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             f"missing={missing_pairs} groups={len(groups)}"
         )
         for missing_weight_indices, user_indices in groups.items():
-            suboracle = self._suboracle(user_indices)
+            suboracle = self._suboracle(user_indices, cache_config=self.cache_config)
             group_weights = [weight_list[idx] for idx in missing_weight_indices]
             self._progress_log(
                 "stationary uncached group start "
@@ -5223,6 +5233,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                     occupancy=occupancy,
                     value=value,
                     cost_weights=weight_tensor,
+                    active=active,
                     iteration=iteration,
                 )
                 improve_runtime_s = time.perf_counter() - improve_start_s
@@ -5919,6 +5930,317 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             - cost_weights.view(1, weight_count) * total_learning_minutes[:, None]
         ) / float(self.days)
 
+    def _active_cell_attainable_interval_mask(
+        self,
+        *,
+        intervals: torch.Tensor,
+        user_idx: torch.Tensor,
+        state_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        interval_count = int(intervals.numel())
+        if int(user_idx.numel()) == 0:
+            return torch.zeros(
+                (0, interval_count),
+                device=self.device,
+                dtype=torch.bool,
+            )
+        s_idx = torch.div(state_idx, self.d_count, rounding_mode="floor")
+        full_mask = self._attainable_interval_mask(intervals, self.horizon + 1)
+        interval_idx = torch.arange(
+            interval_count,
+            device=self.device,
+            dtype=torch.int64,
+        )
+        return full_mask[
+            user_idx[:, None].expand(-1, interval_count),
+            interval_idx[None, :].expand(int(user_idx.numel()), interval_count),
+            s_idx[:, None].expand(-1, interval_count),
+        ]
+
+    def _active_cell_occupancy_block(
+        self,
+        *,
+        occupancy: torch.Tensor,
+        user_idx: torch.Tensor,
+        state_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        return occupancy[user_idx, :, :, state_idx]
+
+    def _active_cell_policy_interval_block(
+        self,
+        *,
+        current_interval: torch.Tensor,
+        user_idx: torch.Tensor,
+        state_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        return current_interval[user_idx, :, state_idx]
+
+    def _active_cell_immediate_prefix_tables(
+        self,
+        *,
+        block_occupancy: torch.Tensor,
+        user_idx: torch.Tensor,
+        state_idx: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        s_idx = torch.div(state_idx, self.d_count, rounding_mode="floor")
+        memorized = self.memorized_by_day[
+            user_idx,
+            :,
+            s_idx,
+        ]
+        weight_count = int(block_occupancy.shape[1])
+        if self.horizon <= 0:
+            empty = torch.zeros(
+                (int(user_idx.numel()), weight_count, 0),
+                device=self.device,
+                dtype=self.dtype,
+            )
+            totals = torch.zeros(
+                (int(user_idx.numel()), weight_count),
+                device=self.device,
+                dtype=self.dtype,
+            )
+            return memorized, empty, empty, totals, totals
+        occupancy_by_rem = block_occupancy[:, :, 1:]
+        weighted_memorized = occupancy_by_rem * memorized[:, None, 1:]
+        prefix_weighted = torch.cumsum(weighted_memorized, dim=2)
+        prefix_occupancy = torch.cumsum(occupancy_by_rem, dim=2)
+        return (
+            memorized,
+            prefix_weighted,
+            prefix_occupancy,
+            prefix_weighted[:, :, -1],
+            prefix_occupancy[:, :, -1],
+        )
+
+    def _active_cell_immediate_scores_for_intervals(
+        self,
+        *,
+        intervals: torch.Tensor,
+        memorized: torch.Tensor,
+        prefix_weighted: torch.Tensor,
+        prefix_occupancy: torch.Tensor,
+        total_weighted: torch.Tensor,
+        total_occupancy: torch.Tensor,
+    ) -> torch.Tensor:
+        interval_count = int(intervals.numel())
+        if self.horizon <= 0:
+            return torch.zeros(
+                (
+                    int(memorized.shape[0]),
+                    int(total_occupancy.shape[1]),
+                    interval_count,
+                ),
+                device=self.device,
+                dtype=self.dtype,
+            )
+        before_idx = torch.clamp(intervals - 2, min=0, max=self.horizon - 1)
+        prefix_value = prefix_weighted.index_select(2, before_idx)
+        prefix_count = prefix_occupancy.index_select(2, before_idx)
+        has_prefix = (intervals > 1).view(1, 1, interval_count)
+        prefix_value = torch.where(
+            has_prefix,
+            prefix_value,
+            torch.zeros_like(prefix_value),
+        )
+        prefix_count = torch.where(
+            has_prefix,
+            prefix_count,
+            torch.zeros_like(prefix_count),
+        )
+        memorized_idx = torch.clamp(intervals, max=self.horizon)
+        memorized_at_interval = memorized.index_select(1, memorized_idx)
+        score = (
+            prefix_value
+            + (total_occupancy[:, :, None] - prefix_count)
+            * memorized_at_interval[:, None, :]
+        )
+        terminal = (intervals > self.horizon).view(1, 1, interval_count)
+        return torch.where(
+            terminal,
+            total_weighted[:, :, None].expand_as(score),
+            score,
+        )
+
+    def _active_cell_interval_tables(
+        self,
+        *,
+        intervals: torch.Tensor,
+        user_idx: torch.Tensor,
+        state_idx: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        block_size = int(user_idx.numel())
+        interval_count = int(intervals.numel())
+        s_idx = torch.div(state_idx, self.d_count, rounding_mode="floor")
+        d_idx = state_idx.remainder(self.d_count)
+        weights = self.weights.index_select(0, user_idx)
+        s = self.s_grid.index_select(0, s_idx).view(block_size, 1)
+        d = self.d_grid.index_select(0, d_idx).view(block_size, 1)
+        elapsed = intervals.to(device=self.device, dtype=self.dtype).view(
+            1,
+            interval_count,
+        )
+        factor = self.factor.index_select(0, user_idx).view(block_size, 1)
+        decay = self.decay.index_select(0, user_idx).view(block_size, 1)
+        retrievability = torch.pow(
+            1.0 + factor * elapsed / torch.clamp(s, min=self.bounds.s_min),
+            decay,
+        )
+        review_prob = self.review_rating_prob.index_select(0, user_idx)
+        prob = torch.stack(
+            [
+                1.0 - retrievability,
+                retrievability * review_prob[:, 0:1],
+                retrievability * review_prob[:, 1:2],
+                retrievability * review_prob[:, 2:3],
+            ],
+            dim=2,
+        )
+        s_exp = s.expand(block_size, interval_count)
+        d_exp = d.expand(block_size, interval_count)
+        next_indices: list[torch.Tensor] = []
+        next_weights: list[torch.Tensor] = []
+        init_d = self.init_d.index_select(0, user_idx).view(block_size, 1)
+        for rating_idx, rating in enumerate(range(1, 5)):
+            if rating > 1:
+                hard_penalty = (
+                    weights[:, 15:16]
+                    if rating == 2
+                    else torch.ones(
+                        (block_size, 1),
+                        device=self.device,
+                        dtype=self.dtype,
+                    )
+                )
+                easy_bonus = (
+                    weights[:, 16:17]
+                    if rating == 4
+                    else torch.ones(
+                        (block_size, 1),
+                        device=self.device,
+                        dtype=self.dtype,
+                    )
+                )
+                inc = (
+                    torch.exp(weights[:, 8:9])
+                    * (11.0 - d_exp)
+                    * torch.pow(s_exp, -weights[:, 9:10])
+                    * (
+                        torch.exp(
+                            (1.0 - retrievability) * weights[:, 10:11],
+                        )
+                        - 1.0
+                    )
+                )
+                new_s = s_exp * (1.0 + inc * hard_penalty * easy_bonus)
+            else:
+                new_s = (
+                    weights[:, 11:12]
+                    * torch.pow(d_exp, -weights[:, 12:13])
+                    * (torch.pow(s_exp + 1.0, weights[:, 13:14]) - 1.0)
+                    * torch.exp((1.0 - retrievability) * weights[:, 14:15])
+                )
+                new_min = s_exp / torch.exp(weights[:, 17:18] * weights[:, 18:19])
+                new_s = torch.minimum(new_s, new_min)
+
+            rating_delta = float(rating) - 3.0
+            delta_d = -weights[:, 6:7] * rating_delta
+            new_d = d_exp + delta_d * (10.0 - d_exp) / 9.0
+            new_d = weights[:, 7:8] * init_d + (1.0 - weights[:, 7:8]) * new_d
+            new_d = torch.clamp(new_d, self.bounds.d_min, self.bounds.d_max)
+            kernel_idx, kernel_weight = self._state_kernel(new_s, new_d)
+            next_indices.append(kernel_idx)
+            next_weights.append(kernel_weight)
+
+        next_idx = torch.stack(next_indices, dim=0).permute(2, 3, 0, 1)
+        next_weight = torch.stack(next_weights, dim=0).permute(2, 3, 0, 1)
+        return prob, next_idx.to(dtype=torch.int64), next_weight.to(dtype=self.dtype)
+
+    def _active_cell_continuation_scores_for_intervals(
+        self,
+        *,
+        block_occupancy: torch.Tensor,
+        user_idx: torch.Tensor,
+        intervals: torch.Tensor,
+        valid: torch.Tensor,
+        cost_weights: torch.Tensor,
+        value: torch.Tensor,
+        prob: torch.Tensor,
+        next_idx: torch.Tensor,
+        next_weight: torch.Tensor,
+        active_rems: Sequence[int],
+    ) -> torch.Tensor:
+        block_size = int(user_idx.numel())
+        weight_count = int(cost_weights.numel())
+        interval_count = int(intervals.numel())
+        score = torch.zeros(
+            (block_size, weight_count, interval_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        if block_size == 0 or interval_count == 0:
+            return score
+        user_exp = user_idx.view(block_size, 1, 1).expand(
+            block_size,
+            weight_count,
+            interval_count,
+        )
+        weight_idx = torch.arange(
+            weight_count,
+            device=self.device,
+            dtype=torch.int64,
+        ).view(1, weight_count, 1)
+        weight_exp = weight_idx.expand(block_size, weight_count, interval_count)
+        cost_weight = cost_weights.view(1, weight_count, 1)
+        review_minutes = self.review_cost_minutes.index_select(0, user_idx)
+        interval_row = intervals.view(1, interval_count)
+        valid_float = valid.to(dtype=self.dtype)
+        first_interval = int(intervals[0].item())
+        for rem in active_rems:
+            if rem < first_interval:
+                continue
+            future_rem = torch.clamp(rem - intervals, min=0).to(torch.int64)
+            future_rem_exp = future_rem.view(1, 1, interval_count).expand(
+                block_size,
+                weight_count,
+                interval_count,
+            )
+            cont_weight = valid_float * (interval_row <= rem).to(
+                device=self.device, dtype=self.dtype
+            )
+            occupancy_rem = block_occupancy[:, :, rem]
+            for rating_idx, rating in enumerate(range(1, 5)):
+                future_value = torch.zeros_like(score)
+                for corner_idx in range(4):
+                    state_exp = next_idx[:, :, rating_idx, corner_idx].view(
+                        block_size,
+                        1,
+                        interval_count,
+                    )
+                    future_value += (
+                        next_weight[:, None, :, rating_idx, corner_idx]
+                        * value[
+                            user_exp,
+                            weight_exp,
+                            future_rem_exp,
+                            state_exp.expand(
+                                block_size,
+                                weight_count,
+                                interval_count,
+                            ),
+                        ]
+                    )
+                weighted_prob = prob[:, :, rating_idx] * cont_weight
+                score += (
+                    occupancy_rem[:, :, None]
+                    * weighted_prob[:, None, :]
+                    * (
+                        future_value
+                        - cost_weight * review_minutes[:, rating - 1].view(-1, 1, 1)
+                    )
+                )
+        return score
+
     def _improve_stationary_policy_batch(
         self,
         *,
@@ -5926,6 +6248,295 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         occupancy: torch.Tensor,
         value: torch.Tensor,
         cost_weights: torch.Tensor,
+        active: torch.Tensor | None = None,
+        iteration: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        weight_count = int(policy.shape[1])
+        visited_flat = occupancy[:, :, 1:, :].sum(dim=2) > 0.0
+        if active is not None:
+            visited_flat = visited_flat & active[:, :, None]
+        visited_cells = visited_flat.any(dim=1)
+        active_weight_count = (
+            int(active.sum().item())
+            if active is not None
+            else self.user_count * weight_count
+        )
+        active_user_idx, active_state_idx = torch.nonzero(
+            visited_cells,
+            as_tuple=True,
+        )
+        active_cell_count = int(active_user_idx.numel())
+        block_size = int(self.STATIONARY_IMPROVE_STATE_BLOCK_SIZE)
+        block_count = (
+            math.ceil(active_cell_count / block_size) if active_cell_count else 0
+        )
+        if self._progress_logging_enabled():
+            total_cells = max(1, self.user_count * self.state_count)
+            iter_label = "?" if iteration is None else str(iteration)
+            self._progress_log(
+                "stationary improve start "
+                f"iter={iter_label} visited_state_density="
+                f"{active_cell_count / float(total_cells):.6f} "
+                f"active_cells={active_cell_count}/{total_cells} "
+                f"active_weights={active_weight_count}/{self.user_count * weight_count} "
+                f"active_state_blocks={block_count} block_size={block_size}"
+            )
+
+        best_score = torch.full(
+            (self.user_count, weight_count, self.state_count),
+            -math.inf,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        best_interval = torch.ones(
+            (self.user_count, weight_count, self.state_count),
+            device=self.device,
+            dtype=torch.int64,
+        )
+        current_score = torch.zeros_like(best_score)
+        current_interval = self._intervals_for_retention_policy(policy).reshape(
+            self.user_count,
+            weight_count,
+            self.state_count,
+        )
+        improve_start_s = time.perf_counter()
+        next_log_s = self._next_progress_log_deadline()
+        total_chunks = math.ceil((self.horizon + 1) / self.interval_chunk_size)
+        if active_cell_count:
+            weight_scatter = torch.arange(
+                weight_count,
+                device=self.device,
+                dtype=torch.int64,
+            ).view(1, weight_count)
+            for block_number, block_start in enumerate(
+                range(0, active_cell_count, block_size),
+                start=1,
+            ):
+                block_stop = min(active_cell_count, block_start + block_size)
+                block_user = active_user_idx[block_start:block_stop]
+                block_state = active_state_idx[block_start:block_stop]
+                current_interval_block = self._active_cell_policy_interval_block(
+                    current_interval=current_interval,
+                    user_idx=block_user,
+                    state_idx=block_state,
+                )
+                block_occupancy = self._active_cell_occupancy_block(
+                    occupancy=occupancy,
+                    user_idx=block_user,
+                    state_idx=block_state,
+                )
+                active_rems = [
+                    int(rem)
+                    for rem in (
+                        torch.nonzero(
+                            block_occupancy[:, :, 1:].sum(dim=(0, 1)) > 0.0,
+                            as_tuple=False,
+                        )
+                        .flatten()
+                        .add(1)
+                        .cpu()
+                        .tolist()
+                    )
+                ]
+                (
+                    memorized,
+                    prefix_weighted,
+                    prefix_occupancy,
+                    total_weighted,
+                    total_occupancy,
+                ) = self._active_cell_immediate_prefix_tables(
+                    block_occupancy=block_occupancy,
+                    user_idx=block_user,
+                    state_idx=block_state,
+                )
+                block_best_score = torch.full(
+                    (int(block_user.numel()), weight_count),
+                    -math.inf,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                block_best_interval = torch.ones(
+                    (int(block_user.numel()), weight_count),
+                    device=self.device,
+                    dtype=torch.int64,
+                )
+                block_current_score = torch.zeros_like(block_best_score)
+
+                for chunk_number, start in enumerate(
+                    range(1, self.horizon + 2, self.interval_chunk_size),
+                    start=1,
+                ):
+                    chunk_start_s = time.perf_counter()
+                    stop = min(self.horizon + 2, start + self.interval_chunk_size)
+                    intervals = torch.arange(
+                        start,
+                        stop,
+                        device=self.device,
+                        dtype=torch.int64,
+                    )
+                    valid = self._active_cell_attainable_interval_mask(
+                        intervals=intervals,
+                        user_idx=block_user,
+                        state_idx=block_state,
+                    )
+                    if not bool(valid.any().item()):
+                        continue
+                    score = self._active_cell_immediate_scores_for_intervals(
+                        intervals=intervals,
+                        memorized=memorized,
+                        prefix_weighted=prefix_weighted,
+                        prefix_occupancy=prefix_occupancy,
+                        total_weighted=total_weighted,
+                        total_occupancy=total_occupancy,
+                    )
+                    prob, next_idx, next_weight = self._active_cell_interval_tables(
+                        intervals=intervals,
+                        user_idx=block_user,
+                        state_idx=block_state,
+                    )
+                    score += self._active_cell_continuation_scores_for_intervals(
+                        block_occupancy=block_occupancy,
+                        user_idx=block_user,
+                        intervals=intervals,
+                        valid=valid,
+                        cost_weights=cost_weights,
+                        value=value,
+                        prob=prob,
+                        next_idx=next_idx,
+                        next_weight=next_weight,
+                        active_rems=active_rems,
+                    )
+                    valid_expanded = valid[:, None, :]
+                    masked_score = torch.where(
+                        valid_expanded,
+                        score,
+                        torch.full_like(score, -math.inf),
+                    )
+                    chunk_max_score = masked_score.max(dim=2).values
+                    tie_tolerance = (
+                        torch.finfo(self.dtype).eps
+                        * 64.0
+                        * torch.clamp(torch.abs(chunk_max_score), min=1.0)
+                    )
+                    chunk_best_idx = (
+                        (masked_score >= (chunk_max_score - tie_tolerance)[:, :, None])
+                        .to(torch.int64)
+                        .argmax(dim=2)
+                    )
+                    chunk_best_score = masked_score.gather(
+                        2,
+                        chunk_best_idx[:, :, None],
+                    ).squeeze(2)
+                    chunk_interval = intervals.index_select(
+                        0,
+                        chunk_best_idx.reshape(-1),
+                    ).reshape_as(chunk_best_idx)
+                    update_tolerance = (
+                        torch.finfo(self.dtype).eps
+                        * 64.0
+                        * torch.clamp(
+                            torch.maximum(
+                                torch.abs(chunk_best_score),
+                                torch.abs(block_best_score),
+                            ),
+                            min=1.0,
+                        )
+                    )
+                    better = torch.isneginf(block_best_score) | (
+                        chunk_best_score > (block_best_score + update_tolerance)
+                    )
+                    block_best_score = torch.where(
+                        better,
+                        chunk_best_score,
+                        block_best_score,
+                    )
+                    block_best_interval = torch.where(
+                        better,
+                        chunk_interval,
+                        block_best_interval,
+                    )
+                    current_match = current_interval_block[
+                        :, :, None
+                    ] == intervals.view(1, 1, int(intervals.numel()))
+                    score_for_current = torch.where(
+                        valid_expanded,
+                        score,
+                        torch.zeros_like(score),
+                    )
+                    block_current_score += (
+                        score_for_current * current_match.to(dtype=self.dtype)
+                    ).sum(dim=2)
+                    if self._progress_log_due(next_log_s):
+                        iter_label = "?" if iteration is None else str(iteration)
+                        self._progress_log(
+                            "stationary improve progress "
+                            f"iter={iter_label} block={block_number}/{block_count} "
+                            f"chunk={chunk_number}/{total_chunks} "
+                            f"intervals={start}-{stop - 1} "
+                            f"valid_pairs={int(valid.sum().item())} "
+                            f"chunk_s={time.perf_counter() - chunk_start_s:.1f} "
+                            f"elapsed_s={time.perf_counter() - improve_start_s:.1f}"
+                        )
+                        next_log_s = self._next_progress_log_deadline()
+
+                block_weight_idx = weight_scatter.expand(
+                    int(block_user.numel()),
+                    weight_count,
+                )
+                block_user_exp = block_user.view(-1, 1).expand_as(block_weight_idx)
+                block_state_exp = block_state.view(-1, 1).expand_as(block_weight_idx)
+                best_score[block_user_exp, block_weight_idx, block_state_exp] = (
+                    block_best_score
+                )
+                best_interval[block_user_exp, block_weight_idx, block_state_exp] = (
+                    block_best_interval
+                )
+                current_score[block_user_exp, block_weight_idx, block_state_exp] = (
+                    block_current_score
+                )
+
+        visited = visited_flat.reshape(
+            self.user_count,
+            weight_count,
+            self.s_count,
+            self.d_count,
+        )
+        improvement = best_score - current_score
+        masked_improvement = torch.where(
+            visited_flat,
+            improvement,
+            torch.full_like(improvement, -math.inf),
+        )
+        residual = torch.where(
+            visited_flat.any(dim=2),
+            masked_improvement.max(dim=2).values,
+            torch.zeros(
+                (self.user_count, weight_count),
+                device=self.device,
+                dtype=self.dtype,
+            ),
+        )
+        best_interval_grid = best_interval.reshape(
+            self.user_count,
+            weight_count,
+            self.s_count,
+            self.d_count,
+        )
+        new_policy = torch.where(
+            visited,
+            self._retention_for_interval_grid_batch(best_interval_grid),
+            policy,
+        )
+        return new_policy, residual, visited
+
+    def _improve_stationary_policy_batch_dense_reference(
+        self,
+        *,
+        policy: torch.Tensor,
+        occupancy: torch.Tensor,
+        value: torch.Tensor,
+        cost_weights: torch.Tensor,
+        active: torch.Tensor | None = None,
         iteration: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         weight_count = int(policy.shape[1])
@@ -6045,16 +6656,14 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                 )
                 next_log_s = self._next_progress_log_deadline()
 
-        visited = (
-            occupancy[:, :, 1:, :]
-            .sum(dim=2)
-            .reshape(
-                self.user_count,
-                weight_count,
-                self.s_count,
-                self.d_count,
-            )
-            > 0.0
+        visited = occupancy[:, :, 1:, :].sum(dim=2) > 0.0
+        if active is not None:
+            visited = visited & active[:, :, None]
+        visited = visited.reshape(
+            self.user_count,
+            weight_count,
+            self.s_count,
+            self.d_count,
         )
         improvement = best_score - current_score
         masked_improvement = torch.where(
@@ -7400,7 +8009,7 @@ class FSRS6ContinuousRetentionOracle(FSRS6IntervalOracle):
 
 
 class FSRS6ContinuousStationaryFiniteOracle(FSRS6ContinuousRetentionOracle):
-    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v1"
+    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v2"
 
     def solve_stationary_finite_policies(
         self,

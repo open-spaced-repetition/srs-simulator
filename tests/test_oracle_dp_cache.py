@@ -13,6 +13,7 @@ from experiments.single_card_tradeoff.oracles.dp_cache import (
 )
 from experiments.single_card_tradeoff.oracles import (
     FSRS6AverageRewardOracle,
+    FSRS6BatchedContinuousStationaryFiniteOracle,
     FSRS6BatchedStationaryFiniteOracle,
     FSRS6GridOracle,
     FSRS6IntervalOracle,
@@ -47,6 +48,27 @@ def _batched_oracle(
         review_rating_prob=review_prob,
         learning_costs=learning_costs,
         review_costs=review_costs,
+        device="cpu",
+        cache_config=cache_config,
+    )
+
+
+def _continuous_batched_oracle(
+    *,
+    cache_config: OracleDPCacheConfig,
+) -> FSRS6BatchedContinuousStationaryFiniteOracle:
+    return FSRS6BatchedContinuousStationaryFiniteOracle(
+        days=8,
+        s_grid_size=8,
+        d_grid_size=8,
+        retention_min=0.5,
+        retention_max=0.98,
+        interval_chunk_size=4,
+        fsrs_weights=[DEFAULT_FSRS6_WEIGHTS],
+        first_rating_prob=[DEFAULT_FIRST_RATING_PROB],
+        review_rating_prob=[DEFAULT_REVIEW_RATING_PROB],
+        learning_costs=[DEFAULT_STATE_RATING_COSTS.learning],
+        review_costs=[DEFAULT_STATE_RATING_COSTS.review],
         device="cpu",
         cache_config=cache_config,
     )
@@ -363,6 +385,41 @@ class OracleDpCacheTest(unittest.TestCase):
             )
             self.assertEqual(batched.policy.shape, (1, 1, 8, 8))
             self.assertTrue(torch.equal(single.policy[0], batched.policy[0, 0]))
+            self.assertEqual(
+                oracle_dp_cache_stats_snapshot(),
+                {
+                    "hits": 1,
+                    "misses": 0,
+                    "writes": 0,
+                    "refreshes": 0,
+                },
+            )
+
+    def test_continuous_batched_stationary_writes_finite_seed_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _cache_config(Path(tmp))
+            oracle = _continuous_batched_oracle(cache_config=config)
+
+            reset_oracle_dp_cache_stats()
+            solution = oracle.solve_stationary_finite_policies(
+                [0.0],
+                max_iterations=2,
+                tolerance=1e9,
+            )
+            self.assertEqual(solution.policy.shape, (1, 1, 8, 8))
+            self.assertEqual(
+                oracle_dp_cache_stats_snapshot(),
+                {
+                    "hits": 0,
+                    "misses": 2,
+                    "writes": 2,
+                    "refreshes": 0,
+                },
+            )
+
+            reset_oracle_dp_cache_stats()
+            finite = oracle.solve_policies([0.0])
+            self.assertEqual(finite.shape, (1, 1, 8, 8, 8))
             self.assertEqual(
                 oracle_dp_cache_stats_snapshot(),
                 {
