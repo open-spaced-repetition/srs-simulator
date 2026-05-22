@@ -87,6 +87,9 @@ FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER = (
     "fsrs6_oracle_stationary_finite_distill"
 )
 FSRS6_ORACLE_INTERVAL_SCHEDULER = "fsrs6_oracle_interval"
+FSRS6_ORACLE_INTERVAL_BILINEAR_ACTION_SCHEDULER = (
+    "fsrs6_oracle_interval_bilinear_action"
+)
 FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER = "fsrs6_oracle_interval_distill"
 FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER = "fsrs6_oracle_retention_distill"
 UVFA_PPO_SCHEDULER = "uvfa_ppo"

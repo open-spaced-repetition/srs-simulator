@@ -4,6 +4,9 @@ import unittest
 
 import torch
 
+from experiments.single_card_tradeoff.core.tradeoff_runner import (
+    _lookup_interval_policy_bilinear_action,
+)
 from experiments.single_card_tradeoff.oracles import FSRS6IntervalOracle
 
 
@@ -66,6 +69,71 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
             oracle._cache_extra()["transition_value_lookup"],
             FSRS6IntervalOracle.TRANSITION_VALUE_LOOKUP_VERSION,
         )
+
+    def test_action_lookup_interpolates_interval_actions(self) -> None:
+        oracle = FSRS6IntervalOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            interval_chunk_size=2,
+            device="cpu",
+        )
+        policies = torch.ones(
+            (1, oracle.horizon + 1, oracle.s_grid.numel(), oracle.d_grid.numel()),
+            device=oracle.device,
+            dtype=torch.int64,
+        )
+        policies[0, 3, 2, 4] = 1
+        policies[0, 3, 3, 4] = 2
+        policies[0, 3, 2, 5] = 4
+        policies[0, 3, 3, 5] = 5
+
+        interval = _lookup_interval_policy_bilinear_action(
+            oracle=oracle,
+            policies=policies,
+            goal_indices=torch.tensor([0], device=oracle.device),
+            remaining=torch.tensor([3], device=oracle.device),
+            s=torch.sqrt(oracle.s_grid[2] * oracle.s_grid[3]).reshape(1),
+            d=((oracle.d_grid[4] + oracle.d_grid[5]) * 0.5).reshape(1),
+        )
+
+        self.assertEqual(interval.item(), 3)
+
+    def test_action_lookup_uses_exact_grid_value_and_clamps_to_remaining(self) -> None:
+        oracle = FSRS6IntervalOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            interval_chunk_size=2,
+            device="cpu",
+        )
+        policies = torch.ones(
+            (1, oracle.horizon + 1, oracle.s_grid.numel(), oracle.d_grid.numel()),
+            device=oracle.device,
+            dtype=torch.int64,
+        )
+        policies[0, 3, 2, 4] = 4
+        policies[0, 1, :, :] = 10
+
+        exact = _lookup_interval_policy_bilinear_action(
+            oracle=oracle,
+            policies=policies,
+            goal_indices=torch.tensor([0], device=oracle.device),
+            remaining=torch.tensor([3], device=oracle.device),
+            s=oracle.s_grid[2].reshape(1),
+            d=oracle.d_grid[4].reshape(1),
+        )
+        clamped = _lookup_interval_policy_bilinear_action(
+            oracle=oracle,
+            policies=policies,
+            goal_indices=torch.tensor([0], device=oracle.device),
+            remaining=torch.tensor([1], device=oracle.device),
+            s=torch.sqrt(oracle.s_grid[2] * oracle.s_grid[3]).reshape(1),
+            d=((oracle.d_grid[4] + oracle.d_grid[5]) * 0.5).reshape(1),
+        )
+
+        self.assertEqual(exact.item(), 4)
+        self.assertEqual(clamped.item(), 2)
 
 
 if __name__ == "__main__":

@@ -59,6 +59,26 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
             [("fsrs6", "fsrs6", None), ("fsrs6_adr", "fsrs6_adr", None)],
         )
 
+    def test_run_specs_accepts_interval_action_interpolation(self) -> None:
+        args = argparse.Namespace(
+            sched="fsrs6_oracle_interval,fsrs6_oracle_interval_bilinear_action",
+            fixed_intervals=None,
+        )
+
+        specs = tradeoff._run_specs(args)
+
+        self.assertEqual(
+            specs,
+            [
+                ("fsrs6_oracle_interval", "fsrs6_oracle_interval", None),
+                (
+                    "fsrs6_oracle_interval_bilinear_action",
+                    "fsrs6_oracle_interval_bilinear_action",
+                    None,
+                ),
+            ],
+        )
+
     def test_policy_root_expands_portfolio_specs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "train_outputs"

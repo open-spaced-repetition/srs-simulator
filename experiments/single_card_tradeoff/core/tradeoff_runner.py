@@ -51,6 +51,7 @@ from experiments.single_card_tradeoff.core.defaults import (
     FSRS6_ORACLE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_INFINITE_SCHEDULER,
+    FSRS6_ORACLE_INTERVAL_BILINEAR_ACTION_SCHEDULER,
     FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER,
     FSRS6_ORACLE_INTERVAL_SCHEDULER,
     FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER,
@@ -155,6 +156,7 @@ __all__ = [
     "FSRS6_ORACLE_INFINITE_SCHEDULER",
     "FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER",
     "FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER",
+    "FSRS6_ORACLE_INTERVAL_BILINEAR_ACTION_SCHEDULER",
     "FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER",
     "FSRS6_ORACLE_INTERVAL_SCHEDULER",
     "FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER",
@@ -2108,6 +2110,78 @@ def _oracle_d_to_idx(oracle: Any, d: torch.Tensor) -> torch.Tensor:
     ).to(torch.int64)
 
 
+def _oracle_s_bilinear_position(
+    oracle: Any,
+    s: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    s_count = int(oracle.s_grid.numel())
+    log_s = torch.log(torch.clamp(s, oracle.bounds.s_min, oracle.bounds.s_max))
+    ratio = (log_s - oracle.log_s_min) / (oracle.log_s_max - oracle.log_s_min)
+    pos = torch.clamp(ratio * float(s_count - 1), 0.0, float(s_count - 1))
+    lower = torch.floor(pos).to(torch.int64)
+    upper = torch.clamp(lower + 1, max=s_count - 1)
+    weight = pos - lower.to(dtype=pos.dtype)
+    return lower, upper, weight
+
+
+def _oracle_d_bilinear_position(
+    oracle: Any,
+    d: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    d_count = int(oracle.d_grid.numel())
+    clamped = torch.clamp(d, oracle.bounds.d_min, oracle.bounds.d_max)
+    ratio = (clamped - oracle.bounds.d_min) / (
+        oracle.bounds.d_max - oracle.bounds.d_min
+    )
+    pos = torch.clamp(ratio * float(d_count - 1), 0.0, float(d_count - 1))
+    lower = torch.floor(pos).to(torch.int64)
+    upper = torch.clamp(lower + 1, max=d_count - 1)
+    weight = pos - lower.to(dtype=pos.dtype)
+    return lower, upper, weight
+
+
+def _lookup_interval_policy_nearest(
+    *,
+    oracle: Any,
+    policies: torch.Tensor,
+    goal_indices: torch.Tensor,
+    remaining: torch.Tensor,
+    s: torch.Tensor,
+    d: torch.Tensor,
+) -> torch.Tensor:
+    s_idx = _oracle_s_to_idx(oracle, s)
+    d_idx = _oracle_d_to_idx(oracle, d)
+    return policies[goal_indices, remaining, s_idx, d_idx]
+
+
+def _lookup_interval_policy_bilinear_action(
+    *,
+    oracle: Any,
+    policies: torch.Tensor,
+    goal_indices: torch.Tensor,
+    remaining: torch.Tensor,
+    s: torch.Tensor,
+    d: torch.Tensor,
+) -> torch.Tensor:
+    s0, s1, sw = _oracle_s_bilinear_position(oracle, s)
+    d0, d1, dw = _oracle_d_bilinear_position(oracle, d)
+    dtype = oracle.dtype
+    a00 = policies[goal_indices, remaining, s0, d0].to(dtype=dtype)
+    a10 = policies[goal_indices, remaining, s1, d0].to(dtype=dtype)
+    a01 = policies[goal_indices, remaining, s0, d1].to(dtype=dtype)
+    a11 = policies[goal_indices, remaining, s1, d1].to(dtype=dtype)
+    intervals = (
+        a00 * (1.0 - sw) * (1.0 - dw)
+        + a10 * sw * (1.0 - dw)
+        + a01 * (1.0 - sw) * dw
+        + a11 * sw * dw
+    )
+    rounded = torch.round(intervals).to(torch.int64)
+    lower = torch.ones_like(rounded)
+    upper = remaining + 1
+    return torch.minimum(torch.maximum(rounded, lower), upper)
+
+
 @torch.inference_mode()
 def _evaluate_fsrs6_oracle_policies(
     *,
@@ -2271,6 +2345,7 @@ def _evaluate_fsrs6_oracle_interval_policies(
     cost_weights: Sequence[float],
     seed: int,
     fsrs_config: SingleCardFSRS6Config | None = None,
+    action_lookup: str = "nearest",
 ) -> list[Any]:
     weight_count = len(cost_weights)
     env_count = args.particles * weight_count
@@ -2299,9 +2374,26 @@ def _evaluate_fsrs6_oracle_interval_policies(
     policies = policies.to(device=device)
     while not bool(env.done.all().item()):
         remaining = torch.clamp((env.days - 1) - env.day, min=0, max=oracle.horizon)
-        s_idx = _oracle_s_to_idx(oracle, env.s)
-        d_idx = _oracle_d_to_idx(oracle, env.d)
-        intervals = policies[goal_indices, remaining, s_idx, d_idx]
+        if action_lookup == "nearest":
+            intervals = _lookup_interval_policy_nearest(
+                oracle=oracle,
+                policies=policies,
+                goal_indices=goal_indices,
+                remaining=remaining,
+                s=env.s,
+                d=env.d,
+            )
+        elif action_lookup == "bilinear_numeric":
+            intervals = _lookup_interval_policy_bilinear_action(
+                oracle=oracle,
+                policies=policies,
+                goal_indices=goal_indices,
+                remaining=remaining,
+                s=env.s,
+                d=env.d,
+            )
+        else:
+            raise ValueError(f"Unknown interval policy action lookup: {action_lookup}")
         env.step_intervals(intervals)
 
     metrics: list[SimMetrics] = []
@@ -2968,24 +3060,26 @@ def _run_fsrs6_oracle_stationary_finite(
     return rows
 
 
-def _run_fsrs6_oracle_interval(
+def _run_fsrs6_oracle_interval_with_action_lookup(
     args: argparse.Namespace,
     *,
     environment_name: str,
+    scheduler_name: str,
     scheduler_spec: str,
     seed: int,
+    action_lookup: str,
 ) -> list[dict[str, Any]]:
     if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
         raise SystemExit(
-            "fsrs6_oracle_interval currently supports only --env fsrs6_default "
-            "or --env fsrs6."
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6."
         )
     if args.engine != "vectorized":
         raise SystemExit(
-            "fsrs6_oracle_interval is supported only with --engine vectorized."
+            f"{scheduler_name} is supported only with --engine vectorized."
         )
     if args.fuzz:
-        raise SystemExit("fsrs6_oracle_interval does not support --fuzz.")
+        raise SystemExit(f"{scheduler_name} does not support --fuzz.")
     if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
         raise SystemExit("--oracle grid sizes must be >= 8.")
     if args.oracle_interval_chunk_size <= 0:
@@ -3016,6 +3110,7 @@ def _run_fsrs6_oracle_interval(
         cost_weights=cost_weights,
         seed=seed + 60_000,
         fsrs_config=fsrs_config,
+        action_lookup=action_lookup,
     )
     runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
 
@@ -3025,7 +3120,7 @@ def _run_fsrs6_oracle_interval(
             _row_from_uvfa_metrics(
                 args,
                 environment_name=environment_name,
-                scheduler_name=FSRS6_ORACLE_INTERVAL_SCHEDULER,
+                scheduler_name=scheduler_name,
                 scheduler_spec=scheduler_spec,
                 goal_cost_weight=cost_weight,
                 seed=seed,
@@ -3034,6 +3129,40 @@ def _run_fsrs6_oracle_interval(
             )
         )
     return rows
+
+
+def _run_fsrs6_oracle_interval(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    return _run_fsrs6_oracle_interval_with_action_lookup(
+        args,
+        environment_name=environment_name,
+        scheduler_name=FSRS6_ORACLE_INTERVAL_SCHEDULER,
+        scheduler_spec=scheduler_spec,
+        seed=seed,
+        action_lookup="nearest",
+    )
+
+
+def _run_fsrs6_oracle_interval_bilinear_action(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    return _run_fsrs6_oracle_interval_with_action_lookup(
+        args,
+        environment_name=environment_name,
+        scheduler_name=FSRS6_ORACLE_INTERVAL_BILINEAR_ACTION_SCHEDULER,
+        scheduler_spec=scheduler_spec,
+        seed=seed,
+        action_lookup="bilinear_numeric",
+    )
 
 
 def _run_uvfa_ppo(
@@ -3504,6 +3633,9 @@ _CUSTOM_SINGLE_USER_RUNNERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     FSRS6_ORACLE_INFINITE_SCHEDULER: _run_fsrs6_oracle_infinite,
     FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER: _run_fsrs6_oracle_stationary_finite,
     FSRS6_ORACLE_INTERVAL_SCHEDULER: _run_fsrs6_oracle_interval,
+    FSRS6_ORACLE_INTERVAL_BILINEAR_ACTION_SCHEDULER: (
+        _run_fsrs6_oracle_interval_bilinear_action
+    ),
     FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER: _run_fsrs6_oracle_interval_distill,
     FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER: _run_fsrs6_oracle_infinite_distill,
     FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER: (

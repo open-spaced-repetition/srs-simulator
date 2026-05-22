@@ -34,6 +34,9 @@ class SingleCardTradeoffRunConfigTests(unittest.TestCase):
                     deck_scale = 10000
                     target_retentions = [0.5, 0.9]
                     oracle_cost_weights = [0.0, 0.5, 1.0]
+                    oracle_s_grid_size = 64
+                    oracle_d_grid_size = 32
+                    oracle_interval_chunk_size = 16
                     review_markov_transition = false
                     scheduler_priority = "low_retrievability"
                     benchmark_partition = "0"
@@ -53,6 +56,11 @@ class SingleCardTradeoffRunConfigTests(unittest.TestCase):
         self.assertIn("--oracle-cost-weights", command)
         flag_index = command.index("--oracle-cost-weights")
         self.assertEqual(command[flag_index + 1], "0,0.5,1")
+        self.assertEqual(command[command.index("--oracle-s-grid-size") + 1], "64")
+        self.assertEqual(command[command.index("--oracle-d-grid-size") + 1], "32")
+        self.assertEqual(
+            command[command.index("--oracle-interval-chunk-size") + 1], "16"
+        )
 
     def test_multiuser_command_uses_single_batched_invocation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -1,0 +1,36 @@
+schema_version = 1
+name = "interval_oracle_action_interp_first8_eval_weights"
+family = "single_card_tradeoff"
+seed = 42
+
+[experiment]
+env = "fsrs6"
+user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+schedulers = ["fsrs6", "fsrs6_oracle_interval", "fsrs6_oracle_interval_bilinear_action"]
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+days = 1825
+particles = 10000
+deck_scale = 10000
+target_retentions = [0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.93, 0.96, 0.98]
+oracle_cost_weights = [0, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+oracle_interval_chunk_size = 64
+torch_device = "cuda"
+scheduler_priority = "low_retrievability"
+benchmark_partition = "0"
+review_markov_transition = false
+no_plot = false
+no_progress = true
+
+[outputs]
+root = "artifacts/single_card_tradeoff/interval_oracle_action_interp_first8_eval_weights_markov_off"
+
+[[tasks]]
+name = "evaluate_interval_oracle_action_interp_first8"
+stage = "evaluate"
+kind = "tradeoff_config"
+description = "Evaluate nearest-grid and bilinear-action fsrs6_oracle_interval policy execution on the first eight FSRS6 users with default eval cost weights."
+
+[tasks.options]
+config = "experiments/single_card_tradeoff/configs/interval_oracle_action_interp_first8_eval_weights.toml"

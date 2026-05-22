@@ -36,6 +36,9 @@ class TradeoffRunConfig:
     deck_scale: int
     target_retentions: tuple[float, ...]
     oracle_cost_weights: tuple[float, ...] | None
+    oracle_s_grid_size: int | None
+    oracle_d_grid_size: int | None
+    oracle_interval_chunk_size: int | None
     button_usage: Path | None
     review_markov_transition: bool
     torch_device: str | None
@@ -112,6 +115,12 @@ def _int(value: Any, label: str) -> int:
     if not isinstance(value, int):
         raise ValueError(f"{label} must be an integer.")
     return int(value)
+
+
+def _optional_int(value: Any, label: str) -> int | None:
+    if value is None:
+        return None
+    return _int(value, label)
 
 
 def _bool(value: Any, label: str) -> bool:
@@ -207,6 +216,18 @@ def load_config(path: Path) -> TradeoffRunConfig:
         oracle_cost_weights=_optional_float_list(
             experiment.get("oracle_cost_weights"),
             "experiment.oracle_cost_weights",
+        ),
+        oracle_s_grid_size=_optional_int(
+            experiment.get("oracle_s_grid_size"),
+            "experiment.oracle_s_grid_size",
+        ),
+        oracle_d_grid_size=_optional_int(
+            experiment.get("oracle_d_grid_size"),
+            "experiment.oracle_d_grid_size",
+        ),
+        oracle_interval_chunk_size=_optional_int(
+            experiment.get("oracle_interval_chunk_size"),
+            "experiment.oracle_interval_chunk_size",
         ),
         button_usage=_optional_path(
             experiment.get("button_usage"),
@@ -377,6 +398,14 @@ def _append_shared_tradeoff_options(
     if config.oracle_cost_weights is not None:
         command.extend(
             ["--oracle-cost-weights", _csv_token(config.oracle_cost_weights)]
+        )
+    if config.oracle_s_grid_size is not None:
+        command.extend(["--oracle-s-grid-size", str(config.oracle_s_grid_size)])
+    if config.oracle_d_grid_size is not None:
+        command.extend(["--oracle-d-grid-size", str(config.oracle_d_grid_size)])
+    if config.oracle_interval_chunk_size is not None:
+        command.extend(
+            ["--oracle-interval-chunk-size", str(config.oracle_interval_chunk_size)]
         )
     if config.srs_benchmark_root is not None:
         command.extend(["--srs-benchmark-root", str(config.srs_benchmark_root)])
@@ -606,6 +635,10 @@ def _scheduler_label(scheduler: str) -> str:
         return "ADR time"
     if scheduler == "fsrs6_oracle_stationary_finite_distill":
         return "476-param distill"
+    if scheduler == "fsrs6_oracle_interval":
+        return "interval nearest"
+    if scheduler == "fsrs6_oracle_interval_bilinear_action":
+        return "interval bilinear action"
     return scheduler
 
 
