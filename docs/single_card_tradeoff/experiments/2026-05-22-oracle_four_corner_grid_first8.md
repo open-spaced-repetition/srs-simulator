@@ -47,7 +47,10 @@ Setup:
 - Users: `1,2,3,4,5,6,7,8`
 - Baseline: `fsrs6` desired-retention frontier
 - Compared schedulers: `fsrs6_oracle_interval`, `fsrs6_oracle`,
-  `fsrs6_oracle_stationary_finite`
+  `fsrs6_oracle_stationary_finite`,
+  `fsrs6_oracle_stationary_finite_distill`
+- Distill policy:
+  `artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/user_{user_id}_policy.pt`
 - Lifecycle: `1825` days
 - Particles: `10000`
 - Evaluation cost weights:
@@ -67,19 +70,20 @@ Mean same-target time saved AUC vs `fsrs6`:
 | `fsrs6_oracle_interval` | 8 | 8 | 7.0926 | 16.97% | 99.99% | 99.93% |
 | `fsrs6_oracle` | 8 | 8 | 6.3309 | 15.19% | 98.77% | 93.48% |
 | `fsrs6_oracle_stationary_finite` | 8 | 8 | 6.0728 | 14.47% | 99.00% | 95.47% |
+| `fsrs6_oracle_stationary_finite_distill` | 8 | 8 | 5.3481 | 13.06% | 99.09% | 96.82% |
 
 Per-user relative time saved vs `fsrs6`:
 
-| user | interval | finite grid oracle | stationary finite |
-| ---: | ---: | ---: | ---: |
-| 1 | 12.32% | 10.71% | 9.57% |
-| 2 | 19.02% | 16.54% | 16.33% |
-| 3 | 16.15% | 15.00% | 14.52% |
-| 4 | 25.48% | 22.81% | 22.27% |
-| 5 | 23.65% | 20.20% | 19.37% |
-| 6 | 20.26% | 19.13% | 17.60% |
-| 7 | 10.41% | 9.64% | 9.71% |
-| 8 | 8.48% | 7.46% | 6.37% |
+| user | interval | finite grid oracle | stationary finite | distill |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 12.32% | 10.71% | 9.57% | 9.24% |
+| 2 | 19.02% | 16.54% | 16.33% | 11.64% |
+| 3 | 16.15% | 15.00% | 14.52% | 12.34% |
+| 4 | 25.48% | 22.81% | 22.27% | 20.90% |
+| 5 | 23.65% | 20.20% | 19.37% | 16.34% |
+| 6 | 20.26% | 19.13% | 17.60% | 16.50% |
+| 7 | 10.41% | 9.64% | 9.71% | 11.90% |
+| 8 | 8.48% | 7.46% | 6.37% | 5.62% |
 
 Direct oracle pairwise rows:
 
@@ -89,6 +93,14 @@ Direct oracle pairwise rows:
 | `fsrs6_oracle` | `fsrs6_oracle_stationary_finite` | -0.2476 | -0.84% | 1/8 | 99.93% |
 | `fsrs6_oracle` | `fsrs6_oracle_interval` | +0.8028 | +2.11% | 8/8 | 99.84% |
 | `fsrs6_oracle_stationary_finite` | `fsrs6_oracle_interval` | +1.0473 | +2.92% | 8/8 | 99.30% |
+
+Direct distill pairwise rows from `combined_regret_auc.csv`:
+
+| baseline | scheduler | mean AUC delta | mean relative delta | positive users | mean coverage |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `fsrs6_oracle_stationary_finite_distill` | `fsrs6_oracle_interval` | +1.7611 | +4.50% | 7/8 | 96.59% |
+| `fsrs6_oracle_stationary_finite_distill` | `fsrs6_oracle` | +0.9703 | +2.48% | 7/8 | 96.25% |
+| `fsrs6_oracle_stationary_finite_distill` | `fsrs6_oracle_stationary_finite` | +0.7228 | +1.66% | 7/8 | 96.92% |
 
 ## Interpretation
 
@@ -110,6 +122,12 @@ shows `fsrs6_oracle` winning 7 of 8 users.
 `fsrs6_oracle_interval` remains stronger than both retention-action grid
 oracles. That is expected because it has a richer integer-interval action space.
 
+The 476-parameter distill policy is below all exact oracle variants in the mean
+frontier comparison, but it preserves broad coverage. It beats the exact grid
+and interval variants only on user 7; this is consistent with the student being
+a compact approximation of the stationary finite teacher rather than a planning
+upper bound.
+
 ## Visuals
 
 ![Same-target time saved AUC by user](../../../artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/same_target_time_saved_auc_by_user.png)
@@ -123,12 +141,12 @@ Per-user frontier plots are under
 
 ## Runtime And GPU Monitor
 
-- Runtime: `560.25s`
-- DP cache hits: `304`
-- DP cache misses: `152`
-- DP cache writes: `152`
-- Peak `nvidia-smi` memory: `4349 MiB`
-- Peak summed shared GPU memory: `211,640,320` bytes
+- Runtime: `463.38s`
+- DP cache hits: `456`
+- DP cache misses: `0`
+- DP cache writes: `0`
+- Peak `nvidia-smi` memory: `3270 MiB`
+- Peak summed shared GPU memory: `242,528,256` bytes
 - Shared-memory spill detected: `false`
 
 ## Artifacts
@@ -147,3 +165,7 @@ The finite non-stationary grid oracle should be used as the fair retention-actio
 upper bound after this patch. `fsrs6_oracle_stationary_finite` remains useful as
 a compact stationary teacher class, but it is no longer advantaged by a better
 transition approximation than `fsrs6_oracle`.
+
+The added `fsrs6_oracle_stationary_finite_distill` row lands where expected for
+a 476-parameter student: lower mean AUC than the exact stationary finite policy
+(`5.3481` vs `6.0728`), but high mean coverage (`99.09%`).
