@@ -126,6 +126,7 @@ from experiments.single_card_tradeoff.core.tradeoff_args import (
     _fsrs6_adr_lambda_values,
     _parse_float_list,
     _retention_grid,
+    _resolve_continuous_stationary_finite_distill_policy_path,
     _resolve_stationary_finite_distill_policy_path,
     _resolve_user_ids,
     _run_specs,
@@ -4241,6 +4242,18 @@ def _run_registered_custom_scheduler(
                     multiuser=len(user_contexts) > 1,
                 )
             )
+        elif (
+            scheduler_name
+            == FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER
+        ):
+            run_args = argparse.Namespace(**vars(context.args))
+            run_args.oracle_continuous_stationary_finite_distill_policy = (
+                _resolve_continuous_stationary_finite_distill_policy_path(
+                    args,
+                    user_id=context.user_id,
+                    multiuser=len(user_contexts) > 1,
+                )
+            )
         output_rows.extend(
             runner(
                 run_args,
@@ -4746,6 +4759,21 @@ def main() -> None:
         raise SystemExit(
             "--oracle-stationary-finite-distill-policy-template must contain "
             "{user_id} for multi-user runs."
+        )
+    if (
+        len(user_ids) > 1
+        and getattr(
+            args,
+            "oracle_continuous_stationary_finite_distill_policy_template",
+            None,
+        )
+        is not None
+        and "{user_id}"
+        not in str(args.oracle_continuous_stationary_finite_distill_policy_template)
+    ):
+        raise SystemExit(
+            "--oracle-continuous-stationary-finite-distill-policy-template must "
+            "contain {user_id} for multi-user runs."
         )
     if args.torch_device is None:
         args.torch_device = _default_torch_device()

@@ -8,6 +8,7 @@ from experiments.single_card_tradeoff.core.tradeoff_runner import (
     _lookup_interval_policy_bilinear_action,
 )
 from experiments.single_card_tradeoff.oracles import (
+    FSRS6BatchedContinuousStationaryFiniteOracle,
     FSRS6ContinuousRetentionOracle,
     FSRS6ContinuousStationaryFiniteOracle,
     FSRS6GridOracle,
@@ -17,6 +18,9 @@ from experiments.single_card_tradeoff.oracles import (
     retention_interval_float,
 )
 from experiments.single_card_tradeoff.oracles.dp_cache import OracleDPCacheConfig
+from simulator.behavior import DEFAULT_FIRST_RATING_PROB, DEFAULT_REVIEW_RATING_PROB
+from simulator.cost import DEFAULT_STATE_RATING_COSTS
+from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
 
 
 class FSRS6IntervalOracleTests(unittest.TestCase):
@@ -253,6 +257,50 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
         self.assertTrue(torch.all(solution.policy >= 0.5))
         self.assertTrue(torch.all(solution.policy <= 0.98))
         self.assertEqual(len(solution.converged), 2)
+
+    def test_batched_continuous_stationary_finite_outputs_user_retention_table(
+        self,
+    ) -> None:
+        oracle = FSRS6BatchedContinuousStationaryFiniteOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            fsrs_weights=[DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS],
+            first_rating_prob=[
+                DEFAULT_FIRST_RATING_PROB,
+                DEFAULT_FIRST_RATING_PROB,
+            ],
+            review_rating_prob=[
+                DEFAULT_REVIEW_RATING_PROB,
+                DEFAULT_REVIEW_RATING_PROB,
+            ],
+            learning_costs=[
+                DEFAULT_STATE_RATING_COSTS.learning,
+                DEFAULT_STATE_RATING_COSTS.learning,
+            ],
+            review_costs=[
+                DEFAULT_STATE_RATING_COSTS.review,
+                DEFAULT_STATE_RATING_COSTS.review,
+            ],
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+        solution = oracle.solve_stationary_finite_policies(
+            [0.0, 16.0],
+            max_iterations=2,
+            tolerance=1e-8,
+            progress=False,
+        )
+
+        self.assertEqual(solution.policy.shape, (2, 2, 8, 8))
+        self.assertTrue(torch.all(solution.policy >= 0.5))
+        self.assertTrue(torch.all(solution.policy <= 0.98))
+        self.assertTrue(torch.allclose(solution.policy[0], solution.policy[1]))
+        self.assertEqual(len(solution.converged), 2)
+        self.assertEqual(len(solution.converged[0]), 2)
 
     def test_bilinear_retention_lookup_interpolates_and_clamps(self) -> None:
         oracle = FSRS6ContinuousRetentionOracle(

@@ -54,6 +54,8 @@ class TradeoffRunConfig:
     fsrs6_adr_lambda_values: tuple[float, ...] | None
     distill_policy_template: str | None
     distill_cost_weights: tuple[float, ...] | None
+    continuous_distill_policy_template: str | None
+    continuous_distill_cost_weights: tuple[float, ...] | None
     out_root: Path
     no_plot: bool
     plot_label_mode: str
@@ -210,6 +212,11 @@ def load_config(path: Path) -> TradeoffRunConfig:
     experiment = _table(raw, "experiment")
     fsrs6_adr = _table(raw, "fsrs6_adr", required=False)
     distill = _table(raw, "stationary_finite_distill", required=False)
+    continuous_distill = _table(
+        raw,
+        "continuous_stationary_finite_distill",
+        required=False,
+    )
     outputs = _table(raw, "outputs")
     return TradeoffRunConfig(
         config_path=config_path,
@@ -298,6 +305,14 @@ def load_config(path: Path) -> TradeoffRunConfig:
             distill.get("cost_weights"),
             "stationary_finite_distill.cost_weights",
         ),
+        continuous_distill_policy_template=_optional_str(
+            continuous_distill.get("policy_template"),
+            "continuous_stationary_finite_distill.policy_template",
+        ),
+        continuous_distill_cost_weights=_optional_float_list(
+            continuous_distill.get("cost_weights"),
+            "continuous_stationary_finite_distill.cost_weights",
+        ),
         out_root=_path(outputs.get("root"), "outputs.root", base_path=base_path),
         no_plot=_bool(experiment.get("no_plot", True), "experiment.no_plot"),
         plot_label_mode=_plot_label_mode(
@@ -357,6 +372,34 @@ def _distill_policy_template(config: TradeoffRunConfig) -> str | None:
             "stationary_finite_distill.policy_template must contain {user_id}."
         )
     path = Path(config.distill_policy_template).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return str(path)
+
+
+def _continuous_distill_policy_path(
+    config: TradeoffRunConfig,
+    user_id: int,
+) -> Path | None:
+    if config.continuous_distill_policy_template is None:
+        return None
+    path = Path(
+        config.continuous_distill_policy_template.format(user_id=user_id)
+    ).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path
+
+
+def _continuous_distill_policy_template(config: TradeoffRunConfig) -> str | None:
+    if config.continuous_distill_policy_template is None:
+        return None
+    if "{user_id}" not in config.continuous_distill_policy_template:
+        raise ValueError(
+            "continuous_stationary_finite_distill.policy_template must contain "
+            "{user_id}."
+        )
+    path = Path(config.continuous_distill_policy_template).expanduser()
     if not path.is_absolute():
         path = REPO_ROOT / path
     return str(path)
@@ -454,6 +497,13 @@ def _append_distill_cost_and_output_flags(
                 _csv_token(config.distill_cost_weights),
             ]
         )
+    if config.continuous_distill_cost_weights is not None:
+        command.extend(
+            [
+                "--oracle-continuous-stationary-finite-distill-cost-weights",
+                _csv_token(config.continuous_distill_cost_weights),
+            ]
+        )
     command.extend(["--plot-label-mode", config.plot_label_mode])
     if config.no_plot:
         command.append("--no-plot")
@@ -475,6 +525,14 @@ def _tradeoff_command(config: TradeoffRunConfig, user_id: int) -> list[str]:
     if distill_policy is not None:
         command.extend(
             ["--oracle-stationary-finite-distill-policy", str(distill_policy)]
+        )
+    continuous_distill_policy = _continuous_distill_policy_path(config, user_id)
+    if continuous_distill_policy is not None:
+        command.extend(
+            [
+                "--oracle-continuous-stationary-finite-distill-policy",
+                str(continuous_distill_policy),
+            ]
         )
     _append_distill_cost_and_output_flags(command, config)
     return command
@@ -500,6 +558,14 @@ def _multiuser_tradeoff_command(
             [
                 "--oracle-stationary-finite-distill-policy-template",
                 distill_policy_template,
+            ]
+        )
+    continuous_distill_policy_template = _continuous_distill_policy_template(config)
+    if continuous_distill_policy_template is not None:
+        command.extend(
+            [
+                "--oracle-continuous-stationary-finite-distill-policy-template",
+                continuous_distill_policy_template,
             ]
         )
     _append_distill_cost_and_output_flags(command, config)

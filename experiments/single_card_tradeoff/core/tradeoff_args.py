@@ -239,6 +239,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--oracle-continuous-stationary-finite-distill-policy-template",
+        default=None,
+        help=(
+            "Per-user FSRS6 continuous stationary finite-lifecycle oracle "
+            "retention distillation checkpoint template for multi-user runs. "
+            "Must contain {user_id}. When omitted, "
+            "--oracle-continuous-stationary-finite-distill-policy is shared."
+        ),
+    )
+    parser.add_argument(
         "--oracle-continuous-stationary-finite-distill-cost-weights",
         default=",".join(
             format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
@@ -627,6 +637,24 @@ def _resolve_stationary_finite_distill_policy_path(
     if multiuser:
         return Path(args.oracle_stationary_finite_distill_policy)
     return Path(args.oracle_stationary_finite_distill_policy)
+
+
+def _resolve_continuous_stationary_finite_distill_policy_path(
+    args: argparse.Namespace,
+    *,
+    user_id: int,
+    multiuser: bool,
+) -> Path:
+    template = getattr(
+        args,
+        "oracle_continuous_stationary_finite_distill_policy_template",
+        None,
+    )
+    if template is not None and str(template).strip():
+        return _resolve_user_policy_template(str(template), user_id=user_id)
+    if multiuser:
+        return Path(args.oracle_continuous_stationary_finite_distill_policy)
+    return Path(args.oracle_continuous_stationary_finite_distill_policy)
 
 
 def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:

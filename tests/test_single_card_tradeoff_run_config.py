@@ -195,6 +195,69 @@ class SingleCardTradeoffRunConfigTests(unittest.TestCase):
         ]
         self.assertIn("user_{user_id}_policy.pt", template)
 
+    def test_multiuser_command_forwards_continuous_policy_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.toml"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    schema_version = 1
+                    name = "test_continuous_template"
+                    seed = 42
+
+                    [experiment]
+                    env = "fsrs6"
+                    user_ids = [1, 2]
+                    schedulers = ["fsrs6_oracle_continuous_stationary_finite_distill"]
+                    days = 30
+                    particles = 64
+                    deck_scale = 10000
+                    target_retentions = [0.5]
+                    review_markov_transition = false
+                    scheduler_priority = "low_retrievability"
+                    benchmark_partition = "0"
+                    no_plot = true
+                    no_progress = true
+
+                    [continuous_stationary_finite_distill]
+                    policy_template = "artifacts/policies/user_{user_id}_continuous_policy.pt"
+                    cost_weights = [0, 0.25, 0.5]
+
+                    [outputs]
+                    root = "artifacts/single_card_tradeoff/test_template"
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+            command = _multiuser_tradeoff_command(config, (1, 2))
+
+        self.assertIn(
+            "--oracle-continuous-stationary-finite-distill-policy-template",
+            command,
+        )
+        template = command[
+            command.index(
+                "--oracle-continuous-stationary-finite-distill-policy-template"
+            )
+            + 1
+        ]
+        self.assertIn("user_{user_id}_continuous_policy.pt", template)
+        self.assertIn(
+            "--oracle-continuous-stationary-finite-distill-cost-weights",
+            command,
+        )
+        self.assertEqual(
+            command[
+                command.index(
+                    "--oracle-continuous-stationary-finite-distill-cost-weights"
+                )
+                + 1
+            ],
+            "0,0.25,0.5",
+        )
+
     def test_multiuser_policy_template_requires_user_placeholder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "config.toml"

@@ -6,7 +6,17 @@ seed = 42
 [experiment]
 env = "fsrs6"
 user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
-schedulers = ["fsrs6", "fsrs6_adr", "fsrs6_oracle_interval", "fsrs6_oracle", "fsrs6_oracle_stationary_finite", "fsrs6_oracle_stationary_finite_distill"]
+schedulers = [
+  "fsrs6",
+  "fsrs6_adr",
+  "fsrs6_oracle_interval",
+  "fsrs6_oracle",
+  "fsrs6_oracle_stationary_finite",
+  "fsrs6_oracle_stationary_finite_distill",
+  "fsrs6_oracle_continuous_retention",
+  "fsrs6_oracle_continuous_stationary_finite",
+  "fsrs6_oracle_continuous_stationary_finite_distill",
+]
 button_usage = "../Anki-button-usage/button_usage.jsonl"
 days = 1825
 particles = 10000
@@ -30,6 +40,10 @@ lambda_values = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 32
 
 [stationary_finite_distill]
 policy_template = "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/user_{user_id}_policy.pt"
+cost_weights = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
+
+[continuous_stationary_finite_distill]
+policy_template = "artifacts/single_card_tradeoff/continuous_stationary_finite_distill_first8_eval_weights_add_025_05_markov_off/user_{user_id}_policy.pt"
 cost_weights = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
 
 [outputs]
@@ -62,7 +76,7 @@ no_progress = true
 name = "evaluate_oracle_interval_grid_stationary_distill_adr_first8_add_025_05"
 stage = "evaluate"
 kind = "tradeoff_config"
-description = "Compare fsrs6_adr, fsrs6_oracle_interval, fsrs6_oracle, fsrs6_oracle_stationary_finite, and fsrs6_oracle_stationary_finite_distill on the first eight FSRS6 users using default eval cost weights plus 0.25 and 0.5."
+description = "Compare discrete, interval, stationary finite, and continuous oracle schedulers on the first eight FSRS6 users using default eval cost weights plus 0.25 and 0.5."
 
 [tasks.options]
 config = "experiments/single_card_tradeoff/configs/oracle_interval_grid_stationary_first8_eval_weights_add_025_05.toml"
