@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from typing import Any
 import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -192,6 +193,60 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
                 for _, _, title in calls
             )
         )
+
+    def test_tradeoff_plot_uses_log_y_axis_for_positive_minutes(self) -> None:
+        import matplotlib.pyplot as plt
+
+        rows = [
+            {
+                "user_id": 1,
+                "environment": "fsrs6",
+                "scheduler": "fsrs6",
+                "scheduler_spec": "fsrs6",
+                "desired_retention": 0.5,
+                "fixed_interval": None,
+                "goal_cost_weight": None,
+                "deck_expected_memorized": 7000.0,
+                "deck_minutes_per_day": 10.0,
+            },
+            {
+                "user_id": 1,
+                "environment": "fsrs6",
+                "scheduler": "fsrs6",
+                "scheduler_spec": "fsrs6",
+                "desired_retention": 0.9,
+                "fixed_interval": None,
+                "goal_cost_weight": None,
+                "deck_expected_memorized": 9500.0,
+                "deck_minutes_per_day": 1000.0,
+            },
+        ]
+        captured: dict[str, object] = {}
+        original_subplots = plt.subplots
+
+        def capturing_subplots(*args: Any, **kwargs: Any) -> Any:
+            fig, ax = original_subplots(*args, **kwargs)
+            original_set_yscale = ax.set_yscale
+
+            def capturing_set_yscale(scale: str, *args: Any, **kwargs: Any) -> Any:
+                captured["yscale"] = scale
+                return original_set_yscale(scale, *args, **kwargs)
+
+            ax.set_yscale = capturing_set_yscale
+            return fig, ax
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plt.subplots = capturing_subplots
+            try:
+                tradeoff_runner._write_plot(
+                    Path(tmp) / "plot.png",
+                    rows,
+                    title="Test plot",
+                )
+            finally:
+                plt.subplots = original_subplots
+
+        self.assertEqual(captured["yscale"], "log")
 
     def test_native_adr_train_run_root_and_manifest_discover_multiuser_policies(
         self,

@@ -3923,6 +3923,15 @@ def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
             label=f"user {user_id} Pareto frontier ({len(frontier)} points)",
         )
 
+    positive_y_values = [
+        float(row["deck_minutes_per_day"])
+        for row in rows
+        if float(row["deck_minutes_per_day"]) > 0.0
+    ]
+    use_log_y = bool(positive_y_values)
+    if use_log_y:
+        ax.set_yscale("log")
+        ax.set_ylim(bottom=min(positive_y_values) / 1.25)
     ax.margins(x=0.04, y=0.08)
     texts = []
     label_x = []
@@ -3975,9 +3984,10 @@ def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
             pass
 
     ax.set_xlabel("Expected memorized cards per day (deck scaled)")
-    ax.set_ylabel("Study minutes per day (deck scaled)")
+    y_label_suffix = ", log scale" if use_log_y else ""
+    ax.set_ylabel(f"Study minutes per day (deck scaled{y_label_suffix})")
     ax.set_title(title)
-    ax.grid(True, alpha=0.25)
+    ax.grid(True, which="both", alpha=0.25)
     ax.legend()
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)

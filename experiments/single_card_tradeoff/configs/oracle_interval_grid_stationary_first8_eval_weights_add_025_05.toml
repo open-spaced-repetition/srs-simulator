@@ -6,7 +6,7 @@ seed = 42
 [experiment]
 env = "fsrs6"
 user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
-schedulers = ["fsrs6", "fsrs6_oracle_interval", "fsrs6_oracle", "fsrs6_oracle_stationary_finite", "fsrs6_oracle_stationary_finite_distill"]
+schedulers = ["fsrs6", "fsrs6_adr", "fsrs6_oracle_interval", "fsrs6_oracle", "fsrs6_oracle_stationary_finite", "fsrs6_oracle_stationary_finite_distill"]
 button_usage = "../Anki-button-usage/button_usage.jsonl"
 days = 1825
 particles = 10000
@@ -23,6 +23,10 @@ review_markov_transition = false
 no_plot = false
 no_progress = true
 
+[fsrs6_adr]
+train_run_root = "artifacts/single_card_tradeoff/native_adr_first8_eval_weights_add_025_05_markov_off"
+lambda_values = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
+
 [stationary_finite_distill]
 policy_template = "artifacts/single_card_tradeoff/stationary_finite_distill_train_weights_add_4_only_first8_markov_off/user_{user_id}_policy.pt"
 cost_weights = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
@@ -31,10 +35,33 @@ cost_weights = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320
 root = "artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off"
 
 [[tasks]]
-name = "evaluate_oracle_interval_grid_stationary_distill_first8_add_025_05"
+name = "train_native_adr_first8_add_025_05"
+stage = "train"
+kind = "fsrs6_adr_train_multiuser"
+description = "Train one native single-card FSRS6 ADR policy per first-eight user and evaluation cost weight, including 0.25 and 0.5."
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+cost_weights = "0,0.25,0.5,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+benchmark_partition = "0"
+days = 1825
+population_size = 32
+elite_count = 8
+generations = 64
+train_particles = 1024
+eval_particles = 10000
+job_batch_size = 8192
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/native_adr_first8_eval_weights_add_025_05_markov_off"
+no_progress = true
+
+[[tasks]]
+name = "evaluate_oracle_interval_grid_stationary_distill_adr_first8_add_025_05"
 stage = "evaluate"
 kind = "tradeoff_config"
-description = "Compare fsrs6_oracle_interval, fsrs6_oracle, fsrs6_oracle_stationary_finite, and fsrs6_oracle_stationary_finite_distill on the first eight FSRS6 users using default eval cost weights plus 0.25 and 0.5."
+description = "Compare fsrs6_adr, fsrs6_oracle_interval, fsrs6_oracle, fsrs6_oracle_stationary_finite, and fsrs6_oracle_stationary_finite_distill on the first eight FSRS6 users using default eval cost weights plus 0.25 and 0.5."
 
 [tasks.options]
 config = "experiments/single_card_tradeoff/configs/oracle_interval_grid_stationary_first8_eval_weights_add_025_05.toml"
