@@ -162,7 +162,7 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             plot_path = Path(tmp) / "combined_results.png"
             rows = [{"user_id": 1}, {"user_id": 2}]
-            calls: list[tuple[Path, int, str]] = []
+            calls: list[tuple[Path, int, str, str]] = []
             original_write_plot = tradeoff_runner._write_plot
 
             def fake_write_plot(
@@ -170,29 +170,216 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
                 rows: list[dict[str, object]],
                 *,
                 title: str,
+                label_mode: str = "sparse",
             ) -> None:
-                calls.append((path, len(rows), title))
+                calls.append((path, len(rows), title, label_mode))
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("stub", encoding="utf-8")
 
             tradeoff_runner._write_plot = fake_write_plot
             try:
-                output = tradeoff_runner._write_user_plots(plot_path, rows)
+                output = tradeoff_runner._write_user_plots(
+                    plot_path,
+                    rows,
+                    label_mode="none",
+                )
             finally:
                 tradeoff_runner._write_plot = original_write_plot
 
         self.assertEqual(output, Path(tmp) / "combined_results_by_user")
         self.assertEqual(
-            {path.name for path, _, _ in calls}, {"user_1.png", "user_2.png"}
+            {path.name for path, _, _, _ in calls}, {"user_1.png", "user_2.png"}
         )
-        self.assertTrue(all(count == 1 for _, count, _ in calls))
+        self.assertTrue(all(count == 1 for _, count, _, _ in calls))
+        self.assertTrue(all(label_mode == "none" for _, _, _, label_mode in calls))
         self.assertTrue(
             all(
-                title == "User 1 single-card lifecycle Pareto frontier"
-                or title == "User 2 single-card lifecycle Pareto frontier"
-                for _, _, title in calls
+                title == "User 1 single-card lifecycle tradeoff"
+                or title == "User 2 single-card lifecycle tradeoff"
+                for _, _, title, _ in calls
             )
         )
+
+    def test_sparse_plot_label_mode_keeps_only_key_points(self) -> None:
+        base_row: dict[str, object] = {
+            "scheduler": "fsrs6_oracle",
+            "scheduler_spec": "fsrs6_oracle",
+            "desired_retention": None,
+            "fixed_interval": None,
+            "goal_cost_weight": "",
+        }
+
+        oracle_key = {**base_row, "goal_cost_weight": "4"}
+        oracle_nonkey = {**base_row, "goal_cost_weight": "0.5"}
+        adr_key = {
+            **base_row,
+            "scheduler": "fsrs6_adr",
+            "scheduler_spec": "fsrs6_adr",
+            "fsrs6_adr_lambda_value": "16",
+            "fsrs6_adr_point_label": "lambda_16",
+        }
+        adr_nonkey = {
+            **base_row,
+            "scheduler": "fsrs6_adr",
+            "scheduler_spec": "fsrs6_adr",
+            "fsrs6_adr_lambda_value": "0.25",
+            "fsrs6_adr_point_label": "lambda_0p25",
+        }
+        retention_key = {
+            **base_row,
+            "scheduler": "fsrs6",
+            "scheduler_spec": "fsrs6",
+            "desired_retention": "0.9",
+        }
+        retention_nonkey = {
+            **base_row,
+            "scheduler": "fsrs6",
+            "scheduler_spec": "fsrs6",
+            "desired_retention": "0.7",
+        }
+
+        self.assertEqual(
+            tradeoff_runner._plot_point_label(oracle_key, label_mode="sparse"),
+            "w=4",
+        )
+        self.assertIsNone(
+            tradeoff_runner._plot_point_label(oracle_nonkey, label_mode="sparse")
+        )
+        self.assertEqual(
+            tradeoff_runner._plot_point_label(adr_key, label_mode="sparse"),
+            "λ=16",
+        )
+        self.assertIsNone(
+            tradeoff_runner._plot_point_label(adr_nonkey, label_mode="sparse")
+        )
+        self.assertEqual(
+            tradeoff_runner._plot_point_label(adr_nonkey, label_mode="all"),
+            "λ=0.25",
+        )
+        self.assertEqual(
+            tradeoff_runner._plot_point_label(retention_key, label_mode="sparse"),
+            "0.9",
+        )
+        self.assertIsNone(
+            tradeoff_runner._plot_point_label(retention_nonkey, label_mode="sparse")
+        )
+
+    def test_sparse_plot_label_rows_deduplicate_shared_cost_labels(self) -> None:
+        base_row: dict[str, object] = {
+            "environment": "fsrs6",
+            "desired_retention": None,
+            "fixed_interval": None,
+            "deck_expected_memorized": "9000",
+            "deck_minutes_per_day": "100",
+        }
+        rows = [
+            {
+                **base_row,
+                "scheduler": "fsrs6_oracle_interval",
+                "scheduler_spec": "fsrs6_oracle_interval",
+                "goal_cost_weight": "4",
+            },
+            {
+                **base_row,
+                "scheduler": "fsrs6_oracle",
+                "scheduler_spec": "fsrs6_oracle",
+                "goal_cost_weight": "4",
+            },
+            {
+                **base_row,
+                "scheduler": "fsrs6_adr",
+                "scheduler_spec": "fsrs6_adr",
+                "goal_cost_weight": "",
+                "fsrs6_adr_lambda_value": "4",
+                "fsrs6_adr_point_label": "lambda_4",
+            },
+        ]
+
+        labels = [
+            label
+            for _, label in tradeoff_runner._plot_label_rows(
+                rows,
+                label_mode="sparse",
+            )
+        ]
+
+        self.assertEqual(labels.count("w=4"), 1)
+        self.assertIn("λ=4", labels)
+
+    def test_tradeoff_plot_none_label_mode_omits_labels_and_black_frontier(
+        self,
+    ) -> None:
+        import matplotlib.pyplot as plt
+
+        rows = [
+            {
+                "user_id": 1,
+                "environment": "fsrs6",
+                "scheduler": "fsrs6_oracle",
+                "scheduler_spec": "fsrs6_oracle",
+                "desired_retention": None,
+                "fixed_interval": None,
+                "goal_cost_weight": "0",
+                "deck_expected_memorized": "7000",
+                "deck_minutes_per_day": "10",
+            },
+            {
+                "user_id": 1,
+                "environment": "fsrs6",
+                "scheduler": "fsrs6_oracle",
+                "scheduler_spec": "fsrs6_oracle",
+                "desired_retention": None,
+                "fixed_interval": None,
+                "goal_cost_weight": "4",
+                "deck_expected_memorized": "9000",
+                "deck_minutes_per_day": "100",
+            },
+        ]
+        plot_args: list[tuple[Any, ...]] = []
+        plot_kwargs: list[dict[str, Any]] = []
+        texts: list[tuple[Any, ...]] = []
+        original_subplots = plt.subplots
+
+        def capturing_subplots(*args: Any, **kwargs: Any) -> Any:
+            fig, ax = original_subplots(*args, **kwargs)
+            original_plot = ax.plot
+            original_text = ax.text
+
+            def capturing_plot(*args: Any, **kwargs: Any) -> Any:
+                plot_args.append(args)
+                plot_kwargs.append(dict(kwargs))
+                return original_plot(*args, **kwargs)
+
+            def capturing_text(*args: Any, **kwargs: Any) -> Any:
+                texts.append(args)
+                return original_text(*args, **kwargs)
+
+            ax.plot = capturing_plot
+            ax.text = capturing_text
+            return fig, ax
+
+        with tempfile.TemporaryDirectory() as tmp:
+            plt.subplots = capturing_subplots
+            try:
+                tradeoff_runner._write_plot(
+                    Path(tmp) / "plot.png",
+                    rows,
+                    title="Test plot",
+                    label_mode="none",
+                )
+            finally:
+                plt.subplots = original_subplots
+
+        self.assertEqual(texts, [])
+        labels = [kwargs.get("label") for kwargs in plot_kwargs]
+        self.assertFalse(
+            any("Pareto frontier" in str(label) for label in labels if label)
+        )
+        self.assertFalse(any(kwargs.get("color") == "black" for kwargs in plot_kwargs))
+        first_plot_args = plot_args[0]
+        self.assertIsInstance(first_plot_args, tuple)
+        first_x_values = first_plot_args[0]
+        self.assertTrue(all(isinstance(value, float) for value in first_x_values))
 
     def test_tradeoff_plot_uses_log_y_axis_for_positive_minutes(self) -> None:
         import matplotlib.pyplot as plt

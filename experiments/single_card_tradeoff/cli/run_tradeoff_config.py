@@ -22,6 +22,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from simulator.scheduler_spec import format_float
 
+_PLOT_LABEL_MODES = {"none", "sparse", "all"}
+
 
 @dataclass(frozen=True)
 class TradeoffRunConfig:
@@ -54,6 +56,7 @@ class TradeoffRunConfig:
     distill_cost_weights: tuple[float, ...] | None
     out_root: Path
     no_plot: bool
+    plot_label_mode: str
     no_progress: bool
 
 
@@ -169,6 +172,15 @@ def _optional_float_list(value: Any, label: str) -> tuple[float, ...] | None:
     if value is None:
         return None
     return _float_list(value, label)
+
+
+def _plot_label_mode(value: Any, label: str) -> str:
+    mode = _str(value, label)
+    if mode not in _PLOT_LABEL_MODES:
+        raise ValueError(
+            f"{label} must be one of: " + ", ".join(sorted(_PLOT_LABEL_MODES))
+        )
+    return mode
 
 
 def _path(value: Any, label: str, *, base_path: Path) -> Path:
@@ -288,6 +300,10 @@ def load_config(path: Path) -> TradeoffRunConfig:
         ),
         out_root=_path(outputs.get("root"), "outputs.root", base_path=base_path),
         no_plot=_bool(experiment.get("no_plot", True), "experiment.no_plot"),
+        plot_label_mode=_plot_label_mode(
+            experiment.get("plot_label_mode", "sparse"),
+            "experiment.plot_label_mode",
+        ),
         no_progress=_bool(
             experiment.get("no_progress", True), "experiment.no_progress"
         ),
@@ -438,6 +454,7 @@ def _append_distill_cost_and_output_flags(
                 _csv_token(config.distill_cost_weights),
             ]
         )
+    command.extend(["--plot-label-mode", config.plot_label_mode])
     if config.no_plot:
         command.append("--no-plot")
     if config.no_progress:
@@ -733,6 +750,16 @@ def _write_aggregate_outputs(
     _write_csv(config.out_root / "summary.csv", summary)
     _write_csv(config.out_root / "mean_summary.csv", _mean_summary_rows(summary))
     _write_summary_plots(config.out_root, summary)
+    if not config.no_plot:
+        from experiments.single_card_tradeoff.core.tradeoff_runner import (
+            _write_user_plots,
+        )
+
+        _write_user_plots(
+            config.out_root / "combined_results.png",
+            [dict(row) for row in result_rows],
+            label_mode=config.plot_label_mode,
+        )
 
 
 def _combine_outputs(config: TradeoffRunConfig, user_ids: Sequence[int]) -> None:

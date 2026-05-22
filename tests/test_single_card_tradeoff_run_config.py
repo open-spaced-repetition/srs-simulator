@@ -84,6 +84,7 @@ class SingleCardTradeoffRunConfigTests(unittest.TestCase):
                     scheduler_priority = "low_retrievability"
                     benchmark_partition = "0"
                     no_plot = true
+                    plot_label_mode = "none"
                     no_progress = true
 
                     [outputs]
@@ -99,6 +100,7 @@ class SingleCardTradeoffRunConfigTests(unittest.TestCase):
         self.assertIn("--user-ids", command)
         self.assertNotIn("--user-id", command)
         self.assertEqual(command[command.index("--user-ids") + 1], "1,2")
+        self.assertEqual(command[command.index("--plot-label-mode") + 1], "none")
         self.assertTrue(any(part.endswith("combined_results.csv") for part in command))
         self.assertTrue(
             any(part.endswith("combined_regret_auc.csv") for part in command)

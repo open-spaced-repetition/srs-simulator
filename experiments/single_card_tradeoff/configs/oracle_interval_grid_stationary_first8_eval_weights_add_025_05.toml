@@ -21,6 +21,7 @@ scheduler_priority = "low_retrievability"
 benchmark_partition = "0"
 review_markov_transition = false
 no_plot = false
+plot_label_mode = "sparse"
 no_progress = true
 
 [fsrs6_adr]

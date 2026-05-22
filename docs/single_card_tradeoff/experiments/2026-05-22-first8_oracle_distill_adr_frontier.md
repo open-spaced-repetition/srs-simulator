@@ -194,10 +194,11 @@ mean coverage. Direct shared-span comparison shows distill ahead of ADR on 6 of
 
 ![Span coverage by user](../../../artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/span_coverage_by_user.png)
 
-Per-user frontier plots are under
+Per-user tradeoff plots are under
 `artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/combined_results_by_user/user_<id>.png`.
-These plots use a log-scaled y-axis for study minutes per day so low-workload
-frontier points remain readable alongside the high-workload `w=0` points.
+These plots use a log-scaled y-axis for study minutes per day, omit the black
+global Pareto frontier overlay, and use sparse point labels so low-workload
+points remain readable alongside the high-workload `w=0` points.
 
 ## Runtime And GPU Monitor
 

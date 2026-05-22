@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable, Sequence
+import contextlib
 from dataclasses import dataclass
+import io
 import math
 import os
 from pathlib import Path
@@ -64,7 +66,6 @@ from experiments.single_card_tradeoff.core.defaults import (
 )
 from experiments.single_card_tradeoff.core.results import (
     build_regret_auc_rows as _build_regret_auc_rows,
-    pareto_frontier as _pareto_frontier,
     row_user_id as _row_user_id,
     write_csv as _write_csv,
     write_regret_auc_csv as _write_regret_auc_csv,
@@ -3820,21 +3821,132 @@ def _run_scheduler_spec_rows(
     raise RuntimeError(f"No evaluator handled scheduler '{request.scheduler_name}'.")
 
 
+_PLOT_LABEL_MODES = {"none", "sparse", "all"}
+_SPARSE_COST_LABEL_VALUES = (0.0, 4.0, 16.0, 64.0, 256.0, 1024.0)
+_SPARSE_RETENTION_LABEL_VALUES = (0.5, 0.8, 0.9, 0.98)
+_SPARSE_FIXED_INTERVAL_LABEL_VALUES = (8.0, 32.0, 128.0, 512.0)
+
+
+def _row_float(row: dict[str, Any], key: str) -> float | None:
+    value = row.get(key)
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _matches_sparse_label_value(value: float, candidates: Sequence[float]) -> bool:
+    return any(
+        math.isclose(value, candidate, rel_tol=0.0, abs_tol=1e-9)
+        for candidate in candidates
+    )
+
+
+def _fsrs6_adr_plot_label(row: dict[str, Any]) -> str | None:
+    lambda_value = _row_float(row, "fsrs6_adr_lambda_value")
+    if lambda_value is not None:
+        return f"λ={format_float(lambda_value)}"
+    point_label = row.get("fsrs6_adr_point_label")
+    if point_label is not None and point_label != "":
+        return str(point_label)
+    return None
+
+
 def _point_label(row: dict[str, Any]) -> str:
-    goal_cost_weight = row.get("goal_cost_weight")
-    if goal_cost_weight is not None and goal_cost_weight != "":
-        return f"w={format_float(float(goal_cost_weight))}"
+    goal_cost_weight = _row_float(row, "goal_cost_weight")
+    if goal_cost_weight is not None:
+        return f"w={format_float(goal_cost_weight)}"
     if row.get("scheduler") in FSRS6_ADR_SCHEDULERS:
-        point_label = row.get("fsrs6_adr_point_label")
-        if point_label is not None and point_label != "":
-            return str(point_label)
-    desired_retention = row["desired_retention"]
+        adr_label = _fsrs6_adr_plot_label(row)
+        if adr_label is not None:
+            return adr_label
+    desired_retention = _row_float(row, "desired_retention")
     if desired_retention is not None:
-        return format_float(float(desired_retention))
-    fixed_interval = row["fixed_interval"]
+        return format_float(desired_retention)
+    fixed_interval = _row_float(row, "fixed_interval")
     if fixed_interval is not None:
-        return f"{format_float(float(fixed_interval))}d"
+        return f"{format_float(fixed_interval)}d"
     return row["scheduler_spec"]
+
+
+def _sparse_point_label(row: dict[str, Any]) -> str | None:
+    goal_cost_weight = _row_float(row, "goal_cost_weight")
+    if goal_cost_weight is not None:
+        if _matches_sparse_label_value(goal_cost_weight, _SPARSE_COST_LABEL_VALUES):
+            return _point_label(row)
+        return None
+    if row.get("scheduler") in FSRS6_ADR_SCHEDULERS:
+        lambda_value = _row_float(row, "fsrs6_adr_lambda_value")
+        if lambda_value is not None and _matches_sparse_label_value(
+            lambda_value,
+            _SPARSE_COST_LABEL_VALUES,
+        ):
+            return _point_label(row)
+        return None
+    desired_retention = _row_float(row, "desired_retention")
+    if desired_retention is not None:
+        if _matches_sparse_label_value(
+            desired_retention,
+            _SPARSE_RETENTION_LABEL_VALUES,
+        ):
+            return _point_label(row)
+        return None
+    fixed_interval = _row_float(row, "fixed_interval")
+    if fixed_interval is not None:
+        if _matches_sparse_label_value(
+            fixed_interval,
+            _SPARSE_FIXED_INTERVAL_LABEL_VALUES,
+        ):
+            return _point_label(row)
+        return None
+    return None
+
+
+def _plot_point_label(row: dict[str, Any], *, label_mode: str) -> str | None:
+    if label_mode not in _PLOT_LABEL_MODES:
+        raise ValueError(
+            "label_mode must be one of: " + ", ".join(sorted(_PLOT_LABEL_MODES))
+        )
+    if label_mode == "none":
+        return None
+    if label_mode == "sparse":
+        return _sparse_point_label(row)
+    return _point_label(row)
+
+
+def _plot_label_key(row: dict[str, Any], label: str) -> tuple[str, str]:
+    if _row_float(row, "goal_cost_weight") is not None:
+        return "goal_cost_weight", label
+    if row.get("scheduler") in FSRS6_ADR_SCHEDULERS:
+        return "fsrs6_adr_lambda", label
+    if _row_float(row, "desired_retention") is not None:
+        return "desired_retention", label
+    if _row_float(row, "fixed_interval") is not None:
+        return "fixed_interval", label
+    return "scheduler_spec", label
+
+
+def _plot_label_rows(
+    rows: Sequence[dict[str, Any]],
+    *,
+    label_mode: str,
+) -> list[tuple[dict[str, Any], str]]:
+    if label_mode not in _PLOT_LABEL_MODES:
+        raise ValueError(
+            "label_mode must be one of: " + ", ".join(sorted(_PLOT_LABEL_MODES))
+        )
+    output: list[tuple[dict[str, Any], str]] = []
+    seen_sparse_keys: set[tuple[str, str]] = set()
+    for row in rows:
+        label = _plot_point_label(row, label_mode=label_mode)
+        if label is None:
+            continue
+        if label_mode == "sparse":
+            key = _plot_label_key(row, label)
+            if key in seen_sparse_keys:
+                continue
+            seen_sparse_keys.add(key)
+        output.append((row, label))
+    return output
 
 
 def _regret_auc_path(args: argparse.Namespace) -> Path:
@@ -3851,51 +3963,57 @@ def _plot_group_key(row: dict[str, Any]) -> tuple[int, str, str]:
 
 
 def _plot_sort_key(row: dict[str, Any]) -> tuple[float, float]:
-    goal_cost_weight = row.get("goal_cost_weight")
-    if goal_cost_weight is not None and goal_cost_weight != "":
-        return 0.5, float(goal_cost_weight)
+    goal_cost_weight = _row_float(row, "goal_cost_weight")
+    if goal_cost_weight is not None:
+        return 0.5, goal_cost_weight
     if row.get("scheduler") in FSRS6_ADR_SCHEDULERS:
         policy_index = row.get("fsrs6_adr_policy_index")
         if policy_index is not None and policy_index != "":
             return 0.75, float(policy_index)
-        baseline_dr = row.get("fsrs6_adr_baseline_desired_retention")
-        if baseline_dr is not None and baseline_dr != "":
-            lambda_value = row.get("fsrs6_adr_lambda_value")
-            lambda_offset = (
-                0.0
-                if lambda_value is None or lambda_value == ""
-                else float(lambda_value)
-            )
-            return 0.75, float(baseline_dr) + lambda_offset * 1e-6
-        lambda_value = row.get("fsrs6_adr_lambda_value")
-        if lambda_value is not None and lambda_value != "":
-            return 0.75, float(lambda_value)
-    fixed_interval = row["fixed_interval"]
+        baseline_dr = _row_float(row, "fsrs6_adr_baseline_desired_retention")
+        if baseline_dr is not None:
+            lambda_value = _row_float(row, "fsrs6_adr_lambda_value")
+            lambda_offset = 0.0 if lambda_value is None else lambda_value
+            return 0.75, baseline_dr + lambda_offset * 1e-6
+        lambda_value = _row_float(row, "fsrs6_adr_lambda_value")
+        if lambda_value is not None:
+            return 0.75, lambda_value
+    fixed_interval = _row_float(row, "fixed_interval")
     if fixed_interval is not None:
-        return 1.0, float(fixed_interval)
-    desired_retention = row["desired_retention"]
+        return 1.0, fixed_interval
+    desired_retention = _row_float(row, "desired_retention")
     if desired_retention is not None:
-        return 0.0, float(desired_retention)
+        return 0.0, desired_retention
     return 2.0, 0.0
 
 
-def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
+def _write_plot(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    title: str,
+    label_mode: str = "sparse",
+) -> None:
     os.environ.setdefault("MPLBACKEND", "Agg")
     import matplotlib.pyplot as plt
+
+    if label_mode not in _PLOT_LABEL_MODES:
+        raise ValueError(
+            "label_mode must be one of: " + ", ".join(sorted(_PLOT_LABEL_MODES))
+        )
 
     groups: dict[tuple[int, str, str], list[dict[str, Any]]] = {}
     for row in rows:
         key = _plot_group_key(row)
         groups.setdefault(key, []).append(row)
 
-    user_ids = sorted({_row_user_id(row) for row in rows})
     label_rows: list[dict[str, Any]] = []
 
     fig, ax = plt.subplots(figsize=(9, 6))
     for (user_id, environment, scheduler_label), group in groups.items():
         group = sorted(group, key=_plot_sort_key)
-        x = [row["deck_expected_memorized"] for row in group]
-        y = [row["deck_minutes_per_day"] for row in group]
+        x = [float(row["deck_expected_memorized"]) for row in group]
+        y = [float(row["deck_minutes_per_day"]) for row in group]
         ax.plot(
             x,
             y,
@@ -3905,23 +4023,6 @@ def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
             label=f"user {user_id}/{environment}/{scheduler_label}",
         )
         label_rows.extend(group)
-
-    for user_id in user_ids:
-        frontier = _pareto_frontier(
-            [row for row in rows if _row_user_id(row) == user_id]
-        )
-        if not frontier:
-            continue
-        ax.plot(
-            [row["deck_expected_memorized"] for row in frontier],
-            [row["deck_minutes_per_day"] for row in frontier],
-            color="black",
-            marker="o",
-            linewidth=2.0,
-            markersize=4.5,
-            alpha=0.75,
-            label=f"user {user_id} Pareto frontier ({len(frontier)} points)",
-        )
 
     positive_y_values = [
         float(row["deck_minutes_per_day"])
@@ -3936,7 +4037,7 @@ def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
     texts = []
     label_x = []
     label_y = []
-    for row in label_rows:
+    for row, label in _plot_label_rows(label_rows, label_mode=label_mode):
         x = float(row["deck_expected_memorized"])
         y = float(row["deck_minutes_per_day"])
         label_x.append(x)
@@ -3945,7 +4046,7 @@ def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
             ax.text(
                 x,
                 y,
-                _point_label(row),
+                label,
                 fontsize=8,
                 zorder=6,
                 bbox={
@@ -3960,26 +4061,27 @@ def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
         try:
             from adjustText import adjust_text
 
-            adjust_text(
-                texts,
-                x=label_x,
-                y=label_y,
-                target_x=label_x,
-                target_y=label_y,
-                ax=ax,
-                arrowprops={
-                    "arrowstyle": "-",
-                    "color": "0.45",
-                    "lw": 0.5,
-                    "alpha": 0.75,
-                    "shrinkA": 3,
-                    "shrinkB": 2,
-                },
-                force_text=(0.35, 0.5),
-                force_static=(0.2, 0.35),
-                expand=(1.08, 1.2),
-                ensure_inside_axes=True,
-            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                adjust_text(
+                    texts,
+                    x=label_x,
+                    y=label_y,
+                    target_x=label_x,
+                    target_y=label_y,
+                    ax=ax,
+                    arrowprops={
+                        "arrowstyle": "-",
+                        "color": "0.45",
+                        "lw": 0.5,
+                        "alpha": 0.75,
+                        "shrinkA": 3,
+                        "shrinkB": 2,
+                    },
+                    force_text=(0.35, 0.5),
+                    force_static=(0.2, 0.35),
+                    expand=(1.08, 1.2),
+                    ensure_inside_axes=True,
+                )
         except ImportError:
             pass
 
@@ -3995,10 +4097,20 @@ def _write_plot(path: Path, rows: list[dict[str, Any]], *, title: str) -> None:
     plt.close(fig)
 
 
-def _write_user_plots(path: Path, rows: list[dict[str, Any]]) -> Path:
+def _write_user_plots(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    label_mode: str = "sparse",
+) -> Path:
     user_ids = sorted({_row_user_id(row) for row in rows})
     if len(user_ids) <= 1:
-        _write_plot(path, rows, title="Single-card lifecycle Pareto frontier")
+        _write_plot(
+            path,
+            rows,
+            title="Single-card lifecycle tradeoff",
+            label_mode=label_mode,
+        )
         return path
     plot_dir = path if not path.suffix else path.with_name(f"{path.stem}_by_user")
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -4007,7 +4119,8 @@ def _write_user_plots(path: Path, rows: list[dict[str, Any]]) -> Path:
         _write_plot(
             plot_dir / f"user_{user_id}.png",
             user_rows,
-            title=f"User {user_id} single-card lifecycle Pareto frontier",
+            title=f"User {user_id} single-card lifecycle tradeoff",
+            label_mode=label_mode,
         )
     return plot_dir
 
@@ -4181,7 +4294,11 @@ def main() -> None:
     _write_csv(args.out, rows)
     if not args.no_plot:
         plot_path = args.plot_path or args.out.with_suffix(".png")
-        plot_output = _write_user_plots(plot_path, rows)
+        plot_output = _write_user_plots(
+            plot_path,
+            rows,
+            label_mode=args.plot_label_mode,
+        )
         if len(user_ids) <= 1:
             print(f"Wrote plot: {plot_output}")
         else:

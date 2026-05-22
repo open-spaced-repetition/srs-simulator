@@ -459,7 +459,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-plot",
         action="store_true",
-        help="Skip writing the Pareto-style PNG plot.",
+        help="Skip writing the tradeoff PNG plot.",
+    )
+    parser.add_argument(
+        "--plot-label-mode",
+        choices=("none", "sparse", "all"),
+        default="sparse",
+        help=(
+            "Point label density for tradeoff plots. 'sparse' labels only "
+            "key cost-weight, ADR lambda, desired-retention, and fixed-interval "
+            "points."
+        ),
     )
     parser.add_argument(
         "--regret-auc-out",
