@@ -43,6 +43,8 @@ class TransitionCache:
     prob: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
     next_s_idx: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
     next_d_idx: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    next_idx: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    next_weight: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,8 @@ def scalar_objective(metrics: Any, cost_weight: float) -> float:
 
 
 class FSRS6GridOracle:
+    TRANSITION_KERNEL_VERSION = "four_corner_log_s_linear_d_v1"
+
     def __init__(
         self,
         *,
@@ -272,6 +276,9 @@ class FSRS6GridOracle:
         )
         self.s_mesh = self.s_grid[:, None].expand(s_grid_size, d_grid_size)
         self.d_mesh = self.d_grid[None, :].expand(s_grid_size, d_grid_size)
+        self.s_count = int(self.s_grid.numel())
+        self.d_count = int(self.d_grid.numel())
+        self.state_count = self.s_count * self.d_count
         self._s_grid_idx = torch.arange(self.s_grid.numel(), device=self.device)
         self.memorized_by_day = self._precompute_grid_memorized_by_day()
         self.transitions = self._precompute_transitions()
@@ -313,6 +320,18 @@ class FSRS6GridOracle:
             payload["extra"] = extra
         return payload
 
+    def _grid_cache_extra(
+        self,
+        *,
+        capture_policy: bool | None = None,
+    ) -> dict[str, Any]:
+        extra: dict[str, Any] = {
+            "transition_kernel": self.TRANSITION_KERNEL_VERSION,
+        }
+        if capture_policy is not None:
+            extra["capture_policy"] = capture_policy
+        return extra
+
     def estimate(self, cost_weight: float, *, progress: bool = False) -> OracleMetrics:
         return self.solve(
             cost_weight,
@@ -338,6 +357,7 @@ class FSRS6GridOracle:
                     oracle_kind="grid",
                     method="estimate_many",
                     cost_weight=float(weight),
+                    extra=self._grid_cache_extra(),
                 ),
                 map_location=self.device,
             )
@@ -359,6 +379,7 @@ class FSRS6GridOracle:
                         oracle_kind="grid",
                         method="estimate_many",
                         cost_weight=weight,
+                        extra=self._grid_cache_extra(),
                     ),
                     data={"metrics": _metrics_payload(metrics)},
                 )
@@ -392,7 +413,7 @@ class FSRS6GridOracle:
             oracle_kind="grid",
             method="solve",
             cost_weight=float(cost_weight),
-            extra={"capture_policy": capture_policy},
+            extra=self._grid_cache_extra(capture_policy=capture_policy),
         )
         entry = load_cache_entry(
             self.cache_config,
@@ -507,18 +528,24 @@ class FSRS6GridOracle:
         total_minutes = torch.tensor(0.0, device=self.device, dtype=self.dtype)
         total_reviews = torch.tensor(0.0, device=self.device, dtype=self.dtype)
         total_lapses = torch.tensor(0.0, device=self.device, dtype=self.dtype)
+        mem_flat = memorized.reshape(memorized.shape[0], self.state_count)
+        minutes_flat = minutes.reshape(minutes.shape[0], self.state_count)
+        reviews_flat = reviews.reshape(reviews.shape[0], self.state_count)
+        lapses_flat = lapses.reshape(lapses.shape[0], self.state_count)
         for rating in range(1, 5):
             prob = self.first_rating_prob[rating - 1]
-            s0, d0 = self._init_state_scalar(rating)
-            s_idx = self._s_to_idx(s0)
-            d_idx = self._d_to_idx(d0)
-            total_mem += prob * memorized[self.horizon, s_idx, d_idx]
+            state_idx, state_weight = self._initial_state_kernel(rating)
+            total_mem += prob * (state_weight * mem_flat[self.horizon, state_idx]).sum()
             total_minutes += prob * (
                 self.learning_cost_minutes[rating - 1]
-                + minutes[self.horizon, s_idx, d_idx]
+                + (state_weight * minutes_flat[self.horizon, state_idx]).sum()
             )
-            total_reviews += prob * reviews[self.horizon, s_idx, d_idx]
-            total_lapses += prob * lapses[self.horizon, s_idx, d_idx]
+            total_reviews += (
+                prob * (state_weight * reviews_flat[self.horizon, state_idx]).sum()
+            )
+            total_lapses += (
+                prob * (state_weight * lapses_flat[self.horizon, state_idx]).sum()
+            )
 
         day_count = float(self.days)
         reviews_float = float(total_reviews.item())
@@ -558,6 +585,7 @@ class FSRS6GridOracle:
                 oracle_kind="grid",
                 method="solve_policies",
                 cost_weight=float(weight),
+                extra=self._grid_cache_extra(),
             )
             entry = load_cache_entry(
                 self.cache_config,
@@ -583,6 +611,7 @@ class FSRS6GridOracle:
                         oracle_kind="grid",
                         method="solve_policies",
                         cost_weight=weight,
+                        extra=self._grid_cache_extra(),
                     ),
                     data={"policy": policy},
                 )
@@ -682,12 +711,27 @@ class FSRS6GridOracle:
             return candidate_value
 
         rem_idx = future_rem[:, None].expand_as(self.s_mesh)
+        rem_idx_flat = rem_idx.reshape(-1)
         cont_2d = cont_mask[:, None].expand_as(self.s_mesh)
+        value_flat = value.reshape(
+            value.shape[0],
+            self.state_count,
+            int(cost_weights.numel()),
+        )
         for rating_idx, rating in enumerate(range(1, 5)):
             prob = transition.prob[rating_idx][:, None].expand_as(self.s_mesh)
-            s_idx = transition.next_s_idx[rating_idx]
-            d_idx = transition.next_d_idx[rating_idx]
-            future_value = value[rem_idx, s_idx, d_idx]
+            future_value = torch.zeros_like(candidate_value)
+            for corner_idx in range(4):
+                future_value += transition.next_weight[rating_idx][
+                    corner_idx
+                ].unsqueeze(2) * value_flat[
+                    rem_idx_flat,
+                    transition.next_idx[rating_idx][corner_idx].reshape(-1),
+                ].reshape(
+                    self.s_count,
+                    self.d_count,
+                    int(cost_weights.numel()),
+                )
             review_minutes = self.review_cost_minutes[rating - 1]
             weighted = torch.where(cont_2d, prob, torch.zeros_like(prob)).unsqueeze(2)
             candidate_value += weighted * (future_value - cost_weights * review_minutes)
@@ -788,18 +832,28 @@ class FSRS6GridOracle:
             dtype=self.dtype,
         )
         total_lapses = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        mem_flat = memorized.reshape(memorized.shape[0], self.state_count, weight_count)
+        minutes_flat = minutes.reshape(minutes.shape[0], self.state_count, weight_count)
+        reviews_flat = reviews.reshape(reviews.shape[0], self.state_count, weight_count)
+        lapses_flat = lapses.reshape(lapses.shape[0], self.state_count, weight_count)
         for rating in range(1, 5):
             prob = self.first_rating_prob[rating - 1]
-            s0, d0 = self._init_state_scalar(rating)
-            s_idx = self._s_to_idx(s0)
-            d_idx = self._d_to_idx(d0)
-            total_mem += prob * memorized[self.horizon, s_idx, d_idx]
+            state_idx, state_weight = self._initial_state_kernel(rating)
+            total_mem += prob * (
+                state_weight[:, None] * mem_flat[self.horizon, state_idx]
+            ).sum(dim=0)
             total_minutes += prob * (
                 self.learning_cost_minutes[rating - 1]
-                + minutes[self.horizon, s_idx, d_idx]
+                + (state_weight[:, None] * minutes_flat[self.horizon, state_idx]).sum(
+                    dim=0
+                )
             )
-            total_reviews += prob * reviews[self.horizon, s_idx, d_idx]
-            total_lapses += prob * lapses[self.horizon, s_idx, d_idx]
+            total_reviews += prob * (
+                state_weight[:, None] * reviews_flat[self.horizon, state_idx]
+            ).sum(dim=0)
+            total_lapses += prob * (
+                state_weight[:, None] * lapses_flat[self.horizon, state_idx]
+            ).sum(dim=0)
 
         day_count = float(self.days)
         elapsed_per_weight = (time.perf_counter() - start) / float(weight_count)
@@ -875,16 +929,47 @@ class FSRS6GridOracle:
             )
 
         rem_idx = future_rem[:, None].expand_as(self.s_mesh)
+        rem_idx_flat = rem_idx.reshape(-1)
         cont_2d = cont_mask[:, None].expand_as(self.s_mesh)
+        value_flat = value.reshape(value.shape[0], self.state_count, weight_count)
+        memorized_flat = memorized.reshape(
+            memorized.shape[0],
+            self.state_count,
+            weight_count,
+        )
+        minutes_flat = minutes.reshape(minutes.shape[0], self.state_count, weight_count)
+        reviews_flat = reviews.reshape(reviews.shape[0], self.state_count, weight_count)
+        lapses_flat = lapses.reshape(lapses.shape[0], self.state_count, weight_count)
         for rating_idx, rating in enumerate(range(1, 5)):
             prob = transition.prob[rating_idx][:, None].expand_as(self.s_mesh)
-            s_idx = transition.next_s_idx[rating_idx]
-            d_idx = transition.next_d_idx[rating_idx]
-            future_value = value[rem_idx, s_idx, d_idx]
-            future_mem = memorized[rem_idx, s_idx, d_idx]
-            future_minutes = minutes[rem_idx, s_idx, d_idx]
-            future_reviews = reviews[rem_idx, s_idx, d_idx]
-            future_lapses = lapses[rem_idx, s_idx, d_idx]
+            future_value = torch.zeros_like(candidate_value)
+            future_mem = torch.zeros_like(candidate_mem)
+            future_minutes = torch.zeros_like(candidate_minutes)
+            future_reviews = torch.zeros_like(candidate_reviews)
+            future_lapses = torch.zeros_like(candidate_lapses)
+            for corner_idx in range(4):
+                next_idx = transition.next_idx[rating_idx][corner_idx].reshape(-1)
+                weight = transition.next_weight[rating_idx][corner_idx].unsqueeze(2)
+                future_value += weight * value_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count, weight_count)
+                future_mem += weight * memorized_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count, weight_count)
+                future_minutes += weight * minutes_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count, weight_count)
+                future_reviews += weight * reviews_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count, weight_count)
+                future_lapses += weight * lapses_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count, weight_count)
             review_minutes = self.review_cost_minutes[rating - 1]
             weighted = torch.where(cont_2d, prob, torch.zeros_like(prob)).unsqueeze(2)
             candidate_value += weighted * (future_value - cost_weights * review_minutes)
@@ -936,16 +1021,43 @@ class FSRS6GridOracle:
             )
 
         rem_idx = future_rem[:, None].expand_as(self.s_mesh)
+        rem_idx_flat = rem_idx.reshape(-1)
         cont_2d = cont_mask[:, None].expand_as(self.s_mesh)
+        value_flat = value.reshape(value.shape[0], self.state_count)
+        memorized_flat = memorized.reshape(memorized.shape[0], self.state_count)
+        minutes_flat = minutes.reshape(minutes.shape[0], self.state_count)
+        reviews_flat = reviews.reshape(reviews.shape[0], self.state_count)
+        lapses_flat = lapses.reshape(lapses.shape[0], self.state_count)
         for rating_idx, rating in enumerate(range(1, 5)):
             prob = transition.prob[rating_idx][:, None].expand_as(self.s_mesh)
-            s_idx = transition.next_s_idx[rating_idx]
-            d_idx = transition.next_d_idx[rating_idx]
-            future_value = value[rem_idx, s_idx, d_idx]
-            future_mem = memorized[rem_idx, s_idx, d_idx]
-            future_minutes = minutes[rem_idx, s_idx, d_idx]
-            future_reviews = reviews[rem_idx, s_idx, d_idx]
-            future_lapses = lapses[rem_idx, s_idx, d_idx]
+            future_value = torch.zeros_like(candidate_value)
+            future_mem = torch.zeros_like(candidate_mem)
+            future_minutes = torch.zeros_like(candidate_minutes)
+            future_reviews = torch.zeros_like(candidate_reviews)
+            future_lapses = torch.zeros_like(candidate_lapses)
+            for corner_idx in range(4):
+                next_idx = transition.next_idx[rating_idx][corner_idx].reshape(-1)
+                weight = transition.next_weight[rating_idx][corner_idx]
+                future_value += weight * value_flat[rem_idx_flat, next_idx].reshape(
+                    self.s_count,
+                    self.d_count,
+                )
+                future_mem += weight * memorized_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count)
+                future_minutes += weight * minutes_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count)
+                future_reviews += weight * reviews_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count)
+                future_lapses += weight * lapses_flat[
+                    rem_idx_flat,
+                    next_idx,
+                ].reshape(self.s_count, self.d_count)
             review_minutes = self.review_cost_minutes[rating - 1]
             weighted = torch.where(cont_2d, prob, torch.zeros_like(prob))
             candidate_value += weighted * (future_value - cost_weight * review_minutes)
@@ -981,6 +1093,8 @@ class FSRS6GridOracle:
             )
             next_s_idx: list[torch.Tensor] = []
             next_d_idx: list[torch.Tensor] = []
+            next_idx: list[torch.Tensor] = []
+            next_weight: list[torch.Tensor] = []
             for rating in range(1, 5):
                 next_s, next_d = self._next_state_grid(
                     elapsed=elapsed,
@@ -989,12 +1103,17 @@ class FSRS6GridOracle:
                 )
                 next_s_idx.append(self._s_to_idx(next_s))
                 next_d_idx.append(self._d_to_idx(next_d))
+                kernel_idx, kernel_weight = self._state_kernel(next_s, next_d)
+                next_idx.append(kernel_idx)
+                next_weight.append(kernel_weight)
             transitions.append(
                 TransitionCache(
                     interval=interval,
                     prob=probs,
                     next_s_idx=tuple(next_s_idx),  # type: ignore[arg-type]
                     next_d_idx=tuple(next_d_idx),  # type: ignore[arg-type]
+                    next_idx=tuple(next_idx),  # type: ignore[arg-type]
+                    next_weight=tuple(next_weight),  # type: ignore[arg-type]
                 )
             )
         return transitions
@@ -1113,6 +1232,53 @@ class FSRS6GridOracle:
         )
         new_min = s / torch.exp(self.weights[17] * self.weights[18])
         return torch.minimum(new_s, new_min)
+
+    def _state_kernel(
+        self,
+        s: torch.Tensor,
+        d: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        log_s = torch.log(torch.clamp(s, self.bounds.s_min, self.bounds.s_max))
+        s_pos = (log_s - self.log_s_min) / (self.log_s_max - self.log_s_min)
+        s_pos = torch.clamp(
+            s_pos * float(self.s_count - 1), 0.0, float(self.s_count - 1)
+        )
+        s0 = torch.floor(s_pos).to(torch.int64)
+        s1 = torch.clamp(s0 + 1, max=self.s_count - 1)
+        sw = s_pos - s0.to(dtype=self.dtype)
+
+        d_pos = torch.clamp(d, self.bounds.d_min, self.bounds.d_max)
+        d_pos = (d_pos - self.bounds.d_min) / (self.bounds.d_max - self.bounds.d_min)
+        d_pos = torch.clamp(
+            d_pos * float(self.d_count - 1), 0.0, float(self.d_count - 1)
+        )
+        d0 = torch.floor(d_pos).to(torch.int64)
+        d1 = torch.clamp(d0 + 1, max=self.d_count - 1)
+        dw = d_pos - d0.to(dtype=self.dtype)
+
+        next_idx = torch.stack(
+            (
+                s0 * self.d_count + d0,
+                s1 * self.d_count + d0,
+                s0 * self.d_count + d1,
+                s1 * self.d_count + d1,
+            ),
+            dim=0,
+        )
+        next_weight = torch.stack(
+            (
+                (1.0 - sw) * (1.0 - dw),
+                sw * (1.0 - dw),
+                (1.0 - sw) * dw,
+                sw * dw,
+            ),
+            dim=0,
+        )
+        return next_idx.to(dtype=torch.int64), next_weight.to(dtype=self.dtype)
+
+    def _initial_state_kernel(self, rating: int) -> tuple[torch.Tensor, torch.Tensor]:
+        s, d = self._init_state_scalar(rating)
+        return self._state_kernel(s, d)
 
     def _s_to_idx(self, s: torch.Tensor) -> torch.Tensor:
         log_s = torch.log(torch.clamp(s, self.bounds.s_min, self.bounds.s_max))
@@ -1309,49 +1475,7 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
         *,
         progress: bool = False,
     ) -> torch.Tensor:
-        if not cost_weights:
-            raise ValueError("cost_weights must contain at least one value.")
-        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
-        missing: list[tuple[int, float]] = []
-        for idx, weight in enumerate(cost_weights):
-            entry = load_cache_entry(
-                self.cache_config,
-                key_parts=self._cache_key_parts(
-                    oracle_kind="stationary_finite",
-                    method="solve_policies",
-                    cost_weight=float(weight),
-                    extra=self._stationary_cache_extra(),
-                ),
-                map_location=self.device,
-            )
-            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
-                missing.append((idx, float(weight)))
-                continue
-            policies[idx] = entry["policy"].to(device=self.device)
-
-        if missing:
-            computed = self._solve_policies_uncached(
-                [weight for _, weight in missing],
-                progress=progress,
-            )
-            for local_idx, (idx, weight) in enumerate(missing):
-                policy = computed[local_idx].to(device=self.device)
-                policies[idx] = policy
-                write_cache_entry(
-                    self.cache_config,
-                    key_parts=self._cache_key_parts(
-                        oracle_kind="stationary_finite",
-                        method="solve_policies",
-                        cost_weight=weight,
-                        extra=self._stationary_cache_extra(),
-                    ),
-                    data={"policy": policy},
-                )
-
-        return torch.stack(
-            [policy for policy in policies if policy is not None],
-            dim=0,
-        ).to(device=self.device)
+        return super().solve_policies(cost_weights, progress=progress)
 
     def _solve_policies_uncached(
         self,
@@ -1359,115 +1483,7 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
         *,
         progress: bool = False,
     ) -> torch.Tensor:
-        if not cost_weights:
-            raise ValueError("cost_weights must contain at least one value.")
-        weight_tensor = torch.tensor(
-            list(cost_weights), device=self.device, dtype=self.dtype
-        )
-        weight_count = int(weight_tensor.numel())
-        value = torch.zeros(
-            (weight_count, self.horizon + 1, self.state_count),
-            device=self.device,
-            dtype=self.dtype,
-        )
-        policy = torch.zeros(
-            (weight_count, self.horizon + 1, self.state_count),
-            device=self.device,
-            dtype=torch.int64,
-        )
-        weight_penalty = weight_tensor.to(dtype=self.dtype)[:, None]
-        tables = self._action_tables
-        batch_idx = torch.arange(weight_count, device=self.device)[:, None, None]
-
-        progress_bar = None
-        if progress:
-            from tqdm import tqdm
-
-            progress_bar = tqdm(
-                total=self.horizon,
-                desc=f"Stationary finite seed batch={weight_count}",
-                unit="day",
-                leave=False,
-            )
-        try:
-            for rem in range(1, self.horizon + 1):
-                best_value = torch.full(
-                    (weight_count, self.state_count),
-                    -math.inf,
-                    device=self.device,
-                    dtype=self.dtype,
-                )
-                best_action = torch.zeros_like(best_value, dtype=torch.int64)
-                cont_mask = tables.interval <= rem
-                future_rem = torch.clamp(rem - tables.interval, min=0).to(torch.int64)
-                active_days = torch.minimum(
-                    tables.interval,
-                    torch.full_like(tables.interval, rem),
-                )
-                candidate_base = self.memorized_by_day[
-                    active_days,
-                    self._flat_s_idx[None, :].expand_as(active_days),
-                ]
-                for action_idx in range(self.action_count):
-                    candidate_value = (
-                        candidate_base[action_idx][None, :]
-                        .expand(weight_count, -1)
-                        .clone()
-                    )
-                    if bool(cont_mask[action_idx].any().item()):
-                        future_rem_action = future_rem[action_idx][None, :].expand(
-                            weight_count,
-                            -1,
-                        )
-                        for rating_idx, rating in enumerate(range(1, 5)):
-                            future_value = torch.zeros_like(candidate_value)
-                            for corner_idx in range(4):
-                                future_value += (
-                                    tables.next_weight[
-                                        action_idx,
-                                        rating_idx,
-                                        corner_idx,
-                                    ][None, :]
-                                    * value[
-                                        batch_idx.squeeze(2),
-                                        future_rem_action,
-                                        tables.next_idx[
-                                            action_idx,
-                                            rating_idx,
-                                            corner_idx,
-                                        ][None, :].expand(weight_count, -1),
-                                    ]
-                                )
-                            review_minutes = self.review_cost_minutes[rating - 1]
-                            weighted = torch.where(
-                                cont_mask[action_idx],
-                                tables.prob[action_idx, rating_idx],
-                                torch.zeros_like(tables.prob[action_idx, rating_idx]),
-                            )[None, :]
-                            candidate_value += weighted * (
-                                future_value - weight_penalty * review_minutes
-                            )
-                    better = candidate_value > best_value
-                    best_value = torch.where(better, candidate_value, best_value)
-                    best_action = torch.where(
-                        better,
-                        torch.full_like(best_action, action_idx),
-                        best_action,
-                    )
-                value[:, rem] = best_value
-                policy[:, rem] = best_action
-                if progress_bar is not None:
-                    progress_bar.update(1)
-        finally:
-            if progress_bar is not None:
-                progress_bar.close()
-
-        return policy.reshape(
-            weight_count,
-            self.horizon + 1,
-            self.s_count,
-            self.d_count,
-        )
+        return super()._solve_policies_uncached(cost_weights, progress=progress)
 
     def _solve_stationary_finite_policies_uncached(
         self,
@@ -2687,24 +2703,23 @@ class FSRS6StationaryFiniteOracle(FSRS6GridOracle):
                     dim=0,
                 )
             )
-            elapsed = transition.interval.to(dtype=self.dtype)
-            retrievability = self._forgetting_curve(elapsed, self.s_grid)
-            action_next_idx: list[torch.Tensor] = []
-            action_next_weight: list[torch.Tensor] = []
-            for rating in range(1, 5):
-                next_s, next_d = self._next_state_grid(
-                    elapsed=elapsed,
-                    retrievability=retrievability,
-                    rating=rating,
-                )
-                kernel_idx, kernel_weight = self._state_kernel(next_s, next_d)
-                action_next_idx.append(kernel_idx.reshape(4, self.state_count))
-                action_next_weight.append(kernel_weight.reshape(4, self.state_count))
             next_indices.append(
-                torch.stack(action_next_idx, dim=0).to(dtype=torch.int64)
+                torch.stack(
+                    [
+                        kernel_idx.reshape(4, self.state_count)
+                        for kernel_idx in transition.next_idx
+                    ],
+                    dim=0,
+                ).to(dtype=torch.int64)
             )
             next_weights.append(
-                torch.stack(action_next_weight, dim=0).to(dtype=self.dtype)
+                torch.stack(
+                    [
+                        kernel_weight.reshape(4, self.state_count)
+                        for kernel_weight in transition.next_weight
+                    ],
+                    dim=0,
+                ).to(dtype=self.dtype)
             )
         return StationaryActionKernelTables(
             interval=torch.stack(intervals, dim=0).to(dtype=torch.int64),
