@@ -264,6 +264,25 @@ uv run python -m experiments.single_card_tradeoff.cli.oracle_retention_distill -
 uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_distill,fsrs6_oracle_retention_distill --oracle-retention-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt
 ```
 
+The continuous desired-retention oracle solves the same single-card lifecycle
+while constraining actions to a retention interval, defaulting to `[0.5,0.98]`.
+The DP enumerates only rounded day intervals attainable from that retention
+range, stores the canonical continuous retention in the policy table, and
+executes by interpolating retention before the simulator rounds it back to days.
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_continuous_retention --oracle-cost-weights 16,64 --oracle-continuous-retention-min 0.5 --oracle-continuous-retention-max 0.98
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_continuous_stationary_finite --oracle-cost-weights 16,64 --oracle-continuous-interval-chunk-size 64
+```
+
+Train the compact stationary finite continuous-retention student, then evaluate
+it in the standard sweep:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.oracle_continuous_stationary_finite_distill --days 1825 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --oracle-interval-chunk-size 64 --model-out artifacts/single_card_tradeoff/fsrs6_oracle_continuous_stationary_finite_distill_policy.pt
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_continuous_stationary_finite_distill --oracle-continuous-stationary-finite-distill-policy artifacts/single_card_tradeoff/fsrs6_oracle_continuous_stationary_finite_distill_policy.pt
+```
+
 ## Findings
 
 `single_card_tradeoff` is best understood as a frontier experiment, not a full deck scheduler benchmark. It removes daily budget constraints and isolates the memory-time tradeoff for one iid card lifecycle. The metrics can be deck-scaled, but they should not be read as a complete workload simulation.

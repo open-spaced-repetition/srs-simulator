@@ -67,6 +67,10 @@ DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY = Path(
 DEFAULT_FSRS6_ORACLE_RETENTION_DISTILL_POLICY = Path(
     "artifacts/single_card_tradeoff/fsrs6_oracle_retention_distill_policy.pt"
 )
+DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY = Path(
+    "artifacts/single_card_tradeoff/"
+    "fsrs6_oracle_continuous_stationary_finite_distill_policy.pt"
+)
 DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY = Path(
     "artifacts/single_card_tradeoff/fsrs6_oracle_infinite_distill_policy.pt"
 )
@@ -92,6 +96,13 @@ FSRS6_ORACLE_INTERVAL_BILINEAR_ACTION_SCHEDULER = (
 )
 FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER = "fsrs6_oracle_interval_distill"
 FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER = "fsrs6_oracle_retention_distill"
+FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER = "fsrs6_oracle_continuous_retention"
+FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER = (
+    "fsrs6_oracle_continuous_stationary_finite"
+)
+FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER = (
+    "fsrs6_oracle_continuous_stationary_finite_distill"
+)
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
 UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
 FSRS6_ADR_SCHEDULERS = frozenset(schedulers_for_policy_source(PolicySource.FSRS6_ADR))

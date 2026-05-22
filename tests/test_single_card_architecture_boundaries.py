@@ -62,6 +62,9 @@ class SingleCardArchitectureBoundaryTests(unittest.TestCase):
     def test_tradeoff_custom_scheduler_registry_covers_custom_schedulers(self) -> None:
         from experiments.single_card_tradeoff.cli import tradeoff
         from experiments.single_card_tradeoff.core.defaults import (
+            FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER,
+            FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER,
+            FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER,
             FSRS6_ORACLE_DISTILL_SCHEDULER,
             FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER,
             FSRS6_ORACLE_INFINITE_SCHEDULER,
@@ -80,6 +83,9 @@ class SingleCardArchitectureBoundaryTests(unittest.TestCase):
             set(tradeoff._CUSTOM_SINGLE_USER_RUNNERS),
             {
                 FSRS6_ORACLE_SCHEDULER,
+                FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER,
+                FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER,
+                FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER,
                 FSRS6_ORACLE_INFINITE_SCHEDULER,
                 FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER,
                 FSRS6_ORACLE_INTERVAL_SCHEDULER,

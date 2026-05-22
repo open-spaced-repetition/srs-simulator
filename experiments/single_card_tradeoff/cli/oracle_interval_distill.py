@@ -33,11 +33,16 @@ from experiments.single_card_tradeoff.core.config import (
 from experiments.single_card_tradeoff.cli.uvfa_ppo import (
     DEFAULT_COST_WEIGHTS,
     FSRS6SingleCardBatch,
-    ResidualBlock,
     SimMetrics,
     fsrs_config_kwargs,
     parse_csv_floats,
     scalar_objective,
+)
+from experiments.single_card_tradeoff.models.policy_runtime import (
+    IntervalDistillNet,
+    interval_distill_loss,
+    interval_oracle_labels,
+    predicted_intervals,
 )
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
 from simulator.scheduler_spec import format_float
@@ -188,174 +193,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-class IntervalDistillNet(nn.Module):
-    def __init__(
-        self,
-        *,
-        obs_dim: int,
-        hidden_size: int,
-        architecture: str = "residual",
-        depth: int = 3,
-    ) -> None:
-        super().__init__()
-        if obs_dim <= 0:
-            raise ValueError("obs_dim must be > 0.")
-        if hidden_size <= 0:
-            raise ValueError("hidden_size must be > 0.")
-        if architecture not in {"mlp", "residual"}:
-            raise ValueError("architecture must be 'mlp' or 'residual'.")
-        if depth <= 0:
-            raise ValueError("depth must be > 0.")
-        self.obs_dim = int(obs_dim)
-        self.hidden_size = int(hidden_size)
-        self.architecture = architecture
-        self.depth = int(depth)
-        if architecture == "mlp":
-            self.body = nn.Sequential(
-                nn.Linear(obs_dim, hidden_size),
-                nn.Tanh(),
-                nn.Linear(hidden_size, hidden_size),
-                nn.Tanh(),
-            )
-        else:
-            self.body = nn.Sequential(
-                nn.Linear(obs_dim, hidden_size),
-                nn.SiLU(),
-                *[ResidualBlock(hidden_size) for _ in range(depth)],
-                nn.LayerNorm(hidden_size),
-            )
-        self.output = nn.Linear(hidden_size, 1)
-        self._init_weights()
-
-    def _init_weights(self) -> None:
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
-                nn.init.zeros_(module.bias)
-        nn.init.orthogonal_(self.output.weight, gain=0.01)
-        nn.init.zeros_(self.output.bias)
-
-    def forward(self, obs: torch.Tensor) -> torch.Tensor:
-        return self.output(self.body(obs)).squeeze(-1)
-
-
 def resolve_torch_device(raw: str | None) -> torch.device:
     if raw:
         return torch.device(raw)
     if torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
-
-
-def oracle_s_to_idx(oracle: FSRS6IntervalOracle, s: torch.Tensor) -> torch.Tensor:
-    log_s = torch.log(torch.clamp(s, oracle.bounds.s_min, oracle.bounds.s_max))
-    ratio = (log_s - oracle.log_s_min) / (oracle.log_s_max - oracle.log_s_min)
-    return torch.clamp(
-        torch.round(ratio * float(oracle.s_grid.numel() - 1)),
-        min=0,
-        max=oracle.s_grid.numel() - 1,
-    ).to(torch.int64)
-
-
-def oracle_d_to_idx(oracle: FSRS6IntervalOracle, d: torch.Tensor) -> torch.Tensor:
-    ratio = torch.clamp(d, oracle.bounds.d_min, oracle.bounds.d_max)
-    ratio = (ratio - oracle.bounds.d_min) / (oracle.bounds.d_max - oracle.bounds.d_min)
-    return torch.clamp(
-        torch.round(ratio * float(oracle.d_grid.numel() - 1)),
-        min=0,
-        max=oracle.d_grid.numel() - 1,
-    ).to(torch.int64)
-
-
-def interval_oracle_labels(
-    *,
-    env: FSRS6SingleCardBatch,
-    oracle: FSRS6IntervalOracle,
-    policies: torch.Tensor,
-    cost_weights: torch.Tensor,
-) -> torch.Tensor:
-    remaining = torch.clamp((env.days - 1) - env.day, min=0, max=oracle.horizon)
-    s_idx = oracle_s_to_idx(oracle, env.s)
-    d_idx = oracle_d_to_idx(oracle, env.d)
-    goal_idx = torch.argmin(
-        torch.abs(
-            env.goal_weight.to(dtype=cost_weights.dtype)[:, None]
-            - cost_weights[None, :]
-        ),
-        dim=1,
-    )
-    labels = torch.empty(env.env_count, device=env.device, dtype=torch.int64)
-    for idx in torch.unique(goal_idx).tolist():
-        goal_mask = goal_idx == int(idx)
-        labels[goal_mask] = policies[int(idx)][
-            remaining[goal_mask],
-            s_idx[goal_mask],
-            d_idx[goal_mask],
-        ]
-    return labels
-
-
-def _goal_norm(env: FSRS6SingleCardBatch) -> torch.Tensor:
-    return torch.log1p(env.goal_weight) / math.log1p(max(1.0, env.max_goal_weight))
-
-
-def predicted_intervals(
-    *,
-    env: FSRS6SingleCardBatch,
-    log_interval: torch.Tensor,
-    log_interval_bias: float,
-    terminal_snap_ratio: float,
-) -> torch.Tensor:
-    adjusted = log_interval.to(dtype=env.dtype)
-    if log_interval_bias:
-        adjusted = adjusted + float(log_interval_bias) * _goal_norm(env)
-    clipped = torch.clamp(
-        adjusted,
-        min=0.0,
-        max=math.log(float(env.max_interval_days)),
-    )
-    intervals = torch.clamp(
-        torch.round(torch.exp(clipped)),
-        min=1.0,
-        max=float(env.max_interval_days),
-    ).to(torch.int64)
-    if terminal_snap_ratio > 0.0:
-        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
-        snap = intervals.to(dtype=env.dtype) >= (
-            remaining.to(dtype=env.dtype) * float(terminal_snap_ratio)
-        )
-        intervals = torch.where(snap, remaining + 1, intervals)
-    return intervals
-
-
-def interval_distill_loss(
-    *,
-    pred_log_interval: torch.Tensor,
-    target_log_interval: torch.Tensor,
-    labels: torch.Tensor,
-    env: FSRS6SingleCardBatch,
-    underprediction_loss_weight: float,
-    terminal_underprediction_loss_weight: float,
-) -> torch.Tensor:
-    abs_error = torch.abs(pred_log_interval - target_log_interval)
-    smooth_l1 = torch.where(
-        abs_error < 1.0,
-        0.5 * torch.square(abs_error),
-        abs_error - 0.5,
-    )
-    under = (pred_log_interval < target_log_interval).to(dtype=smooth_l1.dtype)
-    weights = torch.ones_like(smooth_l1)
-    if underprediction_loss_weight:
-        weights = weights + (
-            float(underprediction_loss_weight) * _goal_norm(env) * under
-        )
-    if terminal_underprediction_loss_weight:
-        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
-        terminal = (labels == (remaining + 1)).to(dtype=smooth_l1.dtype)
-        weights = weights + (
-            float(terminal_underprediction_loss_weight) * terminal * under
-        )
-    return torch.mean(smooth_l1 * weights)
 
 
 def train_model(

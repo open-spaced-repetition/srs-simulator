@@ -39,6 +39,7 @@ from experiments.single_card_tradeoff.core.config import (
 from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT,
+    DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY,
@@ -50,6 +51,9 @@ from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_UVFA_PPO_POLICY,
     DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY,
     FSRS6_ADR_SCHEDULERS,
+    FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER,
+    FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER,
+    FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER,
     FSRS6_ORACLE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_INFINITE_SCHEDULER,
@@ -147,6 +151,7 @@ __all__ = [
     "DEFAULT_FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_POLICY",
     "DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY",
     "DEFAULT_FSRS6_ORACLE_RETENTION_DISTILL_POLICY",
+    "DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY",
     "DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS",
     "DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS",
     "DEFAULT_TARGET_RETENTIONS",
@@ -161,6 +166,9 @@ __all__ = [
     "FSRS6_ORACLE_INTERVAL_DISTILL_SCHEDULER",
     "FSRS6_ORACLE_INTERVAL_SCHEDULER",
     "FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER",
+    "FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER",
+    "FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER",
+    "FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER",
     "FSRS6_ORACLE_SCHEDULER",
     "MIN_TARGET_RETENTION",
     "UVFA_PPO_RNN_INTERVAL_SCHEDULER",
@@ -1884,6 +1892,122 @@ def _oracle_retention_distill_cost_weights(
     return values
 
 
+def _load_fsrs6_oracle_continuous_stationary_finite_distill_policy(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+) -> tuple[Any, list[float], list[float], float, str, float, float, float]:
+    policy_path = args.oracle_continuous_stationary_finite_distill_policy
+    if not policy_path.exists():
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill policy not found: "
+            f"{policy_path}. Train one with `uv run python -m "
+            "experiments.single_card_tradeoff.cli."
+            "oracle_continuous_stationary_finite_distill "
+            f"--model-out {policy_path}` or pass "
+            "--oracle-continuous-stationary-finite-distill-policy."
+        )
+
+    checkpoint = torch.load(policy_path, map_location=device)
+    if not isinstance(checkpoint, dict):
+        raise SystemExit(
+            f"Invalid FSRS6 continuous stationary finite distill checkpoint: "
+            f"{policy_path}"
+        )
+    if (
+        checkpoint.get("policy_type")
+        != "fsrs6_oracle_continuous_stationary_finite_distill"
+    ):
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill checkpoint has unexpected "
+            "policy_type."
+        )
+    if checkpoint.get("action_mode") != "desired_retention":
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill checkpoint must use "
+            "action_mode=desired_retention."
+        )
+    raw_cost_weights = checkpoint.get("cost_weights")
+    if not isinstance(raw_cost_weights, list) or not raw_cost_weights:
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill checkpoint is missing "
+            "cost_weights."
+        )
+    raw_action_retentions = checkpoint.get("action_retentions", [0.5, 0.98])
+    if not isinstance(raw_action_retentions, list) or not raw_action_retentions:
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill checkpoint has invalid "
+            "action_retentions."
+        )
+    policy_cost_weights = [float(value) for value in raw_cost_weights]
+    action_retentions = [float(value) for value in raw_action_retentions]
+    obs_dim = int(checkpoint.get("obs_dim", 3))
+    obs_mode = str(checkpoint.get("obs_mode", "oracle_stationary"))
+    hidden_size = int(checkpoint.get("hidden_size", 8))
+    network = str(checkpoint.get("network", "residual"))
+    network_depth = int(checkpoint.get("network_depth", 2))
+    model = RetentionDistillNet(
+        obs_dim=obs_dim,
+        hidden_size=hidden_size,
+        action_count=len(action_retentions),
+        architecture=network,
+        depth=network_depth,
+    ).to(device)
+    state_dict = checkpoint.get("model_state_dict")
+    if not isinstance(state_dict, dict):
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill checkpoint is missing "
+            "model_state_dict."
+        )
+    model.load_state_dict(state_dict)
+    model.eval()
+    validate_retention_values(
+        action_retentions,
+        name="FSRS6 continuous stationary finite distill action retention",
+    )
+    retention_min = float(checkpoint.get("retention_min", 0.5))
+    retention_max = float(checkpoint.get("retention_max", 0.98))
+    if not MIN_TARGET_RETENTION <= retention_min <= retention_max < 1.0:
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill retention range must be "
+            "within [0.5, 1)."
+        )
+    terminal_snap_ratio = float(checkpoint.get("terminal_snap_ratio", 0.0))
+    return (
+        model,
+        action_retentions,
+        policy_cost_weights,
+        max(policy_cost_weights),
+        obs_mode,
+        retention_min,
+        retention_max,
+        terminal_snap_ratio,
+    )
+
+
+def _oracle_continuous_stationary_finite_distill_cost_weights(
+    args: argparse.Namespace,
+    *,
+    policy_cost_weights: Sequence[float],
+) -> list[float]:
+    raw = getattr(
+        args,
+        "oracle_continuous_stationary_finite_distill_cost_weights",
+        None,
+    )
+    if raw is None or not raw.strip():
+        return [float(value) for value in policy_cost_weights]
+    values = _parse_float_list(
+        raw,
+        label="Continuous stationary finite oracle-distilled cost weight",
+    )
+    if any(value < 0.0 for value in values):
+        raise SystemExit(
+            "Continuous stationary finite oracle-distilled cost weights must be >= 0."
+        )
+    return values
+
+
 def _load_uvfa_ppo_rnn_interval_policy(
     args: argparse.Namespace,
     *,
@@ -2181,6 +2305,69 @@ def _lookup_interval_policy_bilinear_action(
     lower = torch.ones_like(rounded)
     upper = remaining + 1
     return torch.minimum(torch.maximum(rounded, lower), upper)
+
+
+@torch.inference_mode()
+def _evaluate_fsrs6_oracle_continuous_policies(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    oracle: Any,
+    policies: torch.Tensor,
+    cost_weights: Sequence[float],
+    seed: int,
+    stationary: bool,
+    fsrs_config: SingleCardFSRS6Config | None = None,
+) -> list[Any]:
+    from experiments.single_card_tradeoff.oracles import (
+        bilinear_retention_policy_lookup,
+    )
+
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=env_count,
+        cost_weights=cost_weights,
+        action_retentions=[0.9],
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+    goal_indices = torch.repeat_interleave(
+        torch.arange(weight_count, device=device, dtype=torch.int64),
+        args.particles,
+    )
+    _reset_cost_weight_slices(
+        env,
+        cost_weights=cost_weights,
+        particles=args.particles,
+        device=device,
+    )
+
+    policies = policies.to(device=device, dtype=env.dtype)
+    while not bool(env.done.all().item()):
+        remaining = torch.clamp((env.days - 1) - env.day, min=0, max=oracle.horizon)
+        retention = bilinear_retention_policy_lookup(
+            oracle=oracle,
+            policies=policies,
+            goal_indices=goal_indices,
+            remaining=None if stationary else remaining,
+            s=env.s,
+            d=env.d,
+            retention_min=oracle.retention_min,
+            retention_max=oracle.retention_max,
+        )
+        env.step_retentions(retention)
+
+    return _single_card_metrics_by_weight(
+        env,
+        weight_count=weight_count,
+        particles=args.particles,
+        device=device,
+    )
 
 
 @torch.inference_mode()
@@ -2707,6 +2894,76 @@ def _evaluate_retention_distill_weights(
 
 
 @torch.inference_mode()
+def _evaluate_retention_policy_weights(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    model: Any,
+    action_retentions: Sequence[float],
+    cost_weights: Sequence[float],
+    seed: int,
+    goal_norm_max: float,
+    obs_mode: str,
+    retention_min: float,
+    retention_max: float,
+    progress_label: str,
+    fsrs_config: SingleCardFSRS6Config | None = None,
+) -> list[Any]:
+    weight_count = len(cost_weights)
+    env_count = args.particles * weight_count
+    model_dtype = next(model.parameters()).dtype
+    env = FSRS6SingleCardBatch(
+        days=args.days,
+        env_count=env_count,
+        cost_weights=cost_weights,
+        action_retentions=action_retentions,
+        device=device,
+        dtype=torch.float64,
+        seed=seed,
+        exact_memory=True,
+        goal_norm_max=goal_norm_max,
+        obs_mode=obs_mode,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+    _reset_cost_weight_slices(
+        env,
+        cost_weights=cost_weights,
+        particles=args.particles,
+        device=device,
+    )
+    model.eval()
+    progress = _progress_done(
+        enabled=not args.no_progress,
+        total=env_count,
+        label=progress_label,
+    )
+    completed = 0
+    try:
+        while not bool(env.done.all().item()):
+            obs = env.obs().to(dtype=model_dtype)
+            raw_retention, _ = model(obs)
+            retention = predicted_retentions(
+                raw_retention.to(dtype=env.dtype),
+                retention_min=retention_min,
+                retention_max=retention_max,
+            )
+            env.step_retentions(retention)
+            if progress is not None:
+                next_completed = int(env.done.sum().item())
+                progress.update(next_completed - completed)
+                completed = next_completed
+    finally:
+        if progress is not None:
+            progress.close()
+    return _single_card_metrics_by_weight(
+        env,
+        weight_count=weight_count,
+        particles=args.particles,
+        device=device,
+    )
+
+
+@torch.inference_mode()
 def _evaluate_recurrent_interval_weights(
     *,
     args: argparse.Namespace,
@@ -3166,6 +3423,202 @@ def _run_fsrs6_oracle_interval_bilinear_action(
     )
 
 
+def _continuous_oracle_chunk_size(args: argparse.Namespace) -> int:
+    raw = getattr(args, "oracle_continuous_interval_chunk_size", None)
+    chunk_size = int(args.oracle_interval_chunk_size if raw is None else raw)
+    if chunk_size <= 0:
+        raise SystemExit("--oracle-continuous-interval-chunk-size must be > 0.")
+    return chunk_size
+
+
+def _validate_continuous_oracle_args(
+    args: argparse.Namespace, scheduler_name: str
+) -> None:
+    if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
+        raise SystemExit("--oracle grid sizes must be >= 8.")
+    retention_min = float(args.oracle_continuous_retention_min)
+    retention_max = float(args.oracle_continuous_retention_max)
+    if not MIN_TARGET_RETENTION <= retention_min <= retention_max < 1.0:
+        raise SystemExit(
+            f"{scheduler_name} retention bounds must satisfy "
+            f"{format_float(MIN_TARGET_RETENTION)} <= min <= max < 1."
+        )
+
+
+def _run_fsrs6_oracle_continuous_retention(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    scheduler_name = FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit(f"{scheduler_name} does not support --fuzz.")
+    _validate_continuous_oracle_args(args, scheduler_name)
+
+    from experiments.single_card_tradeoff.oracles import (
+        FSRS6ContinuousRetentionOracle,
+    )
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    cost_weights = _oracle_cost_weights(args)
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
+    oracle = FSRS6ContinuousRetentionOracle(
+        days=args.days,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        retention_min=args.oracle_continuous_retention_min,
+        retention_max=args.oracle_continuous_retention_max,
+        interval_chunk_size=_continuous_oracle_chunk_size(args),
+        device=device,
+        cache_config=_runtime_context(args).dp_cache_config,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+
+    start = time.perf_counter()
+    policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)
+    metrics_by_weight = _evaluate_fsrs6_oracle_continuous_policies(
+        args=args,
+        device=device,
+        oracle=oracle,
+        policies=policies,
+        cost_weights=cost_weights,
+        seed=seed + 62_000,
+        stationary=False,
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
+
+    return [
+        _row_from_uvfa_metrics(
+            args,
+            environment_name=environment_name,
+            scheduler_name=scheduler_name,
+            scheduler_spec=scheduler_spec,
+            goal_cost_weight=cost_weight,
+            seed=seed,
+            metrics=metrics,
+            runtime_s=runtime_s,
+        )
+        for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True)
+    ]
+
+
+def _run_fsrs6_oracle_continuous_stationary_finite(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    scheduler_name = FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit(f"{scheduler_name} does not support --fuzz.")
+    _validate_continuous_oracle_args(args, scheduler_name)
+    if args.oracle_stationary_finite_max_iterations <= 0:
+        raise SystemExit("--oracle-stationary-finite-max-iterations must be > 0.")
+    if args.oracle_stationary_finite_tolerance <= 0.0:
+        raise SystemExit("--oracle-stationary-finite-tolerance must be > 0.")
+
+    from experiments.single_card_tradeoff.oracles import (
+        FSRS6ContinuousStationaryFiniteOracle,
+    )
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    cost_weights = _oracle_cost_weights(args)
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
+    oracle = FSRS6ContinuousStationaryFiniteOracle(
+        days=args.days,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        retention_min=args.oracle_continuous_retention_min,
+        retention_max=args.oracle_continuous_retention_max,
+        interval_chunk_size=_continuous_oracle_chunk_size(args),
+        device=device,
+        cache_config=_runtime_context(args).dp_cache_config,
+        **_fsrs_config_kwargs(fsrs_config),
+    )
+
+    start = time.perf_counter()
+    solution = oracle.solve_stationary_finite_policies(
+        cost_weights,
+        max_iterations=args.oracle_stationary_finite_max_iterations,
+        tolerance=args.oracle_stationary_finite_tolerance,
+        progress=not args.no_progress,
+    )
+    if not all(solution.converged):
+        failed = [
+            format_float(weight)
+            for weight, converged in zip(cost_weights, solution.converged, strict=True)
+            if not converged
+        ]
+        raise SystemExit(
+            f"{scheduler_name} did not converge for cost weights: " + ",".join(failed)
+        )
+    metrics_by_weight = _evaluate_fsrs6_oracle_continuous_policies(
+        args=args,
+        device=device,
+        oracle=oracle,
+        policies=solution.policy,
+        cost_weights=cost_weights,
+        seed=seed + 63_000,
+        stationary=True,
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / float(len(cost_weights))
+
+    for cost_weight, objective, iterations, residual in zip(
+        cost_weights,
+        solution.objectives.tolist(),
+        solution.iterations,
+        solution.residuals,
+        strict=True,
+    ):
+        print(
+            " ".join(
+                [
+                    f"continuous_stationary_finite_oracle w={format_float(cost_weight)}",
+                    f"objective={float(objective):.8f}",
+                    f"iterations={iterations}",
+                    f"residual={residual:.3g}",
+                ]
+            )
+        )
+
+    return [
+        _row_from_uvfa_metrics(
+            args,
+            environment_name=environment_name,
+            scheduler_name=scheduler_name,
+            scheduler_spec=scheduler_spec,
+            goal_cost_weight=cost_weight,
+            seed=seed,
+            metrics=metrics,
+            runtime_s=runtime_s,
+        )
+        for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True)
+    ]
+
+
 def _run_uvfa_ppo(
     args: argparse.Namespace,
     *,
@@ -3498,6 +3951,80 @@ def _run_fsrs6_oracle_retention_distill(
     return rows
 
 
+def _run_fsrs6_oracle_continuous_stationary_finite_distill(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+) -> list[dict[str, Any]]:
+    scheduler_name = FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit(f"{scheduler_name} does not support --fuzz.")
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    (
+        model,
+        action_retentions,
+        policy_cost_weights,
+        goal_norm_max,
+        obs_mode,
+        retention_min,
+        retention_max,
+        _terminal_snap_ratio,
+    ) = _load_fsrs6_oracle_continuous_stationary_finite_distill_policy(
+        args,
+        device=device,
+    )
+    cost_weights = _oracle_continuous_stationary_finite_distill_cost_weights(
+        args,
+        policy_cost_weights=policy_cost_weights,
+    )
+    fsrs_config = load_single_card_fsrs6_config(args, environment=environment_name)
+
+    start = time.perf_counter()
+    metrics_by_weight = _evaluate_retention_policy_weights(
+        args=args,
+        device=device,
+        model=model,
+        action_retentions=action_retentions,
+        cost_weights=cost_weights,
+        seed=seed + 76_000,
+        goal_norm_max=goal_norm_max,
+        obs_mode=obs_mode,
+        retention_min=retention_min,
+        retention_max=retention_max,
+        progress_label=f"{environment_name}/{scheduler_spec}",
+        fsrs_config=fsrs_config,
+    )
+    runtime_s = (time.perf_counter() - start) / max(1, len(cost_weights))
+
+    rows: list[dict[str, Any]] = []
+    for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True):
+        rows.append(
+            _row_from_uvfa_metrics(
+                args,
+                environment_name=environment_name,
+                scheduler_name=scheduler_name,
+                scheduler_spec=scheduler_spec,
+                goal_cost_weight=cost_weight,
+                seed=seed,
+                metrics=metrics,
+                runtime_s=runtime_s,
+            )
+        )
+    return rows
+
+
 def _run_uvfa_ppo_rnn_interval(
     args: argparse.Namespace,
     *,
@@ -3631,6 +4158,12 @@ def _run_fsrs6_oracle_interval_distill(
 
 _CUSTOM_SINGLE_USER_RUNNERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     FSRS6_ORACLE_SCHEDULER: _run_fsrs6_oracle,
+    FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER: (
+        _run_fsrs6_oracle_continuous_retention
+    ),
+    FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER: (
+        _run_fsrs6_oracle_continuous_stationary_finite
+    ),
     FSRS6_ORACLE_INFINITE_SCHEDULER: _run_fsrs6_oracle_infinite,
     FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER: _run_fsrs6_oracle_stationary_finite,
     FSRS6_ORACLE_INTERVAL_SCHEDULER: _run_fsrs6_oracle_interval,
@@ -3641,6 +4174,9 @@ _CUSTOM_SINGLE_USER_RUNNERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER: _run_fsrs6_oracle_infinite_distill,
     FSRS6_ORACLE_STATIONARY_FINITE_DISTILL_SCHEDULER: (
         _run_fsrs6_oracle_stationary_finite_distill
+    ),
+    FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER: (
+        _run_fsrs6_oracle_continuous_stationary_finite_distill
     ),
     FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER: _run_fsrs6_oracle_retention_distill,
     UVFA_PPO_SCHEDULER: _run_uvfa_ppo,

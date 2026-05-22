@@ -146,6 +146,169 @@ def scalar_objective(metrics: Any, cost_weight: float) -> float:
     )
 
 
+def validate_continuous_retention_bounds(
+    retention_min: float,
+    retention_max: float,
+) -> None:
+    if not math.isfinite(retention_min) or not math.isfinite(retention_max):
+        raise ValueError("retention bounds must be finite.")
+    if not 0.0 < retention_min <= retention_max < 1.0:
+        raise ValueError("retention bounds must satisfy 0 < min <= max < 1.")
+
+
+def retention_interval_float(
+    *,
+    s: torch.Tensor,
+    retention: torch.Tensor | float,
+    factor: torch.Tensor,
+    decay: torch.Tensor,
+) -> torch.Tensor:
+    retention_tensor = torch.as_tensor(retention, device=s.device, dtype=s.dtype)
+    clipped = torch.clamp(retention_tensor, min=1e-7, max=1.0 - 1e-7)
+    retention_factor = torch.pow(clipped, 1.0 / decay.to(dtype=s.dtype)) - 1.0
+    return s / factor.to(dtype=s.dtype) * retention_factor
+
+
+def retention_interval_bounds(
+    *,
+    s: torch.Tensor,
+    retention_min: float,
+    retention_max: float,
+    factor: torch.Tensor,
+    decay: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    low_retention_interval = retention_interval_float(
+        s=s,
+        retention=retention_min,
+        factor=factor,
+        decay=decay,
+    )
+    high_retention_interval = retention_interval_float(
+        s=s,
+        retention=retention_max,
+        factor=factor,
+        decay=decay,
+    )
+    lower = torch.minimum(low_retention_interval, high_retention_interval)
+    upper = torch.maximum(low_retention_interval, high_retention_interval)
+    return lower, upper
+
+
+def attainable_interval_mask_for_retention_bounds(
+    *,
+    intervals: torch.Tensor,
+    s_grid: torch.Tensor,
+    retention_min: float,
+    retention_max: float,
+    factor: torch.Tensor,
+    decay: torch.Tensor,
+    terminal_interval: int | None = None,
+) -> torch.Tensor:
+    validate_continuous_retention_bounds(retention_min, retention_max)
+    lower_float, upper_float = retention_interval_bounds(
+        s=s_grid,
+        retention_min=retention_min,
+        retention_max=retention_max,
+        factor=factor,
+        decay=decay,
+    )
+    rounded_lower = torch.clamp(torch.round(lower_float), min=1.0).to(torch.int64)
+    rounded_upper = torch.clamp(torch.round(upper_float), min=1.0).to(torch.int64)
+    lo = torch.minimum(rounded_lower, rounded_upper)
+    hi = torch.maximum(rounded_lower, rounded_upper)
+    interval_col = intervals.to(device=s_grid.device, dtype=torch.int64)[:, None]
+    mask = (interval_col >= lo[None, :]) & (interval_col <= hi[None, :])
+    if terminal_interval is not None:
+        terminal = torch.as_tensor(
+            terminal_interval,
+            device=s_grid.device,
+            dtype=torch.int64,
+        )
+        terminal_mask = (interval_col == terminal) & (hi[None, :] >= terminal)
+        mask = torch.where(interval_col == terminal, terminal_mask, mask)
+        mask = mask & (interval_col <= terminal)
+    return mask
+
+
+def canonical_retention_for_intervals(
+    *,
+    intervals: torch.Tensor,
+    s_grid: torch.Tensor,
+    factor: torch.Tensor,
+    decay: torch.Tensor,
+    retention_min: float,
+    retention_max: float,
+) -> torch.Tensor:
+    validate_continuous_retention_bounds(retention_min, retention_max)
+    elapsed = intervals.to(device=s_grid.device, dtype=s_grid.dtype)[:, None]
+    retrievability = torch.pow(
+        1.0
+        + factor.to(dtype=s_grid.dtype)
+        * elapsed
+        / torch.clamp(s_grid[None, :], min=torch.finfo(s_grid.dtype).tiny),
+        decay.to(dtype=s_grid.dtype),
+    )
+    return torch.clamp(
+        retrievability,
+        min=float(retention_min),
+        max=float(retention_max),
+    )
+
+
+def bilinear_retention_policy_lookup(
+    *,
+    oracle: Any,
+    policies: torch.Tensor,
+    goal_indices: torch.Tensor,
+    s: torch.Tensor,
+    d: torch.Tensor,
+    retention_min: float,
+    retention_max: float,
+    remaining: torch.Tensor | None = None,
+) -> torch.Tensor:
+    validate_continuous_retention_bounds(retention_min, retention_max)
+    s_count = int(oracle.s_grid.numel())
+    d_count = int(oracle.d_grid.numel())
+    log_s = torch.log(torch.clamp(s, oracle.bounds.s_min, oracle.bounds.s_max))
+    s_pos = (log_s - oracle.log_s_min) / (oracle.log_s_max - oracle.log_s_min)
+    s_pos = torch.clamp(s_pos * float(s_count - 1), 0.0, float(s_count - 1))
+    s0 = torch.floor(s_pos).to(torch.int64)
+    s1 = torch.clamp(s0 + 1, max=s_count - 1)
+    sw = s_pos - s0.to(dtype=s_pos.dtype)
+
+    d_pos = torch.clamp(d, oracle.bounds.d_min, oracle.bounds.d_max)
+    d_pos = (d_pos - oracle.bounds.d_min) / (oracle.bounds.d_max - oracle.bounds.d_min)
+    d_pos = torch.clamp(d_pos * float(d_count - 1), 0.0, float(d_count - 1))
+    d0 = torch.floor(d_pos).to(torch.int64)
+    d1 = torch.clamp(d0 + 1, max=d_count - 1)
+    dw = d_pos - d0.to(dtype=d_pos.dtype)
+
+    table = policies.to(device=s.device)
+    if remaining is None:
+        a00 = table[goal_indices, s0, d0]
+        a10 = table[goal_indices, s1, d0]
+        a01 = table[goal_indices, s0, d1]
+        a11 = table[goal_indices, s1, d1]
+    else:
+        a00 = table[goal_indices, remaining, s0, d0]
+        a10 = table[goal_indices, remaining, s1, d0]
+        a01 = table[goal_indices, remaining, s0, d1]
+        a11 = table[goal_indices, remaining, s1, d1]
+
+    dtype = s.dtype
+    retention = (
+        a00.to(dtype=dtype) * (1.0 - sw) * (1.0 - dw)
+        + a10.to(dtype=dtype) * sw * (1.0 - dw)
+        + a01.to(dtype=dtype) * (1.0 - sw) * dw
+        + a11.to(dtype=dtype) * sw * dw
+    )
+    return torch.clamp(
+        retention,
+        min=float(retention_min),
+        max=float(retention_max),
+    )
+
+
 class FSRS6GridOracle:
     TRANSITION_KERNEL_VERSION = "four_corner_log_s_linear_d_v1"
 
@@ -5437,4 +5600,966 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
         return (
             torch.clamp(new_s, self.bounds.s_min, self.bounds.s_max),
             torch.clamp(new_d, self.bounds.d_min, self.bounds.d_max),
+        )
+
+
+class FSRS6ContinuousRetentionOracle(FSRS6IntervalOracle):
+    ACTION_POLICY_LOOKUP_VERSION = "bilinear_retention_action_v1"
+
+    def __init__(
+        self,
+        *,
+        days: int,
+        s_grid_size: int,
+        d_grid_size: int,
+        retention_min: float = 0.5,
+        retention_max: float = 0.98,
+        interval_chunk_size: int = 64,
+        dtype: torch.dtype = torch.float64,
+        device: torch.device | str | None = None,
+        fsrs_weights: Sequence[float] | None = None,
+        first_rating_prob: Sequence[float] | None = None,
+        review_rating_prob: Sequence[float] | None = None,
+        learning_costs: Sequence[float] | None = None,
+        review_costs: Sequence[float] | None = None,
+        cache_config: OracleDPCacheConfig | None = None,
+    ) -> None:
+        validate_continuous_retention_bounds(retention_min, retention_max)
+        super().__init__(
+            days=days,
+            s_grid_size=s_grid_size,
+            d_grid_size=d_grid_size,
+            interval_chunk_size=interval_chunk_size,
+            dtype=dtype,
+            device=device,
+            fsrs_weights=fsrs_weights,
+            first_rating_prob=first_rating_prob,
+            review_rating_prob=review_rating_prob,
+            learning_costs=learning_costs,
+            review_costs=review_costs,
+            cache_config=cache_config,
+        )
+        self.retention_min = float(retention_min)
+        self.retention_max = float(retention_max)
+        self.s_count = int(self.s_grid.numel())
+        self.d_count = int(self.d_grid.numel())
+        self.state_count = self.s_count * self.d_count
+        self._flat_s_idx = (
+            torch.arange(self.s_count, device=self.device)[:, None]
+            .expand(self.s_count, self.d_count)
+            .reshape(-1)
+        )
+
+    def solve_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="continuous_retention",
+                    method="solve_policies",
+                    cost_weight=float(weight),
+                    extra=self._cache_extra(),
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing.append((idx, float(weight)))
+                continue
+            policies[idx] = entry["policy"].to(device=self.device, dtype=self.dtype)
+
+        if missing:
+            computed = self._solve_continuous_policies_uncached(
+                [weight for _, weight in missing],
+                progress=progress,
+            )
+            for local_idx, (idx, weight) in enumerate(missing):
+                policy = computed[local_idx].to(device=self.device, dtype=self.dtype)
+                policies[idx] = policy
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="continuous_retention",
+                        method="solve_policies",
+                        cost_weight=weight,
+                        extra=self._cache_extra(),
+                    ),
+                    data={"policy": policy},
+                )
+
+        return torch.stack(
+            [policy for policy in policies if policy is not None],
+            dim=0,
+        ).to(device=self.device, dtype=self.dtype)
+
+    def _cache_extra(self) -> dict[str, Any]:
+        return {
+            "retention_min": self.retention_min,
+            "retention_max": self.retention_max,
+            "interval_chunk_size": self.interval_chunk_size,
+            "transition_value_lookup": self.TRANSITION_VALUE_LOOKUP_VERSION,
+            "action_policy_lookup": self.ACTION_POLICY_LOOKUP_VERSION,
+        }
+
+    def _solve_continuous_policies_uncached(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
+        weight_count = int(weight_tensor.numel())
+        shape = (
+            self.horizon + 1,
+            self.s_grid.numel(),
+            self.d_grid.numel(),
+            weight_count,
+        )
+        value = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        policy = torch.full(
+            shape,
+            self.retention_max,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        weights = weight_tensor.view(1, 1, 1, weight_count)
+
+        progress_bar = None
+        if progress:
+            from tqdm import tqdm
+
+            progress_bar = tqdm(
+                total=self.horizon,
+                desc=f"Continuous retention oracle w batch={weight_count}",
+                unit="day",
+                leave=False,
+            )
+        try:
+            for rem in range(1, self.horizon + 1):
+                best_value = torch.full_like(value[rem], -math.inf)
+                best_retention = torch.full_like(policy[rem], self.retention_max)
+
+                for start in range(1, rem + 2, self.interval_chunk_size):
+                    stop = min(rem + 2, start + self.interval_chunk_size)
+                    intervals = torch.arange(
+                        start,
+                        stop,
+                        device=self.device,
+                        dtype=torch.int64,
+                    )
+                    candidate_value = self._candidate_interval_value_batch(
+                        intervals=intervals,
+                        rem=rem,
+                        cost_weights=weights,
+                        value=value,
+                    )
+                    candidate_value = self._mask_unattainable_candidates(
+                        intervals=intervals,
+                        rem=rem,
+                        candidate_value=candidate_value,
+                    )
+                    chunk_best_value, chunk_best_idx = candidate_value.max(dim=0)
+                    chunk_best_interval = intervals.index_select(
+                        0,
+                        chunk_best_idx.reshape(-1),
+                    ).reshape_as(chunk_best_idx)
+                    chunk_retention = self._retention_for_interval_grid(
+                        chunk_best_interval,
+                    )
+                    better = chunk_best_value > best_value
+                    best_value = torch.where(better, chunk_best_value, best_value)
+                    best_retention = torch.where(
+                        better,
+                        chunk_retention,
+                        best_retention,
+                    )
+
+                value[rem] = best_value
+                policy[rem] = best_retention
+                if progress_bar is not None:
+                    progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        return policy.permute(3, 0, 1, 2).contiguous()
+
+    def _mask_unattainable_candidates(
+        self,
+        *,
+        intervals: torch.Tensor,
+        rem: int,
+        candidate_value: torch.Tensor,
+    ) -> torch.Tensor:
+        mask = attainable_interval_mask_for_retention_bounds(
+            intervals=intervals,
+            s_grid=self.s_grid,
+            retention_min=self.retention_min,
+            retention_max=self.retention_max,
+            factor=self.factor,
+            decay=self.decay,
+            terminal_interval=rem + 1,
+        )
+        expanded = mask[:, :, None, None]
+        return torch.where(
+            expanded,
+            candidate_value,
+            torch.full_like(candidate_value, -math.inf),
+        )
+
+    def _canonical_retention_for_intervals(
+        self,
+        intervals: torch.Tensor,
+    ) -> torch.Tensor:
+        return canonical_retention_for_intervals(
+            intervals=intervals,
+            s_grid=self.s_grid,
+            factor=self.factor,
+            decay=self.decay,
+            retention_min=self.retention_min,
+            retention_max=self.retention_max,
+        )
+
+    def _retention_for_interval_grid(self, interval: torch.Tensor) -> torch.Tensor:
+        s = self.s_grid[:, None, None].expand_as(interval).to(dtype=self.dtype)
+        retention = self._forgetting_curve(interval.to(dtype=self.dtype), s)
+        return torch.clamp(
+            retention,
+            min=self.retention_min,
+            max=self.retention_max,
+        )
+
+
+class FSRS6ContinuousStationaryFiniteOracle(FSRS6ContinuousRetentionOracle):
+    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v1"
+
+    def solve_stationary_finite_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+        progress: bool = False,
+    ) -> StationaryFiniteOracleSolution:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        if max_iterations <= 0:
+            raise ValueError("max_iterations must be > 0.")
+        if tolerance <= 0.0:
+            raise ValueError("tolerance must be > 0.")
+
+        start = time.perf_counter()
+        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
+        metrics_by_weight: list[OracleMetrics | None] = [None for _ in cost_weights]
+        objectives: list[float | None] = [None for _ in cost_weights]
+        iterations: list[int | None] = [None for _ in cost_weights]
+        converged: list[bool | None] = [None for _ in cost_weights]
+        residuals: list[float | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="continuous_stationary_finite",
+                    method="solve_stationary_finite_policies",
+                    cost_weight=float(weight),
+                    extra=self._stationary_cache_extra(
+                        max_iterations=max_iterations,
+                        tolerance=tolerance,
+                    ),
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing.append((idx, float(weight)))
+                continue
+            policies[idx] = entry["policy"].to(device=self.device, dtype=self.dtype)
+            metrics_by_weight[idx] = _metrics_from_payload(
+                entry["metrics"],
+                runtime_s=0.0,
+            )
+            objectives[idx] = float(entry["objective"])
+            iterations[idx] = int(entry["iterations"])
+            converged[idx] = bool(entry["converged"])
+            residuals[idx] = float(entry["residual"])
+
+        if missing:
+            solution = self._solve_stationary_finite_policies_uncached(
+                [weight for _, weight in missing],
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            for local_idx, (idx, weight) in enumerate(missing):
+                policy = solution.policy[local_idx].to(
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                metrics = solution.metrics[local_idx]
+                objective = float(solution.objectives[local_idx].item())
+                iteration = solution.iterations[local_idx]
+                did_converge = solution.converged[local_idx]
+                residual = solution.residuals[local_idx]
+                policies[idx] = policy
+                metrics_by_weight[idx] = metrics
+                objectives[idx] = objective
+                iterations[idx] = iteration
+                converged[idx] = did_converge
+                residuals[idx] = residual
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="continuous_stationary_finite",
+                        method="solve_stationary_finite_policies",
+                        cost_weight=weight,
+                        extra=self._stationary_cache_extra(
+                            max_iterations=max_iterations,
+                            tolerance=tolerance,
+                        ),
+                    ),
+                    data={
+                        "policy": policy,
+                        "metrics": _metrics_payload(metrics),
+                        "objective": objective,
+                        "iterations": iteration,
+                        "converged": did_converge,
+                        "residual": residual,
+                    },
+                )
+
+        return StationaryFiniteOracleSolution(
+            policy=torch.stack(
+                [policy for policy in policies if policy is not None],
+                dim=0,
+            ).to(device=self.device, dtype=self.dtype),
+            metrics=[metric for metric in metrics_by_weight if metric is not None],
+            objectives=torch.tensor(
+                [objective for objective in objectives if objective is not None],
+                device=self.device,
+                dtype=self.dtype,
+            ),
+            iterations=[int(value) for value in iterations if value is not None],
+            converged=[bool(value) for value in converged if value is not None],
+            residuals=[float(value) for value in residuals if value is not None],
+            runtime_s=time.perf_counter() - start,
+        )
+
+    def _stationary_cache_extra(
+        self,
+        *,
+        max_iterations: int | None = None,
+        tolerance: float | None = None,
+    ) -> dict[str, Any]:
+        extra = self._cache_extra()
+        extra["policy_iteration"] = self.STATIONARY_POLICY_ITERATION_VERSION
+        if max_iterations is not None:
+            extra["max_iterations"] = max_iterations
+        if tolerance is not None:
+            extra["tolerance"] = tolerance
+        return extra
+
+    def _solve_stationary_finite_policies_uncached(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        max_iterations: int,
+        tolerance: float,
+        progress: bool = False,
+    ) -> StationaryFiniteOracleSolution:
+        start = time.perf_counter()
+        cost_weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
+        finite_policies = self.solve_policies(cost_weights, progress=progress)
+        policy = torch.clamp(
+            finite_policies[:, self.horizon],
+            min=self.retention_min,
+            max=self.retention_max,
+        ).contiguous()
+        weight_count = int(cost_weight_tensor.numel())
+        value = self._evaluate_stationary_policy_value_batch(
+            policy=policy,
+            cost_weights=cost_weight_tensor,
+        )
+        objective = self._objective_from_value_batch(
+            value=value,
+            cost_weights=cost_weight_tensor,
+        )
+        iterations = torch.zeros(weight_count, device=self.device, dtype=torch.int64)
+        converged = torch.zeros(weight_count, device=self.device, dtype=torch.bool)
+        residuals = torch.full(
+            (weight_count,),
+            math.inf,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        active = torch.ones(weight_count, device=self.device, dtype=torch.bool)
+
+        progress_bar = None
+        if progress:
+            from tqdm import tqdm
+
+            progress_bar = tqdm(
+                total=weight_count * max_iterations,
+                desc="Continuous stationary finite oracle",
+                unit="iter",
+                leave=False,
+            )
+        try:
+            for iteration in range(1, max_iterations + 1):
+                if not bool(active.any().item()):
+                    break
+                active_idx = active.nonzero(as_tuple=False).squeeze(1)
+                active_count = int(active_idx.numel())
+                active_policy = policy.index_select(0, active_idx)
+                active_weights = cost_weight_tensor.index_select(0, active_idx)
+                active_value = value.index_select(0, active_idx)
+                occupancy = self._rollout_occupancy_batch(
+                    policy=active_policy,
+                    stationary=True,
+                )
+                new_policy, residual, visited = self._improve_stationary_policy_batch(
+                    policy=active_policy,
+                    occupancy=occupancy,
+                    value=active_value,
+                    cost_weights=active_weights,
+                )
+                changed = (
+                    (torch.abs(new_policy - active_policy) > 1e-12) & visited
+                ).reshape(active_count, self.state_count)
+                policy_changed = changed.any(dim=1)
+                residuals[active_idx] = residual
+                iterations[active_idx] = iteration
+                if progress_bar is not None:
+                    progress_bar.update(active_count)
+
+                done = (~policy_changed) | (residual <= tolerance)
+                if bool(done.any().item()):
+                    done_idx = active_idx[done]
+                    converged[done_idx] = True
+                    active[done_idx] = False
+
+                candidate = ~done
+                if not bool(candidate.any().item()):
+                    continue
+
+                candidate_idx = active_idx[candidate]
+                candidate_policy = new_policy[candidate]
+                candidate_weights = cost_weight_tensor.index_select(0, candidate_idx)
+                candidate_value = self._evaluate_stationary_policy_value_batch(
+                    policy=candidate_policy,
+                    cost_weights=candidate_weights,
+                )
+                candidate_objective = self._objective_from_value_batch(
+                    value=candidate_value,
+                    cost_weights=candidate_weights,
+                )
+                objective_improvement = candidate_objective - objective[candidate_idx]
+                accepted = objective_improvement > tolerance
+                residuals[candidate_idx] = torch.where(
+                    accepted,
+                    objective_improvement,
+                    torch.clamp(objective_improvement, min=0.0),
+                )
+
+                if bool((~accepted).any().item()):
+                    rejected_idx = candidate_idx[~accepted]
+                    converged[rejected_idx] = True
+                    active[rejected_idx] = False
+
+                if bool(accepted.any().item()):
+                    accepted_idx = candidate_idx[accepted]
+                    policy[accepted_idx] = candidate_policy[accepted]
+                    value[accepted_idx] = candidate_value[accepted]
+                    objective[accepted_idx] = candidate_objective[accepted]
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        if bool(active.any().item()):
+            iterations[active] = max_iterations
+
+        metrics = self._metrics_from_occupancy_batch(
+            policy=policy,
+            cost_weights=cost_weight_tensor,
+        )
+        return StationaryFiniteOracleSolution(
+            policy=policy,
+            metrics=metrics,
+            objectives=torch.tensor(
+                [metric.scalar_objective for metric in metrics],
+                device=self.device,
+                dtype=self.dtype,
+            ),
+            iterations=[int(value) for value in iterations.cpu().tolist()],
+            converged=[bool(value) for value in converged.cpu().tolist()],
+            residuals=[float(value) for value in residuals.cpu().tolist()],
+            runtime_s=time.perf_counter() - start,
+        )
+
+    def labels(
+        self,
+        *,
+        policies: torch.Tensor,
+        cost_weights: torch.Tensor,
+        s: torch.Tensor,
+        d: torch.Tensor,
+        goal_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        goal_idx = torch.argmin(
+            torch.abs(
+                goal_weight.to(dtype=cost_weights.dtype)[:, None]
+                - cost_weights[None, :]
+            ),
+            dim=1,
+        )
+        return bilinear_retention_policy_lookup(
+            oracle=self,
+            policies=policies,
+            goal_indices=goal_idx,
+            s=s,
+            d=d,
+            retention_min=self.retention_min,
+            retention_max=self.retention_max,
+        )
+
+    def _evaluate_stationary_policy_value_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        weight_count = int(policy.shape[0])
+        value = torch.zeros(
+            (weight_count, self.horizon + 1, self.s_count, self.d_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        interval, prob, next_idx, next_weight = self._policy_tables_batch(policy)
+        batch_idx = torch.arange(weight_count, device=self.device)[:, None]
+        weight_penalty = cost_weights.to(dtype=self.dtype)[:, None]
+        flat_s_idx = self._flat_s_idx[None, :].expand(weight_count, self.state_count)
+        value_flat = value.reshape(
+            weight_count,
+            self.horizon + 1,
+            self.state_count,
+        )
+
+        for rem in range(1, self.horizon + 1):
+            cont_mask = interval <= rem
+            future_rem = torch.clamp(rem - interval, min=0).to(torch.int64)
+            active_days = torch.minimum(interval, torch.full_like(interval, rem))
+            value_rem = self.memorized_by_day[active_days, flat_s_idx].clone()
+
+            if cont_mask.any():
+                for rating_idx, rating in enumerate(range(1, 5)):
+                    future_value = torch.zeros_like(value_rem)
+                    for corner_idx in range(4):
+                        future_value += (
+                            next_weight[:, rating_idx, corner_idx, :]
+                            * value_flat[
+                                batch_idx,
+                                future_rem,
+                                next_idx[:, rating_idx, corner_idx, :],
+                            ]
+                        )
+                    review_minutes = self.review_cost_minutes[rating - 1]
+                    weighted = torch.where(
+                        cont_mask,
+                        prob[:, rating_idx, :],
+                        torch.zeros_like(prob[:, rating_idx, :]),
+                    )
+                    value_rem += weighted * (
+                        future_value - weight_penalty * review_minutes
+                    )
+
+            value[:, rem] = value_rem.reshape(weight_count, self.s_count, self.d_count)
+
+        return value
+
+    def _objective_from_value_batch(
+        self,
+        *,
+        value: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> torch.Tensor:
+        weight_count = int(cost_weights.numel())
+        value_flat = value.reshape(weight_count, self.horizon + 1, self.state_count)
+        total_value = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_learning_minutes = torch.tensor(
+            0.0,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        for rating in range(1, 5):
+            prob = self.first_rating_prob[rating - 1]
+            state_idx, state_weight = self._initial_state_kernel(rating)
+            total_value += prob * (
+                state_weight[None, :] * value_flat[:, self.horizon, state_idx]
+            ).sum(dim=1)
+            total_learning_minutes += prob * self.learning_cost_minutes[rating - 1]
+        return (total_value - cost_weights * total_learning_minutes) / float(self.days)
+
+    def _improve_stationary_policy_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        occupancy: torch.Tensor,
+        value: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        weight_count = int(policy.shape[0])
+        interval_count = self.horizon + 1
+        action_scores = torch.zeros(
+            (weight_count, interval_count, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        valid_actions = (
+            self._stationary_attainable_interval_mask(
+                torch.arange(1, self.horizon + 2, device=self.device, dtype=torch.int64)
+            )
+            .reshape(interval_count, self.s_count, 1)
+            .expand(
+                interval_count,
+                self.s_count,
+                self.d_count,
+            )
+            .reshape(interval_count, self.state_count)
+        )
+        value_for_lookup = value.permute(1, 2, 3, 0).contiguous()
+        weights = cost_weights.to(dtype=self.dtype).view(1, 1, 1, weight_count)
+
+        for rem in range(1, self.horizon + 1):
+            rem_occupancy = occupancy[:, rem, :].reshape(
+                weight_count,
+                self.s_count,
+                self.d_count,
+            )
+            if float(rem_occupancy.sum().item()) <= 0.0:
+                continue
+            for start in range(1, self.horizon + 2, self.interval_chunk_size):
+                stop = min(self.horizon + 2, start + self.interval_chunk_size)
+                intervals = torch.arange(
+                    start,
+                    stop,
+                    device=self.device,
+                    dtype=torch.int64,
+                )
+                candidate_value = self._candidate_interval_value_batch(
+                    intervals=intervals,
+                    rem=rem,
+                    cost_weights=weights,
+                    value=value_for_lookup,
+                )
+                mask = self._stationary_attainable_interval_mask(intervals)
+                candidate_value = torch.where(
+                    mask[:, :, None, None],
+                    candidate_value,
+                    torch.zeros_like(candidate_value),
+                )
+                score = rem_occupancy[:, None, :, :] * candidate_value.permute(
+                    3, 0, 1, 2
+                )
+                action_scores[:, start - 1 : stop - 1] += score.reshape(
+                    weight_count,
+                    int(intervals.numel()),
+                    self.state_count,
+                )
+
+        action_scores = torch.where(
+            valid_actions[None, :, :],
+            action_scores,
+            torch.full_like(action_scores, -math.inf),
+        )
+        best_score, best_idx = action_scores.max(dim=1)
+        best_interval = (best_idx + 1).reshape(
+            weight_count,
+            self.s_count,
+            self.d_count,
+        )
+        current_interval = self._intervals_for_retention_policy(policy)
+        current_score = action_scores.gather(
+            1,
+            (current_interval.reshape(weight_count, self.state_count) - 1)[:, None, :],
+        ).squeeze(1)
+        state_occupancy = occupancy[:, 1:, :].sum(dim=1)
+        visited = state_occupancy > 0.0
+        improvement = best_score - current_score
+        masked_improvement = torch.where(
+            visited,
+            improvement,
+            torch.full_like(improvement, -math.inf),
+        )
+        residual = masked_improvement.max(dim=1).values
+        residual = torch.where(
+            visited.any(dim=1),
+            residual,
+            torch.zeros_like(residual),
+        )
+        new_policy = torch.where(
+            visited.reshape(weight_count, self.s_count, self.d_count),
+            self._retention_for_interval_grid_batch(best_interval),
+            policy,
+        )
+        return (
+            new_policy,
+            residual,
+            visited.reshape(weight_count, self.s_count, self.d_count),
+        )
+
+    def _rollout_occupancy_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        stationary: bool,
+    ) -> torch.Tensor:
+        weight_count = int(policy.shape[0])
+        occupancy = torch.zeros(
+            (weight_count, self.horizon + 1, self.state_count),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        flat_occupancy = occupancy.reshape(-1)
+        batch_offsets = (
+            torch.arange(weight_count, device=self.device, dtype=torch.int64)
+            .view(weight_count, 1)
+            .mul((self.horizon + 1) * self.state_count)
+        )
+        for rating in range(1, 5):
+            prob = self.first_rating_prob[rating - 1]
+            state_idx, state_weight = self._initial_state_kernel(rating)
+            for corner_idx in range(4):
+                target = (
+                    batch_offsets
+                    + self.horizon * self.state_count
+                    + state_idx[corner_idx]
+                )
+                amount = (prob * state_weight[corner_idx]).expand(weight_count)
+                flat_occupancy.scatter_add_(0, target.reshape(-1), amount)
+
+        selected_interval: torch.Tensor | None = None
+        selected_prob: torch.Tensor | None = None
+        selected_next_idx: torch.Tensor | None = None
+        selected_next_weight: torch.Tensor | None = None
+        if stationary:
+            (
+                selected_interval,
+                selected_prob,
+                selected_next_idx,
+                selected_next_weight,
+            ) = self._policy_tables_batch(policy)
+
+        for rem in range(self.horizon, 0, -1):
+            current = occupancy[:, rem, :]
+            if float(current.sum().item()) <= 0.0:
+                continue
+            if not stationary:
+                (
+                    selected_interval,
+                    selected_prob,
+                    selected_next_idx,
+                    selected_next_weight,
+                ) = self._policy_tables_batch(policy[:, rem])
+            if (
+                selected_interval is None
+                or selected_prob is None
+                or selected_next_idx is None
+                or selected_next_weight is None
+            ):
+                raise RuntimeError("selected policy tables were not initialized.")
+
+            cont_mask = selected_interval <= rem
+            if not bool(cont_mask.any().item()):
+                continue
+            source = current * cont_mask.to(dtype=self.dtype)
+            if float(source.sum().item()) <= 0.0:
+                continue
+
+            future_rem = torch.clamp(rem - selected_interval, min=0).to(torch.int64)
+            target_base = batch_offsets + future_rem * self.state_count
+            for rating_idx in range(4):
+                for corner_idx in range(4):
+                    amount = (
+                        source
+                        * selected_prob[:, rating_idx, :]
+                        * selected_next_weight[:, rating_idx, corner_idx, :]
+                    )
+                    target = (
+                        target_base + selected_next_idx[:, rating_idx, corner_idx, :]
+                    )
+                    flat_occupancy.scatter_add_(
+                        0,
+                        target.reshape(-1),
+                        amount.reshape(-1),
+                    )
+
+        return occupancy
+
+    def _metrics_from_occupancy_batch(
+        self,
+        *,
+        policy: torch.Tensor,
+        cost_weights: torch.Tensor,
+    ) -> list[OracleMetrics]:
+        weight_count = int(policy.shape[0])
+        occupancy = self._rollout_occupancy_batch(policy=policy, stationary=True)
+        interval, prob, _, _ = self._policy_tables_batch(policy)
+        total_mem = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_minutes = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_reviews = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        total_lapses = torch.zeros(weight_count, device=self.device, dtype=self.dtype)
+        learning_minutes = (self.first_rating_prob * self.learning_cost_minutes).sum()
+        total_minutes += learning_minutes
+        expected_review_minutes = (prob * self.review_cost_minutes.view(1, 4, 1)).sum(
+            dim=1
+        )
+        flat_s_idx = self._flat_s_idx[None, :].expand(weight_count, self.state_count)
+
+        for rem in range(1, self.horizon + 1):
+            current = occupancy[:, rem, :]
+            if float(current.sum().item()) <= 0.0:
+                continue
+            active_days = torch.minimum(interval, torch.full_like(interval, rem))
+            immediate_mem = self.memorized_by_day[active_days, flat_s_idx]
+            total_mem += (current * immediate_mem).sum(dim=1)
+
+            cont_mask = interval <= rem
+            source = current * cont_mask.to(dtype=self.dtype)
+            if float(source.sum().item()) <= 0.0:
+                continue
+            total_minutes += (source * expected_review_minutes).sum(dim=1)
+            total_reviews += source.sum(dim=1)
+            total_lapses += (source * prob[:, 0, :]).sum(dim=1)
+
+        day_count = float(self.days)
+        objectives = total_mem / day_count - cost_weights * (total_minutes / day_count)
+        metrics: list[OracleMetrics] = []
+        for idx in range(weight_count):
+            reviews_float = float(total_reviews[idx].item())
+            lapses_float = float(total_lapses[idx].item())
+            observed_retention = (
+                1.0 - lapses_float / reviews_float if reviews_float > 0.0 else None
+            )
+            metrics.append(
+                OracleMetrics(
+                    card_expected_retrievability=float(
+                        (total_mem[idx] / day_count).item()
+                    ),
+                    card_minutes_per_day=float((total_minutes[idx] / day_count).item()),
+                    card_reviews_per_day=reviews_float / day_count,
+                    card_total_reviews=reviews_float,
+                    card_total_lapses=lapses_float,
+                    card_total_cost_seconds=float((total_minutes[idx] * 60.0).item()),
+                    observed_retention=observed_retention,
+                    scalar_objective=float(objectives[idx].item()),
+                    runtime_s=0.0,
+                )
+            )
+        return metrics
+
+    def _policy_tables_batch(
+        self,
+        policy: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        weight_count = int(policy.shape[0])
+        interval = self._intervals_for_retention_policy(policy)
+        s = self.s_mesh[None, :, :].expand(weight_count, self.s_count, self.d_count)
+        d = self.d_mesh[None, :, :].expand(weight_count, self.s_count, self.d_count)
+        elapsed = interval.to(dtype=self.dtype)
+        retrievability = self._forgetting_curve(elapsed, s)
+        probs = torch.stack(
+            (
+                1.0 - retrievability,
+                retrievability * self.review_rating_prob[0],
+                retrievability * self.review_rating_prob[1],
+                retrievability * self.review_rating_prob[2],
+            ),
+            dim=1,
+        ).reshape(weight_count, 4, self.state_count)
+
+        next_indices: list[torch.Tensor] = []
+        next_weights: list[torch.Tensor] = []
+        for rating in range(1, 5):
+            rating_tensor = torch.full(
+                (weight_count, self.s_count, self.d_count),
+                rating,
+                device=self.device,
+                dtype=torch.int64,
+            )
+            if rating > 1:
+                new_s = self._stability_after_success(
+                    s,
+                    retrievability,
+                    d,
+                    rating_tensor,
+                )
+            else:
+                new_s = self._stability_after_failure(s, retrievability, d)
+            new_d = self._next_d(d, rating_tensor)
+            kernel_idx, kernel_weight = self._state_kernel(new_s, new_d)
+            next_indices.append(kernel_idx)
+            next_weights.append(kernel_weight)
+
+        next_idx = torch.stack(next_indices, dim=0).permute(2, 0, 1, 3, 4)
+        next_weight = torch.stack(next_weights, dim=0).permute(2, 0, 1, 3, 4)
+        return (
+            interval.reshape(weight_count, self.state_count),
+            probs,
+            next_idx.reshape(weight_count, 4, 4, self.state_count).to(
+                dtype=torch.int64
+            ),
+            next_weight.reshape(weight_count, 4, 4, self.state_count).to(
+                dtype=self.dtype
+            ),
+        )
+
+    def _intervals_for_retention_policy(self, policy: torch.Tensor) -> torch.Tensor:
+        s = self.s_mesh[None, :, :].expand_as(policy)
+        interval = retention_interval_float(
+            s=s,
+            retention=policy,
+            factor=self.factor,
+            decay=self.decay,
+        )
+        return torch.clamp(
+            torch.round(interval),
+            min=1.0,
+            max=float(self.horizon + 1),
+        ).to(torch.int64)
+
+    def _stationary_attainable_interval_mask(
+        self,
+        intervals: torch.Tensor,
+    ) -> torch.Tensor:
+        return attainable_interval_mask_for_retention_bounds(
+            intervals=intervals,
+            s_grid=self.s_grid,
+            retention_min=self.retention_min,
+            retention_max=self.retention_max,
+            factor=self.factor,
+            decay=self.decay,
+            terminal_interval=self.horizon + 1,
+        )
+
+    def _retention_for_interval_grid_batch(
+        self,
+        interval: torch.Tensor,
+    ) -> torch.Tensor:
+        s = self.s_grid[None, :, None].expand_as(interval).to(dtype=self.dtype)
+        retention = self._forgetting_curve(interval.to(dtype=self.dtype), s)
+        return torch.clamp(
+            retention,
+            min=self.retention_min,
+            max=self.retention_max,
         )

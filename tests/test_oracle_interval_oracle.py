@@ -7,7 +7,16 @@ import torch
 from experiments.single_card_tradeoff.core.tradeoff_runner import (
     _lookup_interval_policy_bilinear_action,
 )
-from experiments.single_card_tradeoff.oracles import FSRS6IntervalOracle
+from experiments.single_card_tradeoff.oracles import (
+    FSRS6ContinuousRetentionOracle,
+    FSRS6ContinuousStationaryFiniteOracle,
+    FSRS6GridOracle,
+    FSRS6IntervalOracle,
+    attainable_interval_mask_for_retention_bounds,
+    bilinear_retention_policy_lookup,
+    retention_interval_float,
+)
+from experiments.single_card_tradeoff.oracles.dp_cache import OracleDPCacheConfig
 
 
 class FSRS6IntervalOracleTests(unittest.TestCase):
@@ -134,6 +143,180 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
 
         self.assertEqual(exact.item(), 4)
         self.assertEqual(clamped.item(), 2)
+
+    def test_continuous_bounds_attainable_mask_includes_terminal_surrogate(
+        self,
+    ) -> None:
+        oracle = FSRS6ContinuousRetentionOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.5,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+        intervals = torch.arange(1, 5, device=oracle.device, dtype=torch.int64)
+        mask = attainable_interval_mask_for_retention_bounds(
+            intervals=intervals,
+            s_grid=oracle.s_grid,
+            retention_min=0.5,
+            retention_max=0.5,
+            factor=oracle.factor,
+            decay=oracle.decay,
+            terminal_interval=4,
+        )
+        rounded = torch.clamp(
+            torch.round(
+                retention_interval_float(
+                    s=oracle.s_grid,
+                    retention=0.5,
+                    factor=oracle.factor,
+                    decay=oracle.decay,
+                )
+            ),
+            min=1.0,
+        ).to(torch.int64)
+
+        for s_idx, interval in enumerate(rounded.tolist()):
+            expected = torch.zeros(4, dtype=torch.bool)
+            if interval >= 4:
+                expected[3] = True
+            else:
+                expected[int(interval) - 1] = True
+            self.assertTrue(torch.equal(mask[:, s_idx].cpu(), expected))
+
+    def test_single_retention_continuous_policy_matches_discrete_interval(
+        self,
+    ) -> None:
+        cache_config = OracleDPCacheConfig(enabled=False)
+        discrete = FSRS6GridOracle(
+            days=6,
+            action_retentions=[0.8],
+            s_grid_size=8,
+            d_grid_size=8,
+            device="cpu",
+            cache_config=cache_config,
+        )
+        continuous = FSRS6ContinuousRetentionOracle(
+            days=6,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.8,
+            retention_max=0.8,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=cache_config,
+        )
+        policy = continuous.solve_policies([1.0], progress=False)[0]
+        interval_from_retention = torch.clamp(
+            torch.round(
+                retention_interval_float(
+                    s=continuous.s_mesh,
+                    retention=policy[continuous.horizon],
+                    factor=continuous.factor,
+                    decay=continuous.decay,
+                )
+            ),
+            min=1.0,
+        ).to(torch.int64)
+
+        self.assertTrue(
+            torch.equal(
+                interval_from_retention,
+                discrete.transitions[0]
+                .interval[:, None]
+                .expand_as(interval_from_retention),
+            )
+        )
+
+    def test_continuous_stationary_finite_outputs_retention_table(self) -> None:
+        oracle = FSRS6ContinuousStationaryFiniteOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+        solution = oracle.solve_stationary_finite_policies(
+            [0.0, 16.0],
+            max_iterations=2,
+            tolerance=1e-8,
+            progress=False,
+        )
+
+        self.assertEqual(solution.policy.shape, (2, 8, 8))
+        self.assertTrue(torch.all(solution.policy >= 0.5))
+        self.assertTrue(torch.all(solution.policy <= 0.98))
+        self.assertEqual(len(solution.converged), 2)
+
+    def test_bilinear_retention_lookup_interpolates_and_clamps(self) -> None:
+        oracle = FSRS6ContinuousRetentionOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+        policies = torch.full(
+            (1, oracle.horizon + 1, oracle.s_grid.numel(), oracle.d_grid.numel()),
+            0.9,
+            device=oracle.device,
+            dtype=oracle.dtype,
+        )
+        policies[0, 3, 2, 4] = 0.4
+        policies[0, 3, 3, 4] = 0.6
+        policies[0, 3, 2, 5] = 1.1
+        policies[0, 3, 3, 5] = 0.8
+
+        retention = bilinear_retention_policy_lookup(
+            oracle=oracle,
+            policies=policies,
+            goal_indices=torch.tensor([0], device=oracle.device),
+            remaining=torch.tensor([3], device=oracle.device),
+            s=torch.sqrt(oracle.s_grid[2] * oracle.s_grid[3]).reshape(1),
+            d=((oracle.d_grid[4] + oracle.d_grid[5]) * 0.5).reshape(1),
+            retention_min=0.5,
+            retention_max=0.98,
+        )
+
+        self.assertAlmostEqual(float(retention.item()), 0.725, places=12)
+
+    def test_continuous_cache_key_names_bounds_and_lookup_versions(self) -> None:
+        oracle = FSRS6ContinuousStationaryFiniteOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+        extra = oracle._stationary_cache_extra(max_iterations=3, tolerance=1e-8)
+
+        self.assertEqual(extra["retention_min"], 0.5)
+        self.assertEqual(extra["retention_max"], 0.98)
+        self.assertEqual(extra["interval_chunk_size"], 2)
+        self.assertEqual(
+            extra["transition_value_lookup"],
+            FSRS6ContinuousRetentionOracle.TRANSITION_VALUE_LOOKUP_VERSION,
+        )
+        self.assertEqual(
+            extra["action_policy_lookup"],
+            FSRS6ContinuousRetentionOracle.ACTION_POLICY_LOOKUP_VERSION,
+        )
+        self.assertEqual(
+            extra["policy_iteration"],
+            FSRS6ContinuousStationaryFiniteOracle.STATIONARY_POLICY_ITERATION_VERSION,
+        )
 
 
 if __name__ == "__main__":

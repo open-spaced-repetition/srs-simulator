@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import torch
 from torch import nn
@@ -13,11 +14,14 @@ from experiments.single_card_tradeoff.models.single_card_env import (
 from experiments.single_card_tradeoff.oracles import FSRS6IntervalOracle
 
 __all__ = [
+    "IntervalAwareRetentionLossConfig",
+    "RetentionDistillLoss",
     "IntervalDistillNet",
     "RetentionDistillNet",
     "RecurrentIntervalPolicyValueNet",
     "auxiliary_action_labels",
     "continuous_intervals_for_retentions",
+    "interval_underprediction_weights",
     "interval_aware_retention_loss",
     "interval_distill_loss",
     "interval_oracle_labels",
@@ -26,9 +30,27 @@ __all__ = [
     "oracle_s_to_idx",
     "predicted_intervals",
     "predicted_retentions",
+    "retention_distill_loss",
+    "retention_logits_for_retentions",
     "rounded_intervals_for_retentions",
     "target_retentions_for_intervals",
+    "weighted_log_interval_smooth_l1",
 ]
+
+
+@dataclass(frozen=True)
+class IntervalAwareRetentionLossConfig:
+    interval_weight: float
+    retention_logit_weight: float
+    underprediction_weight: float
+    terminal_underprediction_weight: float
+
+
+@dataclass(frozen=True)
+class RetentionDistillLoss:
+    total: torch.Tensor
+    interval: torch.Tensor
+    retention_logit: torch.Tensor
 
 
 class IntervalDistillNet(nn.Module):
@@ -315,7 +337,7 @@ def predicted_retentions(
     return float(retention_min) + unit * (float(retention_max) - float(retention_min))
 
 
-def _retention_logits(
+def retention_logits_for_retentions(
     retention: torch.Tensor,
     *,
     retention_min: float,
@@ -395,25 +417,19 @@ def interval_aware_retention_loss(
     underprediction_loss_weight: float,
     terminal_underprediction_loss_weight: float,
 ) -> torch.Tensor:
-    abs_error = torch.abs(pred_log_interval - target_log_interval)
-    smooth_l1 = torch.where(
-        abs_error < 1.0,
-        0.5 * torch.square(abs_error),
-        abs_error - 0.5,
+    weights = interval_underprediction_weights(
+        pred_log_interval=pred_log_interval,
+        target_log_interval=target_log_interval,
+        labels=labels,
+        env=env,
+        underprediction_loss_weight=underprediction_loss_weight,
+        terminal_underprediction_loss_weight=terminal_underprediction_loss_weight,
     )
-    under = (pred_log_interval < target_log_interval).to(dtype=smooth_l1.dtype)
-    weights = torch.ones_like(smooth_l1)
-    if underprediction_loss_weight:
-        weights = weights + (
-            float(underprediction_loss_weight) * _goal_norm(env) * under
-        )
-    if terminal_underprediction_loss_weight:
-        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
-        terminal = (labels == (remaining + 1)).to(dtype=smooth_l1.dtype)
-        weights = weights + (
-            float(terminal_underprediction_loss_weight) * terminal * under
-        )
-    return torch.mean(smooth_l1 * weights)
+    return weighted_log_interval_smooth_l1(
+        pred_log_interval=pred_log_interval,
+        target_log_interval=target_log_interval,
+        weights=weights,
+    )
 
 
 def interval_distill_loss(
@@ -425,22 +441,126 @@ def interval_distill_loss(
     underprediction_loss_weight: float,
     terminal_underprediction_loss_weight: float,
 ) -> torch.Tensor:
-    abs_error = torch.abs(pred_log_interval - target_log_interval)
-    smooth_l1 = torch.where(
-        abs_error < 1.0,
-        0.5 * torch.square(abs_error),
-        abs_error - 0.5,
+    weights = interval_underprediction_weights(
+        pred_log_interval=pred_log_interval,
+        target_log_interval=target_log_interval,
+        labels=labels,
+        env=env,
+        underprediction_loss_weight=underprediction_loss_weight,
+        terminal_underprediction_loss_weight=terminal_underprediction_loss_weight,
     )
-    under = (pred_log_interval < target_log_interval).to(dtype=smooth_l1.dtype)
-    weights = torch.ones_like(smooth_l1)
+    return weighted_log_interval_smooth_l1(
+        pred_log_interval=pred_log_interval,
+        target_log_interval=target_log_interval,
+        weights=weights,
+    )
+
+
+def interval_underprediction_weights(
+    *,
+    pred_log_interval: torch.Tensor,
+    target_log_interval: torch.Tensor,
+    labels: torch.Tensor,
+    env: FSRS6SingleCardBatch,
+    underprediction_loss_weight: float,
+    terminal_underprediction_loss_weight: float,
+) -> torch.Tensor:
+    target_log_interval = target_log_interval.to(
+        device=pred_log_interval.device,
+        dtype=pred_log_interval.dtype,
+    )
+    under = (pred_log_interval < target_log_interval).to(dtype=pred_log_interval.dtype)
+    weights = torch.ones_like(pred_log_interval)
     if underprediction_loss_weight:
-        weights = weights + (
-            float(underprediction_loss_weight) * _goal_norm(env) * under
-        )
+        goal_norm = _goal_norm(env).to(device=weights.device, dtype=weights.dtype)
+        weights = weights + (float(underprediction_loss_weight) * goal_norm * under)
     if terminal_underprediction_loss_weight:
         remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
-        terminal = (labels == (remaining + 1)).to(dtype=smooth_l1.dtype)
+        labels = labels.to(device=remaining.device)
+        terminal = (labels == (remaining + 1)).to(dtype=weights.dtype)
         weights = weights + (
             float(terminal_underprediction_loss_weight) * terminal * under
         )
-    return torch.mean(smooth_l1 * weights)
+    return weights
+
+
+def weighted_log_interval_smooth_l1(
+    *,
+    pred_log_interval: torch.Tensor,
+    target_log_interval: torch.Tensor,
+    weights: torch.Tensor,
+) -> torch.Tensor:
+    target_log_interval = target_log_interval.to(
+        device=pred_log_interval.device,
+        dtype=pred_log_interval.dtype,
+    )
+    weights = weights.to(device=pred_log_interval.device, dtype=pred_log_interval.dtype)
+    elementwise = nn.functional.smooth_l1_loss(
+        pred_log_interval,
+        target_log_interval,
+        reduction="none",
+    )
+    return torch.mean(elementwise * weights)
+
+
+def retention_distill_loss(
+    *,
+    pred_logit: torch.Tensor,
+    target_interval: torch.Tensor,
+    env: FSRS6SingleCardBatch,
+    config: IntervalAwareRetentionLossConfig,
+    retention_min: float,
+    retention_max: float,
+) -> RetentionDistillLoss:
+    pred_retention = predicted_retentions(
+        pred_logit,
+        retention_min=retention_min,
+        retention_max=retention_max,
+    )
+    target_retention = target_retentions_for_intervals(
+        env=env,
+        intervals=target_interval,
+        retention_min=retention_min,
+        retention_max=retention_max,
+    )
+    pred_log_interval = torch.log(
+        continuous_intervals_for_retentions(
+            env=env,
+            s=env.s,
+            retention=pred_retention,
+        )
+    )
+    target_log_interval = torch.log(
+        target_interval.to(
+            device=pred_log_interval.device,
+            dtype=pred_log_interval.dtype,
+        )
+    )
+    interval_weights = interval_underprediction_weights(
+        pred_log_interval=pred_log_interval,
+        target_log_interval=target_log_interval,
+        labels=target_interval,
+        env=env,
+        underprediction_loss_weight=config.underprediction_weight,
+        terminal_underprediction_loss_weight=config.terminal_underprediction_weight,
+    )
+    interval = weighted_log_interval_smooth_l1(
+        pred_log_interval=pred_log_interval,
+        target_log_interval=target_log_interval,
+        weights=interval_weights,
+    )
+    target_logit = retention_logits_for_retentions(
+        target_retention.to(device=pred_logit.device, dtype=pred_logit.dtype),
+        retention_min=retention_min,
+        retention_max=retention_max,
+    )
+    retention_logit = nn.functional.smooth_l1_loss(pred_logit, target_logit)
+    total = (
+        float(config.interval_weight) * interval
+        + float(config.retention_logit_weight) * retention_logit
+    )
+    return RetentionDistillLoss(
+        total=total,
+        interval=interval,
+        retention_logit=retention_logit,
+    )

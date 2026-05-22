@@ -30,9 +30,6 @@ from experiments.single_card_tradeoff.core.config import (
     SingleCardFSRS6Config,
 )
 from experiments.single_card_tradeoff.oracles import FSRS6IntervalOracle
-from experiments.single_card_tradeoff.cli.oracle_interval_distill import (
-    interval_oracle_labels,
-)
 from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
@@ -46,11 +43,22 @@ from experiments.single_card_tradeoff.cli.uvfa_ppo import (
     DEFAULT_MAX_GRAD_NORM,
     DEFAULT_TRAIN_ENVS,
     FSRS6SingleCardBatch,
-    ResidualBlock,
     SimMetrics,
     fsrs_config_kwargs,
     parse_csv_floats,
     scalar_objective,
+)
+from experiments.single_card_tradeoff.models.policy_runtime import (
+    IntervalAwareRetentionLossConfig,
+    RetentionDistillNet,
+    auxiliary_action_labels,
+    continuous_intervals_for_retentions,
+    interval_oracle_labels,
+    predicted_retentions,
+    retention_distill_loss,
+    retention_logits_for_retentions,
+    rounded_intervals_for_retentions,
+    target_retentions_for_intervals,
 )
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_DECK_SIZE, DEFAULT_SEED
 from simulator.scheduler_spec import format_float
@@ -85,63 +93,6 @@ class DistillTrainStats:
     mean_loss: float
     mean_interval_loss: float
     runtime_s: float
-
-
-class RetentionDistillNet(nn.Module):
-    def __init__(
-        self,
-        *,
-        obs_dim: int,
-        hidden_size: int,
-        action_count: int,
-        architecture: str = "residual",
-        depth: int = 2,
-    ) -> None:
-        super().__init__()
-        if obs_dim <= 0:
-            raise ValueError("obs_dim must be > 0.")
-        if hidden_size <= 0:
-            raise ValueError("hidden_size must be > 0.")
-        if action_count <= 0:
-            raise ValueError("action_count must be > 0.")
-        if architecture not in {"mlp", "residual"}:
-            raise ValueError("architecture must be 'mlp' or 'residual'.")
-        if depth <= 0:
-            raise ValueError("depth must be > 0.")
-        self.obs_dim = int(obs_dim)
-        self.hidden_size = int(hidden_size)
-        self.action_count = int(action_count)
-        self.architecture = architecture
-        self.depth = int(depth)
-        if architecture == "mlp":
-            self.body = nn.Sequential(
-                nn.Linear(obs_dim, hidden_size),
-                nn.Tanh(),
-                nn.Linear(hidden_size, hidden_size),
-                nn.Tanh(),
-            )
-        else:
-            self.body = nn.Sequential(
-                nn.Linear(obs_dim, hidden_size),
-                nn.SiLU(),
-                *[ResidualBlock(hidden_size) for _ in range(depth)],
-                nn.LayerNorm(hidden_size),
-            )
-        self.retention = nn.Linear(hidden_size, 1)
-        self.auxiliary_action = nn.Linear(hidden_size, action_count)
-        self._init_weights()
-
-    def _init_weights(self) -> None:
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight, gain=math.sqrt(2.0))
-                nn.init.zeros_(module.bias)
-        nn.init.orthogonal_(self.retention.weight, gain=0.01)
-        nn.init.orthogonal_(self.auxiliary_action.weight, gain=0.01)
-
-    def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden = self.body(obs)
-        return self.retention(hidden).squeeze(-1), self.auxiliary_action(hidden)
 
 
 def parse_args() -> argparse.Namespace:
@@ -289,121 +240,6 @@ def resolve_torch_device(raw: str | None) -> torch.device:
     return torch.device("cpu")
 
 
-def predicted_retentions(
-    raw_retention: torch.Tensor,
-    *,
-    retention_min: float,
-    retention_max: float,
-) -> torch.Tensor:
-    unit = torch.sigmoid(raw_retention)
-    return float(retention_min) + unit * (float(retention_max) - float(retention_min))
-
-
-def _retention_logits(
-    retention: torch.Tensor,
-    *,
-    retention_min: float,
-    retention_max: float,
-) -> torch.Tensor:
-    unit = (retention - float(retention_min)) / (
-        float(retention_max) - float(retention_min)
-    )
-    return torch.logit(torch.clamp(unit, min=1e-6, max=1.0 - 1e-6))
-
-
-def continuous_intervals_for_retentions(
-    *,
-    env: FSRS6SingleCardBatch,
-    s: torch.Tensor,
-    retention: torch.Tensor,
-) -> torch.Tensor:
-    clipped_retention = torch.clamp(retention, min=1e-7, max=1.0 - 1e-7)
-    retention_factor = torch.pow(clipped_retention, 1.0 / env.decay) - 1.0
-    interval = s / env.factor * retention_factor
-    return torch.clamp(
-        interval,
-        min=1.0,
-        max=float(env.max_interval_days),
-    )
-
-
-def _goal_norm(env: FSRS6SingleCardBatch) -> torch.Tensor:
-    return torch.log1p(env.goal_weight) / math.log1p(max(1.0, env.max_goal_weight))
-
-
-def rounded_intervals_for_retentions(
-    *,
-    env: FSRS6SingleCardBatch,
-    retention: torch.Tensor,
-    terminal_snap_ratio: float,
-) -> torch.Tensor:
-    intervals = env._intervals_for_retentions(env.s, retention)
-    if terminal_snap_ratio > 0.0:
-        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
-        snap = intervals.to(dtype=env.dtype) >= (
-            remaining.to(dtype=env.dtype) * float(terminal_snap_ratio)
-        )
-        intervals = torch.where(snap, remaining + 1, intervals)
-    return intervals
-
-
-def interval_aware_retention_loss(
-    *,
-    pred_log_interval: torch.Tensor,
-    target_log_interval: torch.Tensor,
-    labels: torch.Tensor,
-    env: FSRS6SingleCardBatch,
-    underprediction_loss_weight: float,
-    terminal_underprediction_loss_weight: float,
-) -> torch.Tensor:
-    abs_error = torch.abs(pred_log_interval - target_log_interval)
-    smooth_l1 = torch.where(
-        abs_error < 1.0,
-        0.5 * torch.square(abs_error),
-        abs_error - 0.5,
-    )
-    under = (pred_log_interval < target_log_interval).to(dtype=smooth_l1.dtype)
-    weights = torch.ones_like(smooth_l1)
-    if underprediction_loss_weight:
-        weights = weights + (
-            float(underprediction_loss_weight) * _goal_norm(env) * under
-        )
-    if terminal_underprediction_loss_weight:
-        remaining = torch.clamp((env.days - 1) - env.day, min=0).to(torch.int64)
-        terminal = (labels == (remaining + 1)).to(dtype=smooth_l1.dtype)
-        weights = weights + (
-            float(terminal_underprediction_loss_weight) * terminal * under
-        )
-    return torch.mean(smooth_l1 * weights)
-
-
-def target_retentions_for_intervals(
-    *,
-    env: FSRS6SingleCardBatch,
-    intervals: torch.Tensor,
-    retention_min: float,
-    retention_max: float,
-) -> torch.Tensor:
-    elapsed = intervals.to(dtype=env.dtype)
-    retention = env._forgetting_curve(elapsed, env.s)
-    return torch.clamp(
-        retention,
-        min=float(retention_min),
-        max=float(retention_max),
-    )
-
-
-def auxiliary_action_labels(
-    *,
-    target_retention: torch.Tensor,
-    action_retentions: torch.Tensor,
-) -> torch.Tensor:
-    return torch.argmin(
-        torch.abs(target_retention[:, None] - action_retentions[None, :]),
-        dim=1,
-    )
-
-
 def train_model(
     args: argparse.Namespace,
     *,
@@ -445,6 +281,12 @@ def train_model(
         dtype=dtype,
     )
     obs = env.obs()
+    loss_config = IntervalAwareRetentionLossConfig(
+        interval_weight=args.interval_loss_weight,
+        retention_logit_weight=args.retention_logit_loss_weight,
+        underprediction_weight=args.underprediction_loss_weight,
+        terminal_underprediction_weight=args.terminal_underprediction_loss_weight,
+    )
     losses: list[float] = []
     interval_losses: list[float] = []
     final_interval_loss = math.nan
@@ -460,50 +302,28 @@ def train_model(
                 policies=policy_tables,
                 cost_weights=cost_weight_tensor,
             )
+            pred_logit, aux_logits = model(obs)
+            distill = retention_distill_loss(
+                pred_logit=pred_logit,
+                target_interval=interval_labels,
+                env=env,
+                config=loss_config,
+                retention_min=args.retention_min,
+                retention_max=args.retention_max,
+            )
             target_retention = target_retentions_for_intervals(
                 env=env,
                 intervals=interval_labels,
                 retention_min=args.retention_min,
                 retention_max=args.retention_max,
             )
-            target_logit = _retention_logits(
-                target_retention,
-                retention_min=args.retention_min,
-                retention_max=args.retention_max,
-            )
-            pred_logit, aux_logits = model(obs)
-            pred_retention = predicted_retentions(
-                pred_logit,
-                retention_min=args.retention_min,
-                retention_max=args.retention_max,
-            )
-            pred_interval = continuous_intervals_for_retentions(
-                env=env,
-                s=env.s,
-                retention=pred_retention,
-            )
-            pred_log_interval = torch.log(pred_interval)
-            target_log_interval = torch.log(interval_labels.to(dtype=dtype))
-            interval_loss = interval_aware_retention_loss(
-                pred_log_interval=pred_log_interval,
-                target_log_interval=target_log_interval,
-                labels=interval_labels,
-                env=env,
-                underprediction_loss_weight=args.underprediction_loss_weight,
-                terminal_underprediction_loss_weight=(
-                    args.terminal_underprediction_loss_weight
-                ),
-            )
-            retention_loss = nn.functional.smooth_l1_loss(pred_logit, target_logit)
             aux_labels = auxiliary_action_labels(
                 target_retention=target_retention,
                 action_retentions=action_retention_tensor,
             )
             auxiliary_loss = nn.functional.cross_entropy(aux_logits, aux_labels)
-            loss = (
-                (float(args.interval_loss_weight) * interval_loss)
-                + (float(args.retention_logit_loss_weight) * retention_loss)
-                + (float(args.auxiliary_action_loss_weight) * auxiliary_loss)
+            loss = distill.total + (
+                float(args.auxiliary_action_loss_weight) * auxiliary_loss
             )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -511,10 +331,10 @@ def train_model(
             optimizer.step()
             loss_value = float(loss.item())
             losses.append(loss_value)
-            interval_losses.append(float(interval_loss.item()))
+            interval_losses.append(float(distill.interval.item()))
             epoch_loss += loss_value
-            final_interval_loss = float(interval_loss.item())
-            final_retention_loss = float(retention_loss.item())
+            final_interval_loss = float(distill.interval.item())
+            final_retention_loss = float(distill.retention_logit.item())
             final_auxiliary_loss = float(auxiliary_loss.item())
             with torch.no_grad():
                 rollout_prob = (
@@ -636,7 +456,7 @@ def evaluate_retention_agreement(
             retention_min=args.retention_min,
             retention_max=args.retention_max,
         )
-        target_logit = _retention_logits(
+        target_logit = retention_logits_for_retentions(
             target_retention,
             retention_min=args.retention_min,
             retention_max=args.retention_max,

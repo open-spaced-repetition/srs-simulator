@@ -27,6 +27,10 @@ TASK_MODULES: Mapping[str, str] = {
     "oracle_interval_distill": (
         "experiments.single_card_tradeoff.cli.oracle_interval_distill"
     ),
+    "oracle_continuous_stationary_finite_distill": (
+        "experiments.single_card_tradeoff.cli."
+        "oracle_continuous_stationary_finite_distill"
+    ),
     "oracle_interval_distill_hparam_search": (
         "experiments.single_card_tradeoff.cli.oracle_interval_distill_hparam_search"
     ),
@@ -160,6 +164,8 @@ def expected_artifacts(task: WorkflowTask) -> tuple[Path, ...]:
     if task.kind == "fsrs6_adr_train_multiuser":
         return _fsrs6_adr_train_multiuser_artifacts(options)
     if task.kind == "oracle_interval_distill":
+        return _explicit_file_artifacts(options, ["model_out", "out"])
+    if task.kind == "oracle_continuous_stationary_finite_distill":
         return _explicit_file_artifacts(options, ["model_out", "out"])
     if task.kind == "oracle_interval_distill_hparam_search":
         return _root_artifacts(

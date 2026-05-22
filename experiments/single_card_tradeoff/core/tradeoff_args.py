@@ -16,6 +16,7 @@ from experiments.retention_sweep.cli_utils import (
 from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT,
+    DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY,
@@ -26,6 +27,9 @@ from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_UVFA_PPO_POLICY,
     DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY,
     FSRS6_ADR_SCHEDULERS,
+    FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER,
+    FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER,
+    FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER,
     FSRS6_ORACLE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_INFINITE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_INFINITE_SCHEDULER,
@@ -225,6 +229,28 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--oracle-continuous-stationary-finite-distill-policy",
+        type=Path,
+        default=DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY,
+        help=(
+            "Path to an FSRS6 continuous stationary finite-lifecycle oracle "
+            "retention distillation checkpoint when --sched contains "
+            "fsrs6_oracle_continuous_stationary_finite_distill."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-continuous-stationary-finite-distill-cost-weights",
+        default=",".join(
+            format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
+        ),
+        help=(
+            "Comma-separated scalarization weights for "
+            "fsrs6_oracle_continuous_stationary_finite_distill. Defaults to "
+            "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024. "
+            "Pass an empty string to use the cost_weights saved in the policy."
+        ),
+    )
+    parser.add_argument(
         "--oracle-infinite-distill-policy",
         type=Path,
         default=DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY,
@@ -332,6 +358,27 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=64,
         help="Interval candidates per Bellman-backup chunk for fsrs6_oracle_interval.",
+    )
+    parser.add_argument(
+        "--oracle-continuous-retention-min",
+        type=float,
+        default=0.5,
+        help="Minimum desired retention for continuous-retention oracles.",
+    )
+    parser.add_argument(
+        "--oracle-continuous-retention-max",
+        type=float,
+        default=0.98,
+        help="Maximum desired retention for continuous-retention oracles.",
+    )
+    parser.add_argument(
+        "--oracle-continuous-interval-chunk-size",
+        type=int,
+        default=None,
+        help=(
+            "Interval candidates per Bellman-backup chunk for continuous-retention "
+            "oracles. Defaults to --oracle-interval-chunk-size."
+        ),
     )
     parser.add_argument(
         "--oracle-infinite-max-iterations",
@@ -591,6 +638,9 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             raise SystemExit(str(exc)) from exc
         custom_schedulers = {
             FSRS6_ORACLE_SCHEDULER,
+            FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER,
+            FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER,
+            FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER,
             FSRS6_ORACLE_INFINITE_SCHEDULER,
             FSRS6_ORACLE_STATIONARY_FINITE_SCHEDULER,
             FSRS6_ORACLE_DISTILL_SCHEDULER,
