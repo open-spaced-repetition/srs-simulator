@@ -214,6 +214,51 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
                 expected[int(interval) - 1] = True
             self.assertTrue(torch.equal(mask[:, s_idx].cpu(), expected))
 
+    def test_continuous_terminal_interval_uses_retention_min_representative(
+        self,
+    ) -> None:
+        oracle = FSRS6ContinuousRetentionOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+        intervals = torch.full(
+            (oracle.s_count, oracle.d_count, 1),
+            oracle.horizon + 1,
+            device=oracle.device,
+            dtype=torch.int64,
+        )
+
+        retention = oracle._retention_for_interval_grid(
+            intervals,
+            terminal_interval=oracle.horizon + 1,
+        )
+
+        self.assertTrue(torch.all(retention == oracle.retention_min))
+
+    def test_batched_continuous_terminal_interval_uses_retention_min_representative(
+        self,
+    ) -> None:
+        oracle = _batched_continuous_oracle(days=4)
+        intervals = torch.full(
+            (oracle.user_count, 2, oracle.s_count, oracle.d_count),
+            oracle.horizon + 1,
+            device=oracle.device,
+            dtype=torch.int64,
+        )
+
+        retention = oracle._retention_for_interval_grid_batch(
+            intervals,
+            terminal_interval=oracle.horizon + 1,
+        )
+
+        self.assertTrue(torch.all(retention == oracle.retention_min))
+
     def test_single_retention_continuous_policy_matches_discrete_interval(
         self,
     ) -> None:
@@ -523,6 +568,42 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
 
         self.assertAlmostEqual(float(retention.item()), 0.725, places=12)
 
+    def test_bilinear_retention_lookup_indexes_batched_user_tables(self) -> None:
+        oracle = _batched_continuous_oracle(user_count=2, days=4)
+        policies = torch.full(
+            (
+                2,
+                2,
+                oracle.horizon + 1,
+                oracle.s_grid.numel(),
+                oracle.d_grid.numel(),
+            ),
+            0.5,
+            device=oracle.device,
+            dtype=oracle.dtype,
+        )
+        policies[0, 1, 2, 2, 4] = 0.61
+        policies[1, 0, 2, 2, 4] = 0.83
+
+        retention = bilinear_retention_policy_lookup(
+            oracle=oracle,
+            policies=policies,
+            user_indices=torch.tensor([0, 1], device=oracle.device),
+            goal_indices=torch.tensor([1, 0], device=oracle.device),
+            remaining=torch.tensor([2, 2], device=oracle.device),
+            s=oracle.s_grid[2].repeat(2),
+            d=oracle.d_grid[4].repeat(2),
+            retention_min=0.5,
+            retention_max=0.98,
+        )
+
+        self.assertTrue(
+            torch.allclose(
+                retention,
+                torch.tensor([0.61, 0.83], device=oracle.device, dtype=oracle.dtype),
+            )
+        )
+
     def test_continuous_cache_key_names_bounds_and_lookup_versions(self) -> None:
         oracle = FSRS6ContinuousStationaryFiniteOracle(
             days=4,
@@ -551,7 +632,7 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
             extra["policy_iteration"],
             FSRS6ContinuousStationaryFiniteOracle.STATIONARY_POLICY_ITERATION_VERSION,
         )
-        self.assertEqual(extra["policy_iteration"], "continuous_interval_greedy_v2")
+        self.assertEqual(extra["policy_iteration"], "continuous_interval_greedy_v3")
 
         batched = _batched_continuous_oracle(days=4)
         self.assertNotIn("policy_iteration", batched._continuous_cache_extra())
@@ -560,7 +641,7 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
                 max_iterations=3,
                 tolerance=1e-8,
             )["policy_iteration"],
-            "continuous_interval_greedy_v2",
+            "continuous_interval_greedy_v3",
         )
 
 

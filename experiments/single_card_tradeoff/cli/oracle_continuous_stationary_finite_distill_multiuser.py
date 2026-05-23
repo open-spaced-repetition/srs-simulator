@@ -928,21 +928,34 @@ def evaluate_batched_per_user_policies(
         env.reset_all(goal_values=goal_values)
         start = time.perf_counter()
         while not bool(env.done.all().item()):
-            obs = (
-                env.obs()
-                .to(dtype=model_dtype)
-                .reshape(
-                    user_count,
-                    group_count * args.eval_particles,
-                    env.obs_dim,
+            active = (~env.done).nonzero(as_tuple=False).squeeze(1)
+            obs = env.obs().index_select(0, active).to(dtype=model_dtype)
+            active_users = env.user_index.index_select(0, active)
+            retention = torch.empty(env.env_count, device=device, dtype=env.dtype)
+            for user_idx in range(user_count):
+                local = (active_users == user_idx).nonzero(as_tuple=False).squeeze(1)
+                if local.numel() == 0:
+                    continue
+                user_obs = obs.index_select(0, local)
+                raw_retention, _ = torch.func.functional_call(
+                    ensemble.base_model,
+                    (
+                        {
+                            name: tensor[user_idx]
+                            for name, tensor in ensemble.params.items()
+                        },
+                        {
+                            name: tensor[user_idx]
+                            for name, tensor in ensemble.buffers.items()
+                        },
+                    ),
+                    (user_obs,),
                 )
-            )
-            raw_retention, _ = batched_retention_ensemble_forward(ensemble, obs)
-            retention = predicted_retentions(
-                raw_retention.reshape(-1).to(dtype=env.dtype),
-                retention_min=args.retention_min,
-                retention_max=args.retention_max,
-            )
+                retention[active.index_select(0, local)] = predicted_retentions(
+                    raw_retention.reshape(-1).to(dtype=env.dtype),
+                    retention_min=args.retention_min,
+                    retention_max=args.retention_max,
+                )
             env.step_retention(retention)
         elapsed_s = time.perf_counter() - start
         runtime_s = elapsed_s / float(max(1, user_count * group_count))

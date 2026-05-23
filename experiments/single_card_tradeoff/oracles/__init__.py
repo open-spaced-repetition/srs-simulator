@@ -260,6 +260,7 @@ def bilinear_retention_policy_lookup(
     oracle: Any,
     policies: torch.Tensor,
     goal_indices: torch.Tensor,
+    user_indices: torch.Tensor | None = None,
     s: torch.Tensor,
     d: torch.Tensor,
     retention_min: float,
@@ -284,16 +285,29 @@ def bilinear_retention_policy_lookup(
     dw = d_pos - d0.to(dtype=d_pos.dtype)
 
     table = policies.to(device=s.device)
-    if remaining is None:
-        a00 = table[goal_indices, s0, d0]
-        a10 = table[goal_indices, s1, d0]
-        a01 = table[goal_indices, s0, d1]
-        a11 = table[goal_indices, s1, d1]
+    if user_indices is None:
+        if remaining is None:
+            a00 = table[goal_indices, s0, d0]
+            a10 = table[goal_indices, s1, d0]
+            a01 = table[goal_indices, s0, d1]
+            a11 = table[goal_indices, s1, d1]
+        else:
+            a00 = table[goal_indices, remaining, s0, d0]
+            a10 = table[goal_indices, remaining, s1, d0]
+            a01 = table[goal_indices, remaining, s0, d1]
+            a11 = table[goal_indices, remaining, s1, d1]
     else:
-        a00 = table[goal_indices, remaining, s0, d0]
-        a10 = table[goal_indices, remaining, s1, d0]
-        a01 = table[goal_indices, remaining, s0, d1]
-        a11 = table[goal_indices, remaining, s1, d1]
+        users = user_indices.to(device=s.device, dtype=torch.int64)
+        if remaining is None:
+            a00 = table[users, goal_indices, s0, d0]
+            a10 = table[users, goal_indices, s1, d0]
+            a01 = table[users, goal_indices, s0, d1]
+            a11 = table[users, goal_indices, s1, d1]
+        else:
+            a00 = table[users, goal_indices, remaining, s0, d0]
+            a10 = table[users, goal_indices, remaining, s1, d0]
+            a01 = table[users, goal_indices, remaining, s0, d1]
+            a11 = table[users, goal_indices, remaining, s1, d1]
 
     dtype = s.dtype
     retention = (
@@ -4605,9 +4619,10 @@ class FSRS6BatchedStationaryFiniteOracle:
 
 
 class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteOracle):
-    ACTION_POLICY_LOOKUP_VERSION = "bilinear_retention_action_v1"
-    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v2"
+    ACTION_POLICY_LOOKUP_VERSION = "terminal_retention_min_action_v2"
+    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v3"
     STATIONARY_IMPROVE_STATE_BLOCK_SIZE = 4096
+    STATIONARY_SOLVE_WEIGHT_BLOCK_SIZE = 4
 
     def __init__(
         self,
@@ -4937,60 +4952,79 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         )
         for missing_weight_indices, user_indices in groups.items():
             suboracle = self._suboracle(user_indices, cache_config=self.cache_config)
-            group_weights = [weight_list[idx] for idx in missing_weight_indices]
-            self._progress_log(
-                "stationary uncached group start "
-                f"users={list(user_indices)} weights={group_weights}"
-            )
-            group_start_s = time.perf_counter()
-            solution = suboracle._solve_stationary_finite_policies_uncached(
-                group_weights,
-                max_iterations=max_iterations,
-                tolerance=tolerance,
-                progress=progress,
-            )
-            self._progress_log(
-                "stationary uncached group solved "
-                f"users={list(user_indices)} weights={group_weights} "
-                f"runtime_s={time.perf_counter() - group_start_s:.1f}"
-            )
-            for local_user_idx, user_idx in enumerate(user_indices):
-                for local_weight_idx, weight_idx in enumerate(missing_weight_indices):
-                    policy = solution.policy[local_user_idx, local_weight_idx].to(
-                        device=self.device,
-                        dtype=self.dtype,
-                    )
-                    metric = solution.metrics[local_user_idx][local_weight_idx]
-                    objective = float(
-                        solution.objectives[local_user_idx, local_weight_idx].item()
-                    )
-                    iteration = solution.iterations[local_user_idx][local_weight_idx]
-                    did_converge = solution.converged[local_user_idx][local_weight_idx]
-                    residual = solution.residuals[local_user_idx][local_weight_idx]
-                    policies[user_idx][weight_idx] = policy
-                    metrics[user_idx][weight_idx] = metric
-                    objectives[user_idx, weight_idx] = objective
-                    iterations[user_idx][weight_idx] = iteration
-                    converged[user_idx][weight_idx] = did_converge
-                    residuals[user_idx][weight_idx] = residual
-                    write_cache_entry(
-                        self.cache_config,
-                        key_parts=self._cache_key_parts(
-                            oracle_kind="continuous_stationary_finite",
-                            method="solve_stationary_finite_policies",
-                            user_idx=user_idx,
-                            cost_weight=weight_list[weight_idx],
-                            extra=extra,
-                        ),
-                        data={
-                            "policy": policy,
-                            "metrics": _metrics_payload(metric),
-                            "objective": objective,
-                            "iterations": iteration,
-                            "converged": did_converge,
-                            "residual": residual,
-                        },
-                    )
+            weight_block_size = max(1, int(self.STATIONARY_SOLVE_WEIGHT_BLOCK_SIZE))
+            for block_start in range(
+                0,
+                len(missing_weight_indices),
+                weight_block_size,
+            ):
+                block_weight_indices = missing_weight_indices[
+                    block_start : block_start + weight_block_size
+                ]
+                group_weights = [weight_list[idx] for idx in block_weight_indices]
+                self._progress_log(
+                    "stationary uncached group start "
+                    f"users={list(user_indices)} weights={group_weights}"
+                )
+                group_start_s = time.perf_counter()
+                solution = suboracle._solve_stationary_finite_policies_uncached(
+                    group_weights,
+                    max_iterations=max_iterations,
+                    tolerance=tolerance,
+                    progress=progress,
+                )
+                self._progress_log(
+                    "stationary uncached group solved "
+                    f"users={list(user_indices)} weights={group_weights} "
+                    f"runtime_s={time.perf_counter() - group_start_s:.1f}"
+                )
+                for local_user_idx, user_idx in enumerate(user_indices):
+                    for local_weight_idx, weight_idx in enumerate(block_weight_indices):
+                        policy = solution.policy[local_user_idx, local_weight_idx].to(
+                            device=self.device,
+                            dtype=self.dtype,
+                        )
+                        metric = solution.metrics[local_user_idx][local_weight_idx]
+                        objective = float(
+                            solution.objectives[
+                                local_user_idx,
+                                local_weight_idx,
+                            ].item()
+                        )
+                        iteration = solution.iterations[local_user_idx][
+                            local_weight_idx
+                        ]
+                        did_converge = solution.converged[local_user_idx][
+                            local_weight_idx
+                        ]
+                        residual = solution.residuals[local_user_idx][local_weight_idx]
+                        policies[user_idx][weight_idx] = policy
+                        metrics[user_idx][weight_idx] = metric
+                        objectives[user_idx, weight_idx] = objective
+                        iterations[user_idx][weight_idx] = iteration
+                        converged[user_idx][weight_idx] = did_converge
+                        residuals[user_idx][weight_idx] = residual
+                        write_cache_entry(
+                            self.cache_config,
+                            key_parts=self._cache_key_parts(
+                                oracle_kind="continuous_stationary_finite",
+                                method="solve_stationary_finite_policies",
+                                user_idx=user_idx,
+                                cost_weight=weight_list[weight_idx],
+                                extra=extra,
+                            ),
+                            data={
+                                "policy": policy,
+                                "metrics": _metrics_payload(metric),
+                                "objective": objective,
+                                "iterations": iteration,
+                                "converged": did_converge,
+                                "residual": residual,
+                            },
+                        )
+                del solution
+                if self.device.type == "cuda":
+                    torch.cuda.empty_cache()
 
         return BatchedStationaryFiniteOracleSolution(
             policy=torch.stack(
@@ -5103,6 +5137,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                     ).reshape_as(chunk_best_idx)
                     chunk_retention = self._retention_for_interval_grid_batch(
                         chunk_interval,
+                        terminal_interval=rem + 1,
                     )
                     better = chunk_best_value > best_value
                     best_value = torch.where(better, chunk_best_value, best_value)
@@ -5614,15 +5649,26 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         return mask & (interval_col <= terminal)
 
     def _retention_for_interval_grid_batch(
-        self, interval: torch.Tensor
+        self,
+        interval: torch.Tensor,
+        *,
+        terminal_interval: int | None = None,
     ) -> torch.Tensor:
         s = self.s_grid.view(1, 1, self.s_count, 1).expand_as(interval)
         retention = self._forgetting_curve(interval.to(dtype=self.dtype), s)
-        return torch.clamp(
+        retention = torch.clamp(
             retention,
             min=self.retention_min,
             max=self.retention_max,
         )
+        if terminal_interval is not None:
+            terminal = interval.to(dtype=torch.int64) >= int(terminal_interval)
+            retention = torch.where(
+                terminal,
+                torch.full_like(retention, self.retention_min),
+                retention,
+            )
+        return retention
 
     def _intervals_for_retention_policy(self, policy: torch.Tensor) -> torch.Tensor:
         retention = torch.clamp(policy, min=1e-7, max=1.0 - 1e-7)
@@ -6524,7 +6570,10 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         )
         new_policy = torch.where(
             visited,
-            self._retention_for_interval_grid_batch(best_interval_grid),
+            self._retention_for_interval_grid_batch(
+                best_interval_grid,
+                terminal_interval=self.horizon + 1,
+            ),
             policy,
         )
         return new_policy, residual, visited
@@ -6688,7 +6737,10 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         )
         new_policy = torch.where(
             visited,
-            self._retention_for_interval_grid_batch(best_interval),
+            self._retention_for_interval_grid_batch(
+                best_interval,
+                terminal_interval=self.horizon + 1,
+            ),
             policy,
         )
         return new_policy, residual, visited
@@ -7772,7 +7824,7 @@ class FSRS6IntervalOracle(FSRS6GridOracle):
 
 
 class FSRS6ContinuousRetentionOracle(FSRS6IntervalOracle):
-    ACTION_POLICY_LOOKUP_VERSION = "bilinear_retention_action_v1"
+    ACTION_POLICY_LOOKUP_VERSION = "terminal_retention_min_action_v2"
 
     def __init__(
         self,
@@ -7943,6 +7995,7 @@ class FSRS6ContinuousRetentionOracle(FSRS6IntervalOracle):
                     ).reshape_as(chunk_best_idx)
                     chunk_retention = self._retention_for_interval_grid(
                         chunk_best_interval,
+                        terminal_interval=rem + 1,
                     )
                     better = chunk_best_value > best_value
                     best_value = torch.where(better, chunk_best_value, best_value)
@@ -7998,18 +8051,31 @@ class FSRS6ContinuousRetentionOracle(FSRS6IntervalOracle):
             retention_max=self.retention_max,
         )
 
-    def _retention_for_interval_grid(self, interval: torch.Tensor) -> torch.Tensor:
+    def _retention_for_interval_grid(
+        self,
+        interval: torch.Tensor,
+        *,
+        terminal_interval: int | None = None,
+    ) -> torch.Tensor:
         s = self.s_grid[:, None, None].expand_as(interval).to(dtype=self.dtype)
         retention = self._forgetting_curve(interval.to(dtype=self.dtype), s)
-        return torch.clamp(
+        retention = torch.clamp(
             retention,
             min=self.retention_min,
             max=self.retention_max,
         )
+        if terminal_interval is not None:
+            terminal = interval.to(dtype=torch.int64) >= int(terminal_interval)
+            retention = torch.where(
+                terminal,
+                torch.full_like(retention, self.retention_min),
+                retention,
+            )
+        return retention
 
 
 class FSRS6ContinuousStationaryFiniteOracle(FSRS6ContinuousRetentionOracle):
-    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v2"
+    STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v3"
 
     def solve_stationary_finite_policies(
         self,
@@ -8477,7 +8543,10 @@ class FSRS6ContinuousStationaryFiniteOracle(FSRS6ContinuousRetentionOracle):
         )
         new_policy = torch.where(
             visited.reshape(weight_count, self.s_count, self.d_count),
-            self._retention_for_interval_grid_batch(best_interval),
+            self._retention_for_interval_grid_batch(
+                best_interval,
+                terminal_interval=self.horizon + 1,
+            ),
             policy,
         )
         return (
@@ -8723,11 +8792,21 @@ class FSRS6ContinuousStationaryFiniteOracle(FSRS6ContinuousRetentionOracle):
     def _retention_for_interval_grid_batch(
         self,
         interval: torch.Tensor,
+        *,
+        terminal_interval: int | None = None,
     ) -> torch.Tensor:
         s = self.s_grid[None, :, None].expand_as(interval).to(dtype=self.dtype)
         retention = self._forgetting_curve(interval.to(dtype=self.dtype), s)
-        return torch.clamp(
+        retention = torch.clamp(
             retention,
             min=self.retention_min,
             max=self.retention_max,
         )
+        if terminal_interval is not None:
+            terminal = interval.to(dtype=torch.int64) >= int(terminal_interval)
+            retention = torch.where(
+                terminal,
+                torch.full_like(retention, self.retention_min),
+                retention,
+            )
+        return retention

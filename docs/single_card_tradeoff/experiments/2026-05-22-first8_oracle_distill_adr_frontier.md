@@ -4,7 +4,8 @@
 
 How does a native single-card `fsrs6_adr` policy, trained separately for each of
 the first eight users and each evaluation cost weight, compare against the exact
-oracle family and the compact stationary-finite distill baseline?
+oracle family, the continuous desired-retention oracle variants, and the compact
+stationary-finite distill baselines?
 
 The experiment focuses on three practical questions:
 
@@ -31,6 +32,13 @@ The oracle rows have different action-space and model-class meanings:
   class, seeded from the same finite grid oracle solve.
 - `fsrs6_oracle_stationary_finite_distill` is a compact 476-parameter student
   of the stationary finite policy.
+- `fsrs6_oracle_continuous_retention` is the finite-horizon continuous
+  desired-retention oracle; internally it still enumerates attainable rounded
+  intervals.
+- `fsrs6_oracle_continuous_stationary_finite` is the stationary continuous
+  desired-retention policy class seeded from the continuous finite oracle.
+- `fsrs6_oracle_continuous_stationary_finite_distill` is a compact
+  476-parameter student of the continuous stationary finite teacher.
 - `fsrs6_adr` is a native learned single-card policy trained by CEM, one policy
   per user and cost weight.
 
@@ -38,7 +46,9 @@ The exact retention-action grid oracles use the current four-corner transition
 backup over `(log stability, difficulty)` grid corners. This keeps
 `fsrs6_oracle` and `fsrs6_oracle_stationary_finite` on the same transition
 approximation. Execution-time table lookup still maps each continuous `(S, D)`
-state to the nearest policy grid point.
+state to the nearest policy grid point. The continuous desired-retention rows
+use the same rounded-interval simulator semantics, but their policy tables store
+retention values and execution uses bilinear retention-policy lookup.
 
 ## Configuration
 
@@ -60,7 +70,10 @@ Setup:
 - Baseline: `fsrs6` desired-retention frontier
 - Compared schedulers: `fsrs6_adr`, `fsrs6_oracle_interval`, `fsrs6_oracle`,
   `fsrs6_oracle_stationary_finite`,
-  `fsrs6_oracle_stationary_finite_distill`
+  `fsrs6_oracle_stationary_finite_distill`,
+  `fsrs6_oracle_continuous_retention`,
+  `fsrs6_oracle_continuous_stationary_finite`,
+  `fsrs6_oracle_continuous_stationary_finite_distill`
 - ADR policies:
   `artifacts/single_card_tradeoff/native_adr_first8_eval_weights_add_025_05_markov_off`
 - Distill policy:
@@ -91,11 +104,14 @@ Mean same-target time saved AUC vs `fsrs6`:
 
 | scheduler | users | positive users | mean time saved AUC | mean relative time saved | mean span coverage | min span coverage |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `fsrs6_oracle_interval` | 8 | 8 | 7.0926 | 16.97% | 99.99% | 99.93% |
-| `fsrs6_oracle` | 8 | 8 | 6.3309 | 15.19% | 98.77% | 93.48% |
-| `fsrs6_oracle_stationary_finite` | 8 | 8 | 6.0728 | 14.47% | 99.00% | 95.47% |
-| `fsrs6_oracle_stationary_finite_distill` | 8 | 8 | 5.3481 | 13.06% | 99.09% | 96.82% |
-| `fsrs6_adr` | 8 | 8 | 4.9303 | 11.20% | 95.48% | 83.79% |
+| `fsrs6_oracle_interval` | 8 | 8 | 7.0332 | 17.05% | 99.99% | 99.93% |
+| `fsrs6_oracle_continuous_retention` | 8 | 8 | 6.7186 | 15.97% | 97.99% | 87.58% |
+| `fsrs6_oracle_continuous_stationary_finite` | 8 | 8 | 6.4386 | 14.95% | 98.20% | 91.77% |
+| `fsrs6_oracle` | 8 | 8 | 6.2762 | 15.27% | 98.78% | 93.38% |
+| `fsrs6_oracle_stationary_finite` | 8 | 8 | 6.0174 | 14.55% | 99.01% | 95.37% |
+| `fsrs6_oracle_continuous_stationary_finite_distill` | 8 | 8 | 5.4253 | 12.72% | 93.00% | 63.19% |
+| `fsrs6_oracle_stationary_finite_distill` | 8 | 8 | 5.2921 | 13.14% | 99.10% | 96.72% |
+| `fsrs6_adr` | 8 | 8 | 4.8727 | 11.29% | 95.52% | 84.15% |
 
 ADR train-particle progression from the reruns of this profile:
 
@@ -103,7 +119,7 @@ ADR train-particle progression from the reruns of this profile:
 | ---: | ---: | ---: | ---: | ---: |
 | 64 | 4.3697 | 9.63% | 95.95% | 149/152 |
 | 512 | 4.7020 | 10.64% | 94.94% | 150/152 |
-| 1024 | 4.9303 | 11.20% | 95.48% | 152/152 |
+| 1024 | 4.8727 | 11.29% | 95.52% | 152/152 |
 
 Policy parameter / table-size comparison:
 
@@ -112,22 +128,25 @@ Policy parameter / table-size comparison:
 | `fsrs6` | desired-retention scalar | 1 | 11 | 88 | Baseline frontier settings, not learned policy parameters. |
 | `fsrs6_oracle_interval` | finite-horizon integer interval table | 3,739,648 | 71,053,312 | 568,426,496 | `(1825 + 1) * 64 * 32` table entries per cost weight. |
 | `fsrs6_oracle` | finite-horizon retention-action table | 3,739,648 | 71,053,312 | 568,426,496 | Integer action ids over the retention action set. |
+| `fsrs6_oracle_continuous_retention` | finite-horizon continuous retention table | 3,739,648 | 71,053,312 | 568,426,496 | Continuous retention value per remaining-day and state cell. |
+| `fsrs6_oracle_continuous_stationary_finite` | stationary continuous retention table | 2,048 | 38,912 | 311,296 | `64 * 32` retention values per cost weight. |
 | `fsrs6_oracle_stationary_finite` | stationary retention-action table | 2,048 | 38,912 | 311,296 | `64 * 32` table entries per cost weight. |
+| `fsrs6_oracle_continuous_stationary_finite_distill` | residual MLP | 476 | 476 | 3,808 | One per-user network conditions on goal cost weight. |
 | `fsrs6_oracle_stationary_finite_distill` | residual MLP | 476 | 476 | 3,808 | One per-user network conditions on goal cost weight. |
 | `fsrs6_adr` | log-polynomial retention function | 6 | 114 | 912 | Six coefficients per cost weight, 19 policies per user. |
 
 Per-user relative time saved vs `fsrs6`:
 
-| user | interval | finite grid oracle | stationary finite | distill | ADR |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 12.32% | 10.71% | 9.57% | 9.24% | 6.74% |
-| 2 | 19.02% | 16.54% | 16.33% | 11.64% | 13.48% |
-| 3 | 16.15% | 15.00% | 14.52% | 12.34% | 12.72% |
-| 4 | 25.48% | 22.81% | 22.27% | 20.90% | 17.48% |
-| 5 | 23.65% | 20.20% | 19.37% | 16.34% | 14.41% |
-| 6 | 20.26% | 19.13% | 17.60% | 16.50% | 14.07% |
-| 7 | 10.41% | 9.64% | 9.71% | 11.90% | 5.18% |
-| 8 | 8.48% | 7.46% | 6.37% | 5.62% | 5.49% |
+| user | interval | cont finite | finite grid oracle | cont stationary | stationary finite | cont distill | distill | ADR |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 12.44% | 12.17% | 10.86% | 11.26% | 9.70% | 10.03% | 9.38% | 6.89% |
+| 2 | 18.59% | 18.03% | 16.10% | 17.10% | 15.89% | 16.24% | 11.17% | 13.03% |
+| 3 | 16.57% | 15.89% | 15.42% | 14.88% | 14.94% | 11.73% | 12.77% | 13.15% |
+| 4 | 25.30% | 23.52% | 22.61% | 23.15% | 22.06% | 17.65% | 20.69% | 17.26% |
+| 5 | 23.24% | 19.82% | 19.81% | 18.62% | 18.98% | 12.91% | 15.93% | 14.04% |
+| 6 | 20.44% | 19.58% | 19.31% | 17.67% | 17.79% | 14.98% | 16.69% | 14.27% |
+| 7 | 11.11% | 10.22% | 10.35% | 10.28% | 10.43% | 12.26% | 12.59% | 5.92% |
+| 8 | 8.71% | 8.49% | 7.69% | 6.65% | 6.61% | 5.96% | 5.86% | 5.73% |
 
 Direct oracle pairwise rows:
 
@@ -135,8 +154,14 @@ Direct oracle pairwise rows:
 | --- | --- | ---: | ---: | ---: | ---: |
 | `fsrs6_oracle_stationary_finite` | `fsrs6_oracle` | +0.2476 | +0.83% | 7/8 | 99.19% |
 | `fsrs6_oracle` | `fsrs6_oracle_stationary_finite` | -0.2476 | -0.84% | 1/8 | 99.93% |
+| `fsrs6_oracle` | `fsrs6_oracle_continuous_retention` | +0.3846 | +0.77% | 6/8 | 98.80% |
+| `fsrs6_oracle_continuous_retention` | `fsrs6_oracle` | -0.3846 | -0.78% | 2/8 | 99.91% |
+| `fsrs6_oracle_continuous_stationary_finite` | `fsrs6_oracle_continuous_retention` | +0.3107 | +1.20% | 7/8 | 99.38% |
+| `fsrs6_oracle_continuous_retention` | `fsrs6_oracle_continuous_stationary_finite` | -0.3107 | -1.22% | 1/8 | 94.99% |
 | `fsrs6_oracle` | `fsrs6_oracle_interval` | +0.8028 | +2.11% | 8/8 | 99.84% |
+| `fsrs6_oracle_continuous_retention` | `fsrs6_oracle_interval` | +0.4196 | +1.34% | 8/8 | 100.00% |
 | `fsrs6_oracle_stationary_finite` | `fsrs6_oracle_interval` | +1.0473 | +2.92% | 8/8 | 99.30% |
+| `fsrs6_oracle_continuous_stationary_finite` | `fsrs6_oracle_interval` | +0.7212 | +2.50% | 8/8 | 100.00% |
 
 Direct distill pairwise rows from `combined_regret_auc.csv`:
 
@@ -145,46 +170,63 @@ Direct distill pairwise rows from `combined_regret_auc.csv`:
 | `fsrs6_oracle_stationary_finite_distill` | `fsrs6_oracle_interval` | +1.7611 | +4.50% | 7/8 | 96.59% |
 | `fsrs6_oracle_stationary_finite_distill` | `fsrs6_oracle` | +0.9703 | +2.48% | 7/8 | 96.25% |
 | `fsrs6_oracle_stationary_finite_distill` | `fsrs6_oracle_stationary_finite` | +0.7228 | +1.66% | 7/8 | 96.92% |
+| `fsrs6_oracle_stationary_finite_distill` | `fsrs6_oracle_continuous_stationary_finite_distill` | -0.0269 | -0.28% | 3/8 | 86.72% |
+| `fsrs6_oracle_continuous_stationary_finite_distill` | `fsrs6_oracle_continuous_stationary_finite` | +1.1361 | +2.44% | 7/8 | 99.98% |
+| `fsrs6_oracle_continuous_stationary_finite_distill` | `fsrs6_oracle_continuous_retention` | +1.4747 | +3.67% | 7/8 | 99.51% |
+| `fsrs6_oracle_continuous_stationary_finite_distill` | `fsrs6_oracle_interval` | +1.7980 | +4.52% | 7/8 | 100.00% |
 
 Direct ADR pairwise rows from `combined_regret_auc.csv`:
 
 | baseline | scheduler | mean AUC delta | mean relative delta | positive users | mean coverage |
 | --- | --- | ---: | ---: | ---: | ---: |
 | `fsrs6_adr` | `fsrs6_oracle_interval` | +2.3792 | +6.30% | 8/8 | 100.00% |
+| `fsrs6_adr` | `fsrs6_oracle_continuous_retention` | +2.0380 | +5.30% | 8/8 | 99.12% |
 | `fsrs6_adr` | `fsrs6_oracle` | +1.6181 | +4.49% | 8/8 | 99.92% |
 | `fsrs6_adr` | `fsrs6_oracle_stationary_finite` | +1.3568 | +3.66% | 8/8 | 99.98% |
+| `fsrs6_adr` | `fsrs6_oracle_continuous_stationary_finite_distill` | +0.5436 | +1.59% | 6/8 | 94.63% |
 | `fsrs6_adr` | `fsrs6_oracle_stationary_finite_distill` | +0.6069 | +1.97% | 6/8 | 99.96% |
 
 ## Interpretation
 
-The frontier ordering is now stable and interpretable. `fsrs6_oracle_interval`
-is the strongest row because its integer-interval action space is richer than
-the retention-action grid. `fsrs6_oracle` is the best retention-action exact
-grid policy in aggregate, followed by the stationary finite policy. The
-stationary finite row remains useful as a teacher class, not as the planning
-upper bound. The parameter table also makes the upper-bound caveat concrete:
-the finite-horizon exact rows store about 71.05M action entries per user for
-this 19-weight frontier.
+The frontier ordering is now cleaner. `fsrs6_oracle_interval` is still the
+strongest row because its integer-interval action space is richer than the
+retention-action grid. The continuous finite oracle is now positive for all
+eight users and has the second highest absolute mean AUC (`6.7186`) and second
+highest mean relative time saved (`15.97%`). The terminal no-review
+canonicalization removed the earlier user 7 regression.
 
-The 476-parameter distill policy is below the exact oracle rows in the mean
-frontier comparison, but it preserves broad coverage. Its `13.06%` mean relative
-time saved is still above ADR's `11.20%`, so the compact supervised student
-remains a stronger first-eight-user baseline than the native ADR family tested
-here despite ADR using only 114 coefficients per user for the full 19-weight
-frontier.
+The stationary rows show a smaller but still visible approximation cost. The
+continuous stationary finite row improves absolute mean AUC over discrete
+stationary finite (`6.4386` vs `6.0174`) and is now slightly higher on relative
+time saved (`14.95%` vs `14.55%`), while keeping lower coverage than the
+discrete stationary row. The finite-horizon exact rows still store about
+71.05M action entries or retention values per user for this 19-weight frontier,
+so the stationary rows remain useful as teacher classes rather than planning
+upper bounds.
+
+The compact distill comparison is closer after retraining. The continuous
+stationary distill is now positive for all eight users and has higher absolute
+mean AUC than the discrete distill (`5.4253` vs `5.2921`). The original discrete
+distill still has better mean relative time saved (`13.14%` vs `12.72%`) and
+much better coverage (`99.10%` vs `93.00%`), mainly because continuous distill
+still loses shared-span coverage on user 5. On this report's primary
+relative/coverage reading, the original discrete distill remains the stronger
+compact baseline, but the previous user 7 failure is gone.
 
 The native single-card ADR frontier is positive against `fsrs6` for all eight
 users. Raising the training estimator from 64 to 512 to 1024 particles improves
-ADR's mean relative AUC from 9.63% to 10.64% to 11.20%, and the training gate
+ADR's mean relative AUC from 9.63% to 10.64% to 11.29%, and the training gate
 improves from 149/152 to 152/152. That indicates the smaller training
-estimators were materially noisy. The remaining gap is not just gate failure,
-though: with 1024 particles, ADR still trails distill by 1.86 percentage points
-of relative time saved and trails the interval oracle by 5.78 percentage points.
+estimators were materially noisy. The remaining gap is not just gate failure:
+with 1024 particles, ADR still trails the discrete distill by 1.85 percentage
+points of relative time saved and trails the interval oracle by 5.76 percentage
+points.
 
-Coverage is the remaining ADR weakness. Its mean coverage is `95.48%`, but its
-minimum user coverage is `83.79%`; the exact and distill rows all keep higher
-mean coverage. Direct shared-span comparison shows distill ahead of ADR on 6 of
-8 users; ADR is ahead on users 2 and 3.
+Coverage is still the main ADR weakness. Its mean coverage is `95.52%`, with a
+minimum user coverage of `84.15%`. Direct shared-span comparison shows discrete
+distill ahead of ADR on 6 of 8 users; ADR is ahead on users 2 and 3. The
+continuous rows no longer have a user 7 sign problem, but continuous distill's
+user 5 coverage remains the next diagnostic target.
 
 ## Visuals
 
@@ -212,15 +254,34 @@ ADR training:
 - Peak summed shared GPU memory: `240,205,824` bytes
 - Shared-memory spill detected: `false`
 
-Tradeoff evaluation:
+Continuous stationary finite distill retrain:
 
-- Runtime: `479.30s`
-- DP cache hits: `456`
-- DP cache misses: `0`
-- DP cache writes: `0`
-- Peak `nvidia-smi` memory: `3409 MiB`
-- Peak summed shared GPU memory: `213,090,304` bytes
+- Runtime: `1288.7s` through checkpoint write
+- Teacher cache hits: `48`
+- Teacher cache misses: `0`
+- Final train mean loss: `0.864017`
+- Checkpoints:
+  `artifacts/single_card_tradeoff/continuous_stationary_finite_distill_first8_eval_weights_add_025_05_markov_off/user_{1..8}_policy.pt`
+
+Continuous refresh tradeoff evaluation:
+
+- Runtime: `3243.51s`
+- DP cache hits: `304`
+- DP cache misses: `104`
+- DP cache writes: `104`
+- Peak `nvidia-smi` memory: `15982 MiB`
+- Peak summed shared GPU memory: `196,243,456` bytes
 - Shared-memory spill detected: `false`
+
+Notes:
+
+- The final refresh evaluated `fsrs6` plus the three continuous schedulers with
+  `--target-batch-size 4`, then merged those rows back into the full comparison.
+- An unchunked attempt hit shared GPU memory spill during continuous stationary
+  finite cache-miss solving and was discarded.
+- Continuous stationary finite cache-miss solving now writes cache per internal
+  cost-weight block, so future runs of the same v3 policy-iteration key should
+  hit cache.
 
 ## Artifacts
 
@@ -239,15 +300,19 @@ Tradeoff evaluation:
 
 The current first-eight-user comparison should be read as a scheduler frontier
 study rather than a four-corner implementation check. `fsrs6_oracle_interval`
-is the interval-action upper bound in this setup, while `fsrs6_oracle` is the
-retention-action finite-horizon upper bound.
+is the interval-action upper bound in this setup. Among retention-action exact
+rows, the continuous finite oracle is now the strongest mean row by both
+absolute AUC and relative time saved, and it is positive for all eight users.
 
 The 476-parameter stationary finite distill policy remains the strongest compact
-baseline in this comparison: `13.06%` mean relative time saved at `99.09%` mean
-coverage.
+baseline by relative time saved and coverage: `13.14%` mean relative time saved
+at `99.10%` mean coverage. The continuous stationary distill is higher on
+absolute AUC and now fixes user 7, but it remains weaker on relative time saved
+and coverage because of user 5 shared-span loss.
 
 The 1024-particle ADR run is clearly better than the 64- and 512-particle runs:
-it reaches `11.20%` mean relative time saved, `95.48%` mean coverage, and passes
-all 152 training gates. It is still below distill and all exact oracle rows, so
-further progress likely needs changes to the ADR policy/search class rather than
-only more particles.
+it reaches `11.29%` mean relative time saved, `95.52%` mean coverage, and passes
+all 152 training gates. It is still below the interval oracle, the continuous
+finite oracle, the discrete finite grid oracle, and the discrete distill row on
+the primary relative comparison, so further progress likely needs changes to
+the ADR policy/search class rather than only more particles.

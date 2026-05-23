@@ -2350,14 +2350,20 @@ def _evaluate_fsrs6_oracle_continuous_policies(
 
     policies = policies.to(device=device, dtype=env.dtype)
     while not bool(env.done.all().item()):
-        remaining = torch.clamp((env.days - 1) - env.day, min=0, max=oracle.horizon)
-        retention = bilinear_retention_policy_lookup(
+        active = (~env.done).nonzero(as_tuple=False).squeeze(1)
+        retention = torch.empty(env.env_count, device=device, dtype=env.dtype)
+        active_remaining = torch.clamp(
+            (env.days - 1) - env.day.index_select(0, active),
+            min=0,
+            max=oracle.horizon,
+        )
+        retention[active] = bilinear_retention_policy_lookup(
             oracle=oracle,
             policies=policies,
-            goal_indices=goal_indices,
-            remaining=None if stationary else remaining,
-            s=env.s,
-            d=env.d,
+            goal_indices=goal_indices.index_select(0, active),
+            remaining=None if stationary else active_remaining,
+            s=env.s.index_select(0, active),
+            d=env.d.index_select(0, active),
             retention_min=oracle.retention_min,
             retention_max=oracle.retention_max,
         )
@@ -2369,6 +2375,167 @@ def _evaluate_fsrs6_oracle_continuous_policies(
         particles=args.particles,
         device=device,
     )
+
+
+def _batched_continuous_oracle_configs(
+    user_contexts: Sequence[UserContext],
+) -> list[SingleCardFSRS6Config]:
+    return [context.fsrs_config for context in user_contexts]
+
+
+def _build_batched_continuous_oracle(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    user_contexts: Sequence[UserContext],
+) -> Any:
+    from experiments.single_card_tradeoff.oracles import (
+        FSRS6BatchedContinuousStationaryFiniteOracle,
+    )
+
+    configs = _batched_continuous_oracle_configs(user_contexts)
+    return FSRS6BatchedContinuousStationaryFiniteOracle(
+        days=args.days,
+        s_grid_size=args.oracle_s_grid_size,
+        d_grid_size=args.oracle_d_grid_size,
+        retention_min=args.oracle_continuous_retention_min,
+        retention_max=args.oracle_continuous_retention_max,
+        interval_chunk_size=_continuous_oracle_chunk_size(args),
+        device=device,
+        cache_config=_runtime_context(args).dp_cache_config,
+        fsrs_weights=[tuple(config.fsrs_weights) for config in configs],
+        first_rating_prob=[tuple(config.first_rating_prob) for config in configs],
+        review_rating_prob=[tuple(config.review_rating_prob) for config in configs],
+        learning_costs=[tuple(config.learning_costs) for config in configs],
+        review_costs=[tuple(config.review_costs) for config in configs],
+    )
+
+
+@torch.inference_mode()
+def _evaluate_fsrs6_batched_oracle_continuous_policies(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    oracle: Any,
+    policies: torch.Tensor,
+    cost_weights: Sequence[float],
+    seed: int,
+    stationary: bool,
+    user_contexts: Sequence[UserContext],
+) -> list[list[Any]]:
+    from experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser import (
+        MultiUserFSRS6SingleCardBatch,
+        _batched_eval_layout,
+        _eval_group_chunks,
+    )
+    from experiments.single_card_tradeoff.oracles import (
+        bilinear_retention_policy_lookup,
+    )
+
+    configs = _batched_continuous_oracle_configs(user_contexts)
+    user_count = len(configs)
+    if user_count <= 0:
+        return []
+    results: list[list[Any | None]] = [
+        [None for _ in cost_weights] for _ in range(user_count)
+    ]
+    policies = policies.to(device=device, dtype=torch.float64)
+    for start_idx, batch_weights in _eval_group_chunks(
+        cost_weights,
+        args.target_batch_size,
+    ):
+        group_count = len(batch_weights)
+        user_indices, group_index, local_group_idx = _batched_eval_layout(
+            user_count=user_count,
+            group_count=group_count,
+            particles_per_group=args.particles,
+            device=device,
+        )
+        env = MultiUserFSRS6SingleCardBatch(
+            days=args.days,
+            user_indices=user_indices,
+            configs=configs,
+            cost_weights=batch_weights,
+            action_retentions=[0.9],
+            device=device,
+            dtype=torch.float64,
+            seed=seed + start_idx,
+            exact_memory=True,
+            reset_on_init=False,
+        )
+        goal_values = torch.tensor(
+            batch_weights,
+            device=device,
+            dtype=torch.float64,
+        ).index_select(0, local_group_idx)
+        env.reset_all(goal_values=goal_values)
+        group_policies = policies[:, start_idx : start_idx + group_count]
+        while not bool(env.done.all().item()):
+            active = (~env.done).nonzero(as_tuple=False).squeeze(1)
+            retention = torch.empty(env.env_count, device=device, dtype=env.dtype)
+            active_remaining = torch.clamp(
+                (env.days - 1) - env.day.index_select(0, active),
+                min=0,
+                max=oracle.horizon,
+            )
+            retention[active] = bilinear_retention_policy_lookup(
+                oracle=oracle,
+                policies=group_policies,
+                user_indices=env.user_index.index_select(0, active),
+                goal_indices=local_group_idx.index_select(0, active),
+                remaining=None if stationary else active_remaining,
+                s=env.s.index_select(0, active),
+                d=env.d.index_select(0, active),
+                retention_min=oracle.retention_min,
+                retention_max=oracle.retention_max,
+            )
+            env.step_retention(retention)
+
+        metrics_flat = env.metrics_by_group(
+            group_index=group_index,
+            group_count=user_count * group_count,
+            particles_per_group=args.particles,
+        )
+        for user_idx in range(user_count):
+            for local_idx in range(group_count):
+                results[user_idx][start_idx + local_idx] = metrics_flat[
+                    user_idx * group_count + local_idx
+                ]
+    return [
+        [metric for metric in user_metrics if metric is not None]
+        for user_metrics in results
+    ]
+
+
+def _rows_from_batched_continuous_metrics(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_name: str,
+    scheduler_spec: str,
+    cost_weights: Sequence[float],
+    seed: int,
+    metrics_by_user: Sequence[Sequence[Any]],
+    runtime_s: float,
+    user_contexts: Sequence[UserContext],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for context, user_metrics in zip(user_contexts, metrics_by_user, strict=True):
+        for cost_weight, metrics in zip(cost_weights, user_metrics, strict=True):
+            rows.append(
+                _row_from_uvfa_metrics(
+                    context.args,
+                    user_id=context.user_id,
+                    environment_name=environment_name,
+                    scheduler_name=scheduler_name,
+                    scheduler_spec=scheduler_spec,
+                    goal_cost_weight=cost_weight,
+                    seed=seed,
+                    metrics=metrics,
+                    runtime_s=runtime_s,
+                )
+            )
+    return rows
 
 
 @torch.inference_mode()
@@ -2941,9 +3108,11 @@ def _evaluate_retention_policy_weights(
     completed = 0
     try:
         while not bool(env.done.all().item()):
-            obs = env.obs().to(dtype=model_dtype)
+            active = (~env.done).nonzero(as_tuple=False).squeeze(1)
+            retention = torch.empty(env.env_count, device=device, dtype=env.dtype)
+            obs = env.obs().index_select(0, active).to(dtype=model_dtype)
             raw_retention, _ = model(obs)
-            retention = predicted_retentions(
+            retention[active] = predicted_retentions(
                 raw_retention.to(dtype=env.dtype),
                 retention_min=retention_min,
                 retention_max=retention_max,
@@ -3515,6 +3684,64 @@ def _run_fsrs6_oracle_continuous_retention(
     ]
 
 
+def _run_fsrs6_batched_oracle_continuous_retention(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+    user_contexts: Sequence[UserContext],
+) -> list[dict[str, Any]]:
+    scheduler_name = FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit(f"{scheduler_name} does not support --fuzz.")
+    _validate_continuous_oracle_args(args, scheduler_name)
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    cost_weights = _oracle_cost_weights(args)
+    oracle = _build_batched_continuous_oracle(
+        args=args,
+        device=device,
+        user_contexts=user_contexts,
+    )
+
+    start = time.perf_counter()
+    policies = oracle.solve_policies(cost_weights, progress=not args.no_progress)
+    metrics_by_user = _evaluate_fsrs6_batched_oracle_continuous_policies(
+        args=args,
+        device=device,
+        oracle=oracle,
+        policies=policies,
+        cost_weights=cost_weights,
+        seed=seed + 62_000,
+        stationary=False,
+        user_contexts=user_contexts,
+    )
+    runtime_s = (time.perf_counter() - start) / float(
+        len(cost_weights) * len(user_contexts)
+    )
+    return _rows_from_batched_continuous_metrics(
+        args,
+        environment_name=environment_name,
+        scheduler_name=scheduler_name,
+        scheduler_spec=scheduler_spec,
+        cost_weights=cost_weights,
+        seed=seed,
+        metrics_by_user=metrics_by_user,
+        runtime_s=runtime_s,
+        user_contexts=user_contexts,
+    )
+
+
 def _run_fsrs6_oracle_continuous_stationary_finite(
     args: argparse.Namespace,
     *,
@@ -3618,6 +3845,99 @@ def _run_fsrs6_oracle_continuous_stationary_finite(
         )
         for cost_weight, metrics in zip(cost_weights, metrics_by_weight, strict=True)
     ]
+
+
+def _run_fsrs6_batched_oracle_continuous_stationary_finite(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+    user_contexts: Sequence[UserContext],
+) -> list[dict[str, Any]]:
+    scheduler_name = FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit(f"{scheduler_name} does not support --fuzz.")
+    _validate_continuous_oracle_args(args, scheduler_name)
+    if args.oracle_stationary_finite_max_iterations <= 0:
+        raise SystemExit("--oracle-stationary-finite-max-iterations must be > 0.")
+    if args.oracle_stationary_finite_tolerance <= 0.0:
+        raise SystemExit("--oracle-stationary-finite-tolerance must be > 0.")
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    cost_weights = _oracle_cost_weights(args)
+    oracle = _build_batched_continuous_oracle(
+        args=args,
+        device=device,
+        user_contexts=user_contexts,
+    )
+
+    start = time.perf_counter()
+    solution = oracle.solve_stationary_finite_policies(
+        cost_weights,
+        max_iterations=args.oracle_stationary_finite_max_iterations,
+        tolerance=args.oracle_stationary_finite_tolerance,
+        progress=not args.no_progress,
+    )
+    failed = [
+        f"user={context.user_id}:w={format_float(cost_weight)}"
+        for context, row in zip(user_contexts, solution.converged, strict=True)
+        for cost_weight, converged in zip(cost_weights, row, strict=True)
+        if not converged
+    ]
+    if failed:
+        raise SystemExit(
+            f"{scheduler_name} did not converge for cost weights: " + ",".join(failed)
+        )
+    metrics_by_user = _evaluate_fsrs6_batched_oracle_continuous_policies(
+        args=args,
+        device=device,
+        oracle=oracle,
+        policies=solution.policy,
+        cost_weights=cost_weights,
+        seed=seed + 63_000,
+        stationary=True,
+        user_contexts=user_contexts,
+    )
+    runtime_s = (time.perf_counter() - start) / float(
+        len(cost_weights) * len(user_contexts)
+    )
+
+    for user_idx, context in enumerate(user_contexts):
+        for weight_idx, cost_weight in enumerate(cost_weights):
+            print(
+                " ".join(
+                    [
+                        "continuous_stationary_finite_oracle",
+                        f"user={context.user_id}",
+                        f"w={format_float(cost_weight)}",
+                        f"objective={float(solution.objectives[user_idx, weight_idx].item()):.8f}",
+                        f"iterations={solution.iterations[user_idx][weight_idx]}",
+                        f"residual={solution.residuals[user_idx][weight_idx]:.3g}",
+                    ]
+                )
+            )
+
+    return _rows_from_batched_continuous_metrics(
+        args,
+        environment_name=environment_name,
+        scheduler_name=scheduler_name,
+        scheduler_spec=scheduler_spec,
+        cost_weights=cost_weights,
+        seed=seed,
+        metrics_by_user=metrics_by_user,
+        runtime_s=runtime_s,
+        user_contexts=user_contexts,
+    )
 
 
 def _run_uvfa_ppo(
@@ -4229,6 +4549,24 @@ def _run_registered_custom_scheduler(
     runner = _CUSTOM_SINGLE_USER_RUNNERS.get(scheduler_name)
     if runner is None:
         return None
+
+    if len(user_contexts) > 1:
+        if scheduler_name == FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER:
+            return _run_fsrs6_batched_oracle_continuous_retention(
+                args,
+                environment_name=environment_name,
+                scheduler_spec=scheduler_spec,
+                seed=seed,
+                user_contexts=user_contexts,
+            )
+        if scheduler_name == FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER:
+            return _run_fsrs6_batched_oracle_continuous_stationary_finite(
+                args,
+                environment_name=environment_name,
+                scheduler_spec=scheduler_spec,
+                seed=seed,
+                user_contexts=user_contexts,
+            )
 
     output_rows: list[dict[str, Any]] = []
     for context in user_contexts:
