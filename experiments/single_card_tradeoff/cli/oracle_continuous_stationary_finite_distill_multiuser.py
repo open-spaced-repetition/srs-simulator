@@ -25,7 +25,6 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff.cli.oracle_continuous_stationary_finite_distill import (  # noqa: E402
-    DEFAULT_HIDDEN_SIZE,
     DEFAULT_INTERVAL_LOSS_WEIGHT,
     DEFAULT_NETWORK_DEPTH,
     DEFAULT_RETENTION_LOGIT_LOSS_WEIGHT,
@@ -121,12 +120,20 @@ LOSS_WEIGHTING_CHOICES = (
     "qgap",
     "underpred_qgap",
 )
+TABLE_SAMPLING_CHOICES = (
+    "uniform_table",
+    "teacher_occupancy",
+    "mixed",
+)
 DEFAULT_UNDERPREDICTION_LOSS_WEIGHT = 0.0
 DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT = 0.0
 DEFAULT_Q_GAP_LOSS_WEIGHT = 0.0
 DEFAULT_Q_GAP_WEIGHT_CAP = 8.0
-RECOMMENDED_UNDERPREDICTION_LOSS_WEIGHT = 4.0
-RECOMMENDED_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT = 16.0
+DEFAULT_TABLE_SAMPLING = "teacher_occupancy"
+DEFAULT_MIXED_TABLE_UNIFORM_FRACTION = 0.5
+DEFAULT_CONTINUOUS_STATIONARY_FINITE_DISTILL_HIDDEN_SIZE = 16
+RECOMMENDED_UNDERPREDICTION_LOSS_WEIGHT = 8.0
+RECOMMENDED_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT = 32.0
 RECOMMENDED_Q_GAP_LOSS_WEIGHT = 1.0
 
 
@@ -222,6 +229,8 @@ class ContinuousSingleUserTrainStats:
     eval_retention_mae: float
     eval_log_interval_mae: float
     table_samples_per_weight: int
+    table_sampling: str
+    mixed_table_uniform_fraction: float
 
 
 @dataclass(frozen=True)
@@ -251,6 +260,7 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         configs: Sequence[SingleCardFSRS6Config],
         user_batch_size: int,
         compute_q_gap: bool = False,
+        compute_state_occupancy: bool = False,
         cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         if not configs:
@@ -277,6 +287,7 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         factor_chunks: list[torch.Tensor] = []
         decay_chunks: list[torch.Tensor] = []
         q_gap_chunks: list[torch.Tensor] = []
+        state_occupancy_chunks: list[torch.Tensor] = []
         metrics: list[list[Any]] = []
         iterations: list[list[int]] = []
         converged: list[list[bool]] = []
@@ -355,6 +366,28 @@ class BatchedContinuousStationaryFiniteOracleGuide:
             objective_chunks.append(solution.objectives.to(device=device))
             factor_chunks.append(oracle.factor.to(device=device, dtype=torch.float32))
             decay_chunks.append(oracle.decay.to(device=device, dtype=torch.float32))
+            if compute_state_occupancy:
+                occupancy_start_s = time.perf_counter()
+                occupancy = oracle._rollout_occupancy_batch(policy=solution.policy)
+                state_occupancy = occupancy[:, :, 1:, :].sum(dim=2)
+                state_occupancy_chunks.append(
+                    state_occupancy.to(device=device, dtype=torch.float32)
+                )
+                visited = state_occupancy > 0.0
+                _diagnostic_log(
+                    enabled=log_enabled,
+                    start_s=guide_start_s,
+                    message=(
+                        "teacher state occupancy scored "
+                        f"users={user_ids} runtime_s="
+                        f"{time.perf_counter() - occupancy_start_s:.1f} "
+                        f"visited_density="
+                        f"{float(visited.to(dtype=torch.float32).mean().item()):.6f}"
+                    ),
+                )
+                del occupancy
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
             if compute_q_gap:
                 q_gap_start_s = time.perf_counter()
                 q_gap, _visited = oracle.stationary_policy_interval_q_gaps(
@@ -382,6 +415,9 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         self.factor = torch.cat(factor_chunks, dim=0)
         self.decay = torch.cat(decay_chunks, dim=0)
         self.s_grid = first_oracle.s_grid.to(device=device, dtype=torch.float32)
+        self.state_occupancy: torch.Tensor | None = None
+        if state_occupancy_chunks:
+            self.state_occupancy = torch.cat(state_occupancy_chunks, dim=0)
         self.q_gap: torch.Tensor | None = None
         self.q_gap_normalizer: torch.Tensor | None = None
         if q_gap_chunks:
@@ -461,7 +497,7 @@ def parse_args() -> argparse.Namespace:
         "--train-envs-per-user",
         type=int,
         default=DEFAULT_TRAIN_ENVS_PER_USER,
-        help="Kept for budget parity metadata; uniform-table training does not use it.",
+        help="Kept for budget parity metadata; table training does not use it.",
     )
     parser.add_argument("--epochs", type=int, default=DEFAULT_DISTILL_EPOCHS)
     parser.add_argument("--steps-per-epoch", type=int, default=DEFAULT_STEPS_PER_EPOCH)
@@ -476,7 +512,11 @@ def parse_args() -> argparse.Namespace:
         "--network", choices=["mlp", "residual"], default=DEFAULT_NETWORK
     )
     parser.add_argument("--network-depth", type=int, default=DEFAULT_NETWORK_DEPTH)
-    parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
+    parser.add_argument(
+        "--hidden-size",
+        type=int,
+        default=DEFAULT_CONTINUOUS_STATIONARY_FINITE_DISTILL_HIDDEN_SIZE,
+    )
     parser.add_argument("--retention-min", type=float, default=DEFAULT_RETENTION_MIN)
     parser.add_argument("--retention-max", type=float, default=DEFAULT_RETENTION_MAX)
     parser.add_argument(
@@ -492,7 +532,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--loss-weighting",
         choices=LOSS_WEIGHTING_CHOICES,
-        default="baseline",
+        default="underpred",
         help=(
             "Convenience selector for the continuous distill loss ablation. "
             "baseline preserves the existing unweighted loss; underpred uses "
@@ -570,6 +610,26 @@ def parse_args() -> argparse.Namespace:
             "0 means batch all groups at once."
         ),
     )
+    parser.add_argument(
+        "--table-sampling",
+        choices=TABLE_SAMPLING_CHOICES,
+        default=DEFAULT_TABLE_SAMPLING,
+        help=(
+            "State sampling distribution for table supervision. uniform_table "
+            "samples the full teacher table uniformly; teacher_occupancy samples "
+            "states according to exact stationary teacher occupancy; mixed uses "
+            "both distributions."
+        ),
+    )
+    parser.add_argument(
+        "--mixed-table-uniform-fraction",
+        type=float,
+        default=DEFAULT_MIXED_TABLE_UNIFORM_FRACTION,
+        help=(
+            "For --table-sampling=mixed, fraction of per-weight samples drawn "
+            "uniformly from the teacher table; the rest use teacher occupancy."
+        ),
+    )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     add_run_monitoring_args(parser)
     parser.add_argument(
@@ -634,42 +694,30 @@ def build_guide(
         configs=configs,
         user_batch_size=args.oracle_teacher_user_batch_size,
         compute_q_gap=loss_config.q_gap_loss_weight > 0.0,
+        compute_state_occupancy=args.table_sampling in {"teacher_occupancy", "mixed"},
         cache_config=cache_config,
     )
     return guide, time.perf_counter() - start
 
 
-def sample_batched_uniform_table_batch(
+def _continuous_table_batch_from_indices(
     guide: BatchedContinuousStationaryFiniteOracleGuide,
     *,
     cost_weights: Sequence[float],
-    samples_per_weight: int,
+    user_idx: torch.Tensor,
+    weight_idx: torch.Tensor,
+    s_idx: torch.Tensor,
+    d_idx: torch.Tensor,
     device: torch.device,
-    generator: torch.Generator,
 ) -> ContinuousTableBatch:
     user_count, weight_count, s_count, d_count = guide.policy.shape
-    user_idx = torch.arange(user_count, device=device)[:, None, None].expand(
-        user_count,
-        weight_count,
-        samples_per_weight,
-    )
-    weight_idx = torch.arange(weight_count, device=device)[None, :, None].expand(
-        user_count,
-        weight_count,
-        samples_per_weight,
-    )
-    s_idx = torch.randint(
-        s_count,
-        (user_count, weight_count, samples_per_weight),
-        device=device,
-        generator=generator,
-    )
-    d_idx = torch.randint(
-        d_count,
-        (user_count, weight_count, samples_per_weight),
-        device=device,
-        generator=generator,
-    )
+    if s_idx.shape != d_idx.shape:
+        raise ValueError("s_idx and d_idx must have the same shape.")
+    if s_idx.shape != user_idx.shape or s_idx.shape != weight_idx.shape:
+        raise ValueError("sample index tensors must have matching shapes.")
+    if int(s_idx.shape[0]) != user_count or int(s_idx.shape[1]) != weight_count:
+        raise ValueError("sample index tensors must match guide policy dimensions.")
+    samples_per_weight = int(s_idx.shape[2])
     target_retention = guide.policy.to(device=device)[
         user_idx,
         weight_idx,
@@ -718,6 +766,186 @@ def sample_batched_uniform_table_batch(
         .reshape(user_count, -1),
         q_gap=q_gap,
         q_gap_normalizer=q_gap_normalizer,
+    )
+
+
+def sample_batched_uniform_table_batch(
+    guide: BatchedContinuousStationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    samples_per_weight: int,
+    device: torch.device,
+    generator: torch.Generator,
+) -> ContinuousTableBatch:
+    user_count, weight_count, s_count, d_count = guide.policy.shape
+    user_idx = torch.arange(user_count, device=device)[:, None, None].expand(
+        user_count,
+        weight_count,
+        samples_per_weight,
+    )
+    weight_idx = torch.arange(weight_count, device=device)[None, :, None].expand(
+        user_count,
+        weight_count,
+        samples_per_weight,
+    )
+    s_idx = torch.randint(
+        s_count,
+        (user_count, weight_count, samples_per_weight),
+        device=device,
+        generator=generator,
+    )
+    d_idx = torch.randint(
+        d_count,
+        (user_count, weight_count, samples_per_weight),
+        device=device,
+        generator=generator,
+    )
+    return _continuous_table_batch_from_indices(
+        guide,
+        cost_weights=cost_weights,
+        user_idx=user_idx,
+        weight_idx=weight_idx,
+        s_idx=s_idx,
+        d_idx=d_idx,
+        device=device,
+    )
+
+
+def sample_batched_teacher_occupancy_table_batch(
+    guide: BatchedContinuousStationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    samples_per_weight: int,
+    device: torch.device,
+    generator: torch.Generator,
+) -> ContinuousTableBatch:
+    if guide.state_occupancy is None:
+        raise ValueError("teacher occupancy sampling requires guide.state_occupancy.")
+    user_count, weight_count, s_count, d_count = guide.policy.shape
+    state_count = s_count * d_count
+    occupancy = torch.clamp(
+        guide.state_occupancy.to(device=device, dtype=torch.float32),
+        min=0.0,
+    )
+    if tuple(occupancy.shape) != (user_count, weight_count, state_count):
+        raise ValueError("guide.state_occupancy has incompatible shape.")
+    row_sum = occupancy.sum(dim=2, keepdim=True)
+    uniform = torch.full_like(occupancy, 1.0 / float(state_count))
+    probs = torch.where(
+        row_sum > 0.0,
+        occupancy / torch.clamp(row_sum, min=1e-12),
+        uniform,
+    )
+    state_idx = torch.multinomial(
+        probs.reshape(user_count * weight_count, state_count),
+        num_samples=samples_per_weight,
+        replacement=True,
+        generator=generator,
+    ).reshape(user_count, weight_count, samples_per_weight)
+    s_idx = torch.div(state_idx, d_count, rounding_mode="floor")
+    d_idx = state_idx.remainder(d_count)
+    user_idx = torch.arange(user_count, device=device)[:, None, None].expand_as(s_idx)
+    weight_idx = torch.arange(weight_count, device=device)[None, :, None].expand_as(
+        s_idx
+    )
+    return _continuous_table_batch_from_indices(
+        guide,
+        cost_weights=cost_weights,
+        user_idx=user_idx,
+        weight_idx=weight_idx,
+        s_idx=s_idx,
+        d_idx=d_idx,
+        device=device,
+    )
+
+
+def sample_batched_table_batch(
+    guide: BatchedContinuousStationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    samples_per_weight: int,
+    table_sampling: str,
+    mixed_table_uniform_fraction: float,
+    device: torch.device,
+    generator: torch.Generator,
+) -> ContinuousTableBatch:
+    if table_sampling == "uniform_table":
+        return sample_batched_uniform_table_batch(
+            guide,
+            cost_weights=cost_weights,
+            samples_per_weight=samples_per_weight,
+            device=device,
+            generator=generator,
+        )
+    if table_sampling == "teacher_occupancy":
+        return sample_batched_teacher_occupancy_table_batch(
+            guide,
+            cost_weights=cost_weights,
+            samples_per_weight=samples_per_weight,
+            device=device,
+            generator=generator,
+        )
+    if table_sampling != "mixed":
+        raise ValueError(f"Unknown table sampling mode: {table_sampling}")
+
+    uniform_count = int(samples_per_weight * mixed_table_uniform_fraction)
+    uniform_count = max(0, min(samples_per_weight, uniform_count))
+    occupancy_count = samples_per_weight - uniform_count
+    if uniform_count == 0:
+        return sample_batched_teacher_occupancy_table_batch(
+            guide,
+            cost_weights=cost_weights,
+            samples_per_weight=samples_per_weight,
+            device=device,
+            generator=generator,
+        )
+    if occupancy_count == 0:
+        return sample_batched_uniform_table_batch(
+            guide,
+            cost_weights=cost_weights,
+            samples_per_weight=samples_per_weight,
+            device=device,
+            generator=generator,
+        )
+
+    uniform = sample_batched_uniform_table_batch(
+        guide,
+        cost_weights=cost_weights,
+        samples_per_weight=uniform_count,
+        device=device,
+        generator=generator,
+    )
+    occupancy = sample_batched_teacher_occupancy_table_batch(
+        guide,
+        cost_weights=cost_weights,
+        samples_per_weight=occupancy_count,
+        device=device,
+        generator=generator,
+    )
+    return ContinuousTableBatch(
+        obs=torch.cat([uniform.obs, occupancy.obs], dim=1),
+        target_retention=torch.cat(
+            [uniform.target_retention, occupancy.target_retention],
+            dim=1,
+        ),
+        s_values=torch.cat([uniform.s_values, occupancy.s_values], dim=1),
+        goal_norm=torch.cat([uniform.goal_norm, occupancy.goal_norm], dim=1),
+        q_gap=(
+            torch.cat([uniform.q_gap, occupancy.q_gap], dim=1)
+            if uniform.q_gap is not None and occupancy.q_gap is not None
+            else None
+        ),
+        q_gap_normalizer=(
+            torch.cat(
+                [uniform.q_gap_normalizer, occupancy.q_gap_normalizer],
+                dim=1,
+            )
+            if (
+                uniform.q_gap_normalizer is not None
+                and occupancy.q_gap_normalizer is not None
+            )
+            else None
+        ),
     )
 
 
@@ -1015,6 +1243,8 @@ def train_batched_per_user_models(
             f"users={user_count} epochs={args.epochs} "
             f"steps_per_epoch={args.steps_per_epoch} "
             f"samples_per_weight={args.table_samples_per_weight} "
+            f"table_sampling={args.table_sampling} "
+            f"mixed_uniform_fraction={args.mixed_table_uniform_fraction:g} "
             f"teacher_weights={len(cost_weights)} "
             f"loss_weighting={loss_config.mode} "
             f"underpred={loss_config.underprediction_loss_weight:g} "
@@ -1031,10 +1261,12 @@ def train_batched_per_user_models(
         signed_error_sum_by_user = torch.zeros_like(total_by_user)
         q_gap_weight_sum_by_user = torch.zeros_like(total_by_user)
         for step in range(args.steps_per_epoch):
-            batch = sample_batched_uniform_table_batch(
+            batch = sample_batched_table_batch(
                 guide,
                 cost_weights=cost_weights,
                 samples_per_weight=args.table_samples_per_weight,
+                table_sampling=args.table_sampling,
+                mixed_table_uniform_fraction=args.mixed_table_uniform_fraction,
                 device=device,
                 generator=generator,
             )
@@ -1378,7 +1610,7 @@ def save_single_user_checkpoint(
             "model_state_dict": model.state_dict(),
             "policy_type": POLICY_TYPE,
             "action_mode": "desired_retention",
-            "training_scope": "per_user_batched_uniform_table_supervision",
+            "training_scope": "per_user_batched_table_supervision",
             "obs_mode": "oracle_stationary",
             "obs_dim": model.obs_dim,
             "cost_weights": list(cost_weights),
@@ -1421,6 +1653,8 @@ def save_single_user_checkpoint(
             "train_epochs": stats.epochs,
             "train_steps_per_epoch": stats.steps_per_epoch,
             "table_samples_per_weight": stats.table_samples_per_weight,
+            "table_sampling": stats.table_sampling,
+            "mixed_table_uniform_fraction": stats.mixed_table_uniform_fraction,
             "train_samples": stats.train_samples,
             "train_transitions": stats.train_transitions,
             "params_per_user": stats.params_per_user,
@@ -1463,6 +1697,8 @@ def write_train_summary(
         "epochs",
         "steps_per_epoch",
         "table_samples_per_weight",
+        "table_sampling",
+        "mixed_table_uniform_fraction",
         "train_samples",
         "train_transitions",
         "setup_runtime_s",
@@ -1491,13 +1727,17 @@ def write_train_summary(
         for stats in stats_by_user:
             writer.writerow(
                 {
-                    "training_scope": "per_user_batched_uniform_table_supervision",
+                    "training_scope": "per_user_batched_table_supervision",
                     "user_id": stats.user_id,
                     "params_per_user": stats.params_per_user,
                     "ensemble_trainable_params": stats.ensemble_trainable_params,
                     "epochs": stats.epochs,
                     "steps_per_epoch": stats.steps_per_epoch,
                     "table_samples_per_weight": stats.table_samples_per_weight,
+                    "table_sampling": stats.table_sampling,
+                    "mixed_table_uniform_fraction": (
+                        stats.mixed_table_uniform_fraction
+                    ),
                     "train_samples": stats.train_samples,
                     "train_transitions": stats.train_transitions,
                     "setup_runtime_s": setup_runtime_s,
@@ -1562,6 +1802,8 @@ def write_run_config_snapshot(
         "epochs": args.epochs,
         "steps_per_epoch": args.steps_per_epoch,
         "table_samples_per_weight": args.table_samples_per_weight,
+        "table_sampling": args.table_sampling,
+        "mixed_table_uniform_fraction": args.mixed_table_uniform_fraction,
         "train_envs_per_user": args.train_envs_per_user,
         "eval_particles": args.eval_particles,
         "network": args.network,
@@ -1640,6 +1882,11 @@ def main() -> None:
         raise SystemExit("--steps-per-epoch must be > 0.")
     if args.table_samples_per_weight <= 0:
         raise SystemExit("--table-samples-per-weight must be > 0.")
+    if (
+        args.mixed_table_uniform_fraction < 0.0
+        or args.mixed_table_uniform_fraction > 1.0
+    ):
+        raise SystemExit("--mixed-table-uniform-fraction must be within [0, 1].")
     if args.hidden_size <= 0:
         raise SystemExit("--hidden-size must be > 0.")
     if args.network_depth <= 0:
@@ -1712,6 +1959,8 @@ def main() -> None:
             f"users={list(user_ids)} train_weights={cost_weights} "
             f"eval_weights={eval_cost_weights} device={device} "
             f"out_dir={args.out_dir} loss_weighting={loss_config.mode} "
+            f"table_sampling={args.table_sampling} "
+            f"mixed_uniform_fraction={args.mixed_table_uniform_fraction:g} "
             f"effective_underpred={loss_config.underprediction_loss_weight:g} "
             f"effective_terminal_underpred={loss_config.terminal_underprediction_loss_weight:g} "
             f"effective_q_gap={loss_config.q_gap_loss_weight:g}"
@@ -1817,6 +2066,8 @@ def main() -> None:
             eval_retention_mae=eval_retention_mae[user_idx],
             eval_log_interval_mae=eval_log_interval_mae[user_idx],
             table_samples_per_weight=args.table_samples_per_weight,
+            table_sampling=args.table_sampling,
+            mixed_table_uniform_fraction=args.mixed_table_uniform_fraction,
         )
         model = materialize_ensemble_model(
             args,
@@ -1893,7 +2144,7 @@ def main() -> None:
                     goal_cost_weight=cost_weight,
                     metrics=metrics,
                     runtime_s=runtime_s,
-                    engine="per_user_batched_uniform_table_supervision",
+                    engine=f"per_user_batched_{args.table_sampling}_supervision",
                 )
             )
     if device.type == "cuda":

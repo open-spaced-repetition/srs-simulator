@@ -14,6 +14,7 @@ from experiments.single_card_tradeoff.cli.oracle_continuous_stationary_finite_di
     log_intervals_for_retentions,
     q_gap_loss_weights,
     resolve_loss_weighting,
+    sample_batched_table_batch,
 )
 from experiments.single_card_tradeoff.models.policy_runtime import (
     predicted_retentions,
@@ -25,6 +26,22 @@ class _ToyGuide:
     horizon = 9
     factor = torch.tensor([0.1], dtype=torch.float32)
     decay = torch.tensor([-0.5], dtype=torch.float32)
+
+
+class _ToyTableGuide:
+    horizon = 9
+    factor = torch.tensor([0.1], dtype=torch.float32)
+    decay = torch.tensor([-0.5], dtype=torch.float32)
+    policy = torch.tensor(
+        [[[[0.6, 0.7], [0.8, 0.9]]]],
+        dtype=torch.float32,
+    )
+    s_grid = torch.tensor([1.0, 2.0], dtype=torch.float32)
+    q_gap = None
+    q_gap_normalizer = None
+
+    def __init__(self, state_occupancy: torch.Tensor | None) -> None:
+        self.state_occupancy = state_occupancy
 
 
 class ContinuousStationaryFiniteDistillLossTests(unittest.TestCase):
@@ -245,10 +262,59 @@ class ContinuousStationaryFiniteDistillLossTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(config.underprediction_loss_weight, 4.0)
-        self.assertEqual(config.terminal_underprediction_loss_weight, 16.0)
+        self.assertEqual(config.underprediction_loss_weight, 8.0)
+        self.assertEqual(config.terminal_underprediction_loss_weight, 32.0)
         self.assertEqual(config.q_gap_loss_weight, 1.0)
         self.assertEqual(config.q_gap_weight_cap, 8.0)
+
+    def test_teacher_occupancy_sampling_uses_visited_state_distribution(self) -> None:
+        guide = cast(
+            Any,
+            _ToyTableGuide(torch.tensor([[[0.0, 0.0, 5.0, 0.0]]], dtype=torch.float32)),
+        )
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(123)
+
+        batch = sample_batched_table_batch(
+            guide,
+            cost_weights=[1024.0],
+            samples_per_weight=6,
+            table_sampling="teacher_occupancy",
+            mixed_table_uniform_fraction=0.5,
+            device=torch.device("cpu"),
+            generator=generator,
+        )
+
+        self.assertTrue(torch.allclose(batch.obs[0, :, 0], torch.ones(6)))
+        self.assertTrue(torch.allclose(batch.obs[0, :, 1], torch.zeros(6)))
+        self.assertTrue(torch.allclose(batch.target_retention, torch.full((1, 6), 0.8)))
+        self.assertTrue(torch.allclose(batch.s_values, torch.full((1, 6), 2.0)))
+
+    def test_mixed_sampling_keeps_requested_sample_count(self) -> None:
+        guide = cast(
+            Any,
+            _ToyTableGuide(torch.tensor([[[0.0, 0.0, 0.0, 3.0]]], dtype=torch.float32)),
+        )
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(7)
+
+        batch = sample_batched_table_batch(
+            guide,
+            cost_weights=[1024.0],
+            samples_per_weight=8,
+            table_sampling="mixed",
+            mixed_table_uniform_fraction=0.5,
+            device=torch.device("cpu"),
+            generator=generator,
+        )
+
+        self.assertEqual(tuple(batch.obs.shape), (1, 8, 3))
+        self.assertEqual(tuple(batch.target_retention.shape), (1, 8))
+        self.assertTrue(torch.allclose(batch.obs[0, 4:, 0], torch.ones(4)))
+        self.assertTrue(torch.allclose(batch.obs[0, 4:, 1], torch.ones(4)))
+        self.assertTrue(
+            torch.allclose(batch.target_retention[:, 4:], torch.full((1, 4), 0.9))
+        )
 
 
 if __name__ == "__main__":
