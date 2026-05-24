@@ -296,6 +296,46 @@ class SingleCardTradeoffRunConfigTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _multiuser_tradeoff_command(config, (1, 2))
 
+    def test_multiuser_continuous_policy_template_requires_user_placeholder(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.toml"
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    schema_version = 1
+                    name = "test_continuous_template"
+                    seed = 42
+
+                    [experiment]
+                    env = "fsrs6"
+                    user_ids = [1, 2]
+                    schedulers = ["fsrs6_oracle_continuous_stationary_finite_distill"]
+                    days = 30
+                    particles = 64
+                    deck_scale = 10000
+                    target_retentions = [0.5]
+                    review_markov_transition = false
+                    scheduler_priority = "low_retrievability"
+                    benchmark_partition = "0"
+                    no_plot = true
+                    no_progress = true
+
+                    [continuous_stationary_finite_distill]
+                    policy_template = "artifacts/policies/shared_policy.pt"
+
+                    [outputs]
+                    root = "artifacts/single_card_tradeoff/test_template"
+                    """
+                ).strip(),
+                encoding="utf-8",
+            )
+
+            config = load_config(config_path)
+            with self.assertRaises(ValueError):
+                _multiuser_tradeoff_command(config, (1, 2))
+
     def test_split_combined_outputs_writes_per_user_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             config_path = Path(tmp_dir) / "config.toml"

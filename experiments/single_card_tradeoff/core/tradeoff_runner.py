@@ -1893,12 +1893,58 @@ def _oracle_retention_distill_cost_weights(
     return values
 
 
+@dataclass(frozen=True)
+class _LoadedContinuousStationaryFiniteDistillPolicy:
+    model: RetentionDistillNet
+    action_retentions: list[float]
+    policy_cost_weights: list[float]
+    goal_norm_max: float
+    obs_mode: str
+    retention_min: float
+    retention_max: float
+    terminal_snap_ratio: float
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class _BatchedContinuousStationaryFiniteDistillPolicies:
+    base_model: RetentionDistillNet
+    params: dict[str, torch.Tensor]
+    buffers: dict[str, torch.Tensor]
+    action_retentions: list[float]
+    policy_cost_weights: list[float]
+    goal_norm_max: float
+    obs_mode: str
+    retention_min: float
+    retention_max: float
+
+
 def _load_fsrs6_oracle_continuous_stationary_finite_distill_policy(
     args: argparse.Namespace,
     *,
     device: torch.device,
 ) -> tuple[Any, list[float], list[float], float, str, float, float, float]:
-    policy_path = args.oracle_continuous_stationary_finite_distill_policy
+    loaded = _load_fsrs6_oracle_continuous_stationary_finite_distill_policy_from_path(
+        Path(args.oracle_continuous_stationary_finite_distill_policy),
+        device=device,
+    )
+    return (
+        loaded.model,
+        loaded.action_retentions,
+        loaded.policy_cost_weights,
+        loaded.goal_norm_max,
+        loaded.obs_mode,
+        loaded.retention_min,
+        loaded.retention_max,
+        loaded.terminal_snap_ratio,
+    )
+
+
+def _load_fsrs6_oracle_continuous_stationary_finite_distill_policy_from_path(
+    policy_path: Path,
+    *,
+    device: torch.device,
+) -> _LoadedContinuousStationaryFiniteDistillPolicy:
     if not policy_path.exists():
         raise SystemExit(
             "FSRS6 continuous stationary finite distill policy not found: "
@@ -1915,15 +1961,14 @@ def _load_fsrs6_oracle_continuous_stationary_finite_distill_policy(
             f"Invalid FSRS6 continuous stationary finite distill checkpoint: "
             f"{policy_path}"
         )
-    if (
-        checkpoint.get("policy_type")
-        != "fsrs6_oracle_continuous_stationary_finite_distill"
-    ):
+    policy_type = checkpoint.get("policy_type")
+    if policy_type != "fsrs6_oracle_continuous_stationary_finite_distill":
         raise SystemExit(
             "FSRS6 continuous stationary finite distill checkpoint has unexpected "
             "policy_type."
         )
-    if checkpoint.get("action_mode") != "desired_retention":
+    action_mode = checkpoint.get("action_mode")
+    if action_mode != "desired_retention":
         raise SystemExit(
             "FSRS6 continuous stationary finite distill checkpoint must use "
             "action_mode=desired_retention."
@@ -1974,15 +2019,96 @@ def _load_fsrs6_oracle_continuous_stationary_finite_distill_policy(
             "within [0.5, 1)."
         )
     terminal_snap_ratio = float(checkpoint.get("terminal_snap_ratio", 0.0))
-    return (
-        model,
-        action_retentions,
-        policy_cost_weights,
-        max(policy_cost_weights),
-        obs_mode,
-        retention_min,
-        retention_max,
-        terminal_snap_ratio,
+    metadata: dict[str, Any] = {
+        "policy_type": policy_type,
+        "action_mode": action_mode,
+        "obs_dim": obs_dim,
+        "hidden_size": hidden_size,
+        "network": network,
+        "network_depth": network_depth,
+        "action_retentions": tuple(action_retentions),
+        "cost_weights": tuple(policy_cost_weights),
+        "obs_mode": obs_mode,
+        "retention_min": retention_min,
+        "retention_max": retention_max,
+    }
+    return _LoadedContinuousStationaryFiniteDistillPolicy(
+        model=model,
+        action_retentions=action_retentions,
+        policy_cost_weights=policy_cost_weights,
+        goal_norm_max=max(policy_cost_weights),
+        obs_mode=obs_mode,
+        retention_min=retention_min,
+        retention_max=retention_max,
+        terminal_snap_ratio=terminal_snap_ratio,
+        metadata=metadata,
+    )
+
+
+def _load_fsrs6_batched_oracle_continuous_stationary_finite_distill_policies(
+    args: argparse.Namespace,
+    *,
+    device: torch.device,
+    user_contexts: Sequence[UserContext],
+) -> _BatchedContinuousStationaryFiniteDistillPolicies:
+    if not user_contexts:
+        raise SystemExit(
+            "FSRS6 continuous stationary finite distill requires at least one user."
+        )
+
+    loaded_policies: list[_LoadedContinuousStationaryFiniteDistillPolicy] = []
+    expected_metadata: dict[str, Any] | None = None
+    expected_user_id: int | None = None
+    for context in user_contexts:
+        policy_path = _resolve_continuous_stationary_finite_distill_policy_path(
+            args,
+            user_id=context.user_id,
+            multiuser=True,
+        )
+        loaded = (
+            _load_fsrs6_oracle_continuous_stationary_finite_distill_policy_from_path(
+                policy_path,
+                device=device,
+            )
+        )
+        if expected_metadata is None:
+            expected_metadata = loaded.metadata
+            expected_user_id = context.user_id
+        else:
+            for field, expected_value in expected_metadata.items():
+                actual_value = loaded.metadata[field]
+                if actual_value != expected_value:
+                    raise SystemExit(
+                        "FSRS6 continuous stationary finite distill checkpoints "
+                        "are incompatible for batched multi-user evaluation: "
+                        f"user {context.user_id} field {field}={actual_value!r} "
+                        f"does not match user {expected_user_id} "
+                        f"{field}={expected_value!r}."
+                    )
+        loaded_policies.append(loaded)
+
+    first = loaded_policies[0]
+    if first.obs_mode != "oracle_stationary":
+        raise SystemExit(
+            "Batched FSRS6 continuous stationary finite distill evaluation "
+            "currently supports only obs_mode=oracle_stationary."
+        )
+
+    models = [loaded.model for loaded in loaded_policies]
+    params, buffers = torch.func.stack_module_state(models)
+    base_model = models[0]
+    base_model.requires_grad_(False)
+    base_model.eval()
+    return _BatchedContinuousStationaryFiniteDistillPolicies(
+        base_model=base_model,
+        params=params,
+        buffers=buffers,
+        action_retentions=first.action_retentions,
+        policy_cost_weights=first.policy_cost_weights,
+        goal_norm_max=first.goal_norm_max,
+        obs_mode=first.obs_mode,
+        retention_min=first.retention_min,
+        retention_max=first.retention_max,
     )
 
 
@@ -2501,6 +2627,127 @@ def _evaluate_fsrs6_batched_oracle_continuous_policies(
                 results[user_idx][start_idx + local_idx] = metrics_flat[
                     user_idx * group_count + local_idx
                 ]
+    return [
+        [metric for metric in user_metrics if metric is not None]
+        for user_metrics in results
+    ]
+
+
+@torch.inference_mode()
+def _evaluate_fsrs6_batched_oracle_continuous_stationary_finite_distill_policies(
+    *,
+    args: argparse.Namespace,
+    device: torch.device,
+    policies: _BatchedContinuousStationaryFiniteDistillPolicies,
+    cost_weights: Sequence[float],
+    seed: int,
+    progress_label: str,
+    user_contexts: Sequence[UserContext],
+) -> list[list[Any]]:
+    from experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser import (
+        MultiUserFSRS6SingleCardBatch,
+        _batched_eval_layout,
+        _eval_group_chunks,
+    )
+
+    configs = _batched_continuous_oracle_configs(user_contexts)
+    user_count = len(configs)
+    if user_count <= 0:
+        return []
+
+    results: list[list[Any | None]] = [
+        [None for _ in cost_weights] for _ in range(user_count)
+    ]
+    model_dtype = next(iter(policies.params.values())).dtype
+    total_envs = user_count * len(cost_weights) * args.particles
+    progress = _progress_done(
+        enabled=not args.no_progress,
+        total=total_envs,
+        label=progress_label,
+    )
+    try:
+        for start_idx, batch_weights in _eval_group_chunks(
+            cost_weights,
+            args.target_batch_size,
+        ):
+            group_count = len(batch_weights)
+            user_indices, group_index, local_group_idx = _batched_eval_layout(
+                user_count=user_count,
+                group_count=group_count,
+                particles_per_group=args.particles,
+                device=device,
+            )
+            env = MultiUserFSRS6SingleCardBatch(
+                days=args.days,
+                user_indices=user_indices,
+                configs=configs,
+                cost_weights=batch_weights,
+                action_retentions=policies.action_retentions,
+                device=device,
+                dtype=torch.float64,
+                seed=seed + start_idx,
+                exact_memory=True,
+                goal_norm_max=policies.goal_norm_max,
+                obs_mode=policies.obs_mode,
+                reset_on_init=False,
+            )
+            goal_values = torch.tensor(
+                batch_weights,
+                device=device,
+                dtype=torch.float64,
+            ).index_select(0, local_group_idx)
+            env.reset_all(goal_values=goal_values)
+            completed = 0
+            while not bool(env.done.all().item()):
+                active = (~env.done).nonzero(as_tuple=False).squeeze(1)
+                active_users = env.user_index.index_select(0, active)
+                obs = env.obs().index_select(0, active).to(dtype=model_dtype)
+                retention = torch.empty(env.env_count, device=device, dtype=env.dtype)
+                for user_idx in range(user_count):
+                    local = (
+                        (active_users == user_idx).nonzero(as_tuple=False).squeeze(1)
+                    )
+                    if local.numel() == 0:
+                        continue
+                    raw_retention, _ = torch.func.functional_call(
+                        policies.base_model,
+                        (
+                            {
+                                name: tensor[user_idx]
+                                for name, tensor in policies.params.items()
+                            },
+                            {
+                                name: tensor[user_idx]
+                                for name, tensor in policies.buffers.items()
+                            },
+                        ),
+                        (obs.index_select(0, local),),
+                    )
+                    retention[active.index_select(0, local)] = predicted_retentions(
+                        raw_retention.reshape(-1).to(dtype=env.dtype),
+                        retention_min=policies.retention_min,
+                        retention_max=policies.retention_max,
+                    )
+                env.step_retention(retention)
+                if progress is not None:
+                    next_completed = int(env.done.sum().item())
+                    progress.update(next_completed - completed)
+                    completed = next_completed
+
+            metrics_flat = env.metrics_by_group(
+                group_index=group_index,
+                group_count=user_count * group_count,
+                particles_per_group=args.particles,
+            )
+            for user_idx in range(user_count):
+                for local_idx in range(group_count):
+                    results[user_idx][start_idx + local_idx] = metrics_flat[
+                        user_idx * group_count + local_idx
+                    ]
+    finally:
+        if progress is not None:
+            progress.close()
+
     return [
         [metric for metric in user_metrics if metric is not None]
         for user_metrics in results
@@ -4346,6 +4593,66 @@ def _run_fsrs6_oracle_continuous_stationary_finite_distill(
     return rows
 
 
+def _run_fsrs6_batched_oracle_continuous_stationary_finite_distill(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+    user_contexts: Sequence[UserContext],
+) -> list[dict[str, Any]]:
+    scheduler_name = FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+    if args.fuzz:
+        raise SystemExit(f"{scheduler_name} does not support --fuzz.")
+
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    policies = _load_fsrs6_batched_oracle_continuous_stationary_finite_distill_policies(
+        args,
+        device=device,
+        user_contexts=user_contexts,
+    )
+    cost_weights = _oracle_continuous_stationary_finite_distill_cost_weights(
+        args,
+        policy_cost_weights=policies.policy_cost_weights,
+    )
+
+    start = time.perf_counter()
+    metrics_by_user = (
+        _evaluate_fsrs6_batched_oracle_continuous_stationary_finite_distill_policies(
+            args=args,
+            device=device,
+            policies=policies,
+            cost_weights=cost_weights,
+            seed=seed + 76_000,
+            progress_label=f"{environment_name}/{scheduler_spec}",
+            user_contexts=user_contexts,
+        )
+    )
+    runtime_s = (time.perf_counter() - start) / float(
+        max(1, len(cost_weights) * len(user_contexts))
+    )
+    return _rows_from_batched_continuous_metrics(
+        args,
+        environment_name=environment_name,
+        scheduler_name=scheduler_name,
+        scheduler_spec=scheduler_spec,
+        cost_weights=cost_weights,
+        seed=seed,
+        metrics_by_user=metrics_by_user,
+        runtime_s=runtime_s,
+        user_contexts=user_contexts,
+    )
+
+
 def _run_uvfa_ppo_rnn_interval(
     args: argparse.Namespace,
     *,
@@ -4561,6 +4868,17 @@ def _run_registered_custom_scheduler(
             )
         if scheduler_name == FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER:
             return _run_fsrs6_batched_oracle_continuous_stationary_finite(
+                args,
+                environment_name=environment_name,
+                scheduler_spec=scheduler_spec,
+                seed=seed,
+                user_contexts=user_contexts,
+            )
+        if (
+            scheduler_name
+            == FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER
+        ):
+            return _run_fsrs6_batched_oracle_continuous_stationary_finite_distill(
                 args,
                 environment_name=environment_name,
                 scheduler_spec=scheduler_spec,
