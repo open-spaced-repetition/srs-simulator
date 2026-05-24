@@ -1,0 +1,127 @@
+schema_version = 1
+name = "stationary_finite_distill_teacher_occupancy_ablation"
+family = "single_card_tradeoff"
+seed = 42
+
+[experiment]
+env = "fsrs6"
+user_ids = [1, 2, 3, 4, 5, 6, 7, 8]
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+days = 1825
+deck_scale = 10000
+review_markov_transition = false
+teacher_cost_weights = [0, 4, 16, 64, 256, 1024]
+eval_cost_weights = [0, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
+action_retentions = [0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.93, 0.96, 0.98]
+torch_device = "cuda"
+
+[training]
+per_user_models = true
+network = "residual"
+hidden_size = 8
+network_depth = 2
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+epochs = 128
+steps_per_epoch = 64
+table_samples_per_weight = 256
+eval_particles = 10000
+
+[outputs]
+root = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation"
+uniform_table_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/uniform_table"
+teacher_occupancy_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/teacher_occupancy"
+uniform_table_exact_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/uniform_table_exact_vs_distill"
+teacher_occupancy_exact_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/teacher_occupancy_exact_vs_distill"
+
+[[tasks]]
+name = "train_uniform_table_control"
+stage = "train"
+kind = "stationary_finite_distill_multiuser"
+description = "Train the first-eight stationary finite distill control with uniform exact-table supervision."
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+per_user_models = true
+per_user_supervision = "uniform_table"
+cost_weights = "0,4,16,64,256,1024"
+eval_cost_weights = "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024"
+action_retentions = "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98"
+network = "residual"
+hidden_size = 8
+network_depth = 2
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+epochs = 128
+steps_per_epoch = 64
+table_samples_per_weight = 256
+eval_particles = 10000
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/uniform_table"
+torch_device = "cuda"
+no_progress = true
+
+[[tasks]]
+name = "train_teacher_occupancy"
+stage = "train"
+kind = "stationary_finite_distill_multiuser"
+description = "Train the first-eight stationary finite distill treatment with teacher-occupancy table supervision."
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+per_user_models = true
+per_user_supervision = "teacher_occupancy"
+cost_weights = "0,4,16,64,256,1024"
+eval_cost_weights = "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024"
+action_retentions = "0.5,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.93,0.96,0.98"
+network = "residual"
+hidden_size = 8
+network_depth = 2
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+epochs = 128
+steps_per_epoch = 64
+table_samples_per_weight = 256
+eval_particles = 10000
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/teacher_occupancy"
+torch_device = "cuda"
+no_progress = true
+
+[[tasks]]
+name = "evaluate_uniform_table_exact_vs_distill"
+stage = "evaluate"
+kind = "stationary_finite_distill_multiuser"
+description = "Evaluate the uniform-table control against exact stationary finite and fsrs6."
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+per_user_supervision = "uniform_table"
+eval_exact_vs_distill = true
+eval_cost_weights = "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024"
+distill_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/uniform_table"
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/uniform_table_exact_vs_distill"
+torch_device = "cuda"
+no_progress = true
+
+[[tasks]]
+name = "evaluate_teacher_occupancy_exact_vs_distill"
+stage = "evaluate"
+kind = "stationary_finite_distill_multiuser"
+description = "Evaluate the teacher-occupancy treatment against exact stationary finite and fsrs6."
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+per_user_supervision = "teacher_occupancy"
+eval_exact_vs_distill = true
+eval_cost_weights = "0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024"
+distill_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/teacher_occupancy"
+out_dir = "artifacts/single_card_tradeoff/stationary_finite_distill_teacher_occupancy_ablation/teacher_occupancy_exact_vs_distill"
+torch_device = "cuda"
+no_progress = true

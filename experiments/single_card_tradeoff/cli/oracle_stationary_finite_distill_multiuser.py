@@ -94,6 +94,8 @@ DEFAULT_ORACLE_TEACHER_USER_BATCH_SIZE = 0
 DEFAULT_OUT_DIR = Path(
     "artifacts/single_card_tradeoff/stationary_finite_distill_first8_users_batched"
 )
+TABLE_SUPERVISION_MODES = ("uniform_table", "teacher_occupancy")
+PER_USER_SUPERVISION_CHOICES = (*TABLE_SUPERVISION_MODES, "rollout")
 BASELINE_SCHEDULER = "fsrs6"
 EXACT_STATIONARY_FINITE_SCHEDULER = "fsrs6_oracle_stationary_finite"
 PER_USER_SCHEDULER = "fsrs6_oracle_stationary_finite_distill_per_user"
@@ -778,6 +780,7 @@ class BatchedStationaryFiniteOracleGuide:
         progress: bool,
         configs: Sequence[SingleCardFSRS6Config],
         user_batch_size: int,
+        compute_state_occupancy: bool = False,
         cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         if not configs:
@@ -799,6 +802,7 @@ class BatchedStationaryFiniteOracleGuide:
         iterations: list[list[int]] = []
         converged: list[list[bool]] = []
         residuals: list[list[float]] = []
+        state_occupancy_chunks: list[torch.Tensor] = []
 
         for start in range(0, len(configs), chunk_size):
             chunk_configs = configs[start : start + chunk_size]
@@ -844,6 +848,18 @@ class BatchedStationaryFiniteOracleGuide:
                 )
             policy_chunks.append(solution.policy.to(device=device, dtype=torch.uint8))
             objective_chunks.append(solution.objectives.to(device=device))
+            if compute_state_occupancy:
+                occupancy = oracle._rollout_occupancy_batch(
+                    policy=solution.policy,
+                    stationary=True,
+                )
+                state_occupancy = occupancy[:, :, 1:, :].sum(dim=2)
+                state_occupancy_chunks.append(
+                    state_occupancy.to(device=device, dtype=torch.float32)
+                )
+                del occupancy
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
             metrics.extend(solution.metrics)
             iterations.extend(solution.iterations)
             converged.extend(solution.converged)
@@ -851,6 +867,9 @@ class BatchedStationaryFiniteOracleGuide:
 
         self.policy = torch.cat(policy_chunks, dim=0)
         self.objectives = torch.cat(objective_chunks, dim=0)
+        self.state_occupancy: torch.Tensor | None = None
+        if state_occupancy_chunks:
+            self.state_occupancy = torch.cat(state_occupancy_chunks, dim=0)
         self.metrics = metrics
         self.iterations = iterations
         self.converged = converged
@@ -962,12 +981,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     parser.add_argument(
         "--per-user-supervision",
-        choices=["uniform_table", "rollout"],
+        choices=PER_USER_SUPERVISION_CHOICES,
         default=DEFAULT_DISTILL_SUPERVISION,
         help=(
             "Supervision distribution for --per-user-models. uniform_table samples "
-            "each exact stationary policy table cost weight equally; rollout keeps "
-            "the older teacher-forcing event distribution."
+            "each exact stationary policy table cost weight equally; "
+            "teacher_occupancy samples states by exact stationary teacher "
+            "occupancy within each cost weight; rollout keeps the older "
+            "teacher-forcing event distribution."
         ),
     )
     parser.add_argument(
@@ -1114,6 +1135,9 @@ def build_guide(
         progress=not args.no_progress,
         configs=configs,
         user_batch_size=args.oracle_teacher_user_batch_size,
+        compute_state_occupancy=(
+            args.per_user_models and args.per_user_supervision == "teacher_occupancy"
+        ),
         cache_config=cache_config,
     )
     return guide, time.perf_counter() - start
@@ -1468,6 +1492,35 @@ def sample_batched_uniform_table_batch(
         device=device,
         generator=generator,
     )
+    return _batched_table_batch_from_indices(
+        guide,
+        cost_weights=cost_weights,
+        user_idx=user_idx,
+        weight_idx=weight_idx,
+        s_idx=s_idx,
+        d_idx=d_idx,
+        device=device,
+    )
+
+
+def _batched_table_batch_from_indices(
+    guide: BatchedStationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    user_idx: torch.Tensor,
+    weight_idx: torch.Tensor,
+    s_idx: torch.Tensor,
+    d_idx: torch.Tensor,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    user_count, weight_count, s_count, d_count = guide.policy.shape
+    if s_idx.shape != d_idx.shape:
+        raise ValueError("s_idx and d_idx must have the same shape.")
+    if s_idx.shape != user_idx.shape or s_idx.shape != weight_idx.shape:
+        raise ValueError("sample index tensors must have matching shapes.")
+    if int(s_idx.shape[0]) != user_count or int(s_idx.shape[1]) != weight_count:
+        raise ValueError("sample index tensors must match guide policy dimensions.")
+    samples_per_weight = int(s_idx.shape[2])
     labels = guide.policy.to(device=device)[user_idx, weight_idx, s_idx, d_idx].reshape(
         user_count,
         -1,
@@ -1493,6 +1546,82 @@ def sample_batched_uniform_table_batch(
         dim=2,
     )
     return obs, labels.to(torch.int64)
+
+
+def sample_batched_teacher_occupancy_table_batch(
+    guide: BatchedStationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    samples_per_weight: int,
+    device: torch.device,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if guide.state_occupancy is None:
+        raise ValueError("teacher occupancy sampling requires guide.state_occupancy.")
+    user_count, weight_count, s_count, d_count = guide.policy.shape
+    state_count = s_count * d_count
+    occupancy = torch.clamp(
+        guide.state_occupancy.to(device=device, dtype=torch.float32),
+        min=0.0,
+    )
+    if tuple(occupancy.shape) != (user_count, weight_count, state_count):
+        raise ValueError("guide.state_occupancy has incompatible shape.")
+    row_sum = occupancy.sum(dim=2, keepdim=True)
+    uniform = torch.full_like(occupancy, 1.0 / float(state_count))
+    probs = torch.where(
+        row_sum > 0.0,
+        occupancy / torch.clamp(row_sum, min=1e-12),
+        uniform,
+    )
+    state_idx = torch.multinomial(
+        probs.reshape(user_count * weight_count, state_count),
+        num_samples=samples_per_weight,
+        replacement=True,
+        generator=generator,
+    ).reshape(user_count, weight_count, samples_per_weight)
+    s_idx = torch.div(state_idx, d_count, rounding_mode="floor")
+    d_idx = state_idx.remainder(d_count)
+    user_idx = torch.arange(user_count, device=device)[:, None, None].expand_as(s_idx)
+    weight_idx = torch.arange(weight_count, device=device)[None, :, None].expand_as(
+        s_idx
+    )
+    return _batched_table_batch_from_indices(
+        guide,
+        cost_weights=cost_weights,
+        user_idx=user_idx,
+        weight_idx=weight_idx,
+        s_idx=s_idx,
+        d_idx=d_idx,
+        device=device,
+    )
+
+
+def sample_batched_table_batch(
+    guide: BatchedStationaryFiniteOracleGuide,
+    *,
+    cost_weights: Sequence[float],
+    samples_per_weight: int,
+    supervision: str,
+    device: torch.device,
+    generator: torch.Generator,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if supervision == "uniform_table":
+        return sample_batched_uniform_table_batch(
+            guide,
+            cost_weights=cost_weights,
+            samples_per_weight=samples_per_weight,
+            device=device,
+            generator=generator,
+        )
+    if supervision == "teacher_occupancy":
+        return sample_batched_teacher_occupancy_table_batch(
+            guide,
+            cost_weights=cost_weights,
+            samples_per_weight=samples_per_weight,
+            device=device,
+            generator=generator,
+        )
+    raise ValueError(f"Unknown table supervision mode: {supervision}")
 
 
 def train_batched_per_user_models(
@@ -1544,11 +1673,12 @@ def train_batched_per_user_models(
         correct_by_user = torch.zeros(user_count, device=device, dtype=torch.float64)
         total_by_user = torch.zeros(user_count, device=device, dtype=torch.float64)
         for _ in range(args.steps_per_epoch):
-            if args.per_user_supervision == "uniform_table":
-                obs, label = sample_batched_uniform_table_batch(
+            if args.per_user_supervision in TABLE_SUPERVISION_MODES:
+                obs, label = sample_batched_table_batch(
                     guide,
                     cost_weights=cost_weights,
                     samples_per_weight=args.table_samples_per_weight,
+                    supervision=args.per_user_supervision,
                     device=device,
                     generator=table_generator,
                 )
@@ -2599,7 +2729,7 @@ def evaluate_exact_vs_distill(
                     goal_cost_weight=cost_weight,
                     metrics=metrics,
                     runtime_s=runtime_s,
-                    engine="per_user_batched_uniform_table_supervision",
+                    engine=f"per_user_batched_{args.per_user_supervision}_supervision",
                 )
             )
     if device.type == "cuda":
@@ -2736,7 +2866,7 @@ def main() -> None:
                 params_per_user=params,
             )
         )
-        if args.per_user_supervision == "uniform_table":
+        if args.per_user_supervision in TABLE_SUPERVISION_MODES:
             eval_agreement, eval_agreement_by_user, agreement_runtime_s = (
                 estimate_batched_per_user_table_agreement(
                     ensemble=ensemble,
@@ -2746,7 +2876,7 @@ def main() -> None:
                 )
             )
             train_samples_per_user = args.table_samples_per_weight * len(cost_weights)
-            training_scope = "per_user_batched_uniform_table_supervision"
+            training_scope = f"per_user_batched_{args.per_user_supervision}_supervision"
         else:
             eval_agreement, eval_agreement_by_user, agreement_runtime_s = (
                 estimate_batched_per_user_agreement(
