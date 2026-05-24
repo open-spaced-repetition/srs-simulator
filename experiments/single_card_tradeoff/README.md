@@ -186,6 +186,8 @@ The continuous desired-retention stationary finite distill has the same multi-us
 uv run python -m experiments.single_card_tradeoff.cli.oracle_continuous_stationary_finite_distill_multiuser --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --cost-weights 0,4,16,64,256,1024 --eval-cost-weights 0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024 --oracle-s-grid-size 64 --oracle-d-grid-size 32 --epochs 128 --steps-per-epoch 64 --table-samples-per-weight 256 --eval-particles 10000 --torch-device cuda --out-dir artifacts/single_card_tradeoff/continuous_stationary_finite_distill_first8_eval_weights_add_025_05_markov_off --no-progress
 ```
 
+Use `--loss-weighting baseline|underpred|qgap|underpred_qgap` to run the continuous distill loss ablation with the same teacher and training budget. `baseline` is the old unweighted implied-interval plus retention-logit loss. `underpred` adds high-cost and terminal underprediction weights, `qgap` computes exact stationary teacher interval-margin weights after the DP solve, and `underpred_qgap` combines both.
+
 All oracle DP entrypoints now cache per `(user, weight)` under `artifacts/single_card_tradeoff/dp_cache` by default. Pass `--no-dp-cache` to disable it or `--refresh-dp-cache` to force recomputation.
 
 ```bash

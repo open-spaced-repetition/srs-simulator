@@ -6578,6 +6578,222 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         )
         return new_policy, residual, visited
 
+    def stationary_policy_interval_q_gaps(
+        self,
+        *,
+        policy: torch.Tensor,
+        cost_weights: Sequence[float] | torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        weight_tensor = torch.as_tensor(
+            cost_weights,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        weight_count = int(weight_tensor.numel())
+        if weight_count <= 0:
+            raise ValueError("cost_weights must contain at least one value.")
+        policy = policy.to(device=self.device, dtype=self.dtype).reshape(
+            self.user_count,
+            weight_count,
+            self.s_count,
+            self.d_count,
+        )
+        value = self._evaluate_stationary_policy_value_batch(
+            policy=policy,
+            cost_weights=weight_tensor,
+        )
+        occupancy = self._rollout_occupancy_batch(policy=policy)
+        visited_flat = occupancy[:, :, 1:, :].sum(dim=2) > 0.0
+        visited_cells = visited_flat.any(dim=1)
+        active_user_idx, active_state_idx = torch.nonzero(
+            visited_cells,
+            as_tuple=True,
+        )
+        active_cell_count = int(active_user_idx.numel())
+        block_size = int(self.STATIONARY_IMPROVE_STATE_BLOCK_SIZE)
+        block_count = (
+            math.ceil(active_cell_count / block_size) if active_cell_count else 0
+        )
+        if self._progress_logging_enabled():
+            total_cells = max(1, self.user_count * self.state_count)
+            self._progress_log(
+                "stationary q-gap start "
+                f"visited_state_density={active_cell_count / float(total_cells):.6f} "
+                f"active_cells={active_cell_count}/{total_cells} "
+                f"active_state_blocks={block_count} block_size={block_size}"
+            )
+
+        best_score = torch.full(
+            (self.user_count, weight_count, self.state_count),
+            -math.inf,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        second_score = torch.full_like(best_score, -math.inf)
+        qgap_start_s = time.perf_counter()
+        next_log_s = self._next_progress_log_deadline()
+        total_chunks = math.ceil((self.horizon + 1) / self.interval_chunk_size)
+        if active_cell_count:
+            weight_scatter = torch.arange(
+                weight_count,
+                device=self.device,
+                dtype=torch.int64,
+            ).view(1, weight_count)
+            for block_number, block_start in enumerate(
+                range(0, active_cell_count, block_size),
+                start=1,
+            ):
+                block_stop = min(active_cell_count, block_start + block_size)
+                block_user = active_user_idx[block_start:block_stop]
+                block_state = active_state_idx[block_start:block_stop]
+                block_occupancy = self._active_cell_occupancy_block(
+                    occupancy=occupancy,
+                    user_idx=block_user,
+                    state_idx=block_state,
+                )
+                active_rems = [
+                    int(rem)
+                    for rem in (
+                        torch.nonzero(
+                            block_occupancy[:, :, 1:].sum(dim=(0, 1)) > 0.0,
+                            as_tuple=False,
+                        )
+                        .flatten()
+                        .add(1)
+                        .cpu()
+                        .tolist()
+                    )
+                ]
+                (
+                    memorized,
+                    prefix_weighted,
+                    prefix_occupancy,
+                    total_weighted,
+                    total_occupancy,
+                ) = self._active_cell_immediate_prefix_tables(
+                    block_occupancy=block_occupancy,
+                    user_idx=block_user,
+                    state_idx=block_state,
+                )
+                block_best_score = torch.full(
+                    (int(block_user.numel()), weight_count),
+                    -math.inf,
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                block_second_score = torch.full_like(block_best_score, -math.inf)
+
+                for chunk_number, start in enumerate(
+                    range(1, self.horizon + 2, self.interval_chunk_size),
+                    start=1,
+                ):
+                    chunk_start_s = time.perf_counter()
+                    stop = min(self.horizon + 2, start + self.interval_chunk_size)
+                    intervals = torch.arange(
+                        start,
+                        stop,
+                        device=self.device,
+                        dtype=torch.int64,
+                    )
+                    valid = self._active_cell_attainable_interval_mask(
+                        intervals=intervals,
+                        user_idx=block_user,
+                        state_idx=block_state,
+                    )
+                    if not bool(valid.any().item()):
+                        continue
+                    score = self._active_cell_immediate_scores_for_intervals(
+                        intervals=intervals,
+                        memorized=memorized,
+                        prefix_weighted=prefix_weighted,
+                        prefix_occupancy=prefix_occupancy,
+                        total_weighted=total_weighted,
+                        total_occupancy=total_occupancy,
+                    )
+                    prob, next_idx, next_weight = self._active_cell_interval_tables(
+                        intervals=intervals,
+                        user_idx=block_user,
+                        state_idx=block_state,
+                    )
+                    score += self._active_cell_continuation_scores_for_intervals(
+                        block_occupancy=block_occupancy,
+                        user_idx=block_user,
+                        intervals=intervals,
+                        valid=valid,
+                        cost_weights=weight_tensor,
+                        value=value,
+                        prob=prob,
+                        next_idx=next_idx,
+                        next_weight=next_weight,
+                        active_rems=active_rems,
+                    )
+                    masked_score = torch.where(
+                        valid[:, None, :],
+                        score,
+                        torch.full_like(score, -math.inf),
+                    )
+                    candidates = torch.cat(
+                        [
+                            block_best_score[:, :, None],
+                            block_second_score[:, :, None],
+                            masked_score,
+                        ],
+                        dim=2,
+                    )
+                    top2 = torch.topk(candidates, k=2, dim=2).values
+                    block_best_score = top2[:, :, 0]
+                    block_second_score = top2[:, :, 1]
+                    if self._progress_log_due(next_log_s):
+                        self._progress_log(
+                            "stationary q-gap progress "
+                            f"block={block_number}/{block_count} "
+                            f"chunk={chunk_number}/{total_chunks} "
+                            f"intervals={start}-{stop - 1} "
+                            f"valid_pairs={int(valid.sum().item())} "
+                            f"chunk_s={time.perf_counter() - chunk_start_s:.1f} "
+                            f"elapsed_s={time.perf_counter() - qgap_start_s:.1f}"
+                        )
+                        next_log_s = self._next_progress_log_deadline()
+
+                block_weight_idx = weight_scatter.expand(
+                    int(block_user.numel()),
+                    weight_count,
+                )
+                block_user_exp = block_user.view(-1, 1).expand_as(block_weight_idx)
+                block_state_exp = block_state.view(-1, 1).expand_as(block_weight_idx)
+                best_score[block_user_exp, block_weight_idx, block_state_exp] = (
+                    block_best_score
+                )
+                second_score[block_user_exp, block_weight_idx, block_state_exp] = (
+                    block_second_score
+                )
+
+        finite_gap = torch.isfinite(best_score) & torch.isfinite(second_score)
+        q_gap = torch.where(
+            finite_gap,
+            torch.clamp(best_score - second_score, min=0.0),
+            torch.zeros_like(best_score),
+        )
+        q_gap = torch.where(visited_flat, q_gap, torch.zeros_like(q_gap))
+        if self._progress_logging_enabled():
+            positive = q_gap[q_gap > 0.0]
+            mean_positive = float(positive.mean().item()) if positive.numel() else 0.0
+            self._progress_log(
+                "stationary q-gap done "
+                f"runtime_s={time.perf_counter() - qgap_start_s:.1f} "
+                f"positive_cells={int(positive.numel())} "
+                f"mean_positive={mean_positive:.6g}"
+            )
+        return (
+            q_gap.reshape(self.user_count, weight_count, self.s_count, self.d_count),
+            visited_flat.reshape(
+                self.user_count,
+                weight_count,
+                self.s_count,
+                self.d_count,
+            ),
+        )
+
     def _improve_stationary_policy_batch_dense_reference(
         self,
         *,

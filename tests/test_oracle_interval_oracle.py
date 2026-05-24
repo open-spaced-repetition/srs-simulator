@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 import torch
@@ -506,6 +507,90 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
             )
         )
         self.assertTrue(torch.equal(optimized_active[2], reference_active[2]))
+
+    def test_stationary_policy_interval_q_gaps_match_dense_scores(self) -> None:
+        oracle = _batched_continuous_oracle(user_count=1, days=5)
+        cost_weights = torch.tensor(
+            [0.0, 4.0], device=oracle.device, dtype=oracle.dtype
+        )
+        policy = torch.full(
+            (1, 2, oracle.s_count, oracle.d_count),
+            0.8,
+            device=oracle.device,
+            dtype=oracle.dtype,
+        )
+        value = oracle._evaluate_stationary_policy_value_batch(
+            policy=policy,
+            cost_weights=cost_weights,
+        )
+        occupancy = oracle._rollout_occupancy_batch(policy=policy)
+        intervals = torch.arange(
+            1,
+            oracle.horizon + 2,
+            device=oracle.device,
+            dtype=torch.int64,
+        )
+        interval, prob, next_idx, next_weight = oracle._interval_tables_batch(intervals)
+        score = torch.zeros(
+            (
+                oracle.user_count,
+                int(cost_weights.numel()),
+                int(intervals.numel()),
+                oracle.s_count,
+                oracle.d_count,
+            ),
+            device=oracle.device,
+            dtype=oracle.dtype,
+        )
+        valid = oracle._attainable_interval_mask(intervals, oracle.horizon + 1)
+        for rem in range(1, oracle.horizon + 1):
+            rem_occupancy = occupancy[:, :, rem, :].reshape(
+                oracle.user_count,
+                int(cost_weights.numel()),
+                oracle.s_count,
+                oracle.d_count,
+            )
+            candidate = oracle._candidate_interval_value_from_tables(
+                intervals=intervals,
+                rem=rem,
+                cost_weights=cost_weights.view(1, int(cost_weights.numel()), 1, 1, 1),
+                value=value,
+                interval=interval,
+                prob=prob,
+                next_idx=next_idx,
+                next_weight=next_weight,
+            )
+            candidate = torch.where(
+                valid[:, None, :, :, None],
+                candidate,
+                torch.zeros_like(candidate),
+            )
+            score += rem_occupancy[:, :, None, :, :] * candidate
+        masked_score = torch.where(
+            valid[:, None, :, :, None],
+            score,
+            torch.full_like(score, -math.inf),
+        )
+        top2 = torch.topk(masked_score, k=2, dim=2).values
+        expected = torch.where(
+            torch.isfinite(top2[:, :, 0]) & torch.isfinite(top2[:, :, 1]),
+            torch.clamp(top2[:, :, 0] - top2[:, :, 1], min=0.0),
+            torch.zeros_like(top2[:, :, 0]),
+        )
+        visited = occupancy[:, :, 1:, :].sum(dim=2) > 0.0
+        expected = torch.where(
+            visited.reshape_as(expected),
+            expected,
+            torch.zeros_like(expected),
+        )
+
+        actual, actual_visited = oracle.stationary_policy_interval_q_gaps(
+            policy=policy,
+            cost_weights=cost_weights,
+        )
+
+        self.assertTrue(torch.equal(actual_visited, visited.reshape_as(actual)))
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-10, rtol=0.0))
 
     def test_optimized_batched_improvement_preserves_unvisited_states(self) -> None:
         oracle = _batched_continuous_oracle(user_count=1, days=5)

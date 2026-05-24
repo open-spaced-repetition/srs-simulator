@@ -115,6 +115,19 @@ DEFAULT_OUT_DIR = Path(
 BASELINE_SCHEDULER = "fsrs6"
 PER_USER_SCHEDULER = POLICY_TYPE
 DEFAULT_TRAIN_ENVS_PER_USER = DEFAULT_TRAIN_ENVS
+LOSS_WEIGHTING_CHOICES = (
+    "baseline",
+    "underpred",
+    "qgap",
+    "underpred_qgap",
+)
+DEFAULT_UNDERPREDICTION_LOSS_WEIGHT = 0.0
+DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT = 0.0
+DEFAULT_Q_GAP_LOSS_WEIGHT = 0.0
+DEFAULT_Q_GAP_WEIGHT_CAP = 8.0
+RECOMMENDED_UNDERPREDICTION_LOSS_WEIGHT = 4.0
+RECOMMENDED_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT = 16.0
+RECOMMENDED_Q_GAP_LOSS_WEIGHT = 1.0
 
 
 def _diagnostic_log(
@@ -144,6 +157,47 @@ def _progress_log_due(args: argparse.Namespace, deadline: float) -> bool:
 
 
 @dataclass(frozen=True)
+class ContinuousDistillLossWeightingConfig:
+    mode: str
+    underprediction_loss_weight: float
+    terminal_underprediction_loss_weight: float
+    q_gap_loss_weight: float
+    q_gap_weight_cap: float
+
+
+@dataclass(frozen=True)
+class ContinuousTableBatch:
+    obs: torch.Tensor
+    target_retention: torch.Tensor
+    s_values: torch.Tensor
+    goal_norm: torch.Tensor
+    q_gap: torch.Tensor | None
+    q_gap_normalizer: torch.Tensor | None
+
+
+@dataclass(frozen=True)
+class ContinuousTableDistillLoss:
+    total_by_user: torch.Tensor
+    interval_by_user: torch.Tensor
+    retention_by_user: torch.Tensor
+    underprediction_rate_by_user: torch.Tensor
+    signed_log_interval_error_by_user: torch.Tensor
+    q_gap_weight_by_user: torch.Tensor
+
+
+@dataclass(frozen=True)
+class ContinuousBatchedTrainResult:
+    ensemble: "BatchedRetentionPolicyEnsemble"
+    runtime_s: float
+    final_loss_by_user: list[float]
+    final_interval_loss_by_user: list[float]
+    final_retention_loss_by_user: list[float]
+    final_underprediction_rate_by_user: list[float]
+    final_signed_log_interval_error_by_user: list[float]
+    final_q_gap_weight_by_user: list[float]
+
+
+@dataclass(frozen=True)
 class ContinuousSingleUserTrainStats:
     user_id: int
     user_index: int
@@ -157,6 +211,14 @@ class ContinuousSingleUserTrainStats:
     final_loss: float
     final_interval_loss: float
     final_retention_loss: float
+    loss_weighting: str
+    underprediction_loss_weight: float
+    terminal_underprediction_loss_weight: float
+    q_gap_loss_weight: float
+    q_gap_weight_cap: float
+    interval_underprediction_rate: float
+    mean_signed_log_interval_error: float
+    mean_q_gap_weight: float
     eval_retention_mae: float
     eval_log_interval_mae: float
     table_samples_per_weight: int
@@ -188,6 +250,7 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         progress_log_interval_seconds: float,
         configs: Sequence[SingleCardFSRS6Config],
         user_batch_size: int,
+        compute_q_gap: bool = False,
         cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
         if not configs:
@@ -213,6 +276,7 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         objective_chunks: list[torch.Tensor] = []
         factor_chunks: list[torch.Tensor] = []
         decay_chunks: list[torch.Tensor] = []
+        q_gap_chunks: list[torch.Tensor] = []
         metrics: list[list[Any]] = []
         iterations: list[list[int]] = []
         converged: list[list[bool]] = []
@@ -291,6 +355,21 @@ class BatchedContinuousStationaryFiniteOracleGuide:
             objective_chunks.append(solution.objectives.to(device=device))
             factor_chunks.append(oracle.factor.to(device=device, dtype=torch.float32))
             decay_chunks.append(oracle.decay.to(device=device, dtype=torch.float32))
+            if compute_q_gap:
+                q_gap_start_s = time.perf_counter()
+                q_gap, _visited = oracle.stationary_policy_interval_q_gaps(
+                    policy=solution.policy,
+                    cost_weights=cost_weights,
+                )
+                q_gap_chunks.append(q_gap.to(device=device, dtype=torch.float32))
+                _diagnostic_log(
+                    enabled=log_enabled,
+                    start_s=guide_start_s,
+                    message=(
+                        "teacher q-gap scored "
+                        f"users={user_ids} runtime_s={time.perf_counter() - q_gap_start_s:.1f}"
+                    ),
+                )
             metrics.extend(solution.metrics)
             iterations.extend(solution.iterations)
             converged.extend(solution.converged)
@@ -303,6 +382,28 @@ class BatchedContinuousStationaryFiniteOracleGuide:
         self.factor = torch.cat(factor_chunks, dim=0)
         self.decay = torch.cat(decay_chunks, dim=0)
         self.s_grid = first_oracle.s_grid.to(device=device, dtype=torch.float32)
+        self.q_gap: torch.Tensor | None = None
+        self.q_gap_normalizer: torch.Tensor | None = None
+        if q_gap_chunks:
+            self.q_gap = torch.cat(q_gap_chunks, dim=0)
+            positive = torch.clamp(self.q_gap, min=0.0)
+            positive_mask = positive > 0.0
+            positive_sum = positive.reshape(
+                int(self.q_gap.shape[0]),
+                int(self.q_gap.shape[1]),
+                -1,
+            ).sum(dim=2)
+            positive_count = positive_mask.reshape(
+                int(self.q_gap.shape[0]),
+                int(self.q_gap.shape[1]),
+                -1,
+            ).sum(dim=2)
+            self.q_gap_normalizer = torch.where(
+                positive_count > 0,
+                positive_sum
+                / torch.clamp(positive_count.to(dtype=positive_sum.dtype), min=1.0),
+                torch.ones_like(positive_sum),
+            )
         self.metrics = metrics
         self.iterations = iterations
         self.converged = converged
@@ -389,6 +490,51 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RETENTION_LOGIT_LOSS_WEIGHT,
     )
     parser.add_argument(
+        "--loss-weighting",
+        choices=LOSS_WEIGHTING_CHOICES,
+        default="baseline",
+        help=(
+            "Convenience selector for the continuous distill loss ablation. "
+            "baseline preserves the existing unweighted loss; underpred uses "
+            "asymmetric log-interval underprediction weights; qgap uses exact "
+            "stationary teacher interval-margin sample weights."
+        ),
+    )
+    parser.add_argument(
+        "--underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_UNDERPREDICTION_LOSS_WEIGHT,
+        help=(
+            "Extra SmoothL1 multiplier for log-interval underprediction, scaled "
+            "by normalized cost weight. Nonzero values also enable underpred "
+            "behavior when --loss-weighting=baseline."
+        ),
+    )
+    parser.add_argument(
+        "--terminal-underprediction-loss-weight",
+        type=float,
+        default=DEFAULT_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT,
+        help=(
+            "Extra SmoothL1 multiplier for underpredicting terminal/no-more-review "
+            "intervals."
+        ),
+    )
+    parser.add_argument(
+        "--q-gap-loss-weight",
+        type=float,
+        default=DEFAULT_Q_GAP_LOSS_WEIGHT,
+        help=(
+            "Multiplier for exact stationary teacher Q-gap sample weighting. "
+            "Nonzero values compute an additional teacher margin table."
+        ),
+    )
+    parser.add_argument(
+        "--q-gap-weight-cap",
+        type=float,
+        default=DEFAULT_Q_GAP_WEIGHT_CAP,
+        help="Maximum per-sample Q-gap loss multiplier.",
+    )
+    parser.add_argument(
         "--oracle-s-grid-size", type=int, default=DEFAULT_ORACLE_S_GRID_SIZE
     )
     parser.add_argument(
@@ -440,12 +586,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_loss_weighting(
+    args: argparse.Namespace,
+) -> ContinuousDistillLossWeightingConfig:
+    underprediction = float(args.underprediction_loss_weight)
+    terminal_underprediction = float(args.terminal_underprediction_loss_weight)
+    q_gap = float(args.q_gap_loss_weight)
+    if args.loss_weighting in {"underpred", "underpred_qgap"}:
+        if underprediction == 0.0:
+            underprediction = RECOMMENDED_UNDERPREDICTION_LOSS_WEIGHT
+        if terminal_underprediction == 0.0:
+            terminal_underprediction = RECOMMENDED_TERMINAL_UNDERPREDICTION_LOSS_WEIGHT
+    if args.loss_weighting in {"qgap", "underpred_qgap"} and q_gap == 0.0:
+        q_gap = RECOMMENDED_Q_GAP_LOSS_WEIGHT
+    return ContinuousDistillLossWeightingConfig(
+        mode=str(args.loss_weighting),
+        underprediction_loss_weight=underprediction,
+        terminal_underprediction_loss_weight=terminal_underprediction,
+        q_gap_loss_weight=q_gap,
+        q_gap_weight_cap=float(args.q_gap_weight_cap),
+    )
+
+
 def build_guide(
     args: argparse.Namespace,
     *,
     device: torch.device,
     configs: Sequence[SingleCardFSRS6Config],
     cost_weights: Sequence[float],
+    loss_config: ContinuousDistillLossWeightingConfig,
     cache_config: OracleDPCacheConfig | None = None,
 ) -> tuple[BatchedContinuousStationaryFiniteOracleGuide, float]:
     start = time.perf_counter()
@@ -464,6 +633,7 @@ def build_guide(
         progress_log_interval_seconds=args.progress_log_interval_seconds,
         configs=configs,
         user_batch_size=args.oracle_teacher_user_batch_size,
+        compute_q_gap=loss_config.q_gap_loss_weight > 0.0,
         cache_config=cache_config,
     )
     return guide, time.perf_counter() - start
@@ -476,7 +646,7 @@ def sample_batched_uniform_table_batch(
     samples_per_weight: int,
     device: torch.device,
     generator: torch.Generator,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> ContinuousTableBatch:
     user_count, weight_count, s_count, d_count = guide.policy.shape
     user_idx = torch.arange(user_count, device=device)[:, None, None].expand(
         user_count,
@@ -530,10 +700,28 @@ def sample_batched_uniform_table_batch(
         user_count,
         -1,
     )
-    return obs, target_retention, s_values
+    q_gap: torch.Tensor | None = None
+    q_gap_normalizer: torch.Tensor | None = None
+    if guide.q_gap is not None and guide.q_gap_normalizer is not None:
+        q_gap = guide.q_gap.to(device=device)[user_idx, weight_idx, s_idx, d_idx]
+        q_gap = q_gap.reshape(user_count, -1)
+        q_gap_normalizer = guide.q_gap_normalizer.to(device=device)[
+            user_idx,
+            weight_idx,
+        ].reshape(user_count, -1)
+    return ContinuousTableBatch(
+        obs=obs,
+        target_retention=target_retention,
+        s_values=s_values,
+        goal_norm=goal_norm[None, :, None]
+        .expand(user_count, weight_count, samples_per_weight)
+        .reshape(user_count, -1),
+        q_gap=q_gap,
+        q_gap_normalizer=q_gap_normalizer,
+    )
 
 
-def log_intervals_for_retentions(
+def continuous_intervals_for_retentions(
     *,
     guide: BatchedContinuousStationaryFiniteOracleGuide,
     s: torch.Tensor,
@@ -548,8 +736,155 @@ def log_intervals_for_retentions(
         / guide.factor[:, None].to(device=s.device, dtype=s.dtype)
         * retention_factor.to(dtype=s.dtype)
     )
-    interval = torch.clamp(interval, min=1.0, max=float(guide.horizon + 1))
-    return torch.log(interval)
+    return torch.clamp(interval, min=1.0, max=float(guide.horizon + 1))
+
+
+def log_intervals_for_retentions(
+    *,
+    guide: BatchedContinuousStationaryFiniteOracleGuide,
+    s: torch.Tensor,
+    retention: torch.Tensor,
+) -> torch.Tensor:
+    return torch.log(
+        continuous_intervals_for_retentions(
+            guide=guide,
+            s=s,
+            retention=retention,
+        )
+    )
+
+
+def rounded_intervals_for_retentions(
+    *,
+    guide: BatchedContinuousStationaryFiniteOracleGuide,
+    s: torch.Tensor,
+    retention: torch.Tensor,
+) -> torch.Tensor:
+    return torch.clamp(
+        torch.round(
+            continuous_intervals_for_retentions(
+                guide=guide,
+                s=s,
+                retention=retention,
+            )
+        ),
+        min=1.0,
+        max=float(guide.horizon + 1),
+    ).to(torch.int64)
+
+
+def q_gap_loss_weights(
+    *,
+    q_gap: torch.Tensor | None,
+    q_gap_normalizer: torch.Tensor | None,
+    config: ContinuousDistillLossWeightingConfig,
+    reference: torch.Tensor,
+) -> torch.Tensor:
+    if config.q_gap_loss_weight <= 0.0:
+        return torch.ones_like(reference)
+    if q_gap is None or q_gap_normalizer is None:
+        raise ValueError("Q-gap loss weighting requires a teacher q_gap table.")
+    normalized = torch.clamp(
+        q_gap.to(device=reference.device, dtype=reference.dtype),
+        min=0.0,
+    ) / torch.clamp(
+        q_gap_normalizer.to(
+            device=reference.device,
+            dtype=reference.dtype,
+        ),
+        min=1e-12,
+    )
+    return torch.clamp(
+        1.0 + float(config.q_gap_loss_weight) * normalized,
+        min=1.0,
+        max=float(config.q_gap_weight_cap),
+    )
+
+
+def continuous_table_retention_distill_loss(
+    *,
+    pred_logit: torch.Tensor,
+    batch: ContinuousTableBatch,
+    guide: BatchedContinuousStationaryFiniteOracleGuide,
+    config: ContinuousDistillLossWeightingConfig,
+    retention_min: float,
+    retention_max: float,
+    interval_loss_weight: float,
+    retention_logit_loss_weight: float,
+) -> ContinuousTableDistillLoss:
+    target_logit = retention_logits_for_retentions(
+        batch.target_retention,
+        retention_min=retention_min,
+        retention_max=retention_max,
+    )
+    pred_retention = predicted_retentions(
+        pred_logit,
+        retention_min=retention_min,
+        retention_max=retention_max,
+    )
+    pred_log_interval = log_intervals_for_retentions(
+        guide=guide,
+        s=batch.s_values,
+        retention=pred_retention,
+    )
+    target_log_interval = log_intervals_for_retentions(
+        guide=guide,
+        s=batch.s_values,
+        retention=batch.target_retention,
+    )
+    interval_item = nn.functional.smooth_l1_loss(
+        pred_log_interval,
+        target_log_interval,
+        reduction="none",
+    )
+    retention_item = nn.functional.smooth_l1_loss(
+        pred_logit,
+        target_logit,
+        reduction="none",
+    )
+    under = (pred_log_interval < target_log_interval).to(dtype=interval_item.dtype)
+    interval_weights = torch.ones_like(interval_item)
+    if config.underprediction_loss_weight:
+        interval_weights = interval_weights + (
+            float(config.underprediction_loss_weight)
+            * batch.goal_norm.to(device=interval_item.device, dtype=interval_item.dtype)
+            * under
+        )
+    if config.terminal_underprediction_loss_weight:
+        target_interval = rounded_intervals_for_retentions(
+            guide=guide,
+            s=batch.s_values,
+            retention=batch.target_retention,
+        )
+        terminal = (target_interval >= (guide.horizon + 1)).to(
+            dtype=interval_item.dtype
+        )
+        interval_weights = interval_weights + (
+            float(config.terminal_underprediction_loss_weight) * terminal * under
+        )
+    q_gap_weight = q_gap_loss_weights(
+        q_gap=batch.q_gap,
+        q_gap_normalizer=batch.q_gap_normalizer,
+        config=config,
+        reference=interval_item,
+    )
+    interval_weights = interval_weights * q_gap_weight
+    interval_loss_by_user = (interval_item * interval_weights).mean(dim=1)
+    retention_loss_by_user = retention_item.mean(dim=1)
+    total_by_user = (
+        float(interval_loss_weight) * interval_loss_by_user
+        + float(retention_logit_loss_weight) * retention_loss_by_user
+    )
+    return ContinuousTableDistillLoss(
+        total_by_user=total_by_user,
+        interval_by_user=interval_loss_by_user,
+        retention_by_user=retention_loss_by_user,
+        underprediction_rate_by_user=under.mean(dim=1),
+        signed_log_interval_error_by_user=(
+            pred_log_interval - target_log_interval
+        ).mean(dim=1),
+        q_gap_weight_by_user=q_gap_weight.mean(dim=1),
+    )
 
 
 def build_batched_retention_ensemble(
@@ -647,9 +982,8 @@ def train_batched_per_user_models(
     cost_weights: Sequence[float],
     action_retentions: Sequence[float],
     params_per_user: int,
-) -> tuple[
-    BatchedRetentionPolicyEnsemble, float, list[float], list[float], list[float]
-]:
+    loss_config: ContinuousDistillLossWeightingConfig,
+) -> ContinuousBatchedTrainResult:
     ensemble = build_batched_retention_ensemble(
         args,
         user_count=user_count,
@@ -668,6 +1002,9 @@ def train_batched_per_user_models(
     final_loss_by_user = [math.nan for _ in range(user_count)]
     final_interval_loss_by_user = [math.nan for _ in range(user_count)]
     final_retention_loss_by_user = [math.nan for _ in range(user_count)]
+    final_underprediction_rate_by_user = [math.nan for _ in range(user_count)]
+    final_signed_log_interval_error_by_user = [math.nan for _ in range(user_count)]
+    final_q_gap_weight_by_user = [math.nan for _ in range(user_count)]
     start = time.perf_counter()
     next_log_s = _next_progress_deadline(args)
     _diagnostic_log(
@@ -678,7 +1015,11 @@ def train_batched_per_user_models(
             f"users={user_count} epochs={args.epochs} "
             f"steps_per_epoch={args.steps_per_epoch} "
             f"samples_per_weight={args.table_samples_per_weight} "
-            f"teacher_weights={len(cost_weights)}"
+            f"teacher_weights={len(cost_weights)} "
+            f"loss_weighting={loss_config.mode} "
+            f"underpred={loss_config.underprediction_loss_weight:g} "
+            f"terminal_underpred={loss_config.terminal_underprediction_loss_weight:g} "
+            f"q_gap={loss_config.q_gap_loss_weight:g}"
         ),
     )
     for epoch in range(args.epochs):
@@ -686,68 +1027,62 @@ def train_batched_per_user_models(
         loss_sum_by_user = torch.zeros_like(total_by_user)
         interval_sum_by_user = torch.zeros_like(total_by_user)
         retention_sum_by_user = torch.zeros_like(total_by_user)
+        underprediction_sum_by_user = torch.zeros_like(total_by_user)
+        signed_error_sum_by_user = torch.zeros_like(total_by_user)
+        q_gap_weight_sum_by_user = torch.zeros_like(total_by_user)
         for step in range(args.steps_per_epoch):
-            obs, target_retention, s_values = sample_batched_uniform_table_batch(
+            batch = sample_batched_uniform_table_batch(
                 guide,
                 cost_weights=cost_weights,
                 samples_per_weight=args.table_samples_per_weight,
                 device=device,
                 generator=generator,
             )
-            pred_logit, _ = batched_retention_ensemble_forward(ensemble, obs)
-            target_logit = retention_logits_for_retentions(
-                target_retention,
+            pred_logit, _ = batched_retention_ensemble_forward(ensemble, batch.obs)
+            loss_terms = continuous_table_retention_distill_loss(
+                pred_logit=pred_logit,
+                batch=batch,
+                guide=guide,
+                config=loss_config,
                 retention_min=args.retention_min,
                 retention_max=args.retention_max,
+                interval_loss_weight=args.interval_loss_weight,
+                retention_logit_loss_weight=args.retention_logit_loss_weight,
             )
-            pred_retention = predicted_retentions(
-                pred_logit,
-                retention_min=args.retention_min,
-                retention_max=args.retention_max,
-            )
-            pred_log_interval = log_intervals_for_retentions(
-                guide=guide,
-                s=s_values,
-                retention=pred_retention,
-            )
-            target_log_interval = log_intervals_for_retentions(
-                guide=guide,
-                s=s_values,
-                retention=target_retention,
-            )
-            interval_item = nn.functional.smooth_l1_loss(
-                pred_log_interval,
-                target_log_interval,
-                reduction="none",
-            )
-            retention_item = nn.functional.smooth_l1_loss(
-                pred_logit,
-                target_logit,
-                reduction="none",
-            )
-            interval_loss_by_user = interval_item.mean(dim=1)
-            retention_loss_by_user = retention_item.mean(dim=1)
-            loss_by_user = (
-                float(args.interval_loss_weight) * interval_loss_by_user
-                + float(args.retention_logit_loss_weight) * retention_loss_by_user
-            )
-            loss = loss_by_user.sum()
+            loss = loss_terms.total_by_user.sum()
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             clip_stacked_grad_norm_(ensemble.params, max_norm=args.max_grad_norm)
             optimizer.step()
 
             with torch.no_grad():
-                count = float(target_retention.shape[1])
+                count = float(batch.target_retention.shape[1])
                 total_by_user += count
                 loss_sum_by_user += (
-                    loss_by_user.detach().to(dtype=torch.float64) * count
+                    loss_terms.total_by_user.detach().to(dtype=torch.float64) * count
                 )
                 interval_sum_by_user += (
-                    interval_loss_by_user.detach().to(dtype=torch.float64) * count
+                    loss_terms.interval_by_user.detach().to(dtype=torch.float64) * count
                 )
                 retention_sum_by_user += (
-                    retention_loss_by_user.detach().to(dtype=torch.float64) * count
+                    loss_terms.retention_by_user.detach().to(dtype=torch.float64)
+                    * count
+                )
+                underprediction_sum_by_user += (
+                    loss_terms.underprediction_rate_by_user.detach().to(
+                        dtype=torch.float64
+                    )
+                    * count
+                )
+                signed_error_sum_by_user += (
+                    loss_terms.signed_log_interval_error_by_user.detach().to(
+                        dtype=torch.float64
+                    )
+                    * count
+                )
+                q_gap_weight_sum_by_user += (
+                    loss_terms.q_gap_weight_by_user.detach().to(dtype=torch.float64)
+                    * count
                 )
             if _progress_log_due(args, next_log_s):
                 partial_loss = loss_sum_by_user / torch.clamp(total_by_user, min=1.0)
@@ -756,6 +1091,18 @@ def train_batched_per_user_models(
                     min=1.0,
                 )
                 partial_retention = retention_sum_by_user / torch.clamp(
+                    total_by_user,
+                    min=1.0,
+                )
+                partial_under = underprediction_sum_by_user / torch.clamp(
+                    total_by_user,
+                    min=1.0,
+                )
+                partial_signed = signed_error_sum_by_user / torch.clamp(
+                    total_by_user,
+                    min=1.0,
+                )
+                partial_q_gap_weight = q_gap_weight_sum_by_user / torch.clamp(
                     total_by_user,
                     min=1.0,
                 )
@@ -768,13 +1115,28 @@ def train_batched_per_user_models(
                         f"step={step + 1}/{args.steps_per_epoch} "
                         f"mean_loss={float(partial_loss.mean().item()):.6f} "
                         f"mean_interval={float(partial_interval.mean().item()):.6f} "
-                        f"mean_retention={float(partial_retention.mean().item()):.6f}"
+                        f"mean_retention={float(partial_retention.mean().item()):.6f} "
+                        f"under_rate={float(partial_under.mean().item()):.4f} "
+                        f"signed_log_interval_error={float(partial_signed.mean().item()):.6f} "
+                        f"q_gap_weight={float(partial_q_gap_weight.mean().item()):.4f}"
                     ),
                 )
                 next_log_s = _next_progress_deadline(args)
         final_loss = loss_sum_by_user / torch.clamp(total_by_user, min=1.0)
         final_interval = interval_sum_by_user / torch.clamp(total_by_user, min=1.0)
         final_retention = retention_sum_by_user / torch.clamp(total_by_user, min=1.0)
+        final_under = underprediction_sum_by_user / torch.clamp(
+            total_by_user,
+            min=1.0,
+        )
+        final_signed = signed_error_sum_by_user / torch.clamp(
+            total_by_user,
+            min=1.0,
+        )
+        final_q_gap_weight = q_gap_weight_sum_by_user / torch.clamp(
+            total_by_user,
+            min=1.0,
+        )
         final_loss_by_user = [float(value) for value in final_loss.tolist()]
         final_interval_loss_by_user = [
             float(value) for value in final_interval.tolist()
@@ -782,12 +1144,23 @@ def train_batched_per_user_models(
         final_retention_loss_by_user = [
             float(value) for value in final_retention.tolist()
         ]
+        final_underprediction_rate_by_user = [
+            float(value) for value in final_under.tolist()
+        ]
+        final_signed_log_interval_error_by_user = [
+            float(value) for value in final_signed.tolist()
+        ]
+        final_q_gap_weight_by_user = [
+            float(value) for value in final_q_gap_weight.tolist()
+        ]
         if not args.no_progress:
             print(
                 f"epoch={epoch + 1}/{args.epochs} "
                 f"mean_loss={sum(final_loss_by_user) / float(user_count):.6f} "
                 f"mean_interval={sum(final_interval_loss_by_user) / float(user_count):.6f} "
-                f"mean_retention={sum(final_retention_loss_by_user) / float(user_count):.6f}",
+                f"mean_retention={sum(final_retention_loss_by_user) / float(user_count):.6f} "
+                f"under_rate={sum(final_underprediction_rate_by_user) / float(user_count):.4f} "
+                f"q_gap_weight={sum(final_q_gap_weight_by_user) / float(user_count):.4f}",
                 flush=True,
             )
     _diagnostic_log(
@@ -798,15 +1171,22 @@ def train_batched_per_user_models(
             f"runtime_s={time.perf_counter() - start:.1f} "
             f"mean_loss={sum(final_loss_by_user) / float(user_count):.6f} "
             f"mean_interval={sum(final_interval_loss_by_user) / float(user_count):.6f} "
-            f"mean_retention={sum(final_retention_loss_by_user) / float(user_count):.6f}"
+            f"mean_retention={sum(final_retention_loss_by_user) / float(user_count):.6f} "
+            f"under_rate={sum(final_underprediction_rate_by_user) / float(user_count):.4f} "
+            f"q_gap_weight={sum(final_q_gap_weight_by_user) / float(user_count):.4f}"
         ),
     )
-    return (
-        ensemble,
-        time.perf_counter() - start,
-        final_loss_by_user,
-        final_interval_loss_by_user,
-        final_retention_loss_by_user,
+    return ContinuousBatchedTrainResult(
+        ensemble=ensemble,
+        runtime_s=time.perf_counter() - start,
+        final_loss_by_user=final_loss_by_user,
+        final_interval_loss_by_user=final_interval_loss_by_user,
+        final_retention_loss_by_user=final_retention_loss_by_user,
+        final_underprediction_rate_by_user=final_underprediction_rate_by_user,
+        final_signed_log_interval_error_by_user=(
+            final_signed_log_interval_error_by_user
+        ),
+        final_q_gap_weight_by_user=final_q_gap_weight_by_user,
     )
 
 
@@ -1012,6 +1392,13 @@ def save_single_user_checkpoint(
             "retention_max": args.retention_max,
             "interval_loss_weight": args.interval_loss_weight,
             "retention_logit_loss_weight": args.retention_logit_loss_weight,
+            "loss_weighting": stats.loss_weighting,
+            "underprediction_loss_weight": stats.underprediction_loss_weight,
+            "terminal_underprediction_loss_weight": (
+                stats.terminal_underprediction_loss_weight
+            ),
+            "q_gap_loss_weight": stats.q_gap_loss_weight,
+            "q_gap_weight_cap": stats.q_gap_weight_cap,
             "oracle_s_grid_size": args.oracle_s_grid_size,
             "oracle_d_grid_size": args.oracle_d_grid_size,
             "oracle_interval_chunk_size": args.oracle_interval_chunk_size,
@@ -1041,6 +1428,13 @@ def save_single_user_checkpoint(
             "train_final_loss": stats.final_loss,
             "train_final_interval_loss": stats.final_interval_loss,
             "train_final_retention_loss": stats.final_retention_loss,
+            "train_interval_underprediction_rate": (
+                stats.interval_underprediction_rate
+            ),
+            "train_mean_signed_log_interval_error": (
+                stats.mean_signed_log_interval_error
+            ),
+            "train_mean_q_gap_weight": stats.mean_q_gap_weight,
             "train_runtime_s": stats.train_runtime_s,
             "teacher_runtime_s": teacher_runtime_s,
             "table_eval_runtime_s": table_eval_runtime_s,
@@ -1080,6 +1474,14 @@ def write_train_summary(
         "final_loss",
         "final_interval_loss",
         "final_retention_loss",
+        "loss_weighting",
+        "underprediction_loss_weight",
+        "terminal_underprediction_loss_weight",
+        "q_gap_loss_weight",
+        "q_gap_weight_cap",
+        "interval_underprediction_rate",
+        "mean_signed_log_interval_error",
+        "mean_q_gap_weight",
         "eval_retention_mae",
         "eval_log_interval_mae",
     ]
@@ -1113,6 +1515,20 @@ def write_train_summary(
                     "final_loss": stats.final_loss,
                     "final_interval_loss": stats.final_interval_loss,
                     "final_retention_loss": stats.final_retention_loss,
+                    "loss_weighting": stats.loss_weighting,
+                    "underprediction_loss_weight": stats.underprediction_loss_weight,
+                    "terminal_underprediction_loss_weight": (
+                        stats.terminal_underprediction_loss_weight
+                    ),
+                    "q_gap_loss_weight": stats.q_gap_loss_weight,
+                    "q_gap_weight_cap": stats.q_gap_weight_cap,
+                    "interval_underprediction_rate": (
+                        stats.interval_underprediction_rate
+                    ),
+                    "mean_signed_log_interval_error": (
+                        stats.mean_signed_log_interval_error
+                    ),
+                    "mean_q_gap_weight": stats.mean_q_gap_weight,
                     "eval_retention_mae": stats.eval_retention_mae,
                     "eval_log_interval_mae": stats.eval_log_interval_mae,
                 }
@@ -1123,6 +1539,7 @@ def write_run_config_snapshot(
     path: Path,
     *,
     args: argparse.Namespace,
+    loss_config: ContinuousDistillLossWeightingConfig,
     user_ids: Sequence[int],
     device: torch.device,
     cost_weights: Sequence[float],
@@ -1154,6 +1571,21 @@ def write_run_config_snapshot(
         "retention_max": args.retention_max,
         "interval_loss_weight": args.interval_loss_weight,
         "retention_logit_loss_weight": args.retention_logit_loss_weight,
+        "loss_weighting": args.loss_weighting,
+        "underprediction_loss_weight": args.underprediction_loss_weight,
+        "terminal_underprediction_loss_weight": (
+            args.terminal_underprediction_loss_weight
+        ),
+        "q_gap_loss_weight": args.q_gap_loss_weight,
+        "q_gap_weight_cap": args.q_gap_weight_cap,
+        "effective_underprediction_loss_weight": (
+            loss_config.underprediction_loss_weight
+        ),
+        "effective_terminal_underprediction_loss_weight": (
+            loss_config.terminal_underprediction_loss_weight
+        ),
+        "effective_q_gap_loss_weight": loss_config.q_gap_loss_weight,
+        "effective_q_gap_weight_cap": loss_config.q_gap_weight_cap,
         "oracle_s_grid_size": args.oracle_s_grid_size,
         "oracle_d_grid_size": args.oracle_d_grid_size,
         "oracle_interval_chunk_size": args.oracle_interval_chunk_size,
@@ -1218,6 +1650,14 @@ def main() -> None:
         raise SystemExit("--interval-loss-weight must be >= 0.")
     if args.retention_logit_loss_weight < 0.0:
         raise SystemExit("--retention-logit-loss-weight must be >= 0.")
+    if args.underprediction_loss_weight < 0.0:
+        raise SystemExit("--underprediction-loss-weight must be >= 0.")
+    if args.terminal_underprediction_loss_weight < 0.0:
+        raise SystemExit("--terminal-underprediction-loss-weight must be >= 0.")
+    if args.q_gap_loss_weight < 0.0:
+        raise SystemExit("--q-gap-loss-weight must be >= 0.")
+    if args.q_gap_weight_cap < 1.0:
+        raise SystemExit("--q-gap-weight-cap must be >= 1.")
     if args.interval_loss_weight == 0.0 and args.retention_logit_loss_weight == 0.0:
         raise SystemExit("At least one loss weight must be > 0.")
     if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
@@ -1232,6 +1672,7 @@ def main() -> None:
         raise SystemExit("--oracle-teacher-user-batch-size must be >= 0.")
     if args.progress_log_interval_seconds < 0.0:
         raise SystemExit("--progress-log-interval-seconds must be >= 0.")
+    loss_config = resolve_loss_weighting(args)
 
     device = resolve_torch_device(args.torch_device)
     register_run_monitor(
@@ -1255,6 +1696,7 @@ def main() -> None:
     write_run_config_snapshot(
         args.out_dir / "run_config.json",
         args=args,
+        loss_config=loss_config,
         user_ids=user_ids,
         device=device,
         cost_weights=cost_weights,
@@ -1269,7 +1711,10 @@ def main() -> None:
             "run configured "
             f"users={list(user_ids)} train_weights={cost_weights} "
             f"eval_weights={eval_cost_weights} device={device} "
-            f"out_dir={args.out_dir}"
+            f"out_dir={args.out_dir} loss_weighting={loss_config.mode} "
+            f"effective_underpred={loss_config.underprediction_loss_weight:g} "
+            f"effective_terminal_underpred={loss_config.terminal_underprediction_loss_weight:g} "
+            f"effective_q_gap={loss_config.q_gap_loss_weight:g}"
         ),
     )
 
@@ -1294,6 +1739,7 @@ def main() -> None:
         device=device,
         configs=configs,
         cost_weights=cost_weights,
+        loss_config=loss_config,
         cache_config=cache_config,
     )
     _diagnostic_log(
@@ -1301,13 +1747,7 @@ def main() -> None:
         start_s=run_start_s,
         message=f"teacher build done runtime_s={teacher_runtime_s:.1f}",
     )
-    (
-        ensemble,
-        train_runtime_s,
-        final_loss_by_user,
-        final_interval_by_user,
-        final_retention_by_user,
-    ) = train_batched_per_user_models(
+    train_result = train_batched_per_user_models(
         args,
         device=device,
         user_count=len(configs),
@@ -1315,7 +1755,10 @@ def main() -> None:
         cost_weights=cost_weights,
         action_retentions=action_retentions,
         params_per_user=params,
+        loss_config=loss_config,
     )
+    ensemble = train_result.ensemble
+    train_runtime_s = train_result.runtime_s
     _diagnostic_log(
         enabled=_progress_log_enabled(args),
         start_s=run_start_s,
@@ -1354,9 +1797,23 @@ def main() -> None:
                 args.epochs * args.steps_per_epoch * train_samples_per_user
             ),
             train_runtime_s=train_runtime_s,
-            final_loss=final_loss_by_user[user_idx],
-            final_interval_loss=final_interval_by_user[user_idx],
-            final_retention_loss=final_retention_by_user[user_idx],
+            final_loss=train_result.final_loss_by_user[user_idx],
+            final_interval_loss=train_result.final_interval_loss_by_user[user_idx],
+            final_retention_loss=train_result.final_retention_loss_by_user[user_idx],
+            loss_weighting=loss_config.mode,
+            underprediction_loss_weight=loss_config.underprediction_loss_weight,
+            terminal_underprediction_loss_weight=(
+                loss_config.terminal_underprediction_loss_weight
+            ),
+            q_gap_loss_weight=loss_config.q_gap_loss_weight,
+            q_gap_weight_cap=loss_config.q_gap_weight_cap,
+            interval_underprediction_rate=(
+                train_result.final_underprediction_rate_by_user[user_idx]
+            ),
+            mean_signed_log_interval_error=(
+                train_result.final_signed_log_interval_error_by_user[user_idx]
+            ),
+            mean_q_gap_weight=train_result.final_q_gap_weight_by_user[user_idx],
             eval_retention_mae=eval_retention_mae[user_idx],
             eval_log_interval_mae=eval_log_interval_mae[user_idx],
             table_samples_per_weight=args.table_samples_per_weight,
@@ -1482,6 +1939,7 @@ def main() -> None:
     print(
         "Per-user continuous stationary finite distill: "
         f"users={','.join(str(user_id) for user_id in user_ids)} "
+        f"loss_weighting={loss_config.mode} "
         f"params_each={params} ensemble_params={ensemble_trainable_params} "
         f"device={device} teacher_s={teacher_runtime_s:.2f} "
         f"train_s={train_runtime_s:.2f} table_eval_s={table_eval_runtime_s:.2f} "
