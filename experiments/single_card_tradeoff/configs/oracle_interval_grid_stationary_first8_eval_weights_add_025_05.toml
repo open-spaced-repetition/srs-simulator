@@ -43,7 +43,7 @@ policy_template = "artifacts/single_card_tradeoff/stationary_finite_distill_trai
 cost_weights = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
 
 [continuous_stationary_finite_distill]
-policy_template = "artifacts/single_card_tradeoff/continuous_stationary_finite_distill_first8_eval_weights_add_025_05_markov_off/user_{user_id}_policy.pt"
+policy_template = "artifacts/single_card_tradeoff/continuous_stationary_finite_distill_first8_teacherocc_underpred8_term32_h16/user_{user_id}_policy.pt"
 cost_weights = [0, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 320, 384, 512, 1024]
 
 [outputs]
