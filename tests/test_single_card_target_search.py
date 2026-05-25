@@ -29,6 +29,7 @@ from experiments.single_card_tradeoff.core.target_search.family_search import (
 from experiments.single_card_tradeoff.core.target_search.frontier import (
     empirical_frontier,
     frontier_segments,
+    supported_frontier_segments,
     target_answers,
 )
 from experiments.single_card_tradeoff.core.target_search.oracle_refinement import (
@@ -240,6 +241,35 @@ class SingleCardTargetSearchTests(unittest.TestCase):
 
         self.assertEqual(len(candidates), 1)
         self.assertAlmostEqual(candidates[0], (0.90 - 0.70) / (4.0 - 1.0))
+
+    def test_oracle_refinement_candidates_use_supported_hull_segments(
+        self,
+    ) -> None:
+        family = "fsrs6_oracle_stationary_finite"
+        points = [
+            _point(0.0, 0.90, 4.0, family=family, exact=True),
+            _point(128.0, 0.80, 3.0, family=family, exact=True),
+            _point(1024.0, 0.70, 1.0, family=family, exact=True),
+        ]
+
+        candidates = oracle_refinement_candidates(
+            points,
+            [ConstrainedTarget("memory", 0.82, user_id=1)],
+            family=family,
+            theta_min=0.0,
+            theta_max=1024.0,
+            existing_theta_values=[0.0, 128.0, 1024.0],
+            max_candidates=4,
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertAlmostEqual(candidates[0], (0.90 - 0.70) / (4.0 - 1.0))
+        supported = supported_frontier_segments(points)
+        self.assertEqual(len(supported), 1)
+        self.assertAlmostEqual(
+            supported[0].slope_lambda or 0.0,
+            (0.90 - 0.70) / (4.0 - 1.0),
+        )
 
     def test_oracle_segment_certificate_gap_and_target_certification(self) -> None:
         family = "fsrs6_oracle_stationary_finite"
@@ -756,6 +786,128 @@ class SingleCardTargetSearchTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn("fsrs6_oracle_stationary_finite", points_text)
+
+    def test_oracle_user_scoped_refinement_evaluates_only_relevant_user(
+        self,
+    ) -> None:
+        family = "fsrs6_oracle_stationary_finite"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            init_path = root / "points.csv"
+            _write_csv(
+                init_path,
+                [
+                    point_row(
+                        _point(
+                            0.0,
+                            0.90,
+                            4.0,
+                            user_id=1,
+                            family=family,
+                            exact=True,
+                        )
+                    ),
+                    point_row(
+                        _point(
+                            1024.0,
+                            0.70,
+                            1.0,
+                            user_id=1,
+                            family=family,
+                            exact=True,
+                        )
+                    ),
+                    point_row(
+                        _point(
+                            0.0,
+                            0.95,
+                            2.0,
+                            user_id=2,
+                            family=family,
+                            exact=True,
+                        )
+                    ),
+                    point_row(
+                        _point(
+                            1024.0,
+                            0.75,
+                            1.0,
+                            user_id=2,
+                            family=family,
+                            exact=True,
+                        )
+                    ),
+                ],
+            )
+            calls: list[tuple[tuple[int, ...], tuple[float, ...]]] = []
+
+            def fake_evaluate_oracle_points(
+                **kwargs: object,
+            ) -> list[EvaluatedPoint]:
+                theta_values = kwargs["theta_values"]
+                called_user_ids = kwargs["user_ids"]
+                assert isinstance(theta_values, list)
+                assert isinstance(called_user_ids, list)
+                calls.append((tuple(called_user_ids), tuple(theta_values)))
+                return [
+                    EvaluatedPoint(
+                        user_id=user_id,
+                        family=family,
+                        theta_name="goal_cost_weight",
+                        theta_value=theta,
+                        memory=0.80,
+                        minutes=2.0,
+                        exact=True,
+                        eval_stage="exact",
+                    )
+                    for user_id in called_user_ids
+                    for theta in theta_values
+                ]
+
+            args = target_search.parse_args(
+                [
+                    "--env",
+                    "fsrs6_default",
+                    "--user-ids",
+                    "1,2",
+                    "--family",
+                    family,
+                    "--target-memories",
+                    "0.8",
+                    "--theta-grid",
+                    "0,1024",
+                    "--days",
+                    "10",
+                    "--max-refinement-rounds",
+                    "1",
+                    "--candidates-per-round",
+                    "8",
+                    "--oracle-refinement-scope",
+                    "user",
+                    "--init-points",
+                    str(init_path),
+                    "--torch-device",
+                    "cpu",
+                    "--no-plot",
+                    "--no-progress",
+                    "--out-dir",
+                    str(root / "out"),
+                ]
+            )
+
+            with mock.patch.object(
+                target_search,
+                "evaluate_oracle_points",
+                side_effect=fake_evaluate_oracle_points,
+            ):
+                target_search.run_search(args)
+
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[0][0], (1,))
+            self.assertAlmostEqual(calls[0][1][0], (0.90 - 0.70) / (4.0 - 1.0))
+            self.assertEqual(calls[1][0], (2,))
+            self.assertAlmostEqual(calls[1][1][0], (0.95 - 0.75) / (2.0 - 1.0))
 
     def test_constrained_direct_cli_smoke_writes_policy_and_answers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

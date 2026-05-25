@@ -9,7 +9,7 @@ from experiments.single_card_tradeoff.core.target_search.family_search import (
 )
 from experiments.single_card_tradeoff.core.target_search.frontier import (
     EPSILON,
-    frontier_segments,
+    supported_frontier_segments,
 )
 from experiments.single_card_tradeoff.core.target_search.types import (
     ConstrainedTarget,
@@ -77,7 +77,7 @@ def oracle_refinement_candidates(
     ]
     scored: list[tuple[int, float, float]] = []
     for segment in target_relevant_segments(
-        frontier_segments(frontier),
+        supported_frontier_segments(frontier),
         targets,
         family=family,
     ):

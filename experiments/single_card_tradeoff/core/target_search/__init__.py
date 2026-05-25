@@ -1,6 +1,8 @@
 from experiments.single_card_tradeoff.core.target_search.frontier import (
     empirical_frontier,
     frontier_segments,
+    supported_frontier,
+    supported_frontier_segments,
     target_answers,
 )
 from experiments.single_card_tradeoff.core.target_search.comparison import (
@@ -55,6 +57,8 @@ __all__ = [
     "read_target_answer_records",
     "read_points_csv",
     "summarize_oracle_gaps",
+    "supported_frontier",
+    "supported_frontier_segments",
     "target_answer_record_row",
     "target_relevant_segments",
     "target_answers",

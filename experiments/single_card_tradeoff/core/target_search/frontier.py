@@ -86,6 +86,66 @@ def frontier_segments(frontier: Sequence[EvaluatedPoint]) -> list[FrontierSegmen
     return segments
 
 
+def _supported_user_frontier(
+    points: Sequence[EvaluatedPoint],
+) -> list[EvaluatedPoint]:
+    ordered = sorted(points, key=lambda point: (point.minutes, point.memory))
+    increasing_memory: list[EvaluatedPoint] = []
+    max_memory = float("-inf")
+    for point in ordered:
+        if point.memory <= max_memory + EPSILON:
+            continue
+        increasing_memory.append(point)
+        max_memory = point.memory
+
+    supported: list[EvaluatedPoint] = []
+    for point in increasing_memory:
+        while len(supported) >= 2:
+            low = supported[-2]
+            mid = supported[-1]
+            left_minutes_delta = mid.minutes - low.minutes
+            right_minutes_delta = point.minutes - mid.minutes
+            if (
+                abs(left_minutes_delta) <= EPSILON
+                or abs(right_minutes_delta) <= EPSILON
+            ):
+                supported.pop()
+                continue
+            left_slope = (mid.memory - low.memory) / left_minutes_delta
+            right_slope = (point.memory - mid.memory) / right_minutes_delta
+            if right_slope >= left_slope - EPSILON:
+                supported.pop()
+                continue
+            break
+        supported.append(point)
+    return sorted(supported, key=lambda point: (point.memory, point.minutes))
+
+
+def supported_frontier(points: Sequence[EvaluatedPoint]) -> list[EvaluatedPoint]:
+    by_key: dict[tuple[int, str], list[EvaluatedPoint]] = {}
+    for point in empirical_frontier(points):
+        by_key.setdefault((point.user_id, point.family), []).append(point)
+
+    supported: list[EvaluatedPoint] = []
+    for user_points in by_key.values():
+        supported.extend(_supported_user_frontier(user_points))
+    return sorted(
+        supported,
+        key=lambda point: (
+            point.user_id,
+            point.memory,
+            point.minutes,
+            point.theta_value,
+        ),
+    )
+
+
+def supported_frontier_segments(
+    points: Sequence[EvaluatedPoint],
+) -> list[FrontierSegment]:
+    return frontier_segments(supported_frontier(points))
+
+
 def best_feasible_point(
     points: Sequence[EvaluatedPoint],
     target: ConstrainedTarget,

@@ -59,6 +59,7 @@ from experiments.single_card_tradeoff.core.target_search.family_search import ( 
 from experiments.single_card_tradeoff.core.target_search.frontier import (  # noqa: E402
     empirical_frontier,
     frontier_segments,
+    supported_frontier_segments,
     target_answers,
 )
 from experiments.single_card_tradeoff.core.target_search.io import (  # noqa: E402
@@ -165,6 +166,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=(
             "Maximum exact-oracle lambda_AB candidates per refinement round. "
             "Defaults to --candidates-per-bracket."
+        ),
+    )
+    parser.add_argument(
+        "--oracle-refinement-scope",
+        choices=("global", "user"),
+        default="global",
+        help=(
+            "For exact oracle refinement, evaluate lambda_AB candidates for all "
+            "users (global) or only for the user whose target-relevant segment "
+            "generated the candidate (user)."
         ),
     )
     parser.add_argument("--memory-margin", type=float, default=0.0)
@@ -834,6 +845,67 @@ def _oracle_candidates_per_round(args: argparse.Namespace) -> int:
     return int(args.candidates_per_bracket)
 
 
+def _existing_oracle_thetas_for_user(
+    points: Sequence[EvaluatedPoint],
+    *,
+    user_id: int,
+    family: str,
+) -> list[float]:
+    return unique_sorted(
+        [
+            point.theta_value
+            for point in points
+            if point.user_id == user_id and point.family == family and point.exact
+        ]
+    )
+
+
+def _oracle_refinement_candidates_by_user(
+    points: Sequence[EvaluatedPoint],
+    targets: Sequence[ConstrainedTarget],
+    *,
+    user_ids: Sequence[int],
+    family: str,
+    theta_min: float,
+    theta_max: float,
+    max_candidates_per_user: int,
+) -> dict[int, list[float]]:
+    candidates_by_user: dict[int, list[float]] = {}
+    for user_id in user_ids:
+        user_targets = [
+            target
+            for target in targets
+            if target.user_id is None or target.user_id == user_id
+        ]
+        if not user_targets:
+            continue
+        candidates = oracle_refinement_candidates(
+            points,
+            user_targets,
+            family=family,
+            theta_min=theta_min,
+            theta_max=theta_max,
+            existing_theta_values=_existing_oracle_thetas_for_user(
+                points,
+                user_id=user_id,
+                family=family,
+            ),
+            max_candidates=max_candidates_per_user,
+        )
+        if candidates:
+            candidates_by_user[user_id] = candidates
+    return candidates_by_user
+
+
+def _format_user_scoped_candidates(
+    candidates_by_user: Mapping[int, Sequence[float]],
+) -> str:
+    return "; ".join(
+        f"user_{user_id}={','.join(format_float(value) for value in candidates)}"
+        for user_id, candidates in sorted(candidates_by_user.items())
+    )
+
+
 def _run_oracle_target_search(
     *,
     args: argparse.Namespace,
@@ -847,12 +919,13 @@ def _run_oracle_target_search(
     device: torch.device,
     initial_points: Sequence[EvaluatedPoint],
 ) -> dict[str, Any]:
+    user_scoped_refinement = args.oracle_refinement_scope == "user"
     current_thetas = unique_sorted(
         [*theta_grid, *[point.theta_value for point in initial_points]]
     )
     all_points = list(initial_points)
     missing_initial = _missing_thetas_for_all_users(
-        current_thetas,
+        theta_grid if user_scoped_refinement else current_thetas,
         all_points,
         user_ids=user_ids,
         family=args.family,
@@ -872,8 +945,53 @@ def _run_oracle_target_search(
         )
     else:
         all_points = _merge_points_by_key(all_points)
+    configs_by_user = dict(zip(user_ids, configs, strict=True))
 
     for round_index in range(1, args.max_refinement_rounds + 1):
+        if user_scoped_refinement:
+            candidates_by_user = _oracle_refinement_candidates_by_user(
+                all_points,
+                targets,
+                user_ids=user_ids,
+                family=args.family,
+                theta_min=theta_min,
+                theta_max=theta_max,
+                max_candidates_per_user=_oracle_candidates_per_round(args),
+            )
+            if not candidates_by_user:
+                break
+            for candidates in candidates_by_user.values():
+                current_thetas.extend(candidates)
+            if not args.no_progress:
+                print(
+                    f"oracle_refinement_round={round_index} "
+                    f"lambda_AB_by_user="
+                    f"{_format_user_scoped_candidates(candidates_by_user)}",
+                    flush=True,
+                )
+            for user_id, candidates in sorted(candidates_by_user.items()):
+                missing_candidates = _missing_thetas_for_all_users(
+                    candidates,
+                    all_points,
+                    user_ids=[user_id],
+                    family=args.family,
+                    require_exact=True,
+                )
+                if missing_candidates:
+                    all_points.extend(
+                        evaluate_oracle_points(
+                            family=args.family,
+                            theta_values=missing_candidates,
+                            user_ids=[user_id],
+                            configs=[configs_by_user[user_id]],
+                            args=args,
+                            device=device,
+                            progress=not args.no_progress,
+                        )
+                    )
+            all_points = _merge_points_by_key(all_points)
+            continue
+
         candidates = oracle_refinement_candidates(
             all_points,
             targets,
@@ -915,7 +1033,7 @@ def _run_oracle_target_search(
 
     frontier = empirical_frontier([point for point in all_points if point.exact])
     segments = certify_oracle_segments(
-        frontier_segments(frontier),
+        supported_frontier_segments(frontier),
         all_points,
         family=args.family,
         tolerance=float(args.certificate_tolerance),
@@ -960,6 +1078,15 @@ def _run_oracle_target_search(
             "certificate_tolerance": args.certificate_tolerance,
             "certified_segments": sum(1 for segment in segments if segment.certified),
             "segment_count": len(segments),
+            "oracle_refinement_scope": args.oracle_refinement_scope,
+            "theta_values_confirmed_by_user": {
+                str(user_id): _existing_oracle_thetas_for_user(
+                    all_points,
+                    user_id=user_id,
+                    family=args.family,
+                )
+                for user_id in user_ids
+            },
         },
     )
 

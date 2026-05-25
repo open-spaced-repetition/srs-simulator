@@ -21,9 +21,10 @@ answer.
 - Output root:
   `artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8`
 
-The primary oracle is `fsrs6_oracle_stationary_finite`. The continuous oracle is
-reported separately because it uses continuous desired-retention actions and a
-much more expensive stationary solve.
+The primary oracle is the certified `fsrs6_oracle_stationary_finite` artifact at
+`oracle_stationary_certified_supported`. The continuous oracle is reported
+separately because it uses continuous desired-retention actions and a much more
+expensive stationary solve.
 
 ## Commands
 
@@ -35,11 +36,19 @@ uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --button-usage ../Anki-button-usage/button_usage.jsonl \
   --family fsrs6_oracle_stationary_finite \
   --target-memories 0.70,0.75,0.80,0.85,0.90,0.93,0.96 \
-  --theta-grid 0,16,64,256,1024 \
-  --max-refinement-rounds 6 --candidates-per-round 4 \
+  --theta-grid 0,16,64,256,1024,4096,16384 \
+  --theta-max 16384 \
+  --init-points artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary_certified_user/points.csv \
+  --max-refinement-rounds 100 --candidates-per-round 128 \
+  --eval-group-batch-size 32 --oracle-refinement-scope user \
   --certificate-tolerance 1e-9 --no-plot \
-  --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary
+  --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary_certified_supported
 ```
+
+This final pass uses supported-hull `lambda_AB` certificates and extends the
+lambda range so low-memory user 8 targets are bracketed instead of pinned to the
+old `lambda=1024` boundary. The resulting discrete stationary oracle has
+`56/56` feasible and `56/56` certified target answers.
 
 Continuous stationary oracle:
 
@@ -81,7 +90,7 @@ uv run python -m experiments.single_card_tradeoff.cli.target_constrained_direct_
   --target-memories 0.70,0.75,0.80,0.85,0.90,0.93,0.96 \
   --population-size 32 --elite-count 8 --generations 64 \
   --train-particles 64 --eval-particles 10000 \
-  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary_certified_supported \
   --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/direct
 
 uv run python -m experiments.single_card_tradeoff.cli.target_conditioned_retention_distill \
@@ -90,7 +99,7 @@ uv run python -m experiments.single_card_tradeoff.cli.target_conditioned_retenti
   --teacher-policy artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/direct/policy.pt \
   --epochs 64 --steps-per-epoch 32 --samples-per-job 256 \
   --eval-particles 10000 \
-  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary_certified_supported \
   --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/target_conditioned_distill
 ```
 
@@ -99,12 +108,12 @@ Gap reports for the rollout baselines:
 ```bash
 uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
   --candidate-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fsrs6 \
-  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary_certified_supported \
   --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fsrs6
 
 uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
   --candidate-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fixed \
-  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary_certified_supported \
   --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fixed
 ```
 
@@ -130,7 +139,7 @@ Aggregator command:
 
 ```bash
 uv run python -m experiments.single_card_tradeoff.cli.target_memory_scheduler_compare \
-  --oracle oracle_stationary=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --oracle oracle_stationary=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary_certified_supported \
   --target-answer oracle_continuous_stationary=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_continuous_stationary \
   --target-answer fsrs6=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fsrs6 \
   --target-answer fixed=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fixed \
@@ -153,15 +162,15 @@ Primary scheduler summary, from `comparison/scheduler_summary.csv`:
 
 | scheduler | coverage | feasible | mean T | mean extra T vs oracle | median extra T | p90 extra T | mean slack | negative gaps |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| fsrs6 | 1.000 | 56/56 | 0.003691 | -0.000020 | +0.000118 | +0.000600 | 0.014814 | 12 |
-| oracle_continuous_stationary | 1.000 | 56/56 | 0.003698 | -0.000012 | -0.000001 | +0.000060 | 0.020558 | 31 |
-| oracle_stationary | 1.000 | 56/56 | 0.003711 | +0.000000 | +0.000000 | +0.000000 | 0.019479 | 0 |
-| continuous_stationary_distill | 1.000 | 56/56 | 0.003744 | +0.000033 | +0.000044 | +0.000303 | 0.031150 | 20 |
-| stationary_distill | 1.000 | 56/56 | 0.003860 | +0.000149 | +0.000047 | +0.000516 | 0.021143 | 14 |
-| adr | 1.000 | 56/56 | 0.003893 | +0.000182 | +0.000076 | +0.000335 | 0.035029 | 12 |
-| fixed | 0.982 | 55/56 | 0.005784 | +0.002700 | +0.001410 | +0.007041 | 0.012606 | 0 |
-| direct | 0.643 | 36/56 | 0.002510 | +0.000080 | +0.000042 | +0.000314 | 0.017314 | 8 |
-| target_conditioned_distill | 0.643 | 36/56 | 0.002152 | +0.000169 | +0.000176 | +0.000422 | 0.025867 | 4 |
+| oracle_stationary | 1.000 | 56/56 | 0.003096 | +0.000000 | +0.000000 | +0.000000 | 0.003952 | 0 |
+| oracle_continuous_stationary | 1.000 | 56/56 | 0.003698 | +0.000602 | +0.000079 | +0.001294 | 0.020558 | 6 |
+| fsrs6 | 1.000 | 56/56 | 0.003691 | +0.000595 | +0.000236 | +0.001525 | 0.014814 | 0 |
+| fixed | 0.982 | 55/56 | 0.005784 | +0.003132 | +0.001677 | +0.008158 | 0.012606 | 0 |
+| adr | 1.000 | 56/56 | 0.003893 | +0.000797 | +0.000188 | +0.001407 | 0.035029 | 0 |
+| stationary_distill | 1.000 | 56/56 | 0.003860 | +0.000764 | +0.000106 | +0.001381 | 0.021143 | 1 |
+| continuous_stationary_distill | 1.000 | 56/56 | 0.003744 | +0.000648 | +0.000162 | +0.001329 | 0.031150 | 3 |
+| direct | 0.643 | 36/56 | 0.002510 | +0.000243 | +0.000118 | +0.000685 | 0.017314 | 0 |
+| target_conditioned_distill | 0.643 | 36/56 | 0.002152 | +0.000298 | +0.000226 | +0.000498 | 0.025867 | 0 |
 
 Coverage by target:
 
@@ -179,18 +188,22 @@ Coverage by target:
 
 ## Interpretation
 
-The safest full-coverage non-oracle answer in this run is the continuous
-stationary finite distill: it covers all targets and has the smallest positive
-mean extra time versus the discrete stationary oracle (`+0.000033`). The plain
-FSRS6 desired-retention baseline has a slightly negative mean deterministic gap
-(`-0.000020`), but this should not be read as a certified oracle win because the
-oracle target answer is only locally refined and mostly uncertified.
+The certified discrete stationary oracle is now the baseline: all `56/56`
+target answers are feasible and certified. Extending the lambda range fixed the
+old user 8 low-memory boundary case, so the oracle mean time dropped from the
+earlier locally refined value.
 
-The continuous stationary oracle is close to the discrete stationary oracle on
-this target grid. It has full coverage and a small negative mean deterministic
-gap (`-0.000012`), but again this is not a global certificate. It is useful as a
-diagnostic for the value of continuous desired-retention actions, not as a
-replacement for a certified constrained oracle.
+Among full-coverage non-oracle schedulers, the plain FSRS6 desired-retention
+baseline is the closest to the certified discrete oracle on mean extra time
+(`+0.000595`). The continuous stationary finite distill is next (`+0.000648`),
+followed by the discrete stationary distill (`+0.000764`) and ADR
+(`+0.000797`).
+
+The continuous stationary oracle and continuous stationary distill are not
+strictly comparable to the discrete stationary oracle because they use a
+continuous desired-retention action surface. Their few negative deterministic
+gaps are therefore interpreted as action-space differences, not as failures of
+the certified discrete oracle.
 
 The fixed-interval baseline is much worse on time, especially at high-memory
 targets, and misses one `M0=0.96` target. Direct target search and the
@@ -202,23 +215,23 @@ both had `20` infeasible rows. The largest memory constraint violation was
 
 ## Negative Gaps
 
-There are negative deterministic gaps in several schedulers. The largest are:
+There are still a few negative deterministic gaps, but they are no longer caused
+by an uncertified discrete oracle. The largest are:
 
 | gap | scheduler | user | target | candidate M/T | oracle M/T | oracle certified |
 | ---: | --- | ---: | ---: | --- | --- | --- |
-| -0.005459 | fsrs6 | 2 | 0.93 | 0.930002 / 0.014680 | 0.950079 / 0.020139 | False |
-| -0.005131 | fsrs6 | 2 | 0.96 | 0.960182 / 0.033044 | 0.968334 / 0.038175 | False |
-| -0.003830 | continuous_stationary_distill | 2 | 0.96 | 0.963885 / 0.034345 | 0.968334 / 0.038175 | False |
-| -0.002072 | stationary_distill | 2 | 0.93 | 0.943877 / 0.018067 | 0.950079 / 0.020139 | False |
-| -0.001776 | adr | 2 | 0.93 | 0.944792 / 0.018363 | 0.950079 / 0.020139 | False |
+| -0.000045 | oracle_continuous_stationary | 1 | 0.96 | 0.960562 / 0.009900 | 0.960040 / 0.009946 | True |
+| -0.000042 | oracle_continuous_stationary | 2 | 0.75 | 0.753125 / 0.000697 | 0.756297 / 0.000739 | True |
+| -0.000039 | continuous_stationary_distill | 2 | 0.75 | 0.753882 / 0.000700 | 0.756297 / 0.000739 | True |
+| -0.000016 | oracle_continuous_stationary | 8 | 0.90 | 0.900412 / 0.000558 | 0.914134 / 0.000574 | True |
+| -0.000008 | continuous_stationary_distill | 3 | 0.70 | 0.708569 / 0.000613 | 0.715368 / 0.000621 | True |
 
-These rows compare deterministic selected points on a finite target-search grid.
-They do not invalidate the oracle implementation by themselves. The discrete
-oracle target answers were certified for only `2/56` targets, so many gaps are
-best interpreted as target-grid, Monte Carlo, and local-refinement artifacts.
-The mixed oracle target columns are present in the CSVs for additional
-diagnostics, but this report ranks deterministic policies because the experiment
-question was deterministic scheduler selection.
+The remaining negative rows are small. Most come from continuous-action
+schedulers compared against a discrete-action oracle; the one discrete distill
+negative row is below `1e-6` day-minutes/card and is consistent with rollout
+conversion/evaluation noise. The mixed oracle target columns remain present in
+the CSVs for diagnostics, while this report still ranks deterministic selected
+policies.
 
 ## Performance
 
@@ -227,19 +240,25 @@ All GPU-monitored stages stayed below the shared-memory spill threshold.
 | stage | runtime | peak VRAM MiB | shared spill | cache hits/misses/writes |
 | --- | ---: | ---: | --- | ---: |
 | oracle_stationary | 128.6s | 8438 | False | 200/32/32 |
+| oracle_stationary_certified_user | 6434.1s | 2970 | False | 8/275/275 |
+| oracle_stationary_certified_supported | 2953.4s | 3617 | False | 5/109/109 |
 | oracle_continuous_stationary | 6826.0s | 17995 | False | 40/384/384 |
 | fsrs6 | 264.2s | 19968 | False | 0/0/0 |
 | fixed | 11.8s | 4926 | False | 0/0/0 |
 | direct | 315.4s | 2930 | False | 0/0/0 |
 | target_conditioned_distill | 29.8s | 2932 | False | 0/0/0 |
 
-The continuous stationary target-search run was the dominant cost:
-`6826.04s` with peak `17995 MiB` FB memory and no shared-memory spill. It wrote
-`384` cache entries across finite and stationary solves; reruns of the same
-lambda points should reuse those caches.
+The certified discrete oracle required two warm-started passes after the
+original local run. The first user-scoped pass avoided solving every new
+`lambda_AB` for all users; the second supported-hull pass completed
+certification and added the extended high-lambda user 8 bracket. Both stayed
+well below the shared-memory spill threshold.
 
 ## Artifacts
 
+- `oracle_stationary_certified_supported/target_answers.csv`
+- `oracle_stationary_certified_supported/segments.csv`
+- `oracle_stationary_certified_supported/performance_summary.json`
 - `converted/adr_target_answers.csv`
 - `converted/adr_gap/target_oracle_gaps.csv`
 - `converted/stationary_distill_target_answers.csv`
