@@ -8,6 +8,7 @@ from unittest import mock
 import torch
 
 from experiments.single_card_tradeoff.cli import target_search
+from experiments.single_card_tradeoff.cli import target_conditioned_retention_distill
 from experiments.single_card_tradeoff.cli import target_constrained_direct_policy_search
 from experiments.single_card_tradeoff.core.target_search.direct_training import (
     constrained_rank_candidates,
@@ -490,6 +491,73 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertTrue(answers_path.exists())
             self.assertIn(
                 "fsrs6_low_param_direct_constrained",
+                answers_path.read_text(encoding="utf-8"),
+            )
+
+    def test_target_conditioned_distill_smoke_writes_policy_and_answers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            teacher_dir = Path(temp_dir) / "teacher"
+            teacher_args = target_constrained_direct_policy_search.parse_args(
+                [
+                    "--env",
+                    "fsrs6_default",
+                    "--user-ids",
+                    "1",
+                    "--target-memories",
+                    "0.7",
+                    "--days",
+                    "5",
+                    "--population-size",
+                    "2",
+                    "--elite-count",
+                    "1",
+                    "--generations",
+                    "1",
+                    "--train-particles",
+                    "2",
+                    "--eval-particles",
+                    "2",
+                    "--torch-device",
+                    "cpu",
+                    "--no-progress",
+                    "--out-dir",
+                    str(teacher_dir),
+                ]
+            )
+            target_constrained_direct_policy_search.main_from_args(teacher_args)
+
+            distill_dir = Path(temp_dir) / "distill"
+            distill_args = target_conditioned_retention_distill.parse_args(
+                [
+                    "--env",
+                    "fsrs6_default",
+                    "--teacher-policy",
+                    str(teacher_dir / "policy.pt"),
+                    "--days",
+                    "5",
+                    "--epochs",
+                    "1",
+                    "--steps-per-epoch",
+                    "1",
+                    "--samples-per-job",
+                    "4",
+                    "--eval-particles",
+                    "2",
+                    "--torch-device",
+                    "cpu",
+                    "--no-progress",
+                    "--out-dir",
+                    str(distill_dir),
+                ]
+            )
+
+            target_conditioned_retention_distill.main_from_args(distill_args)
+
+            self.assertTrue((distill_dir / "policy.pt").exists())
+            answers_path = distill_dir / "target_answers.csv"
+            self.assertTrue(answers_path.exists())
+            self.assertIn(
+                "fsrs6_target_conditioned_retention_distill",
                 answers_path.read_text(encoding="utf-8"),
             )
 

@@ -83,6 +83,18 @@ uv run python -m experiments.single_card_tradeoff.cli.target_constrained_direct_
   --out-dir artifacts/single_card_tradeoff/target_constrained_direct_first8_memory
 ```
 
+Distill those per-target direct policies into one target-conditioned retention
+network and confirm it on the same target set:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_conditioned_retention_distill \
+  --env fsrs6 \
+  --teacher-policy artifacts/single_card_tradeoff/target_constrained_direct_first8_memory/policy.pt \
+  --epochs 64 --steps-per-epoch 32 --samples-per-job 256 \
+  --eval-particles 10000 \
+  --out-dir artifacts/single_card_tradeoff/target_conditioned_retention_distill_first8_memory
+```
+
 ## FSRS6 ADR Policies
 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.
