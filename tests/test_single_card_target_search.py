@@ -10,6 +10,7 @@ from unittest import mock
 import torch
 
 from experiments.single_card_tradeoff.cli import target_search
+from experiments.single_card_tradeoff.cli import target_memory_scheduler_compare
 from experiments.single_card_tradeoff.cli import target_oracle_gap_report
 from experiments.single_card_tradeoff.cli import target_conditioned_retention_distill
 from experiments.single_card_tradeoff.cli import target_constrained_direct_policy_search
@@ -397,6 +398,105 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertIn("deterministic_objective_gap", gaps_path.read_text())
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             self.assertEqual(metadata["summary"]["oracle_matched_count"], 1)
+
+    def test_target_memory_scheduler_compare_converts_and_aggregates(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            oracle_path = root / "oracle_target_answers.csv"
+            direct_path = root / "direct_target_answers.csv"
+            tradeoff_path = root / "tradeoff.csv"
+            out_dir = root / "comparison"
+            _write_csv(
+                oracle_path,
+                [
+                    _target_answer_row(
+                        user_id=1,
+                        target_value=0.8,
+                        family="oracle",
+                        theta_name="goal_cost_weight",
+                        theta_value=4.0,
+                        achieved_m=0.82,
+                        achieved_t=1.0,
+                        certified=True,
+                    )
+                ],
+            )
+            _write_csv(
+                direct_path,
+                [
+                    _target_answer_row(
+                        user_id=1,
+                        target_value=0.8,
+                        family="direct_raw",
+                        theta_name="target_memory",
+                        theta_value=0.8,
+                        achieved_m=0.83,
+                        achieved_t=1.2,
+                    )
+                ],
+            )
+            _write_csv(
+                tradeoff_path,
+                [
+                    {
+                        "user_id": 1,
+                        "scheduler": "fsrs6",
+                        "scheduler_spec": "fsrs6",
+                        "desired_retention": 0.7,
+                        "card_expected_retrievability": 0.79,
+                        "card_minutes_per_day": 0.5,
+                    },
+                    {
+                        "user_id": 1,
+                        "scheduler": "fsrs6",
+                        "scheduler_spec": "fsrs6",
+                        "desired_retention": 0.8,
+                        "card_expected_retrievability": 0.81,
+                        "card_minutes_per_day": 1.5,
+                    },
+                    {
+                        "user_id": 1,
+                        "scheduler": "fsrs6",
+                        "scheduler_spec": "fsrs6",
+                        "desired_retention": 0.9,
+                        "card_expected_retrievability": 0.84,
+                        "card_minutes_per_day": 2.0,
+                    },
+                ],
+            )
+
+            args = target_memory_scheduler_compare.parse_args(
+                [
+                    "--oracle",
+                    f"oracle={oracle_path}",
+                    "--target-answer",
+                    f"direct={direct_path}",
+                    "--tradeoff-result",
+                    f"fsrs6={tradeoff_path}",
+                    "--target-memories",
+                    "0.8",
+                    "--out-dir",
+                    str(out_dir),
+                    "--no-plots",
+                    "--require-complete-target-grid",
+                ]
+            )
+            target_memory_scheduler_compare.main_from_args(args)
+
+            matrix_path = out_dir / "scheduler_target_matrix.csv"
+            summary_path = out_dir / "scheduler_summary.csv"
+            gaps_path = out_dir / "scheduler_oracle_gaps.csv"
+            self.assertTrue(matrix_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertTrue(gaps_path.exists())
+            matrix_text = matrix_path.read_text(encoding="utf-8")
+            self.assertIn("fsrs6_T", matrix_text)
+            self.assertIn("1.5", matrix_text)
+            gaps_text = gaps_path.read_text(encoding="utf-8")
+            self.assertIn("deterministic_objective_gap", gaps_text)
+            self.assertIn("0.5", gaps_text)
 
     def test_constrained_rank_prefers_feasible_memory_lower_time(self) -> None:
         jobs = direct_target_jobs(

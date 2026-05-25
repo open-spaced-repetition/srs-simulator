@@ -111,6 +111,22 @@ metadata includes `certification_scope`, `globally_certified`, and
 `family_constrained` so rollout-only results are explicit family-constrained
 baselines rather than oracle-certified global optima.
 
+Aggregate fixed target-memory scheduler answers and convert existing
+`tradeoff.py` frontier CSVs into the same target-answer shape:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_memory_scheduler_compare \
+  --oracle oracle_stationary=artifacts/single_card_tradeoff/target_search/oracle_stationary_first8_memory \
+  --target-answer fsrs6=artifacts/single_card_tradeoff/target_search/fsrs6_first8_memory \
+  --tradeoff-result stationary_distill=artifacts/single_card_tradeoff/stationary_finite_distill_first8_eval_weights_add_025_05_markov_off/combined_results.csv \
+  --tradeoff-scheduler stationary_distill=fsrs6_oracle_stationary_finite_distill \
+  --target-memories 0.7,0.75,0.8,0.85,0.9,0.93,0.96 \
+  --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/comparison
+```
+
+It writes `combined_target_answers.csv`, `scheduler_target_matrix.csv`,
+`scheduler_oracle_gaps.csv`, scheduler/user/target summaries, and plots.
+
 ## FSRS6 ADR Policies
 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.

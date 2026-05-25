@@ -9,6 +9,7 @@ from experiments.single_card_tradeoff.core.target_search.comparison import (
     compare_target_answers_to_oracle,
     read_target_answer_records,
     summarize_oracle_gaps,
+    target_answer_record_row,
 )
 from experiments.single_card_tradeoff.core.target_search.direct_training import (
     DirectRankResult,
@@ -54,6 +55,7 @@ __all__ = [
     "read_target_answer_records",
     "read_points_csv",
     "summarize_oracle_gaps",
+    "target_answer_record_row",
     "target_relevant_segments",
     "target_answers",
 ]

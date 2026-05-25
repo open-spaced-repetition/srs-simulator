@@ -117,6 +117,35 @@ def target_answer_records_from_rows(
     return [target_answer_record_from_row(row) for row in rows]
 
 
+def target_answer_record_row(record: TargetAnswerRecord) -> dict[str, Any]:
+    return {
+        "user_id": record.user_id,
+        "target_type": record.target_type,
+        "target_value": format_optional_float(record.target_value),
+        "family": record.family,
+        "feasible": record.feasible,
+        "theta_name": record.theta_name or "",
+        "theta_value": format_optional_float(record.theta_value),
+        "achieved_M": format_optional_float(record.achieved_memory),
+        "achieved_T": format_optional_float(record.achieved_minutes),
+        "memory_slack": format_optional_float(record.memory_slack),
+        "time_slack": format_optional_float(record.time_slack),
+        "certified": record.certified,
+        "policy_ref": record.policy_ref or "",
+        "cache_key": record.cache_key or "",
+        "neighbor_low_theta": "",
+        "neighbor_low_M": "",
+        "neighbor_low_T": "",
+        "neighbor_high_theta": "",
+        "neighbor_high_M": "",
+        "neighbor_high_T": "",
+        "mixed_available": record.mixed_available,
+        "mixed_probability_high": format_optional_float(record.mixed_probability_high),
+        "mixed_M": format_optional_float(record.mixed_memory),
+        "mixed_T": format_optional_float(record.mixed_minutes),
+    }
+
+
 def resolve_target_answers_path(path: Path) -> Path:
     if path.is_dir():
         return path / "target_answers.csv"
