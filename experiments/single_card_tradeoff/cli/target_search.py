@@ -987,6 +987,7 @@ def _write_outputs(
     segments_path = args.out_dir / "segments.csv"
     metadata_path = args.out_dir / "metadata.json"
     plot_path = args.out_dir / "target_search.png"
+    oracle_family = _is_oracle_family(args.family)
     _write_csv(points_path, [point_row(point) for point in points])
     _write_csv(frontier_path, [point_row(point) for point in frontier])
     _write_csv(answers_path, [answer_row(answer) for answer in answers])
@@ -1006,16 +1007,18 @@ def _write_outputs(
         "theta_min": theta_min,
         "theta_max": theta_max,
         "days": args.days,
-        "explore_particles": None
-        if _is_oracle_family(args.family)
-        else args.explore_particles,
-        "confirm_particles": None
-        if _is_oracle_family(args.family)
-        else _confirm_particles(args),
+        "explore_particles": None if oracle_family else args.explore_particles,
+        "confirm_particles": None if oracle_family else _confirm_particles(args),
         "seed": args.seed,
         "device": str(device),
         "memory_margin": args.memory_margin,
         "time_margin": args.time_margin,
+        "certification_scope": "oracle_target_local"
+        if oracle_family
+        else "family_constrained_rollout",
+        "globally_certified": False,
+        "oracle_certificates_available": oracle_family,
+        "family_constrained": not oracle_family,
         "init_points": [str(path) for path in args.init_points],
         "deterministic_only": True,
         "outputs": {

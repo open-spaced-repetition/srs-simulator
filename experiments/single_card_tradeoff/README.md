@@ -106,7 +106,10 @@ uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
 
 The direct and target-conditioned distill CLIs also accept
 `--oracle-target-answers <target_answers.csv-or-dir>` and write
-`target_oracle_gaps.csv` next to their confirmed target answers.
+`target_oracle_gaps.csv` next to their confirmed target answers. Target-search
+metadata includes `certification_scope`, `globally_certified`, and
+`family_constrained` so rollout-only results are explicit family-constrained
+baselines rather than oracle-certified global optima.
 
 ## FSRS6 ADR Policies
 
