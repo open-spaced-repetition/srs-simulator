@@ -63,6 +63,9 @@ TASK_MODULES: Mapping[str, str] = {
     "continuous_uniform_h_policy_analysis": (
         "experiments.single_card_tradeoff.cli.continuous_uniform_h_policy_analysis"
     ),
+    "continuous_uniform_h_stationary_analysis": (
+        "experiments.single_card_tradeoff.cli.continuous_uniform_h_stationary_analysis"
+    ),
     "uvfa_ppo_hparam_search": (
         "experiments.single_card_tradeoff.cli.uvfa_ppo_hparam_search"
     ),
@@ -227,6 +230,25 @@ def expected_artifacts(task: WorkflowTask) -> tuple[Path, ...]:
                 "uniform_start_closest_fixed_remaining.png",
                 "stability_remaining_heatmaps.png",
                 "difficulty_remaining_heatmaps.png",
+            ],
+        )
+    if task.kind == "continuous_uniform_h_stationary_analysis":
+        return _out_dir_artifacts(
+            options,
+            [
+                "stationary_uniform_summary.csv",
+                "stationary_uniform_vs_fixed_stationary.csv",
+                "stationary_uniform_vs_nonstationary_uniform.csv",
+                "metadata.json",
+                "README.md",
+                "performance_summary.json",
+                "gpu_monitor/summary.json",
+                "stationary_uniform_mean_retention_and_min_share.png",
+                "stationary_uniform_vs_fixed_stationary_delta.png",
+                "stationary_uniform_vs_nonstationary_uniform_delta.png",
+                "uniform_h_objective_comparison.png",
+                "stationary_uniform_policy_heatmaps.png",
+                "stationary_uniform_fixed_policy_comparison_heatmaps.png",
             ],
         )
     if task.kind == "generate_experiment_report":

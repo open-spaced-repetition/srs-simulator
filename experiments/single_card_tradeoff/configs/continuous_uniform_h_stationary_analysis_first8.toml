@@ -1,0 +1,30 @@
+schema_version = 1
+name = "continuous_uniform_h_stationary_analysis_first8"
+family = "single_card_tradeoff"
+seed = 42
+
+[[tasks]]
+name = "analyze_continuous_uniform_h_stationary_first8"
+stage = "analyze"
+kind = "continuous_uniform_h_stationary_analysis"
+description = "Solve the hidden Uniform-H stationary approximation and compare it with the fixed-H continuous stationary finite oracle for the first eight FSRS6 users."
+
+[tasks.options]
+env = "fsrs6"
+user_ids = "1,2,3,4,5,6,7,8"
+button_usage = "../Anki-button-usage/button_usage.jsonl"
+benchmark_partition = "0"
+days = 1825
+cost_weights = "0,0.25,0.5,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024"
+oracle_s_grid_size = 64
+oracle_d_grid_size = 32
+oracle_continuous_retention_min = 0.5
+oracle_continuous_retention_max = 0.98
+oracle_continuous_interval_chunk_size = 64
+stationary_max_iterations = 128
+stationary_tolerance = 1e-10
+landmark_remaining_days = "1,2,7,30,90,365,730,1125,1600,1824"
+plot_selected_cost_weights = "0,16,64,256,1024"
+torch_device = "cuda"
+out_dir = "artifacts/single_card_tradeoff/continuous_uniform_h_stationary_analysis"
+no_progress = true

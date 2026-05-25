@@ -319,6 +319,15 @@ uv run python -m experiments.single_card_tradeoff.cli.run_experiment \
   --stage analyze
 ```
 
+Solve the best stationary approximation under the same hidden Uniform-H
+terminal model and compare it with `FSRS6ContinuousStationaryFiniteOracle`:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.run_experiment \
+  --config experiments/single_card_tradeoff/configs/continuous_uniform_h_stationary_analysis_first8.toml \
+  --stage analyze
+```
+
 Train the compact stationary finite continuous-retention student, then evaluate
 it in the standard sweep:
 

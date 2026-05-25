@@ -193,6 +193,42 @@ class SingleCardWorkflowTests(unittest.TestCase):
             artifact_names,
         )
 
+    def test_continuous_uniform_h_stationary_analysis_contract(self) -> None:
+        config = load_workflow_config(
+            CONFIG_ROOT / "continuous_uniform_h_stationary_analysis_first8.toml"
+        )
+        task = config.tasks[0]
+
+        command = task_command(task)
+        artifacts = expected_artifacts(task)
+        artifact_names = {path.name for path in artifacts}
+
+        self.assertEqual(task.stage, SingleCardWorkflowStage.ANALYZE)
+        self.assertEqual(task.kind, "continuous_uniform_h_stationary_analysis")
+        self.assertIn(
+            (
+                "experiments.single_card_tradeoff.cli."
+                "continuous_uniform_h_stationary_analysis"
+            ),
+            command,
+        )
+        self.assertIn("stationary_uniform_summary.csv", artifact_names)
+        self.assertIn("stationary_uniform_vs_fixed_stationary.csv", artifact_names)
+        self.assertIn(
+            "stationary_uniform_vs_nonstationary_uniform.csv",
+            artifact_names,
+        )
+        self.assertIn("metadata.json", artifact_names)
+        self.assertIn("performance_summary.json", artifact_names)
+        self.assertIn(
+            "stationary_uniform_mean_retention_and_min_share.png",
+            artifact_names,
+        )
+        self.assertIn(
+            "stationary_uniform_fixed_policy_comparison_heatmaps.png",
+            artifact_names,
+        )
+
     def test_run_experiment_dry_run_prints_a_plan(self) -> None:
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
