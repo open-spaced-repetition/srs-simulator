@@ -15,7 +15,8 @@ Project rules:
    - Native Linux: `nvidia-smi` usually reports dedicated/FB memory rather than Windows-style shared GPU memory; use `watch -n 1 nvidia-smi` for VRAM plus system/CUDA profiling to infer spill behavior.
 9. For batched retention sweep experiments, use environment-specific lane caps when possible: `fsrs6` is typically safe at `max_lanes_per_batch = 8192`, while `lstm` should use `max_lanes_per_batch = 1024` to avoid shared GPU memory spill.
 10. This machine has a GPU. If you find that you cannot use the GPU, it means you are likely in a sandbox environment. If the experiment requires CUDA/GPU support and you cannot use it, please request permission to obtain GPU access. If you can use the GPU directly, just use it without requesting permission.
-11. Tests use `unittest`, not pytest. Run focused tests with `uv run python -m unittest tests.test_module_name` and full discovery with `uv run python -m unittest discover tests`.
+11. For long-running experiments, delegate experiment monitoring to a subagent so the main agent does not repeatedly poll progress.
+12. Tests use `unittest`, not pytest. Run focused tests with `uv run python -m unittest tests.test_module_name` and full discovery with `uv run python -m unittest discover tests`.
 
 ## Conventional Commits
 
