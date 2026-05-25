@@ -60,6 +60,9 @@ TASK_MODULES: Mapping[str, str] = {
     "oracle_stationary_finite_policy_viz": (
         "experiments.single_card_tradeoff.cli.oracle_stationary_finite_policy_viz"
     ),
+    "continuous_uniform_h_policy_analysis": (
+        "experiments.single_card_tradeoff.cli.continuous_uniform_h_policy_analysis"
+    ),
     "uvfa_ppo_hparam_search": (
         "experiments.single_card_tradeoff.cli.uvfa_ppo_hparam_search"
     ),
@@ -207,6 +210,25 @@ def expected_artifacts(task: WorkflowTask) -> tuple[Path, ...]:
         return _model_size_ablation_artifacts(options)
     if task.kind == "oracle_stationary_finite_policy_viz":
         return _policy_viz_artifacts(options)
+    if task.kind == "continuous_uniform_h_policy_analysis":
+        return _out_dir_artifacts(
+            options,
+            [
+                "uniform_remaining_summary.csv",
+                "fixed_vs_uniform_remaining_comparison.csv",
+                "uniform_start_vs_fixed_landmarks.csv",
+                "remaining_landmarks.csv",
+                "metadata.json",
+                "README.md",
+                "performance_summary.json",
+                "gpu_monitor/summary.json",
+                "uniform_mean_retention_and_min_share_by_remaining.png",
+                "fixed_vs_uniform_delta_by_remaining.png",
+                "uniform_start_closest_fixed_remaining.png",
+                "stability_remaining_heatmaps.png",
+                "difficulty_remaining_heatmaps.png",
+            ],
+        )
     if task.kind == "generate_experiment_report":
         return _report_artifacts(options)
     return ()

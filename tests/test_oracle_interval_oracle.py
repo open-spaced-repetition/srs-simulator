@@ -12,6 +12,7 @@ from experiments.single_card_tradeoff.oracles import (
     FSRS6BatchedContinuousStationaryFiniteOracle,
     FSRS6ContinuousRetentionOracle,
     FSRS6ContinuousStationaryFiniteOracle,
+    FSRS6ContinuousUniformTerminationOracle,
     FSRS6GridOracle,
     FSRS6IntervalOracle,
     attainable_interval_mask_for_retention_bounds,
@@ -326,6 +327,75 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
         self.assertTrue(torch.all(solution.policy >= 0.5))
         self.assertTrue(torch.all(solution.policy <= 0.98))
         self.assertEqual(len(solution.converged), 2)
+
+    def test_uniform_termination_memory_matches_bruteforce_average(self) -> None:
+        oracle = FSRS6ContinuousUniformTerminationOracle(
+            days=6,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+        rem = 5
+        intervals = torch.tensor([1, 3, 6], device=oracle.device, dtype=torch.int64)
+
+        actual = oracle._uniform_termination_memorized_by_interval(
+            intervals=intervals,
+            rem=rem,
+        )
+        expected_rows = []
+        for interval in intervals.tolist():
+            expected_rows.append(
+                torch.stack(
+                    [
+                        oracle.memorized_by_day[min(interval, terminal_offset)]
+                        for terminal_offset in range(1, rem + 1)
+                    ],
+                    dim=0,
+                ).mean(dim=0)
+            )
+        expected = torch.stack(expected_rows, dim=0)
+
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-10, rtol=0.0))
+
+    def test_uniform_termination_outputs_retention_table(self) -> None:
+        oracle = FSRS6ContinuousUniformTerminationOracle(
+            days=5,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+
+        policy = oracle.solve_policies([0.0, 1024.0], progress=False)
+
+        self.assertEqual(policy.shape, (2, oracle.horizon + 1, 8, 8))
+        self.assertTrue(torch.all(policy >= 0.5))
+        self.assertTrue(torch.all(policy <= 0.98))
+        self.assertTrue(bool((policy[1, 1] == oracle.retention_min).any().item()))
+
+    def test_uniform_termination_cache_key_names_distribution(self) -> None:
+        oracle = FSRS6ContinuousUniformTerminationOracle(
+            days=4,
+            s_grid_size=8,
+            d_grid_size=8,
+            retention_min=0.5,
+            retention_max=0.98,
+            interval_chunk_size=2,
+            device="cpu",
+            cache_config=OracleDPCacheConfig(enabled=False),
+        )
+
+        self.assertEqual(
+            oracle._cache_extra()["termination_distribution"],
+            FSRS6ContinuousUniformTerminationOracle.TERMINATION_DISTRIBUTION_VERSION,
+        )
 
     def test_batched_continuous_stationary_finite_outputs_user_retention_table(
         self,

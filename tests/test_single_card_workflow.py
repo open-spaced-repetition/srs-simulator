@@ -167,6 +167,32 @@ class SingleCardWorkflowTests(unittest.TestCase):
             all("stationary_finite_policy_viz" in path.as_posix() for path in artifacts)
         )
 
+    def test_continuous_uniform_h_analysis_contract(self) -> None:
+        config = load_workflow_config(
+            CONFIG_ROOT / "continuous_uniform_h_policy_analysis_first8.toml"
+        )
+        task = config.tasks[0]
+
+        command = task_command(task)
+        artifacts = expected_artifacts(task)
+        artifact_names = {path.name for path in artifacts}
+
+        self.assertEqual(task.stage, SingleCardWorkflowStage.ANALYZE)
+        self.assertEqual(task.kind, "continuous_uniform_h_policy_analysis")
+        self.assertIn(
+            "experiments.single_card_tradeoff.cli.continuous_uniform_h_policy_analysis",
+            command,
+        )
+        self.assertIn("uniform_remaining_summary.csv", artifact_names)
+        self.assertIn("fixed_vs_uniform_remaining_comparison.csv", artifact_names)
+        self.assertIn("uniform_start_vs_fixed_landmarks.csv", artifact_names)
+        self.assertIn("metadata.json", artifact_names)
+        self.assertIn("performance_summary.json", artifact_names)
+        self.assertIn(
+            "uniform_mean_retention_and_min_share_by_remaining.png",
+            artifact_names,
+        )
+
     def test_run_experiment_dry_run_prints_a_plan(self) -> None:
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):

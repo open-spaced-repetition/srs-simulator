@@ -8290,6 +8290,243 @@ class FSRS6ContinuousRetentionOracle(FSRS6IntervalOracle):
         return retention
 
 
+class FSRS6ContinuousUniformTerminationOracle(FSRS6ContinuousRetentionOracle):
+    """Continuous-retention oracle for a hidden uniformly distributed terminal day."""
+
+    TERMINATION_DISTRIBUTION_VERSION = "hidden_uniform_1_to_remaining_v1"
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.cumulative_memorized_by_day = torch.cumsum(self.memorized_by_day, dim=0)
+
+    def solve_policies(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        if not cost_weights:
+            raise ValueError("cost_weights must contain at least one value.")
+        policies: list[torch.Tensor | None] = [None for _ in cost_weights]
+        missing: list[tuple[int, float]] = []
+        for idx, weight in enumerate(cost_weights):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="continuous_uniform_termination",
+                    method="solve_policies",
+                    cost_weight=float(weight),
+                    extra=self._cache_extra(),
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing.append((idx, float(weight)))
+                continue
+            policies[idx] = entry["policy"].to(device=self.device, dtype=self.dtype)
+
+        if missing:
+            computed = self._solve_continuous_policies_uncached(
+                [weight for _, weight in missing],
+                progress=progress,
+            )
+            for local_idx, (idx, weight) in enumerate(missing):
+                policy = computed[local_idx].to(device=self.device, dtype=self.dtype)
+                policies[idx] = policy
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="continuous_uniform_termination",
+                        method="solve_policies",
+                        cost_weight=weight,
+                        extra=self._cache_extra(),
+                    ),
+                    data={"policy": policy},
+                )
+
+        return torch.stack(
+            [policy for policy in policies if policy is not None],
+            dim=0,
+        ).to(device=self.device, dtype=self.dtype)
+
+    def _cache_extra(self) -> dict[str, Any]:
+        extra = super()._cache_extra()
+        extra["termination_distribution"] = self.TERMINATION_DISTRIBUTION_VERSION
+        return extra
+
+    def _solve_continuous_policies_uncached(
+        self,
+        cost_weights: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        weight_tensor = torch.tensor(
+            list(cost_weights), device=self.device, dtype=self.dtype
+        )
+        weight_count = int(weight_tensor.numel())
+        shape = (
+            self.horizon + 1,
+            self.s_grid.numel(),
+            self.d_grid.numel(),
+            weight_count,
+        )
+        value = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        policy = torch.full(
+            shape,
+            self.retention_max,
+            device=self.device,
+            dtype=self.dtype,
+        )
+        weights = weight_tensor.view(1, 1, 1, weight_count)
+
+        progress_bar = None
+        if progress:
+            from tqdm import tqdm
+
+            progress_bar = tqdm(
+                total=self.horizon,
+                desc=f"Uniform-H continuous oracle w batch={weight_count}",
+                unit="day",
+                leave=False,
+            )
+        try:
+            for rem in range(1, self.horizon + 1):
+                best_value = torch.full_like(value[rem], -math.inf)
+                best_retention = torch.full_like(policy[rem], self.retention_max)
+
+                for start in range(1, rem + 2, self.interval_chunk_size):
+                    stop = min(rem + 2, start + self.interval_chunk_size)
+                    intervals = torch.arange(
+                        start,
+                        stop,
+                        device=self.device,
+                        dtype=torch.int64,
+                    )
+                    candidate_value = self._candidate_uniform_interval_value_batch(
+                        intervals=intervals,
+                        rem=rem,
+                        cost_weights=weights,
+                        value=value,
+                    )
+                    candidate_value = self._mask_unattainable_candidates(
+                        intervals=intervals,
+                        rem=rem,
+                        candidate_value=candidate_value,
+                    )
+                    chunk_best_value, chunk_best_idx = candidate_value.max(dim=0)
+                    chunk_best_interval = intervals.index_select(
+                        0,
+                        chunk_best_idx.reshape(-1),
+                    ).reshape_as(chunk_best_idx)
+                    chunk_retention = self._retention_for_interval_grid(
+                        chunk_best_interval,
+                        terminal_interval=rem + 1,
+                    )
+                    better = chunk_best_value > best_value
+                    best_value = torch.where(better, chunk_best_value, best_value)
+                    best_retention = torch.where(
+                        better,
+                        chunk_retention,
+                        best_retention,
+                    )
+
+                value[rem] = best_value
+                policy[rem] = best_retention
+                if progress_bar is not None:
+                    progress_bar.update(1)
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
+
+        return policy.permute(3, 0, 1, 2).contiguous()
+
+    def _candidate_uniform_interval_value_batch(
+        self,
+        *,
+        intervals: torch.Tensor,
+        rem: int,
+        cost_weights: torch.Tensor,
+        value: torch.Tensor,
+    ) -> torch.Tensor:
+        weight_count = int(cost_weights.numel())
+        s_count = int(self.s_grid.numel())
+        d_count = int(self.d_grid.numel())
+        interval_count = int(intervals.numel())
+        immediate_mem = self._uniform_termination_memorized_by_interval(
+            intervals=intervals,
+            rem=rem,
+        )
+        candidate_value = (
+            immediate_mem[:, :, None, None]
+            .expand(interval_count, s_count, d_count, weight_count)
+            .clone()
+        )
+
+        review_mask = intervals <= rem
+        if not bool(review_mask.any().item()):
+            return candidate_value
+
+        elapsed = intervals.to(dtype=self.dtype)
+        retrievability = self._forgetting_curve(
+            elapsed[:, None],
+            self.s_grid[None, :],
+        )
+        future_rem = torch.clamp(rem - intervals, min=0).to(torch.int64)
+        future_rem_idx = future_rem[:, None, None].expand(
+            interval_count,
+            s_count,
+            d_count,
+        )
+        rem_float = float(rem)
+        review_weight = (
+            torch.clamp(rem - intervals + 1, min=0).to(dtype=self.dtype) / rem_float
+        )
+        future_weight = (
+            torch.clamp(rem - intervals, min=0).to(dtype=self.dtype) / rem_float
+        )
+
+        for rating_idx, rating in enumerate(range(1, 5)):
+            if rating == 1:
+                prob = 1.0 - retrievability
+            else:
+                prob = retrievability * self.review_rating_prob[rating_idx - 1]
+            next_s, next_d = self._next_state_interval_candidates(
+                elapsed=elapsed,
+                retrievability=retrievability,
+                rating=rating,
+            )
+            future_value = self._interpolate_interval_value(
+                value=value,
+                rem_idx=future_rem_idx,
+                s=next_s,
+                d=next_d,
+            )
+            review_minutes = self.review_cost_minutes[rating - 1]
+            prob_expanded = prob[:, :, None, None]
+            candidate_value += prob_expanded * (
+                future_weight[:, None, None, None] * future_value
+                - review_weight[:, None, None, None] * cost_weights * review_minutes
+            )
+
+        return candidate_value
+
+    def _uniform_termination_memorized_by_interval(
+        self,
+        *,
+        intervals: torch.Tensor,
+        rem: int,
+    ) -> torch.Tensor:
+        clamped = torch.clamp(intervals.to(torch.int64), max=rem)
+        prefix_idx = torch.clamp(intervals.to(torch.int64) - 1, max=rem)
+        terminal_count = torch.clamp(rem - intervals.to(torch.int64) + 1, min=0).to(
+            dtype=self.dtype
+        )
+        return (
+            self.cumulative_memorized_by_day.index_select(0, prefix_idx)
+            + terminal_count[:, None] * self.memorized_by_day.index_select(0, clamped)
+        ) / float(rem)
+
+
 class FSRS6ContinuousStationaryFiniteOracle(FSRS6ContinuousRetentionOracle):
     STATIONARY_POLICY_ITERATION_VERSION = "continuous_interval_greedy_v3"
 

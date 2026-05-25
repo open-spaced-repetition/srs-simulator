@@ -310,6 +310,15 @@ uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_defau
 uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6_default --sched fsrs6_oracle_continuous_stationary_finite --oracle-cost-weights 16,64 --oracle-continuous-interval-chunk-size 64
 ```
 
+Analyze how a hidden uniformly distributed lifecycle end date changes the
+continuous-retention policy surface relative to the fixed-horizon oracle:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.run_experiment \
+  --config experiments/single_card_tradeoff/configs/continuous_uniform_h_policy_analysis_first8.toml \
+  --stage analyze
+```
+
 Train the compact stationary finite continuous-retention student, then evaluate
 it in the standard sweep:
 
