@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from experiments.single_card_tradeoff.cli import target_search
 from experiments.single_card_tradeoff.core.target_search.family_search import (
@@ -10,7 +11,15 @@ from experiments.single_card_tradeoff.core.target_search.family_search import (
 )
 from experiments.single_card_tradeoff.core.target_search.frontier import (
     empirical_frontier,
+    frontier_segments,
     target_answers,
+)
+from experiments.single_card_tradeoff.core.target_search.oracle_refinement import (
+    apply_target_certifications,
+    certify_oracle_segments,
+    oracle_refinement_candidates,
+    segment_scalar_gap,
+    target_certification_map,
 )
 from experiments.single_card_tradeoff.core.target_search.types import (
     ConstrainedTarget,
@@ -25,6 +34,7 @@ def _point(
     *,
     user_id: int = 1,
     family: str = "fsrs6",
+    exact: bool = False,
 ) -> EvaluatedPoint:
     return EvaluatedPoint(
         user_id=user_id,
@@ -34,6 +44,7 @@ def _point(
         memory=memory,
         minutes=minutes,
         particles=10,
+        exact=exact,
     )
 
 
@@ -119,6 +130,70 @@ class SingleCardTargetSearchTests(unittest.TestCase):
 
         self.assertEqual(candidates, [0.6, 0.7, 0.8])
 
+    def test_oracle_refinement_candidates_use_lambda_ab(self) -> None:
+        points = [
+            _point(
+                0.0,
+                0.90,
+                4.0,
+                family="fsrs6_oracle_stationary_finite",
+                exact=True,
+            ),
+            _point(
+                1024.0,
+                0.70,
+                1.0,
+                family="fsrs6_oracle_stationary_finite",
+                exact=True,
+            ),
+        ]
+
+        candidates = oracle_refinement_candidates(
+            points,
+            [ConstrainedTarget("memory", 0.80, user_id=1)],
+            family="fsrs6_oracle_stationary_finite",
+            theta_min=0.0,
+            theta_max=1024.0,
+            existing_theta_values=[0.0, 1024.0],
+            max_candidates=4,
+        )
+
+        self.assertEqual(len(candidates), 1)
+        self.assertAlmostEqual(candidates[0], (0.90 - 0.70) / (4.0 - 1.0))
+
+    def test_oracle_segment_certificate_gap_and_target_certification(self) -> None:
+        family = "fsrs6_oracle_stationary_finite"
+        low = _point(1024.0, 0.70, 1.0, family=family, exact=True)
+        high = _point(0.0, 0.90, 4.0, family=family, exact=True)
+        lambda_ab = (high.memory - low.memory) / (high.minutes - low.minutes)
+        certificate = _point(lambda_ab, 0.80, 2.5, family=family, exact=True)
+        segments = frontier_segments([low, high])
+
+        gap = segment_scalar_gap(segments[0], certificate)
+        certified = certify_oracle_segments(
+            segments,
+            [low, high, certificate],
+            family=family,
+            tolerance=1e-12,
+        )
+        answers = target_answers(
+            [low, high],
+            [ConstrainedTarget("memory", 0.80, user_id=1)],
+            family=family,
+        )
+        answers = apply_target_certifications(
+            answers,
+            target_certification_map(
+                certified,
+                [ConstrainedTarget("memory", 0.80, user_id=1)],
+                family=family,
+            ),
+        )
+
+        self.assertAlmostEqual(gap or 0.0, 0.0)
+        self.assertTrue(certified[0].certified)
+        self.assertTrue(answers[0].certified)
+
     def test_cli_smoke_writes_target_answers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             args = target_search.parse_args(
@@ -190,6 +265,76 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             answers_path = Path(temp_dir) / "target_answers.csv"
             self.assertTrue(answers_path.exists())
             self.assertIn("fixed", answers_path.read_text(encoding="utf-8"))
+
+    def test_oracle_cli_branch_writes_certified_answers(self) -> None:
+        family = "fsrs6_oracle_stationary_finite"
+
+        def fake_evaluate_oracle_points(**kwargs: object) -> list[EvaluatedPoint]:
+            theta_values = kwargs["theta_values"]
+            user_ids = kwargs["user_ids"]
+            assert isinstance(theta_values, list)
+            assert isinstance(user_ids, list)
+            points: list[EvaluatedPoint] = []
+            for user_id in user_ids:
+                for theta in theta_values:
+                    if abs(theta) < 1e-12:
+                        memory, minutes = 0.90, 4.0
+                    elif abs(theta - 1024.0) < 1e-12:
+                        memory, minutes = 0.70, 1.0
+                    else:
+                        memory, minutes = 0.80, 2.5
+                    points.append(
+                        EvaluatedPoint(
+                            user_id=user_id,
+                            family=family,
+                            theta_name="goal_cost_weight",
+                            theta_value=theta,
+                            memory=memory,
+                            minutes=minutes,
+                            exact=True,
+                            eval_stage="exact",
+                        )
+                    )
+            return points
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = target_search.parse_args(
+                [
+                    "--env",
+                    "fsrs6_default",
+                    "--family",
+                    family,
+                    "--target-memories",
+                    "0.8",
+                    "--theta-grid",
+                    "0,1024",
+                    "--days",
+                    "10",
+                    "--max-refinement-rounds",
+                    "1",
+                    "--candidates-per-round",
+                    "1",
+                    "--torch-device",
+                    "cpu",
+                    "--no-plot",
+                    "--no-progress",
+                    "--out-dir",
+                    temp_dir,
+                ]
+            )
+
+            with mock.patch.object(
+                target_search,
+                "evaluate_oracle_points",
+                side_effect=fake_evaluate_oracle_points,
+            ):
+                target_search.run_search(args)
+
+            answers_path = Path(temp_dir) / "target_answers.csv"
+            self.assertTrue(answers_path.exists())
+            text = answers_path.read_text(encoding="utf-8")
+            self.assertIn("goal_cost_weight", text)
+            self.assertIn("True", text)
 
 
 if __name__ == "__main__":

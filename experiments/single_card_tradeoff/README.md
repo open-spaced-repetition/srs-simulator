@@ -45,6 +45,19 @@ uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --out-dir artifacts/single_card_tradeoff/target_search/fsrs6_first8_memory
 ```
 
+Exact stationary finite oracle target search uses cost weights as `theta` and
+refines target-local frontier segments with `lambda_AB` certificates:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_search \
+  --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 \
+  --family fsrs6_oracle_stationary_finite \
+  --target-memories 0.7,0.75,0.8,0.85,0.9,0.93,0.96 \
+  --theta-grid 0,16,64,256,1024 \
+  --max-refinement-rounds 4 --candidates-per-round 4 \
+  --out-dir artifacts/single_card_tradeoff/target_search/oracle_stationary_first8_memory
+```
+
 ## FSRS6 ADR Policies
 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.

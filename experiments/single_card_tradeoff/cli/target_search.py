@@ -22,19 +22,30 @@ if str(REPO_ROOT) not in sys.path:
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 from experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill import (  # noqa: E402
+    DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS,
+    DEFAULT_STATIONARY_FINITE_TOLERANCE,
     resolve_torch_device,
 )
 from experiments.single_card_tradeoff.cli.oracle_stationary_finite_distill_multiuser import (  # noqa: E402
     MultiUserFSRS6SingleCardBatch,
 )
+from experiments.single_card_tradeoff.cli.uvfa_ppo import (  # noqa: E402
+    DEFAULT_ORACLE_D_GRID_SIZE,
+    DEFAULT_ORACLE_S_GRID_SIZE,
+)
 from experiments.single_card_tradeoff.core.config import (  # noqa: E402
     SingleCardFSRS6Config,
     add_single_card_fsrs6_config_args,
+    configure_oracle_dp_cache_from_args,
     load_single_card_fsrs6_config,
 )
 from experiments.single_card_tradeoff.core.defaults import (  # noqa: E402
     DEFAULT_FIXED_INTERVALS,
+    DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS,
     DEFAULT_TARGET_RETENTIONS,
+)
+from experiments.single_card_tradeoff.core.retention_space import (  # noqa: E402
+    validate_retention_values,
 )
 from experiments.single_card_tradeoff.core.run_monitoring import (  # noqa: E402
     add_run_monitoring_args,
@@ -55,18 +66,37 @@ from experiments.single_card_tradeoff.core.target_search.io import (  # noqa: E4
     point_row,
     segment_row,
 )
+from experiments.single_card_tradeoff.core.target_search.oracle_refinement import (  # noqa: E402
+    apply_target_certifications,
+    certify_oracle_segments,
+    oracle_refinement_candidates,
+    target_certification_map,
+)
 from experiments.single_card_tradeoff.core.target_search.types import (  # noqa: E402
     ConstrainedTarget,
     EvaluatedPoint,
 )
 from experiments.single_card_tradeoff.core.types import SimMetrics  # noqa: E402
+from experiments.single_card_tradeoff.oracles import (  # noqa: E402
+    BatchedStationaryFiniteOracleSolution,
+    FSRS6BatchedContinuousStationaryFiniteOracle,
+    FSRS6BatchedStationaryFiniteOracle,
+    OracleMetrics,
+)
 from simulator.defaults import DEFAULT_DAYS, DEFAULT_SEED  # noqa: E402
 from simulator.scheduler_spec import format_float  # noqa: E402
 
 DEFAULT_OUT_DIR = Path("artifacts/single_card_tradeoff/target_search")
-FAMILY_CHOICES = ("fsrs6", "fixed")
+ROLLOUT_FAMILIES = ("fsrs6", "fixed")
+ORACLE_FAMILIES = (
+    "fsrs6_oracle_stationary_finite",
+    "fsrs6_oracle_continuous_stationary_finite",
+)
+FAMILY_CHOICES = (*ROLLOUT_FAMILIES, *ORACLE_FAMILIES)
 DEFAULT_EXPLORE_PARTICLES = 1024
 DEFAULT_CONFIRM_PARTICLES = 10_000
+DEFAULT_CERTIFICATE_TOLERANCE = 1e-9
+DEFAULT_ORACLE_CONTINUOUS_INTERVAL_CHUNK_SIZE = 64
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -103,8 +133,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--theta-grid",
         default=None,
         help=(
-            "Initial theta grid. Defaults to target retentions for --family fsrs6 "
-            "and fixed intervals for --family fixed."
+            "Initial theta grid. Defaults to target retentions for --family fsrs6, "
+            "fixed intervals for --family fixed, and scalarization cost weights "
+            "for oracle families."
         ),
     )
     parser.add_argument("--theta-min", type=float, default=None)
@@ -126,8 +157,61 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-group-batch-size", type=int, default=0)
     parser.add_argument("--max-refinement-rounds", type=int, default=4)
     parser.add_argument("--candidates-per-bracket", type=int, default=3)
+    parser.add_argument(
+        "--candidates-per-round",
+        type=int,
+        default=None,
+        help=(
+            "Maximum exact-oracle lambda_AB candidates per refinement round. "
+            "Defaults to --candidates-per-bracket."
+        ),
+    )
     parser.add_argument("--memory-margin", type=float, default=0.0)
     parser.add_argument("--time-margin", type=float, default=0.0)
+    parser.add_argument(
+        "--certificate-tolerance",
+        type=float,
+        default=DEFAULT_CERTIFICATE_TOLERANCE,
+        help="Tolerance for exact-oracle lambda_AB segment certificates.",
+    )
+    parser.add_argument(
+        "--action-retentions",
+        default=",".join(format_float(value) for value in DEFAULT_TARGET_RETENTIONS),
+        help="Discrete desired-retention actions for stationary finite oracle family.",
+    )
+    parser.add_argument(
+        "--oracle-s-grid-size",
+        type=int,
+        default=DEFAULT_ORACLE_S_GRID_SIZE,
+    )
+    parser.add_argument(
+        "--oracle-d-grid-size",
+        type=int,
+        default=DEFAULT_ORACLE_D_GRID_SIZE,
+    )
+    parser.add_argument(
+        "--oracle-stationary-finite-max-iterations",
+        type=int,
+        default=DEFAULT_STATIONARY_FINITE_MAX_ITERATIONS,
+    )
+    parser.add_argument(
+        "--oracle-stationary-finite-tolerance",
+        type=float,
+        default=DEFAULT_STATIONARY_FINITE_TOLERANCE,
+    )
+    parser.add_argument("--oracle-continuous-retention-min", type=float, default=0.5)
+    parser.add_argument("--oracle-continuous-retention-max", type=float, default=0.98)
+    parser.add_argument(
+        "--oracle-continuous-interval-chunk-size",
+        type=int,
+        default=DEFAULT_ORACLE_CONTINUOUS_INTERVAL_CHUNK_SIZE,
+    )
+    parser.add_argument(
+        "--progress-log-interval-seconds",
+        type=float,
+        default=0.0,
+        help="Diagnostic log cadence for continuous stationary oracle internals.",
+    )
     parser.add_argument(
         "--deterministic-only",
         action="store_true",
@@ -172,6 +256,10 @@ def _parse_user_ids(args: argparse.Namespace) -> list[int]:
     return user_ids
 
 
+def _is_oracle_family(family: str) -> bool:
+    return family in ORACLE_FAMILIES
+
+
 def _validate_args(args: argparse.Namespace) -> None:
     if args.days <= 1:
         raise SystemExit("--days must be > 1.")
@@ -186,10 +274,34 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--max-refinement-rounds must be >= 0.")
     if args.candidates_per_bracket < 0:
         raise SystemExit("--candidates-per-bracket must be >= 0.")
+    if args.candidates_per_round is not None and args.candidates_per_round < 0:
+        raise SystemExit("--candidates-per-round must be >= 0.")
     if args.memory_margin < 0.0:
         raise SystemExit("--memory-margin must be >= 0.")
     if args.time_margin < 0.0:
         raise SystemExit("--time-margin must be >= 0.")
+    if args.certificate_tolerance < 0.0:
+        raise SystemExit("--certificate-tolerance must be >= 0.")
+    if _is_oracle_family(args.family):
+        if args.oracle_s_grid_size < 8 or args.oracle_d_grid_size < 8:
+            raise SystemExit("--oracle-*-grid-size values must be >= 8.")
+        if args.oracle_stationary_finite_max_iterations <= 0:
+            raise SystemExit("--oracle-stationary-finite-max-iterations must be > 0.")
+        if args.oracle_stationary_finite_tolerance <= 0.0:
+            raise SystemExit("--oracle-stationary-finite-tolerance must be > 0.")
+        if args.oracle_continuous_interval_chunk_size <= 0:
+            raise SystemExit("--oracle-continuous-interval-chunk-size must be > 0.")
+        if args.progress_log_interval_seconds < 0.0:
+            raise SystemExit("--progress-log-interval-seconds must be >= 0.")
+        if not (
+            0.0
+            < args.oracle_continuous_retention_min
+            <= args.oracle_continuous_retention_max
+            < 1.0
+        ):
+            raise SystemExit(
+                "continuous retention bounds must satisfy 0 < min <= max < 1."
+            )
     if not _parse_csv_floats(args.target_memories, name="--target-memories") and not (
         _parse_csv_floats(args.target_times, name="--target-times")
     ):
@@ -213,6 +325,9 @@ def _theta_defaults(family: str) -> tuple[list[float], str, float, float]:
     if family == "fixed":
         values = [float(value) for value in DEFAULT_FIXED_INTERVALS]
         return values, "integer", 1.0, max(values)
+    if _is_oracle_family(family):
+        values = [float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS]
+        return values, "continuous", 0.0, max(values)
     raise ValueError(f"Unsupported family: {family}")
 
 
@@ -232,6 +347,8 @@ def _theta_grid(args: argparse.Namespace) -> tuple[list[float], str, float, floa
         raise SystemExit("fsrs6 theta values must satisfy 0 < retention < 1.")
     if args.family == "fixed" and any(value < 1.0 for value in values):
         raise SystemExit("fixed theta values must be >= 1 day.")
+    if _is_oracle_family(args.family) and any(value < 0.0 for value in values):
+        raise SystemExit("oracle cost weights must be >= 0.")
     if theta_kind == "integer":
         values = [float(round(value)) for value in values]
     return unique_sorted(values), theta_kind, theta_min, theta_max
@@ -305,13 +422,20 @@ def _metrics_to_point(
     user_id: int,
     family: str,
     theta: float,
-    metrics: SimMetrics,
+    metrics: SimMetrics | OracleMetrics,
     eval_stage: str,
-    particles: int,
-    seed: int,
+    particles: int | None,
+    seed: int | None,
     runtime_s: float,
+    exact: bool = False,
+    policy_ref: str | None = None,
 ) -> EvaluatedPoint:
-    theta_name = "desired_retention" if family == "fsrs6" else "fixed_interval"
+    if family == "fsrs6":
+        theta_name = "desired_retention"
+    elif family == "fixed":
+        theta_name = "fixed_interval"
+    else:
+        theta_name = "goal_cost_weight"
     return EvaluatedPoint(
         user_id=user_id,
         family=family,
@@ -319,9 +443,9 @@ def _metrics_to_point(
         theta_value=float(theta),
         memory=metrics.card_expected_retrievability,
         minutes=metrics.card_minutes_per_day,
-        policy_ref=None,
+        policy_ref=policy_ref,
         cache_key=None,
-        exact=False,
+        exact=exact,
         eval_stage=eval_stage,
         particles=particles,
         seed=seed,
@@ -416,6 +540,132 @@ def evaluate_family_points(
     return points
 
 
+def _oracle_action_retentions(args: argparse.Namespace) -> list[float]:
+    action_retentions = _parse_csv_floats(
+        args.action_retentions,
+        name="--action-retentions",
+    )
+    validate_retention_values(action_retentions, name="--action-retentions")
+    return action_retentions
+
+
+def _build_oracle(
+    *,
+    args: argparse.Namespace,
+    family: str,
+    configs: Sequence[SingleCardFSRS6Config],
+    device: torch.device,
+) -> FSRS6BatchedStationaryFiniteOracle | FSRS6BatchedContinuousStationaryFiniteOracle:
+    cache_config = configure_oracle_dp_cache_from_args(args)
+    common = {
+        "days": int(args.days),
+        "s_grid_size": int(args.oracle_s_grid_size),
+        "d_grid_size": int(args.oracle_d_grid_size),
+        "fsrs_weights": [config.fsrs_weights for config in configs],
+        "first_rating_prob": [config.first_rating_prob for config in configs],
+        "review_rating_prob": [config.review_rating_prob for config in configs],
+        "learning_costs": [config.learning_costs for config in configs],
+        "review_costs": [config.review_costs for config in configs],
+        "dtype": torch.float64,
+        "device": device,
+        "cache_config": cache_config,
+    }
+    if family == "fsrs6_oracle_stationary_finite":
+        return FSRS6BatchedStationaryFiniteOracle(
+            action_retentions=_oracle_action_retentions(args),
+            **common,
+        )
+    if family == "fsrs6_oracle_continuous_stationary_finite":
+        return FSRS6BatchedContinuousStationaryFiniteOracle(
+            retention_min=float(args.oracle_continuous_retention_min),
+            retention_max=float(args.oracle_continuous_retention_max),
+            interval_chunk_size=int(args.oracle_continuous_interval_chunk_size),
+            progress_log_interval_seconds=float(args.progress_log_interval_seconds),
+            **common,
+        )
+    raise ValueError(f"Unsupported oracle family: {family}")
+
+
+def _oracle_solution_points(
+    *,
+    family: str,
+    theta_values: Sequence[float],
+    user_ids: Sequence[int],
+    solution: BatchedStationaryFiniteOracleSolution,
+) -> list[EvaluatedPoint]:
+    weight_count = len(theta_values)
+    runtime_s = solution.runtime_s / float(max(1, len(user_ids) * weight_count))
+    points: list[EvaluatedPoint] = []
+    for user_idx, user_id in enumerate(user_ids):
+        for weight_idx, cost_weight in enumerate(theta_values):
+            did_converge = bool(solution.converged[user_idx][weight_idx])
+            policy_ref = f"{family}:user={user_id}:lambda={format_float(cost_weight)}"
+            points.append(
+                _metrics_to_point(
+                    user_id=user_id,
+                    family=family,
+                    theta=cost_weight,
+                    metrics=solution.metrics[user_idx][weight_idx],
+                    eval_stage="exact" if did_converge else "oracle_unconverged",
+                    particles=None,
+                    seed=None,
+                    runtime_s=runtime_s,
+                    exact=did_converge,
+                    policy_ref=policy_ref,
+                )
+            )
+    return points
+
+
+@torch.inference_mode()
+def evaluate_oracle_points(
+    *,
+    family: str,
+    theta_values: Sequence[float],
+    user_ids: Sequence[int],
+    configs: Sequence[SingleCardFSRS6Config],
+    args: argparse.Namespace,
+    device: torch.device,
+    progress: bool,
+) -> list[EvaluatedPoint]:
+    points: list[EvaluatedPoint] = []
+    for batch_values in _group_chunks(theta_values, args.eval_group_batch_size):
+        oracle = _build_oracle(
+            args=args,
+            family=family,
+            configs=configs,
+            device=device,
+        )
+        solution = oracle.solve_stationary_finite_policies(
+            batch_values,
+            max_iterations=int(args.oracle_stationary_finite_max_iterations),
+            tolerance=float(args.oracle_stationary_finite_tolerance),
+            progress=progress,
+        )
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        points.extend(
+            _oracle_solution_points(
+                family=family,
+                theta_values=batch_values,
+                user_ids=user_ids,
+                solution=solution,
+            )
+        )
+        if progress:
+            converged = sum(
+                1 for row in solution.converged for did_converge in row if did_converge
+            )
+            total = sum(len(row) for row in solution.converged)
+            print(
+                f"exact: solved {family} lambda "
+                f"{format_float(batch_values[0])}..{format_float(batch_values[-1])} "
+                f"for {len(user_ids)} users converged={converged}/{total}",
+                flush=True,
+            )
+    return points
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames: list[str] = []
@@ -485,6 +735,202 @@ def _write_plot(
     plt.close(fig)
 
 
+def _oracle_candidates_per_round(args: argparse.Namespace) -> int:
+    if args.candidates_per_round is not None:
+        return int(args.candidates_per_round)
+    return int(args.candidates_per_bracket)
+
+
+def _run_oracle_target_search(
+    *,
+    args: argparse.Namespace,
+    user_ids: Sequence[int],
+    targets: Sequence[ConstrainedTarget],
+    configs: Sequence[SingleCardFSRS6Config],
+    theta_grid: Sequence[float],
+    theta_kind: str,
+    theta_min: float,
+    theta_max: float,
+    device: torch.device,
+) -> dict[str, Any]:
+    current_thetas = list(theta_grid)
+    all_points = evaluate_oracle_points(
+        family=args.family,
+        theta_values=current_thetas,
+        user_ids=user_ids,
+        configs=configs,
+        args=args,
+        device=device,
+        progress=not args.no_progress,
+    )
+
+    for round_index in range(1, args.max_refinement_rounds + 1):
+        candidates = oracle_refinement_candidates(
+            all_points,
+            targets,
+            family=args.family,
+            theta_min=theta_min,
+            theta_max=theta_max,
+            existing_theta_values=current_thetas,
+            max_candidates=_oracle_candidates_per_round(args),
+        )
+        if not candidates:
+            break
+        current_thetas.extend(candidates)
+        if not args.no_progress:
+            print(
+                f"oracle_refinement_round={round_index} lambda_AB="
+                f"{','.join(format_float(value) for value in candidates)}",
+                flush=True,
+            )
+        all_points.extend(
+            evaluate_oracle_points(
+                family=args.family,
+                theta_values=candidates,
+                user_ids=user_ids,
+                configs=configs,
+                args=args,
+                device=device,
+                progress=not args.no_progress,
+            )
+        )
+
+    frontier = empirical_frontier([point for point in all_points if point.exact])
+    segments = certify_oracle_segments(
+        frontier_segments(frontier),
+        all_points,
+        family=args.family,
+        tolerance=float(args.certificate_tolerance),
+    )
+    answers = target_answers(
+        frontier,
+        targets,
+        family=args.family,
+        memory_margin=args.memory_margin,
+        time_margin=args.time_margin,
+        certified=False,
+    )
+    answers = apply_target_certifications(
+        answers,
+        target_certification_map(segments, targets, family=args.family),
+    )
+    selected = [answer.point for answer in answers if answer.point is not None]
+
+    return _write_outputs(
+        args=args,
+        user_ids=user_ids,
+        points=all_points,
+        frontier=frontier,
+        answers=answers,
+        segments=segments,
+        selected=[point for point in selected if point is not None],
+        theta_grid=theta_grid,
+        theta_values_confirmed=unique_sorted(current_thetas),
+        theta_kind=theta_kind,
+        theta_min=theta_min,
+        theta_max=theta_max,
+        device=device,
+        extra_metadata={
+            "oracle_s_grid_size": args.oracle_s_grid_size,
+            "oracle_d_grid_size": args.oracle_d_grid_size,
+            "oracle_stationary_finite_max_iterations": (
+                args.oracle_stationary_finite_max_iterations
+            ),
+            "oracle_stationary_finite_tolerance": (
+                args.oracle_stationary_finite_tolerance
+            ),
+            "certificate_tolerance": args.certificate_tolerance,
+            "certified_segments": sum(1 for segment in segments if segment.certified),
+            "segment_count": len(segments),
+        },
+    )
+
+
+def _write_outputs(
+    *,
+    args: argparse.Namespace,
+    user_ids: Sequence[int],
+    points: Sequence[EvaluatedPoint],
+    frontier: Sequence[EvaluatedPoint],
+    answers: Sequence[Any],
+    segments: Sequence[Any],
+    selected: Sequence[EvaluatedPoint],
+    theta_grid: Sequence[float],
+    theta_values_confirmed: Sequence[float],
+    theta_kind: str,
+    theta_min: float,
+    theta_max: float,
+    device: torch.device,
+    extra_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    points_path = args.out_dir / "points.csv"
+    frontier_path = args.out_dir / "frontier.csv"
+    answers_path = args.out_dir / "target_answers.csv"
+    segments_path = args.out_dir / "segments.csv"
+    metadata_path = args.out_dir / "metadata.json"
+    plot_path = args.out_dir / "target_search.png"
+    _write_csv(points_path, [point_row(point) for point in points])
+    _write_csv(frontier_path, [point_row(point) for point in frontier])
+    _write_csv(answers_path, [answer_row(answer) for answer in answers])
+    _write_csv(segments_path, [segment_row(segment) for segment in segments])
+    metadata = {
+        "family": args.family,
+        "environment": args.env,
+        "user_ids": list(user_ids),
+        "target_memories": _parse_csv_floats(
+            args.target_memories,
+            name="--target-memories",
+        ),
+        "target_times": _parse_csv_floats(args.target_times, name="--target-times"),
+        "theta_grid_initial": list(theta_grid),
+        "theta_values_confirmed": list(theta_values_confirmed),
+        "theta_kind": theta_kind,
+        "theta_min": theta_min,
+        "theta_max": theta_max,
+        "days": args.days,
+        "explore_particles": None
+        if _is_oracle_family(args.family)
+        else args.explore_particles,
+        "confirm_particles": None
+        if _is_oracle_family(args.family)
+        else _confirm_particles(args),
+        "seed": args.seed,
+        "device": str(device),
+        "memory_margin": args.memory_margin,
+        "time_margin": args.time_margin,
+        "deterministic_only": True,
+        "outputs": {
+            "points": str(points_path),
+            "frontier": str(frontier_path),
+            "target_answers": str(answers_path),
+            "segments": str(segments_path),
+            "plot": None if args.no_plot else str(plot_path),
+        },
+        "feasible_targets": sum(1 for answer in answers if answer.feasible),
+        "target_count": len(answers),
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    if not args.no_plot:
+        _write_plot(
+            plot_path,
+            points=points,
+            frontier=frontier,
+            selected=selected,
+            title=f"{args.family} constrained target search",
+        )
+
+    print(f"Wrote points: {points_path}")
+    print(f"Wrote frontier: {frontier_path}")
+    print(f"Wrote target answers: {answers_path}")
+    print(f"Wrote segments: {segments_path}")
+    print(f"Wrote metadata: {metadata_path}")
+    if not args.no_plot:
+        print(f"Wrote plot: {plot_path}")
+    return metadata
+
+
 def run_search(args: argparse.Namespace) -> dict[str, Any]:
     _validate_args(args)
     user_ids = _parse_user_ids(args)
@@ -500,6 +946,19 @@ def run_search(args: argparse.Namespace) -> dict[str, Any]:
         stage_name=Path(__file__).stem,
     )
     configs = _load_user_configs(args, user_ids)
+
+    if _is_oracle_family(args.family):
+        return _run_oracle_target_search(
+            args=args,
+            user_ids=user_ids,
+            targets=targets,
+            configs=configs,
+            theta_grid=theta_grid,
+            theta_kind=theta_kind,
+            theta_min=theta_min,
+            theta_max=theta_max,
+            device=device,
+        )
 
     explore_points = evaluate_family_points(
         family=args.family,
@@ -579,69 +1038,21 @@ def run_search(args: argparse.Namespace) -> dict[str, Any]:
     segments = frontier_segments(frontier)
     selected = [answer.point for answer in answers if answer.point is not None]
 
-    points_path = args.out_dir / "points.csv"
-    frontier_path = args.out_dir / "frontier.csv"
-    answers_path = args.out_dir / "target_answers.csv"
-    segments_path = args.out_dir / "segments.csv"
-    metadata_path = args.out_dir / "metadata.json"
-    plot_path = args.out_dir / "target_search.png"
-    _write_csv(
-        points_path,
-        [point_row(point) for point in [*all_explore_points, *confirmed_points]],
+    return _write_outputs(
+        args=args,
+        user_ids=user_ids,
+        points=[*all_explore_points, *confirmed_points],
+        frontier=frontier,
+        answers=answers,
+        segments=segments,
+        selected=[point for point in selected if point is not None],
+        theta_grid=theta_grid,
+        theta_values_confirmed=confirm_thetas,
+        theta_kind=theta_kind,
+        theta_min=theta_min,
+        theta_max=theta_max,
+        device=device,
     )
-    _write_csv(frontier_path, [point_row(point) for point in frontier])
-    _write_csv(answers_path, [answer_row(answer) for answer in answers])
-    _write_csv(segments_path, [segment_row(segment) for segment in segments])
-    metadata = {
-        "family": args.family,
-        "environment": args.env,
-        "user_ids": list(user_ids),
-        "target_memories": _parse_csv_floats(
-            args.target_memories,
-            name="--target-memories",
-        ),
-        "target_times": _parse_csv_floats(args.target_times, name="--target-times"),
-        "theta_grid_initial": list(theta_grid),
-        "theta_values_confirmed": list(confirm_thetas),
-        "theta_kind": theta_kind,
-        "theta_min": theta_min,
-        "theta_max": theta_max,
-        "days": args.days,
-        "explore_particles": args.explore_particles,
-        "confirm_particles": confirm_particles,
-        "seed": args.seed,
-        "device": str(device),
-        "memory_margin": args.memory_margin,
-        "time_margin": args.time_margin,
-        "deterministic_only": True,
-        "outputs": {
-            "points": str(points_path),
-            "frontier": str(frontier_path),
-            "target_answers": str(answers_path),
-            "segments": str(segments_path),
-            "plot": None if args.no_plot else str(plot_path),
-        },
-        "feasible_targets": sum(1 for answer in answers if answer.feasible),
-        "target_count": len(answers),
-    }
-    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-    if not args.no_plot:
-        _write_plot(
-            plot_path,
-            points=confirmed_points,
-            frontier=frontier,
-            selected=[point for point in selected if point is not None],
-            title=f"{args.family} constrained target search",
-        )
-
-    print(f"Wrote points: {points_path}")
-    print(f"Wrote frontier: {frontier_path}")
-    print(f"Wrote target answers: {answers_path}")
-    print(f"Wrote segments: {segments_path}")
-    print(f"Wrote metadata: {metadata_path}")
-    if not args.no_plot:
-        print(f"Wrote plot: {plot_path}")
-    return metadata
 
 
 def main() -> None:
