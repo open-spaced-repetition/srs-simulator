@@ -21,6 +21,11 @@ from experiments.single_card_tradeoff.core.target_search.oracle_refinement impor
     segment_scalar_gap,
     target_certification_map,
 )
+from experiments.single_card_tradeoff.core.target_search.io import (
+    point_from_row,
+    point_row,
+    read_points_csv,
+)
 from experiments.single_card_tradeoff.core.target_search.types import (
     ConstrainedTarget,
     EvaluatedPoint,
@@ -194,6 +199,26 @@ class SingleCardTargetSearchTests(unittest.TestCase):
         self.assertTrue(certified[0].certified)
         self.assertTrue(answers[0].certified)
 
+    def test_point_csv_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "points.csv"
+            point = _point(0.8, 0.86, 2.0, exact=True)
+            row = point_row(point)
+            path.write_text(
+                ",".join(row.keys())
+                + "\n"
+                + ",".join(str(value) for value in row.values())
+                + "\n",
+                encoding="utf-8",
+            )
+
+            loaded = read_points_csv(path)
+            parsed = point_from_row({key: str(value) for key, value in row.items()})
+
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0], parsed)
+            self.assertTrue(loaded[0].exact)
+
     def test_cli_smoke_writes_target_answers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             args = target_search.parse_args(
@@ -335,6 +360,63 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             text = answers_path.read_text(encoding="utf-8")
             self.assertIn("goal_cost_weight", text)
             self.assertIn("True", text)
+
+    def test_oracle_cli_uses_init_points_without_resolving_existing_theta(
+        self,
+    ) -> None:
+        family = "fsrs6_oracle_stationary_finite"
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            init_path = Path(temp_dir) / "points.csv"
+            rows = [
+                point_row(_point(0.0, 0.90, 4.0, family=family, exact=True)),
+                point_row(_point(16.0, 0.70, 1.0, family=family, exact=True)),
+            ]
+            init_path.write_text(
+                ",".join(rows[0].keys())
+                + "\n"
+                + "\n".join(
+                    ",".join(str(value) for value in row.values()) for row in rows
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            args = target_search.parse_args(
+                [
+                    "--env",
+                    "fsrs6_default",
+                    "--family",
+                    family,
+                    "--target-memories",
+                    "0.8",
+                    "--theta-grid",
+                    "0,16",
+                    "--days",
+                    "10",
+                    "--max-refinement-rounds",
+                    "0",
+                    "--init-points",
+                    str(init_path),
+                    "--torch-device",
+                    "cpu",
+                    "--no-plot",
+                    "--no-progress",
+                    "--out-dir",
+                    str(Path(temp_dir) / "out"),
+                ]
+            )
+
+            with mock.patch.object(
+                target_search,
+                "evaluate_oracle_points",
+                side_effect=AssertionError("oracle should use warm-start points"),
+            ):
+                target_search.run_search(args)
+
+            points_text = (Path(temp_dir) / "out" / "points.csv").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("fsrs6_oracle_stationary_finite", points_text)
 
 
 if __name__ == "__main__":

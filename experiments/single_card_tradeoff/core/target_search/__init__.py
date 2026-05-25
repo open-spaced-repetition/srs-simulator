@@ -9,6 +9,10 @@ from experiments.single_card_tradeoff.core.target_search.oracle_refinement impor
     oracle_refinement_candidates,
     target_relevant_segments,
 )
+from experiments.single_card_tradeoff.core.target_search.io import (
+    point_from_row,
+    read_points_csv,
+)
 from experiments.single_card_tradeoff.core.target_search.types import (
     ConstrainedTarget,
     EvaluatedPoint,
@@ -26,6 +30,8 @@ __all__ = [
     "empirical_frontier",
     "frontier_segments",
     "oracle_refinement_candidates",
+    "point_from_row",
+    "read_points_csv",
     "target_relevant_segments",
     "target_answers",
 ]

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import math
+from pathlib import Path
 from typing import Any
 
 from experiments.single_card_tradeoff.core.target_search.types import (
@@ -36,6 +38,64 @@ def point_row(point: EvaluatedPoint) -> dict[str, Any]:
         "seed": "" if point.seed is None else point.seed,
         "runtime_s": format_optional_float(point.runtime_s),
     }
+
+
+def _parse_optional_float(value: str | None) -> float | None:
+    if value is None or value.strip() == "":
+        return None
+    return float(value)
+
+
+def _parse_optional_int(value: str | None) -> int | None:
+    if value is None or value.strip() == "":
+        return None
+    return int(value)
+
+
+def _parse_bool(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _first_present(row: dict[str, str], names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = row.get(name)
+        if value is not None and value.strip() != "":
+            return value
+    return None
+
+
+def point_from_row(row: dict[str, str]) -> EvaluatedPoint:
+    memory = _first_present(row, ("M", "memory", "card_expected_retrievability"))
+    minutes = _first_present(row, ("T", "minutes", "card_minutes_per_day"))
+    theta_value = _first_present(row, ("theta_value", "theta", "goal_cost_weight"))
+    if memory is None or minutes is None or theta_value is None:
+        raise ValueError("point row must include theta_value, M, and T.")
+    return EvaluatedPoint(
+        user_id=int(row["user_id"]),
+        family=row["family"],
+        theta_name=row.get("theta_name") or "theta",
+        theta_value=float(theta_value),
+        memory=float(memory),
+        minutes=float(minutes),
+        policy_ref=row.get("policy_ref") or None,
+        cache_key=row.get("cache_key") or None,
+        exact=_parse_bool(row.get("exact")),
+        eval_stage=row.get("eval_stage") or "loaded",
+        particles=_parse_optional_int(row.get("particles")),
+        seed=_parse_optional_int(row.get("seed")),
+        runtime_s=_parse_optional_float(row.get("runtime_s")),
+    )
+
+
+def read_points_csv(path: Path) -> list[EvaluatedPoint]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        points: list[EvaluatedPoint] = []
+        for row in reader:
+            points.append(point_from_row(dict(row)))
+        return points
 
 
 def segment_row(segment: FrontierSegment) -> dict[str, Any]:

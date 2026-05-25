@@ -58,6 +58,19 @@ uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --out-dir artifacts/single_card_tradeoff/target_search/oracle_stationary_first8_memory
 ```
 
+Reuse a previous search's `points.csv` as a warm start with `--init-points`.
+Exact oracle points are reused directly; rollout families use loaded points for
+exploration and still run the configured confirmation pass:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_search \
+  --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 \
+  --family fsrs6_oracle_stationary_finite \
+  --target-memories 0.82,0.88 \
+  --init-points artifacts/single_card_tradeoff/target_search/oracle_stationary_first8_memory/points.csv \
+  --out-dir artifacts/single_card_tradeoff/target_search/oracle_stationary_first8_memory_reuse
+```
+
 ## FSRS6 ADR Policies
 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.

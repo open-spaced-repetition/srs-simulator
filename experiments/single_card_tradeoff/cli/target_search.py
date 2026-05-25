@@ -64,6 +64,7 @@ from experiments.single_card_tradeoff.core.target_search.frontier import (  # no
 from experiments.single_card_tradeoff.core.target_search.io import (  # noqa: E402
     answer_row,
     point_row,
+    read_points_csv,
     segment_row,
 )
 from experiments.single_card_tradeoff.core.target_search.oracle_refinement import (  # noqa: E402
@@ -168,6 +169,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--memory-margin", type=float, default=0.0)
     parser.add_argument("--time-margin", type=float, default=0.0)
+    parser.add_argument(
+        "--init-points",
+        action="append",
+        type=Path,
+        default=[],
+        help=(
+            "Existing target-search points.csv to warm-start from. May be "
+            "passed multiple times."
+        ),
+    )
     parser.add_argument(
         "--certificate-tolerance",
         type=float,
@@ -280,6 +291,9 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--memory-margin must be >= 0.")
     if args.time_margin < 0.0:
         raise SystemExit("--time-margin must be >= 0.")
+    for path in args.init_points:
+        if not path.exists():
+            raise SystemExit(f"--init-points path does not exist: {path}")
     if args.certificate_tolerance < 0.0:
         raise SystemExit("--certificate-tolerance must be >= 0.")
     if _is_oracle_family(args.family):
@@ -451,6 +465,85 @@ def _metrics_to_point(
         seed=seed,
         runtime_s=runtime_s,
     )
+
+
+def _point_key(point: EvaluatedPoint, *, digits: int = 12) -> tuple[int, str, float]:
+    return (point.user_id, point.family, round(point.theta_value, digits))
+
+
+def _merge_points_by_key(points: Sequence[EvaluatedPoint]) -> list[EvaluatedPoint]:
+    merged: dict[tuple[int, str, float], EvaluatedPoint] = {}
+    for point in points:
+        key = _point_key(point)
+        current = merged.get(key)
+        if current is None:
+            merged[key] = point
+            continue
+        if _point_rank(point) >= _point_rank(current):
+            merged[key] = point
+    return list(merged.values())
+
+
+def _point_rank(point: EvaluatedPoint) -> tuple[int, int, int]:
+    stage_rank = {"exact": 4, "confirmed": 3, "explore": 2}.get(point.eval_stage, 1)
+    exact_rank = 1 if point.exact else 0
+    particle_rank = point.particles if point.particles is not None else 0
+    return (exact_rank, stage_rank, particle_rank)
+
+
+def _load_initial_points(
+    *,
+    args: argparse.Namespace,
+    user_ids: Sequence[int],
+    theta_min: float,
+    theta_max: float,
+) -> list[EvaluatedPoint]:
+    if not args.init_points:
+        return []
+    users = set(user_ids)
+    points: list[EvaluatedPoint] = []
+    for path in args.init_points:
+        loaded = read_points_csv(path)
+        points.extend(
+            point
+            for point in loaded
+            if point.family == args.family
+            and point.user_id in users
+            and theta_min <= point.theta_value <= theta_max
+        )
+    merged = _merge_points_by_key(points)
+    if merged and not args.no_progress:
+        print(
+            f"warm_start: loaded {len(merged)} points from "
+            f"{len(args.init_points)} file(s)",
+            flush=True,
+        )
+    return merged
+
+
+def _missing_thetas_for_all_users(
+    theta_values: Sequence[float],
+    points: Sequence[EvaluatedPoint],
+    *,
+    user_ids: Sequence[int],
+    family: str,
+    require_exact: bool,
+) -> list[float]:
+    present: set[tuple[int, float]] = set()
+    requested_users = set(user_ids)
+    for point in points:
+        if point.family != family or point.user_id not in requested_users:
+            continue
+        if require_exact and not point.exact:
+            continue
+        present.add((point.user_id, round(point.theta_value, 12)))
+    missing: list[float] = []
+    for theta in unique_sorted(theta_values):
+        key = round(theta, 12)
+        if all((user_id, key) in present for user_id in user_ids):
+            continue
+        missing.append(theta)
+    return missing
 
 
 @torch.inference_mode()
@@ -752,17 +845,33 @@ def _run_oracle_target_search(
     theta_min: float,
     theta_max: float,
     device: torch.device,
+    initial_points: Sequence[EvaluatedPoint],
 ) -> dict[str, Any]:
-    current_thetas = list(theta_grid)
-    all_points = evaluate_oracle_points(
-        family=args.family,
-        theta_values=current_thetas,
-        user_ids=user_ids,
-        configs=configs,
-        args=args,
-        device=device,
-        progress=not args.no_progress,
+    current_thetas = unique_sorted(
+        [*theta_grid, *[point.theta_value for point in initial_points]]
     )
+    all_points = list(initial_points)
+    missing_initial = _missing_thetas_for_all_users(
+        current_thetas,
+        all_points,
+        user_ids=user_ids,
+        family=args.family,
+        require_exact=True,
+    )
+    if missing_initial:
+        all_points.extend(
+            evaluate_oracle_points(
+                family=args.family,
+                theta_values=missing_initial,
+                user_ids=user_ids,
+                configs=configs,
+                args=args,
+                device=device,
+                progress=not args.no_progress,
+            )
+        )
+    else:
+        all_points = _merge_points_by_key(all_points)
 
     for round_index in range(1, args.max_refinement_rounds + 1):
         candidates = oracle_refinement_candidates(
@@ -783,17 +892,26 @@ def _run_oracle_target_search(
                 f"{','.join(format_float(value) for value in candidates)}",
                 flush=True,
             )
-        all_points.extend(
-            evaluate_oracle_points(
-                family=args.family,
-                theta_values=candidates,
-                user_ids=user_ids,
-                configs=configs,
-                args=args,
-                device=device,
-                progress=not args.no_progress,
-            )
+        missing_candidates = _missing_thetas_for_all_users(
+            candidates,
+            all_points,
+            user_ids=user_ids,
+            family=args.family,
+            require_exact=True,
         )
+        if missing_candidates:
+            all_points.extend(
+                evaluate_oracle_points(
+                    family=args.family,
+                    theta_values=missing_candidates,
+                    user_ids=user_ids,
+                    configs=configs,
+                    args=args,
+                    device=device,
+                    progress=not args.no_progress,
+                )
+            )
+        all_points = _merge_points_by_key(all_points)
 
     frontier = empirical_frontier([point for point in all_points if point.exact])
     segments = certify_oracle_segments(
@@ -898,6 +1016,7 @@ def _write_outputs(
         "device": str(device),
         "memory_margin": args.memory_margin,
         "time_margin": args.time_margin,
+        "init_points": [str(path) for path in args.init_points],
         "deterministic_only": True,
         "outputs": {
             "points": str(points_path),
@@ -946,6 +1065,12 @@ def run_search(args: argparse.Namespace) -> dict[str, Any]:
         stage_name=Path(__file__).stem,
     )
     configs = _load_user_configs(args, user_ids)
+    initial_points = _load_initial_points(
+        args=args,
+        user_ids=user_ids,
+        theta_min=theta_min,
+        theta_max=theta_max,
+    )
 
     if _is_oracle_family(args.family):
         return _run_oracle_target_search(
@@ -958,23 +1083,37 @@ def run_search(args: argparse.Namespace) -> dict[str, Any]:
             theta_min=theta_min,
             theta_max=theta_max,
             device=device,
+            initial_points=initial_points,
         )
 
-    explore_points = evaluate_family_points(
-        family=args.family,
-        theta_values=theta_grid,
+    missing_initial = _missing_thetas_for_all_users(
+        theta_grid,
+        initial_points,
         user_ids=user_ids,
-        configs=configs,
-        days=args.days,
-        particles=args.explore_particles,
-        group_batch_size=args.eval_group_batch_size,
-        seed=args.seed + 10_000,
-        device=device,
-        eval_stage="explore",
-        progress=not args.no_progress,
+        family=args.family,
+        require_exact=False,
     )
-    all_explore_points = list(explore_points)
-    current_thetas = list(theta_grid)
+    all_explore_points = list(initial_points)
+    if missing_initial:
+        all_explore_points.extend(
+            evaluate_family_points(
+                family=args.family,
+                theta_values=missing_initial,
+                user_ids=user_ids,
+                configs=configs,
+                days=args.days,
+                particles=args.explore_particles,
+                group_batch_size=args.eval_group_batch_size,
+                seed=args.seed + 10_000,
+                device=device,
+                eval_stage="explore",
+                progress=not args.no_progress,
+            )
+        )
+    all_explore_points = _merge_points_by_key(all_explore_points)
+    current_thetas = unique_sorted(
+        [*theta_grid, *[point.theta_value for point in initial_points]]
+    )
     for round_index in range(1, args.max_refinement_rounds + 1):
         candidates = adaptive_theta_candidates(
             all_explore_points,
@@ -1041,7 +1180,7 @@ def run_search(args: argparse.Namespace) -> dict[str, Any]:
     return _write_outputs(
         args=args,
         user_ids=user_ids,
-        points=[*all_explore_points, *confirmed_points],
+        points=_merge_points_by_key([*all_explore_points, *confirmed_points]),
         frontier=frontier,
         answers=answers,
         segments=segments,
