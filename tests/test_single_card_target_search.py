@@ -5,7 +5,14 @@ import tempfile
 import unittest
 from unittest import mock
 
+import torch
+
 from experiments.single_card_tradeoff.cli import target_search
+from experiments.single_card_tradeoff.cli import target_constrained_direct_policy_search
+from experiments.single_card_tradeoff.core.target_search.direct_training import (
+    constrained_rank_candidates,
+    direct_target_jobs,
+)
 from experiments.single_card_tradeoff.core.target_search.family_search import (
     adaptive_theta_candidates,
 )
@@ -219,6 +226,34 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertEqual(loaded[0], parsed)
             self.assertTrue(loaded[0].exact)
 
+    def test_constrained_rank_prefers_feasible_memory_lower_time(self) -> None:
+        jobs = direct_target_jobs(
+            user_ids=[1],
+            target_memories=[0.8],
+            target_times=[],
+        )
+        rank = constrained_rank_candidates(
+            memory=torch.tensor([[0.79, 0.81, 0.85]], dtype=torch.float64),
+            minutes=torch.tensor([[0.01, 0.03, 0.05]], dtype=torch.float64),
+            jobs=jobs,
+        )
+
+        self.assertEqual(int(rank.score.argmax(dim=1).item()), 1)
+
+    def test_constrained_rank_prefers_feasible_time_higher_memory(self) -> None:
+        jobs = direct_target_jobs(
+            user_ids=[1],
+            target_memories=[],
+            target_times=[0.03],
+        )
+        rank = constrained_rank_candidates(
+            memory=torch.tensor([[0.70, 0.80, 0.90]], dtype=torch.float64),
+            minutes=torch.tensor([[0.02, 0.03, 0.04]], dtype=torch.float64),
+            jobs=jobs,
+        )
+
+        self.assertEqual(int(rank.score.argmax(dim=1).item()), 1)
+
     def test_cli_smoke_writes_target_answers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             args = target_search.parse_args(
@@ -417,6 +452,46 @@ class SingleCardTargetSearchTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn("fsrs6_oracle_stationary_finite", points_text)
+
+    def test_constrained_direct_cli_smoke_writes_policy_and_answers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = target_constrained_direct_policy_search.parse_args(
+                [
+                    "--env",
+                    "fsrs6_default",
+                    "--user-ids",
+                    "1",
+                    "--target-memories",
+                    "0.7",
+                    "--days",
+                    "5",
+                    "--population-size",
+                    "2",
+                    "--elite-count",
+                    "1",
+                    "--generations",
+                    "1",
+                    "--train-particles",
+                    "2",
+                    "--eval-particles",
+                    "2",
+                    "--torch-device",
+                    "cpu",
+                    "--no-progress",
+                    "--out-dir",
+                    temp_dir,
+                ]
+            )
+
+            target_constrained_direct_policy_search.main_from_args(args)
+
+            self.assertTrue((Path(temp_dir) / "policy.pt").exists())
+            answers_path = Path(temp_dir) / "target_answers.csv"
+            self.assertTrue(answers_path.exists())
+            self.assertIn(
+                "fsrs6_low_param_direct_constrained",
+                answers_path.read_text(encoding="utf-8"),
+            )
 
 
 if __name__ == "__main__":

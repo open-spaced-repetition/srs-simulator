@@ -3,6 +3,12 @@ from experiments.single_card_tradeoff.core.target_search.frontier import (
     frontier_segments,
     target_answers,
 )
+from experiments.single_card_tradeoff.core.target_search.direct_training import (
+    DirectRankResult,
+    DirectTargetJob,
+    constrained_rank_candidates,
+    direct_target_jobs,
+)
 from experiments.single_card_tradeoff.core.target_search.oracle_refinement import (
     apply_target_certifications,
     certify_oracle_segments,
@@ -22,11 +28,15 @@ from experiments.single_card_tradeoff.core.target_search.types import (
 
 __all__ = [
     "ConstrainedTarget",
+    "DirectRankResult",
+    "DirectTargetJob",
     "EvaluatedPoint",
     "FrontierSegment",
     "TargetAnswer",
     "apply_target_certifications",
     "certify_oracle_segments",
+    "constrained_rank_candidates",
+    "direct_target_jobs",
     "empirical_frontier",
     "frontier_segments",
     "oracle_refinement_candidates",
