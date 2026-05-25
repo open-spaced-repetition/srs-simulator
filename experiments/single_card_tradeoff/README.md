@@ -16,6 +16,20 @@ For supported FSRS-6 sweeps, desired-retention targets are batched in one vector
 
 By default, the script writes a pairwise same-target time saved AUC CSV next to the main CSV. `same_target_time_saved_auc` is the average deck-scaled minutes/day saved by the scheduler versus the baseline over their common covered memory-target interval, and `relative_same_target_time_saved_auc_percent` divides that by the baseline time AUC. Positive values mean the scheduler reaches the same memory target faster.
 
+Infer the rollout-level cost-weight ranges implied by the static FSRS6 desired-retention frontier:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.fsrs6_implied_cost_weight \
+  --results artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/combined_results.csv \
+  --out-dir artifacts/single_card_tradeoff/fsrs6_implied_cost_weight/first8
+```
+
+This first-phase inverse analysis compares only `fsrs6` desired-retention points
+against other `fsrs6` points for the same user and rollout settings. Supported
+points get a `lambda_min/lambda_max` interval for the scalar objective
+`card_expected_retrievability - lambda * card_minutes_per_day`; unsupported
+points get a best-fit lambda and regret.
+
 ## FSRS6 ADR Policies
 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.
