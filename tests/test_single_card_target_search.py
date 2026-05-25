@@ -488,6 +488,7 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             matrix_path = out_dir / "scheduler_target_matrix.csv"
             summary_path = out_dir / "scheduler_summary.csv"
             gaps_path = out_dir / "scheduler_oracle_gaps.csv"
+            metadata_path = out_dir / "metadata.json"
             converted_path = root / "converted" / "fsrs6_target_answers.csv"
             converted_gaps_path = (
                 root / "converted" / "fsrs6_gap" / "target_oracle_gaps.csv"
@@ -498,6 +499,7 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertTrue(matrix_path.exists())
             self.assertTrue(summary_path.exists())
             self.assertTrue(gaps_path.exists())
+            self.assertTrue(metadata_path.exists())
             self.assertTrue(converted_path.exists())
             self.assertTrue(converted_gaps_path.exists())
             self.assertTrue(converted_metadata_path.exists())
@@ -515,6 +517,18 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertIn("fsrs6", converted_gaps_text)
             metadata = json.loads(converted_metadata_path.read_text(encoding="utf-8"))
             self.assertEqual(metadata["summary"]["candidate_count"], 1)
+            comparison_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                comparison_metadata["scheduler_categories"]["fsrs6"],
+                "rollout baseline",
+            )
+            self.assertIn(
+                "--tradeoff-result", comparison_metadata["inputs"]["cli_argv"]
+            )
+            self.assertEqual(
+                comparison_metadata["inputs"]["tradeoff_result"],
+                [f"fsrs6={tradeoff_path}"],
+            )
 
     def test_constrained_rank_prefers_feasible_memory_lower_time(self) -> None:
         jobs = direct_target_jobs(

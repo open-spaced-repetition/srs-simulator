@@ -122,7 +122,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--no-plots", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.cli_argv = list(sys.argv[1:] if argv is None else argv)
+    return args
 
 
 def _parse_name_path(raw: str, *, option_name: str) -> tuple[str, Path]:
@@ -648,6 +650,40 @@ def _axis_list(axes: object) -> list[Any]:
         return [axes]
 
 
+def _scheduler_category(family: str, *, oracle_label: str | None) -> str:
+    if family == oracle_label or family.startswith("oracle_"):
+        return "exact oracle"
+    if family in {"fsrs6", "fixed"}:
+        return "rollout baseline"
+    return "learned/distilled policy"
+
+
+def _scheduler_category_code(family: str, *, oracle_label: str | None) -> str:
+    category = _scheduler_category(family, oracle_label=oracle_label)
+    if category == "exact oracle":
+        return "O"
+    if category == "rollout baseline":
+        return "R"
+    return "P"
+
+
+def _plot_label(family: str, *, oracle_label: str | None) -> str:
+    return f"{_scheduler_category_code(family, oracle_label=oracle_label)}: {family}"
+
+
+def _line_style(family: str, *, oracle_label: str | None) -> dict[str, Any]:
+    category = _scheduler_category(family, oracle_label=oracle_label)
+    if category == "exact oracle":
+        return {"marker": "o", "linestyle": "-", "linewidth": 1.8}
+    if category == "rollout baseline":
+        return {"marker": "s", "linestyle": "--", "linewidth": 1.5}
+    return {"marker": "^", "linestyle": ":", "linewidth": 1.5}
+
+
+def _legend_title() -> str:
+    return "O exact oracle, R rollout baseline, P learned/distilled"
+
+
 def _plot_outputs(
     *,
     records: Sequence[TargetAnswerRecord],
@@ -722,14 +758,14 @@ def _plot_outputs(
         ax.plot(
             [item[0] for item in values],
             [item[1] for item in values],
-            marker="o",
-            label=family,
+            label=_plot_label(family, oracle_label=oracle_label),
+            **_line_style(family, oracle_label=oracle_label),
         )
     ax.set_xlabel("Target memory M0")
     ax.set_ylabel("Mean achieved T")
     ax.set_title("Mean target time by scheduler")
     ax.grid(True, alpha=0.25)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, title=_legend_title(), title_fontsize=8)
     fig.tight_layout()
     path = plot_dir / "mean_T_vs_target.png"
     fig.savefig(path, dpi=160)
@@ -744,15 +780,15 @@ def _plot_outputs(
             ax.plot(
                 [item[0] for item in values],
                 [item[1] for item in values],
-                marker="o",
-                label=family,
+                label=_plot_label(family, oracle_label=oracle_label),
+                **_line_style(family, oracle_label=oracle_label),
             )
         ax.axhline(0.0, color="black", linewidth=1.0, alpha=0.6)
         ax.set_xlabel("Target memory M0")
         ax.set_ylabel("Mean extra T vs oracle")
         ax.set_title("Mean target-time gap vs oracle")
         ax.grid(True, alpha=0.25)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=8, title=_legend_title(), title_fontsize=8)
         fig.tight_layout()
         path = plot_dir / "mean_extra_T_vs_oracle.png"
         fig.savefig(path, dpi=160)
@@ -790,14 +826,13 @@ def _plot_outputs(
                 (line,) = ax.plot(
                     [item[0] for item in points],
                     [item[1] for item in points],
-                    marker="o",
-                    linewidth=1.2,
                     markersize=3,
-                    label=family,
+                    label=_plot_label(family, oracle_label=oracle_label),
+                    **_line_style(family, oracle_label=oracle_label),
                 )
                 if family not in labels:
                     handles.append(line)
-                    labels.append(family)
+                    labels.append(_plot_label(family, oracle_label=oracle_label))
             ax.set_title(f"user {user_id}")
             ax.grid(True, alpha=0.25)
         for ax in flat_axes[len(users) :]:
@@ -806,7 +841,13 @@ def _plot_outputs(
         fig.supylabel("Achieved T")
         fig.suptitle("Target time by scheduler and user")
         if handles:
-            fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)))
+            fig.legend(
+                handles,
+                labels,
+                loc="lower center",
+                ncol=min(4, len(labels)),
+                title=_legend_title(),
+            )
             fig.subplots_adjust(bottom=0.18)
         fig.tight_layout()
         path = plot_dir / "T_vs_target_by_user.png"
@@ -855,14 +896,13 @@ def _plot_outputs(
                 (line,) = ax.plot(
                     [item[0] for item in points],
                     [item[1] for item in points],
-                    marker="o",
-                    linewidth=1.2,
                     markersize=3,
-                    label=family,
+                    label=_plot_label(family, oracle_label=oracle_label),
+                    **_line_style(family, oracle_label=oracle_label),
                 )
                 if family not in labels:
                     handles.append(line)
-                    labels.append(family)
+                    labels.append(_plot_label(family, oracle_label=oracle_label))
             ax.axhline(0.0, color="black", linewidth=0.8, alpha=0.5)
             ax.set_title(f"user {user_id}")
             ax.grid(True, alpha=0.25)
@@ -872,7 +912,13 @@ def _plot_outputs(
         fig.supylabel("Extra T vs oracle")
         fig.suptitle("Target-time gap vs oracle by user")
         if handles:
-            fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)))
+            fig.legend(
+                handles,
+                labels,
+                loc="lower center",
+                ncol=min(4, len(labels)),
+                title=_legend_title(),
+            )
             fig.subplots_adjust(bottom=0.18)
         fig.tight_layout()
         path = plot_dir / "extra_T_vs_oracle_by_user.png"
@@ -894,7 +940,10 @@ def _plot_outputs(
         fig, ax = plt.subplots(figsize=(9, max(4.0, 0.36 * len(mean_extra))))
         if mean_extra:
             ax.barh(
-                [item[0] for item in mean_extra],
+                [
+                    _plot_label(item[0], oracle_label=oracle_label)
+                    for item in mean_extra
+                ],
                 [item[1] for item in mean_extra],
             )
         ax.axvline(0.0, color="black", linewidth=1.0, alpha=0.6)
@@ -917,7 +966,10 @@ def _plot_outputs(
     ax.set_xticks(
         range(len(targets)), [format_optional_float(value) for value in targets]
     )
-    ax.set_yticks(range(len(families)), families)
+    ax.set_yticks(
+        range(len(families)),
+        [_plot_label(family, oracle_label=oracle_label) for family in families],
+    )
     ax.set_xlabel("Target memory M0")
     ax.set_title("Feasible user count")
     fig.colorbar(image, ax=ax, label="users")
@@ -929,7 +981,11 @@ def _plot_outputs(
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     box_values = [slack_rows[family] for family in families if slack_rows[family]]
-    box_labels = [family for family in families if slack_rows[family]]
+    box_labels = [
+        _plot_label(family, oracle_label=oracle_label)
+        for family in families
+        if slack_rows[family]
+    ]
     if box_values:
         ax.boxplot(box_values, tick_labels=box_labels, vert=True)
         ax.tick_params(axis="x", labelrotation=30)
@@ -1134,7 +1190,26 @@ def run_compare(args: argparse.Namespace) -> dict[str, Any]:
         "target_tolerance": args.target_tolerance,
         "oracle_label": oracle_label,
         "scheduler_labels": sorted({record.family for record in records}),
+        "scheduler_categories": {
+            family: _scheduler_category(family, oracle_label=oracle_label)
+            for family in sorted({record.family for record in records})
+        },
         "record_count": len(records),
+        "inputs": {
+            "cli_argv": list(getattr(args, "cli_argv", [])),
+            "oracle": args.oracle,
+            "target_answer": list(args.target_answer),
+            "tradeoff_result": list(args.tradeoff_result),
+            "tradeoff_scheduler": list(args.tradeoff_scheduler),
+            "tradeoff_scheduler_filters": scheduler_overrides,
+            "theta_column": list(args.theta_column),
+            "theta_overrides": theta_overrides,
+            "target_memories": args.target_memories,
+            "target_tolerance": args.target_tolerance,
+            "require_complete_target_grid": args.require_complete_target_grid,
+            "out_dir": str(args.out_dir),
+            "no_plots": args.no_plots,
+        },
         "source_paths": source_paths,
         "outputs": {
             "combined_target_answers": str(combined_path),

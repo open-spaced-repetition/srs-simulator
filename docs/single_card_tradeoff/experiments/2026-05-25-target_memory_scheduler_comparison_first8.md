@@ -14,6 +14,7 @@ answer.
 - Users: `1,2,3,4,5,6,7,8`
 - Environment: `fsrs6`
 - Button usage: `../Anki-button-usage/button_usage.jsonl`
+- Review Markov transition: off
 - Days: `1825`
 - Seed: `42`
 - Target memories: `0.70, 0.75, 0.80, 0.85, 0.90, 0.93, 0.96`
@@ -40,9 +41,19 @@ uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary
 ```
 
-Continuous stationary oracle used the same target grid and refinement settings
-with `--family fsrs6_oracle_continuous_stationary_finite` and
-`--progress-log-interval-seconds 30`.
+Continuous stationary oracle:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_search \
+  --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 \
+  --button-usage ../Anki-button-usage/button_usage.jsonl \
+  --family fsrs6_oracle_continuous_stationary_finite \
+  --target-memories 0.70,0.75,0.80,0.85,0.90,0.93,0.96 \
+  --theta-grid 0,16,64,256,1024 \
+  --max-refinement-rounds 6 --candidates-per-round 4 \
+  --certificate-tolerance 1e-9 --progress-log-interval-seconds 30 --no-plot \
+  --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_continuous_stationary
+```
 
 Rollout and direct-search baselines:
 
@@ -83,6 +94,20 @@ uv run python -m experiments.single_card_tradeoff.cli.target_conditioned_retenti
   --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/target_conditioned_distill
 ```
 
+Gap reports for the rollout baselines:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
+  --candidate-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fsrs6 \
+  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fsrs6
+
+uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
+  --candidate-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fixed \
+  --oracle-target-answers artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fixed
+```
+
 The comparison aggregator converted ADR and distill rows from:
 
 ```text
@@ -99,6 +124,27 @@ The combined comparison was written under:
 
 ```text
 artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/comparison
+```
+
+Aggregator command:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_memory_scheduler_compare \
+  --oracle oracle_stationary=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_stationary \
+  --target-answer oracle_continuous_stationary=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/oracle_continuous_stationary \
+  --target-answer fsrs6=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fsrs6 \
+  --target-answer fixed=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/fixed \
+  --target-answer direct=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/direct \
+  --target-answer target_conditioned_distill=artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/target_conditioned_distill \
+  --tradeoff-result adr=artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/combined_results.csv \
+  --tradeoff-scheduler adr=fsrs6_adr \
+  --tradeoff-result stationary_distill=artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/combined_results.csv \
+  --tradeoff-scheduler stationary_distill=fsrs6_oracle_stationary_finite_distill \
+  --tradeoff-result continuous_stationary_distill=artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/combined_results.csv \
+  --tradeoff-scheduler continuous_stationary_distill=fsrs6_oracle_continuous_stationary_finite_distill \
+  --target-memories 0.70,0.75,0.80,0.85,0.90,0.93,0.96 \
+  --require-complete-target-grid \
+  --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/comparison
 ```
 
 ## Results
