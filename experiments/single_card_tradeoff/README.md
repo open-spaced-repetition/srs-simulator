@@ -30,6 +30,21 @@ points get a `lambda_min/lambda_max` interval for the scalar objective
 `card_expected_retrievability - lambda * card_minutes_per_day`; unsupported
 points get a best-fit lambda and regret.
 
+Find family-constrained best feasible policies for target memory or target time
+constraints with the target-search runner. The initial implementation supports
+batched `fsrs6` desired-retention and `fixed` interval families, shares one
+evaluated frontier across all targets, and writes `points.csv`, `frontier.csv`,
+`target_answers.csv`, `segments.csv`, and `metadata.json`:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_search \
+  --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 \
+  --family fsrs6 \
+  --target-memories 0.7,0.75,0.8,0.85,0.9,0.93,0.96 \
+  --explore-particles 2048 --confirm-particles 10000 \
+  --out-dir artifacts/single_card_tradeoff/target_search/fsrs6_first8_memory
+```
+
 ## FSRS6 ADR Policies
 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.

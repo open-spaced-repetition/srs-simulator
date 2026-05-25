@@ -395,6 +395,20 @@ class MultiUserFSRS6SingleCardBatch:
         )
         return self._step_active_intervals(active, intervals, active_users)
 
+    def step_intervals(
+        self,
+        intervals: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        active = (~self.done).nonzero(as_tuple=False).squeeze(1)
+        if active.numel() == 0:
+            reward = torch.zeros(self.env_count, device=self.device, dtype=self.dtype)
+            return self.obs(), reward, self.done.clone()
+
+        active_intervals = intervals.index_select(0, active).to(dtype=torch.int64)
+        active_intervals = torch.clamp(active_intervals, min=1)
+        active_users = self.user_index.index_select(0, active)
+        return self._step_active_intervals(active, active_intervals, active_users)
+
     def _step_active_intervals(
         self,
         active: torch.Tensor,
