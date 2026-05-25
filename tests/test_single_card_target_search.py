@@ -488,15 +488,33 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             matrix_path = out_dir / "scheduler_target_matrix.csv"
             summary_path = out_dir / "scheduler_summary.csv"
             gaps_path = out_dir / "scheduler_oracle_gaps.csv"
+            converted_path = root / "converted" / "fsrs6_target_answers.csv"
+            converted_gaps_path = (
+                root / "converted" / "fsrs6_gap" / "target_oracle_gaps.csv"
+            )
+            converted_metadata_path = (
+                root / "converted" / "fsrs6_gap" / "target_oracle_gaps_metadata.json"
+            )
             self.assertTrue(matrix_path.exists())
             self.assertTrue(summary_path.exists())
             self.assertTrue(gaps_path.exists())
+            self.assertTrue(converted_path.exists())
+            self.assertTrue(converted_gaps_path.exists())
+            self.assertTrue(converted_metadata_path.exists())
             matrix_text = matrix_path.read_text(encoding="utf-8")
             self.assertIn("fsrs6_T", matrix_text)
             self.assertIn("1.5", matrix_text)
             gaps_text = gaps_path.read_text(encoding="utf-8")
             self.assertIn("deterministic_objective_gap", gaps_text)
             self.assertIn("0.5", gaps_text)
+            converted_text = converted_path.read_text(encoding="utf-8")
+            self.assertIn("fsrs6", converted_text)
+            self.assertIn("False", converted_text)
+            converted_gaps_text = converted_gaps_path.read_text(encoding="utf-8")
+            self.assertIn("candidate_family", converted_gaps_text)
+            self.assertIn("fsrs6", converted_gaps_text)
+            metadata = json.loads(converted_metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["summary"]["candidate_count"], 1)
 
     def test_constrained_rank_prefers_feasible_memory_lower_time(self) -> None:
         jobs = direct_target_jobs(

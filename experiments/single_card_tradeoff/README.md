@@ -124,8 +124,11 @@ uv run python -m experiments.single_card_tradeoff.cli.target_memory_scheduler_co
   --out-dir artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/comparison
 ```
 
-It writes `combined_target_answers.csv`, `scheduler_target_matrix.csv`,
-`scheduler_oracle_gaps.csv`, scheduler/user/target summaries, and plots.
+It writes converted `target_answers.csv` files and per-converted-scheduler
+oracle gap reports under the sibling `converted/` directory. The comparison
+directory receives `combined_target_answers.csv`, `scheduler_target_matrix.csv`,
+`scheduler_oracle_gaps.csv`, scheduler/user/target summaries, and aggregate plus
+per-user plots.
 
 ## FSRS6 ADR Policies
 

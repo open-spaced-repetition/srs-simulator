@@ -27,6 +27,7 @@ from experiments.single_card_tradeoff.core.target_search.comparison import (  # 
     oracle_gap_row,
     read_target_answer_records,
     resolve_target_answers_path,
+    summarize_oracle_gaps,
     target_answer_record_row,
 )
 from experiments.single_card_tradeoff.core.target_search.io import (  # noqa: E402
@@ -182,6 +183,13 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_target_answer_records(
+    path: Path,
+    records: Sequence[TargetAnswerRecord],
+) -> None:
+    _write_csv(path, [target_answer_record_row(record) for record in records])
 
 
 def _maybe_float(raw: str | None) -> float | None:
@@ -627,6 +635,19 @@ def _validate_complete_grid(
         raise SystemExit(f"Missing target grid rows: {preview}{suffix}")
 
 
+def _subplot_grid(panel_count: int) -> tuple[int, int]:
+    columns = min(4, max(1, panel_count))
+    rows = math.ceil(panel_count / columns)
+    return rows, columns
+
+
+def _axis_list(axes: object) -> list[Any]:
+    try:
+        return list(axes.flat)  # type: ignore[attr-defined]
+    except AttributeError:
+        return [axes]
+
+
 def _plot_outputs(
     *,
     records: Sequence[TargetAnswerRecord],
@@ -646,6 +667,7 @@ def _plot_outputs(
     extra_rows: dict[str, list[tuple[float, float]]] = {}
     slack_rows: dict[str, list[float]] = {}
     feasible_counts: dict[tuple[str, float], int] = {}
+    extra_values_by_family: dict[str, list[float]] = {}
     for family in families:
         family_records = [record for record in records if record.family == family]
         targets = sorted({record.target_value for record in family_records})
@@ -685,6 +707,13 @@ def _plot_outputs(
                     if record.feasible and record.memory_slack is not None
                 ]
             )
+        extra_values_by_family[family] = _finite(
+            [
+                _extra_vs_oracle(record, oracle_lookup.get(_record_key(record)))
+                for record in family_records
+                if oracle_label is None or family != oracle_label
+            ]
+        )
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     for family, values in mean_t_rows.items():
@@ -730,6 +759,154 @@ def _plot_outputs(
         plt.close(fig)
         paths.append(str(path))
 
+    users = sorted({record.user_id for record in records})
+    if users:
+        rows, columns = _subplot_grid(len(users))
+        fig, axes = plt.subplots(
+            rows,
+            columns,
+            figsize=(4.2 * columns, 3.0 * rows),
+            sharex=True,
+            sharey=True,
+        )
+        flat_axes = _axis_list(axes)
+        handles = []
+        labels = []
+        for ax, user_id in zip(flat_axes, users, strict=False):
+            user_records = [record for record in records if record.user_id == user_id]
+            for family in families:
+                points = sorted(
+                    (
+                        (record.target_value, record.achieved_minutes)
+                        for record in user_records
+                        if record.family == family
+                        and record.feasible
+                        and record.achieved_minutes is not None
+                    ),
+                    key=lambda item: item[0],
+                )
+                if not points:
+                    continue
+                (line,) = ax.plot(
+                    [item[0] for item in points],
+                    [item[1] for item in points],
+                    marker="o",
+                    linewidth=1.2,
+                    markersize=3,
+                    label=family,
+                )
+                if family not in labels:
+                    handles.append(line)
+                    labels.append(family)
+            ax.set_title(f"user {user_id}")
+            ax.grid(True, alpha=0.25)
+        for ax in flat_axes[len(users) :]:
+            ax.axis("off")
+        fig.supxlabel("Target memory M0")
+        fig.supylabel("Achieved T")
+        fig.suptitle("Target time by scheduler and user")
+        if handles:
+            fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)))
+            fig.subplots_adjust(bottom=0.18)
+        fig.tight_layout()
+        path = plot_dir / "T_vs_target_by_user.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        paths.append(str(path))
+
+    if oracle_label is not None and users:
+        rows, columns = _subplot_grid(len(users))
+        fig, axes = plt.subplots(
+            rows,
+            columns,
+            figsize=(4.2 * columns, 3.0 * rows),
+            sharex=True,
+            sharey=True,
+        )
+        flat_axes = _axis_list(axes)
+        handles = []
+        labels = []
+        for ax, user_id in zip(flat_axes, users, strict=False):
+            user_records = [record for record in records if record.user_id == user_id]
+            for family in families:
+                if family == oracle_label:
+                    continue
+                points = sorted(
+                    (
+                        (
+                            record.target_value,
+                            _extra_vs_oracle(
+                                record,
+                                oracle_lookup.get(_record_key(record)),
+                            ),
+                        )
+                        for record in user_records
+                        if record.family == family
+                    ),
+                    key=lambda item: item[0],
+                )
+                points = [
+                    (target, extra)
+                    for target, extra in points
+                    if extra is not None and math.isfinite(extra)
+                ]
+                if not points:
+                    continue
+                (line,) = ax.plot(
+                    [item[0] for item in points],
+                    [item[1] for item in points],
+                    marker="o",
+                    linewidth=1.2,
+                    markersize=3,
+                    label=family,
+                )
+                if family not in labels:
+                    handles.append(line)
+                    labels.append(family)
+            ax.axhline(0.0, color="black", linewidth=0.8, alpha=0.5)
+            ax.set_title(f"user {user_id}")
+            ax.grid(True, alpha=0.25)
+        for ax in flat_axes[len(users) :]:
+            ax.axis("off")
+        fig.supxlabel("Target memory M0")
+        fig.supylabel("Extra T vs oracle")
+        fig.suptitle("Target-time gap vs oracle by user")
+        if handles:
+            fig.legend(handles, labels, loc="lower center", ncol=min(4, len(labels)))
+            fig.subplots_adjust(bottom=0.18)
+        fig.tight_layout()
+        path = plot_dir / "extra_T_vs_oracle_by_user.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        paths.append(str(path))
+
+        mean_extra = [
+            (family, _mean(values))
+            for family, values in extra_values_by_family.items()
+            if family != oracle_label and values
+        ]
+        mean_extra = [
+            (family, value)
+            for family, value in mean_extra
+            if value is not None and math.isfinite(value)
+        ]
+        mean_extra.sort(key=lambda item: item[1])
+        fig, ax = plt.subplots(figsize=(9, max(4.0, 0.36 * len(mean_extra))))
+        if mean_extra:
+            ax.barh(
+                [item[0] for item in mean_extra],
+                [item[1] for item in mean_extra],
+            )
+        ax.axvline(0.0, color="black", linewidth=1.0, alpha=0.6)
+        ax.set_xlabel("Mean extra T vs oracle")
+        ax.set_title("Mean target-time gap by scheduler")
+        ax.grid(True, axis="x", alpha=0.25)
+        fig.tight_layout()
+        path = plot_dir / "mean_extra_T_by_scheduler.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        paths.append(str(path))
+
     targets = sorted({record.target_value for record in records})
     fig, ax = plt.subplots(figsize=(9, max(3.5, 0.32 * len(families))))
     heatmap = [
@@ -767,6 +944,46 @@ def _plot_outputs(
     return paths
 
 
+def _converted_outputs_dir(out_dir: Path) -> Path:
+    return out_dir.parent / "converted"
+
+
+def _write_converted_gap_report(
+    *,
+    label: str,
+    records: Sequence[TargetAnswerRecord],
+    oracle_records: Sequence[TargetAnswerRecord],
+    candidate_path: Path,
+    oracle_label: str | None,
+    oracle_path: Path | None,
+    target_tolerance: float,
+    converted_dir: Path,
+) -> dict[str, Any]:
+    gap_dir = converted_dir / f"{label}_gap"
+    gap_dir.mkdir(parents=True, exist_ok=True)
+    gaps = compare_target_answers_to_oracle(
+        records,
+        oracle_records,
+        target_tolerance=target_tolerance,
+    )
+    gaps_path = gap_dir / "target_oracle_gaps.csv"
+    metadata_path = gap_dir / "target_oracle_gaps_metadata.json"
+    _write_csv(gaps_path, [oracle_gap_row(gap) for gap in gaps])
+    metadata = {
+        "candidate_target_answers": str(candidate_path),
+        "oracle_target_answers": "" if oracle_path is None else str(oracle_path),
+        "oracle_label": oracle_label,
+        "target_tolerance": target_tolerance,
+        "summary": summarize_oracle_gaps(gaps),
+        "outputs": {
+            "target_oracle_gaps": str(gaps_path),
+            "metadata": str(metadata_path),
+        },
+    }
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    return metadata
+
+
 def run_compare(args: argparse.Namespace) -> dict[str, Any]:
     if args.target_tolerance < 0.0 or not math.isfinite(args.target_tolerance):
         raise SystemExit("--target-tolerance must be finite and >= 0.")
@@ -784,18 +1001,22 @@ def run_compare(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    converted_dir = _converted_outputs_dir(args.out_dir)
     records: list[TargetAnswerRecord] = []
     source_paths: dict[str, str] = {}
+    converted_outputs: dict[str, Any] = {}
 
     oracle_label = None
+    oracle_target_answers_path: Path | None = None
     oracle_records: list[TargetAnswerRecord] = []
     if args.oracle is not None:
         oracle_label, oracle_path = _parse_name_path(
             args.oracle, option_name="--oracle"
         )
+        oracle_target_answers_path = resolve_target_answers_path(oracle_path)
         oracle_records = read_labeled_target_answers(oracle_label, oracle_path)
         records.extend(oracle_records)
-        source_paths[oracle_label] = str(resolve_target_answers_path(oracle_path))
+        source_paths[oracle_label] = str(oracle_target_answers_path)
 
     for raw in args.target_answer:
         label, path = _parse_name_path(raw, option_name="--target-answer")
@@ -808,16 +1029,36 @@ def run_compare(args: argparse.Namespace) -> dict[str, Any]:
         label, path = _parse_name_path(raw, option_name="--tradeoff-result")
         if label == oracle_label:
             raise SystemExit(f"Duplicate tradeoff-result label: {label}")
-        records.extend(
-            convert_tradeoff_results(
-                label=label,
-                path=path,
-                target_memories=target_memories,
-                scheduler_filter=scheduler_overrides.get(label),
-                theta_column=theta_overrides.get(label),
-            )
+        converted_records = convert_tradeoff_results(
+            label=label,
+            path=path,
+            target_memories=target_memories,
+            scheduler_filter=scheduler_overrides.get(label),
+            theta_column=theta_overrides.get(label),
         )
+        records.extend(converted_records)
         source_paths[label] = str(path)
+        converted_path = converted_dir / f"{label}_target_answers.csv"
+        _write_target_answer_records(converted_path, converted_records)
+        converted_metadata: dict[str, Any] = {
+            "source_tradeoff_result": str(path),
+            "target_answers": str(converted_path),
+            "record_count": len(converted_records),
+        }
+        if oracle_records:
+            gap_metadata = _write_converted_gap_report(
+                label=label,
+                records=converted_records,
+                oracle_records=oracle_records,
+                candidate_path=converted_path,
+                oracle_label=oracle_label,
+                oracle_path=oracle_target_answers_path,
+                target_tolerance=args.target_tolerance,
+                converted_dir=converted_dir,
+            )
+            converted_metadata["gap_report"] = gap_metadata["outputs"]
+            converted_metadata["gap_summary"] = gap_metadata["summary"]
+        converted_outputs[label] = converted_metadata
 
     if not records:
         raise SystemExit(
@@ -903,6 +1144,7 @@ def run_compare(args: argparse.Namespace) -> dict[str, Any]:
             "user_summary": str(user_summary_path),
             "target_summary": str(target_summary_path),
             "plots": plot_paths,
+            "converted": converted_outputs,
             "metadata": str(metadata_path),
         },
     }
@@ -913,6 +1155,14 @@ def run_compare(args: argparse.Namespace) -> dict[str, Any]:
     print(f"Wrote scheduler summary: {scheduler_summary_path}")
     print(f"Wrote user summary: {user_summary_path}")
     print(f"Wrote target summary: {target_summary_path}")
+    for label, output in converted_outputs.items():
+        print(f"Wrote converted target answers for {label}: {output['target_answers']}")
+        gap_report = output.get("gap_report")
+        if isinstance(gap_report, dict):
+            print(
+                "Wrote converted oracle gaps for "
+                f"{label}: {gap_report['target_oracle_gaps']}"
+            )
     for path in plot_paths:
         print(f"Wrote plot: {path}")
     print(f"Wrote metadata: {metadata_path}")

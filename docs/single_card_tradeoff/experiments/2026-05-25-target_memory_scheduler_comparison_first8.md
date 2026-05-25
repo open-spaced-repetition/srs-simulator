@@ -89,7 +89,13 @@ The comparison aggregator converted ADR and distill rows from:
 artifacts/single_card_tradeoff/oracle_interval_grid_stationary_first8_eval_weights_add_025_05_markov_off/combined_results.csv
 ```
 
-and wrote the combined comparison under:
+and wrote converted target-answer files under:
+
+```text
+artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/converted
+```
+
+The combined comparison was written under:
 
 ```text
 artifacts/single_card_tradeoff/target_memory_scheduler_comparison_first8/comparison
@@ -188,6 +194,12 @@ lambda points should reuse those caches.
 
 ## Artifacts
 
+- `converted/adr_target_answers.csv`
+- `converted/adr_gap/target_oracle_gaps.csv`
+- `converted/stationary_distill_target_answers.csv`
+- `converted/stationary_distill_gap/target_oracle_gaps.csv`
+- `converted/continuous_stationary_distill_target_answers.csv`
+- `converted/continuous_stationary_distill_gap/target_oracle_gaps.csv`
 - `comparison/combined_target_answers.csv`
 - `comparison/scheduler_target_matrix.csv`
 - `comparison/scheduler_oracle_gaps.csv`
@@ -196,6 +208,9 @@ lambda points should reuse those caches.
 - `comparison/target_summary.csv`
 - `comparison/plots/mean_T_vs_target.png`
 - `comparison/plots/mean_extra_T_vs_oracle.png`
+- `comparison/plots/T_vs_target_by_user.png`
+- `comparison/plots/extra_T_vs_oracle_by_user.png`
+- `comparison/plots/mean_extra_T_by_scheduler.png`
 - `comparison/plots/feasibility_heatmap.png`
 - `comparison/plots/memory_slack_distribution.png`
 
