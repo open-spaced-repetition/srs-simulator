@@ -95,6 +95,19 @@ uv run python -m experiments.single_card_tradeoff.cli.target_conditioned_retenti
   --out-dir artifacts/single_card_tradeoff/target_conditioned_retention_distill_first8_memory
 ```
 
+Compare direct or distilled target answers against an oracle target-search run:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
+  --candidate-target-answers artifacts/single_card_tradeoff/target_conditioned_retention_distill_first8_memory \
+  --oracle-target-answers artifacts/single_card_tradeoff/target_search/oracle_stationary_first8_memory \
+  --out-dir artifacts/single_card_tradeoff/target_conditioned_retention_distill_first8_memory
+```
+
+The direct and target-conditioned distill CLIs also accept
+`--oracle-target-answers <target_answers.csv-or-dir>` and write
+`target_oracle_gaps.csv` next to their confirmed target answers.
+
 ## FSRS6 ADR Policies
 
 `tradeoff.py` can evaluate trained ADR schedulers in the same iid single-card lifecycle as the static FSRS baselines and distilled oracle schedulers. Pass one policy JSON with `--fsrs6-adr-policy`, or expand a full trained portfolio with `--fsrs6-adr-policy-root`, `--fsrs6-adr-train-run-root`, or `--fsrs6-adr-policy-manifest`. If no ADR source is passed and the local first-eight portfolio artifact exists, the runner uses `artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/fsrs6_adr_portfolio_users_1_8_pop16_v1`.

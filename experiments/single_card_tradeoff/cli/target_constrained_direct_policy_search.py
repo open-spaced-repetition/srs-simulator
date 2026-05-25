@@ -46,6 +46,14 @@ from experiments.single_card_tradeoff.core.run_monitoring import (  # noqa: E402
     add_run_monitoring_args,
     register_run_monitor,
 )
+from experiments.single_card_tradeoff.core.target_search.comparison import (  # noqa: E402
+    compare_target_answers_to_oracle,
+    oracle_gap_row,
+    read_target_answer_records,
+    resolve_target_answers_path,
+    summarize_oracle_gaps,
+    target_answer_records_from_rows,
+)
 from experiments.single_card_tradeoff.core.target_search.direct_training import (  # noqa: E402
     DirectTargetJob,
     constrained_rank_candidates,
@@ -139,6 +147,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--theta-clip", type=float, default=8.0)
     parser.add_argument("--train-exact-memory", action="store_true")
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument(
+        "--oracle-target-answers",
+        type=Path,
+        default=None,
+        help=(
+            "Optional oracle target_answers.csv, or directory containing it, "
+            "used to write target_oracle_gaps.csv."
+        ),
+    )
+    parser.add_argument("--oracle-gap-target-tolerance", type=float, default=1e-9)
     add_run_monitoring_args(parser)
     parser.add_argument("--no-progress", action="store_true")
     return parser.parse_args(argv)
@@ -169,6 +187,14 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--cem-alpha must be in (0, 1].")
     if args.theta_clip <= 0.0:
         raise SystemExit("--theta-clip must be > 0.")
+    if args.oracle_gap_target_tolerance < 0.0 or not math.isfinite(
+        args.oracle_gap_target_tolerance
+    ):
+        raise SystemExit("--oracle-gap-target-tolerance must be finite and >= 0.")
+    if args.oracle_target_answers is not None:
+        oracle_path = resolve_target_answers_path(args.oracle_target_answers)
+        if not oracle_path.exists():
+            raise SystemExit(f"--oracle-target-answers does not exist: {oracle_path}")
     target_memories = parse_csv_floats(args.target_memories, name="--target-memories")
     target_times = parse_csv_floats(args.target_times, name="--target-times")
     if not target_memories and not target_times:
@@ -540,6 +566,44 @@ def write_history(path: Path, rows: Sequence[dict[str, Any]]) -> None:
     write_csv(path, rows)
 
 
+def oracle_gap_outputs(
+    *,
+    args: argparse.Namespace,
+    answer_rows: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, str], dict[str, Any] | None]:
+    if args.oracle_target_answers is None:
+        return {}, None
+    oracle_path = resolve_target_answers_path(args.oracle_target_answers)
+    candidate_records = target_answer_records_from_rows(answer_rows)
+    oracle_records = read_target_answer_records(oracle_path)
+    gaps = compare_target_answers_to_oracle(
+        candidate_records,
+        oracle_records,
+        target_tolerance=args.oracle_gap_target_tolerance,
+    )
+    gap_rows = [oracle_gap_row(gap) for gap in gaps]
+    gap_path = args.out_dir / "target_oracle_gaps.csv"
+    gap_metadata_path = args.out_dir / "target_oracle_gaps_metadata.json"
+    write_csv(gap_path, gap_rows)
+    metadata = {
+        "oracle_target_answers": str(oracle_path),
+        "target_tolerance": args.oracle_gap_target_tolerance,
+        "summary": summarize_oracle_gaps(gaps),
+        "outputs": {
+            "target_oracle_gaps": str(gap_path),
+            "metadata": str(gap_metadata_path),
+        },
+    }
+    gap_metadata_path.write_text(
+        json.dumps(metadata, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {
+        "target_oracle_gaps": str(gap_path),
+        "target_oracle_gaps_metadata": str(gap_metadata_path),
+    }, metadata
+
+
 def main_from_args(args: argparse.Namespace) -> None:
     validate_args(args)
     user_ids = parse_user_ids(args.user_ids)
@@ -607,12 +671,17 @@ def main_from_args(args: argparse.Namespace) -> None:
     segments_path = args.out_dir / "segments.csv"
     history_path = args.out_dir / "train_history.csv"
     metadata_path = args.out_dir / "metadata.json"
+    answer_rows = [answer_row(answer) for answer in answers]
     write_csv(points_path, [point_row(point) for point in points])
     write_csv(frontier_path, [point_row(point) for point in frontier])
-    write_csv(answers_path, [answer_row(answer) for answer in answers])
+    write_csv(answers_path, answer_rows)
     write_csv(segments_path, [segment_row(segment) for segment in segments])
     write_history(history_path, history)
-    metadata = {
+    gap_output_paths, gap_metadata = oracle_gap_outputs(
+        args=args,
+        answer_rows=answer_rows,
+    )
+    metadata: dict[str, Any] = {
         "family": DIRECT_CONSTRAINED_FAMILY,
         "policy_family": args.policy_family,
         "params_per_policy": parameter_count_for_family(args.policy_family),
@@ -640,8 +709,11 @@ def main_from_args(args: argparse.Namespace) -> None:
             "target_answers": str(answers_path),
             "segments": str(segments_path),
             "train_history": str(history_path),
+            **gap_output_paths,
         },
     }
+    if gap_metadata is not None:
+        metadata["oracle_gap_report"] = gap_metadata
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
 
     print(f"Wrote policy: {policy_path}")
@@ -650,6 +722,8 @@ def main_from_args(args: argparse.Namespace) -> None:
     print(f"Wrote target answers: {answers_path}")
     print(f"Wrote segments: {segments_path}")
     print(f"Wrote train history: {history_path}")
+    for output_path in gap_output_paths.values():
+        print(f"Wrote oracle gap artifact: {output_path}")
     print(f"Wrote metadata: {metadata_path}")
 
 

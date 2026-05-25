@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,8 +10,14 @@ from unittest import mock
 import torch
 
 from experiments.single_card_tradeoff.cli import target_search
+from experiments.single_card_tradeoff.cli import target_oracle_gap_report
 from experiments.single_card_tradeoff.cli import target_conditioned_retention_distill
 from experiments.single_card_tradeoff.cli import target_constrained_direct_policy_search
+from experiments.single_card_tradeoff.core.target_search.comparison import (
+    compare_target_answers_to_oracle,
+    oracle_gap_row,
+    target_answer_records_from_rows,
+)
 from experiments.single_card_tradeoff.core.target_search.direct_training import (
     constrained_rank_candidates,
     direct_target_jobs,
@@ -59,6 +67,64 @@ def _point(
         particles=10,
         exact=exact,
     )
+
+
+def _target_answer_row(
+    *,
+    user_id: int = 1,
+    target_type: str = "memory",
+    target_value: float = 0.8,
+    family: str = "candidate",
+    feasible: bool = True,
+    theta_name: str = "theta",
+    theta_value: float = 1.0,
+    achieved_m: float = 0.82,
+    achieved_t: float = 2.0,
+    certified: bool = False,
+    mixed_available: bool = False,
+    mixed_probability_high: float | None = None,
+    mixed_m: float | None = None,
+    mixed_t: float | None = None,
+) -> dict[str, object]:
+    memory_slack = achieved_m - target_value if target_type == "memory" else ""
+    time_slack = target_value - achieved_t if target_type == "time" else ""
+    return {
+        "user_id": user_id,
+        "target_type": target_type,
+        "target_value": target_value,
+        "family": family,
+        "feasible": feasible,
+        "theta_name": theta_name,
+        "theta_value": theta_value,
+        "achieved_M": achieved_m,
+        "achieved_T": achieved_t,
+        "memory_slack": memory_slack,
+        "time_slack": time_slack,
+        "certified": certified,
+        "policy_ref": "",
+        "cache_key": "",
+        "neighbor_low_theta": "",
+        "neighbor_high_theta": "",
+        "mixed_available": mixed_available,
+        "mixed_probability_high": ""
+        if mixed_probability_high is None
+        else mixed_probability_high,
+        "mixed_M": "" if mixed_m is None else mixed_m,
+        "mixed_T": "" if mixed_t is None else mixed_t,
+    }
+
+
+def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 class SingleCardTargetSearchTests(unittest.TestCase):
@@ -226,6 +292,111 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0], parsed)
             self.assertTrue(loaded[0].exact)
+
+    def test_target_oracle_gap_rows_report_deterministic_and_mixed_gaps(
+        self,
+    ) -> None:
+        candidate_rows = [
+            _target_answer_row(
+                target_type="memory",
+                target_value=0.8,
+                family="direct",
+                achieved_m=0.81,
+                achieved_t=2.4,
+            ),
+            _target_answer_row(
+                target_type="time",
+                target_value=1.5,
+                family="direct",
+                achieved_m=0.78,
+                achieved_t=1.4,
+            ),
+        ]
+        oracle_rows = [
+            _target_answer_row(
+                target_type="memory",
+                target_value=0.8,
+                family="oracle",
+                achieved_m=0.83,
+                achieved_t=1.8,
+                certified=True,
+                mixed_available=True,
+                mixed_probability_high=0.25,
+                mixed_m=0.8,
+                mixed_t=1.6,
+            ),
+            _target_answer_row(
+                target_type="time",
+                target_value=1.5,
+                family="oracle",
+                achieved_m=0.82,
+                achieved_t=1.5,
+                certified=True,
+                mixed_available=True,
+                mixed_probability_high=0.5,
+                mixed_m=0.84,
+                mixed_t=1.5,
+            ),
+        ]
+
+        gaps = compare_target_answers_to_oracle(
+            target_answer_records_from_rows(candidate_rows),
+            target_answer_records_from_rows(oracle_rows),
+        )
+        rows = [oracle_gap_row(gap) for gap in gaps]
+
+        self.assertAlmostEqual(float(rows[0]["deterministic_objective_gap"]), 0.6)
+        self.assertAlmostEqual(float(rows[0]["mixed_objective_gap"]), 0.8)
+        self.assertAlmostEqual(float(rows[1]["deterministic_objective_gap"]), 0.04)
+        self.assertAlmostEqual(float(rows[1]["mixed_objective_gap"]), 0.06)
+        self.assertEqual(rows[0]["oracle_certified"], True)
+
+    def test_target_oracle_gap_report_cli_writes_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate_dir = root / "candidate"
+            oracle_dir = root / "oracle"
+            out_dir = root / "out"
+            _write_csv(
+                candidate_dir / "target_answers.csv",
+                [
+                    _target_answer_row(
+                        family="direct",
+                        achieved_m=0.81,
+                        achieved_t=2.4,
+                    )
+                ],
+            )
+            _write_csv(
+                oracle_dir / "target_answers.csv",
+                [
+                    _target_answer_row(
+                        family="oracle",
+                        achieved_m=0.83,
+                        achieved_t=1.8,
+                        certified=True,
+                    )
+                ],
+            )
+
+            args = target_oracle_gap_report.parse_args(
+                [
+                    "--candidate-target-answers",
+                    str(candidate_dir),
+                    "--oracle-target-answers",
+                    str(oracle_dir),
+                    "--out-dir",
+                    str(out_dir),
+                ]
+            )
+            target_oracle_gap_report.main_from_args(args)
+
+            gaps_path = out_dir / "target_oracle_gaps.csv"
+            metadata_path = out_dir / "target_oracle_gaps_metadata.json"
+            self.assertTrue(gaps_path.exists())
+            self.assertIn("deterministic_objective_gap", gaps_path.read_text())
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["summary"]["oracle_matched_count"], 1)
 
     def test_constrained_rank_prefers_feasible_memory_lower_time(self) -> None:
         jobs = direct_target_jobs(
@@ -456,6 +627,19 @@ class SingleCardTargetSearchTests(unittest.TestCase):
 
     def test_constrained_direct_cli_smoke_writes_policy_and_answers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
+            oracle_answers = Path(temp_dir) / "oracle_target_answers.csv"
+            _write_csv(
+                oracle_answers,
+                [
+                    _target_answer_row(
+                        target_value=0.7,
+                        family="fsrs6_oracle_stationary_finite",
+                        achieved_m=0.72,
+                        achieved_t=0.01,
+                        certified=True,
+                    )
+                ],
+            )
             args = target_constrained_direct_policy_search.parse_args(
                 [
                     "--env",
@@ -479,6 +663,8 @@ class SingleCardTargetSearchTests(unittest.TestCase):
                     "--torch-device",
                     "cpu",
                     "--no-progress",
+                    "--oracle-target-answers",
+                    str(oracle_answers),
                     "--out-dir",
                     temp_dir,
                 ]
@@ -489,6 +675,7 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertTrue((Path(temp_dir) / "policy.pt").exists())
             answers_path = Path(temp_dir) / "target_answers.csv"
             self.assertTrue(answers_path.exists())
+            self.assertTrue((Path(temp_dir) / "target_oracle_gaps.csv").exists())
             self.assertIn(
                 "fsrs6_low_param_direct_constrained",
                 answers_path.read_text(encoding="utf-8"),
