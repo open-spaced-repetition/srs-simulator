@@ -86,11 +86,15 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
         self.assertEqual(policy.action_head, ACTION_HEAD_INTERVAL)
         self.assertTrue(stats["final_loss"] >= 0.0)
 
-    def test_cmaes_trainer_writes_lambda_less_cost_adr_artifact(self) -> None:
+    def test_cmaes_trainer_batches_users_and_writes_artifacts(self) -> None:
+        bundle_lane_user_ids = []
+        simulate_calls = []
+
         def fake_build_bundle(**kwargs):
             lane_user_ids = kwargs.get("lane_user_ids")
             if not isinstance(lane_user_ids, list):
                 raise AssertionError("trainer smoke test expects lane_user_ids.")
+            bundle_lane_user_ids.append(list(lane_user_ids))
             lanes = len(lane_user_ids)
             device = kwargs["device"]
             return SimpleNamespace(
@@ -112,6 +116,12 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
             sched_ops = kwargs["sched_ops"]
             lane_count = int(sched_ops._weights.shape[0])
             is_cost_adr = hasattr(sched_ops, "_goal_cost_weight")
+            simulate_calls.append(
+                {
+                    "is_cost_adr": is_cost_adr,
+                    "lane_count": lane_count,
+                }
+            )
             stats = []
             for index in range(lane_count):
                 if is_cost_adr:
@@ -134,7 +144,7 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config_path = root / "cost_adr.toml"
-            output_dir = root / "user_1"
+            output_dirs = [root / "user_1", root / "user_2"]
             config_path.write_text(
                 """
 schema_version = 1
@@ -145,7 +155,7 @@ output_root = "artifacts/cost-adr-smoke"
 stages = ["train-overfit"]
 
 [users]
-train = [1]
+train = [1, 2]
 validation = []
 reserved_test = []
 
@@ -209,37 +219,79 @@ seed = 7
                 ),
             ):
                 results = run_training_jobs(
-                    jobs=[CostADRTrainJob(user_id=1, output_dir=output_dir)],
+                    jobs=[
+                        CostADRTrainJob(user_id=1, output_dir=output_dirs[0]),
+                        CostADRTrainJob(user_id=2, output_dir=output_dirs[1]),
+                    ],
                     config=config,
                     config_path=config_path,
                     repo_root=REPO_ROOT,
                     button_usage=None,
                 )
 
-            policy_path = output_dir / "policy.json"
-            metadata_path = output_dir / "metadata.json"
-            metrics_path = output_dir / "metrics.json"
-            progress_path = output_dir / "training_progress.jsonl"
-            policy = FSRS6CostConditionedADRPolicy.from_json(policy_path)
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-            progress_events = [
-                json.loads(line)["event"]
-                for line in progress_path.read_text(encoding="utf-8").splitlines()
-            ]
+            artifacts = []
+            progress_records_by_user = []
+            for output_dir in output_dirs:
+                policy_path = output_dir / "policy.json"
+                metadata_path = output_dir / "metadata.json"
+                metrics_path = output_dir / "metrics.json"
+                progress_path = output_dir / "training_progress.jsonl"
+                artifacts.append(
+                    (
+                        FSRS6CostConditionedADRPolicy.from_json(policy_path),
+                        metadata_path,
+                        json.loads(metadata_path.read_text(encoding="utf-8")),
+                        json.loads(metrics_path.read_text(encoding="utf-8")),
+                    )
+                )
+                progress_records_by_user.append(
+                    [
+                        json.loads(line)
+                        for line in progress_path.read_text(
+                            encoding="utf-8"
+                        ).splitlines()
+                    ]
+                )
 
-        self.assertTrue(results[0].passed, results[0].error)
-        self.assertEqual(results[0].artifact_paths, (metadata_path,))
-        self.assertEqual(policy.parameter_count, 24)
-        self.assertEqual(policy.action_head, ACTION_HEAD_INTERVAL)
-        self.assertEqual(metadata["scheduler_name"], "fsrs6_cost_adr")
-        self.assertEqual(metadata["action_space"], "sd_cost_interval_function")
-        self.assertIsNone(metadata["lambda_value"])
-        self.assertIsNone(metadata["baseline_desired_retention"])
-        self.assertGreater(metrics["best_hypervolume_delta"], 0.0)
-        self.assertEqual(len(metrics["selected_cost_weight_rollout_points"]), 16)
-        self.assertEqual(metrics["optimizer"]["population_size"], 2)
-        self.assertIn("cmaes_generation", progress_events)
+        self.assertEqual([result.passed for result in results], [True, True])
+        self.assertEqual(
+            [result.artifact_paths for result in results],
+            [
+                (output_dirs[0] / "metadata.json",),
+                (output_dirs[1] / "metadata.json",),
+            ],
+        )
+        self.assertEqual(bundle_lane_user_ids[0], [1, 2])
+        self.assertEqual(bundle_lane_user_ids[1], [1] * 32 + [2] * 32)
+        self.assertEqual(
+            simulate_calls,
+            [
+                {"is_cost_adr": False, "lane_count": 2},
+                {"is_cost_adr": True, "lane_count": 64},
+            ],
+        )
+        for policy, _metadata_path, metadata, metrics in artifacts:
+            self.assertEqual(policy.parameter_count, 24)
+            self.assertEqual(policy.action_head, ACTION_HEAD_INTERVAL)
+            self.assertEqual(metadata["scheduler_name"], "fsrs6_cost_adr")
+            self.assertEqual(metadata["action_space"], "sd_cost_interval_function")
+            self.assertIsNone(metadata["lambda_value"])
+            self.assertIsNone(metadata["baseline_desired_retention"])
+            self.assertGreater(metrics["best_hypervolume_delta"], 0.0)
+            self.assertEqual(len(metrics["selected_cost_weight_rollout_points"]), 16)
+            self.assertEqual(metrics["optimizer"]["population_size"], 2)
+
+        for progress_records in progress_records_by_user:
+            progress_events = [record["event"] for record in progress_records]
+            generation = next(
+                record
+                for record in progress_records
+                if record["event"] == "cmaes_generation"
+            )
+            self.assertIn("cmaes_generation", progress_events)
+            self.assertEqual(generation["batched_user_count"], 2)
+            self.assertEqual(generation["batched_user_ids"], [1, 2])
+            self.assertEqual(generation["effective_lanes"], 64)
 
 
 if __name__ == "__main__":

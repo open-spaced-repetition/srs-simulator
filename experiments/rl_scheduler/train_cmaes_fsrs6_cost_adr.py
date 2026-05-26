@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -88,6 +88,24 @@ class CostADRTrainJobResult:
     artifact_paths: tuple[Path, ...]
     progress_path: Path | None
     error: str | None = None
+
+
+@dataclass(slots=True)
+class _PreparedCostADRJob:
+    job: CostADRTrainJob
+    progress: TrainingProgress
+    baseline_drs: tuple[float, ...]
+    optimizer_seed: int
+    optimizer: Any
+    baseline_metrics: list[CandidateMetrics] = field(default_factory=list)
+    baseline_points: list[ObjectivePoint] = field(default_factory=list)
+    baseline_hypervolume: float = 0.0
+    reference_point: ObjectivePoint | None = None
+    best_cost_weight_metrics: list[CandidateMetrics] | None = None
+    best_coefficients: torch.Tensor | None = None
+    best_hypervolume: float = float("-inf")
+    best_hypervolume_delta: float = float("-inf")
+    history: list[dict[str, float]] = field(default_factory=list)
 
 
 def parse_args() -> argparse.Namespace:
@@ -176,6 +194,9 @@ def run_training_jobs(
     benchmark_result: str | None = None,
     benchmark_partition: str | None = None,
 ) -> list[CostADRTrainJobResult]:
+    if not jobs:
+        return []
+
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(config_path))
     optimizer_settings = optimizer_settings_from_mapping(config.training_optimizer)
@@ -191,10 +212,19 @@ def run_training_jobs(
     device = torch.device(settings.torch_device)
     benchmark_root = resolve_benchmark_root(repo_root, srs_benchmark_root).resolve()
     overrides = parse_result_overrides(benchmark_result)
-    outcomes: list[CostADRTrainJobResult] = []
-    for job in jobs:
-        progress = _progress_for_job(job=job, config_path=config_path)
-        try:
+    progress_by_job = [
+        (job, _progress_for_job(job=job, config_path=config_path)) for job in jobs
+    ]
+    batched_user_ids = [job.user_id for job in jobs]
+    batched_fields = {
+        "batched_user_count": len(jobs),
+        "batched_user_ids": batched_user_ids,
+    }
+
+    states: list[_PreparedCostADRJob] = []
+    results_by_job: dict[CostADRTrainJob, CostADRTrainingResult] = {}
+    try:
+        for job, progress in progress_by_job:
             baseline_drs = _baseline_dr_values_for_user(
                 config=config,
                 repo_root=repo_root,
@@ -219,28 +249,53 @@ def run_training_jobs(
                 baseline_desired_retention_values=list(baseline_drs),
                 simulation=config.simulation.to_dict(),
                 seed=config.seed,
+                **batched_fields,
             )
-            progress.write("device_resolved", device=device, torch_device=str(device))
-            baseline_bundle = _build_bundle(
-                config=config,
-                settings=settings,
-                lane_user_ids=[job.user_id for _dr in baseline_drs],
-                benchmark_root=benchmark_root,
-                overrides=overrides,
-                benchmark_partition=benchmark_partition,
-                button_usage=button_usage,
+            progress.write(
+                "device_resolved",
                 device=device,
-                short_term_source=short_term_source,
-                learning_steps=learning_steps,
-                relearning_steps=relearning_steps,
+                torch_device=str(device),
+                **batched_fields,
             )
-            baseline_metrics = _evaluate_baseline_grid(
-                config=config,
-                settings=settings,
-                bundle=baseline_bundle,
-                baseline_drs=baseline_drs,
-                seed=config.seed,
+            states.append(
+                _PreparedCostADRJob(
+                    job=job,
+                    progress=progress,
+                    baseline_drs=baseline_drs,
+                    optimizer_seed=optimizer_seed,
+                    optimizer=_make_strategy(
+                        optimizer_settings=optimizer_settings,
+                        optimizer_seed=optimizer_seed,
+                    ),
+                )
             )
+
+        baseline_lane_user_ids = [
+            state.job.user_id for state in states for _dr in state.baseline_drs
+        ]
+        baseline_bundle = _build_bundle(
+            config=config,
+            settings=settings,
+            lane_user_ids=baseline_lane_user_ids,
+            benchmark_root=benchmark_root,
+            overrides=overrides,
+            benchmark_partition=benchmark_partition,
+            button_usage=button_usage,
+            device=device,
+            short_term_source=short_term_source,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+        )
+        baseline_metrics_by_job = _evaluate_baseline_grids_multiuser(
+            config=config,
+            settings=settings,
+            bundle=baseline_bundle,
+            jobs=[state.job for state in states],
+            baseline_drs_by_job={state.job: state.baseline_drs for state in states},
+            seed=config.seed,
+        )
+        for state in states:
+            baseline_metrics = baseline_metrics_by_job[state.job]
             baseline_points = [
                 point_from_metrics(metric) for metric in baseline_metrics
             ]
@@ -252,63 +307,101 @@ def run_training_jobs(
                 baseline_points,
                 reference=hv_reference,
             )
-            progress.write(
+            state.baseline_metrics = baseline_metrics
+            state.baseline_points = baseline_points
+            state.baseline_hypervolume = baseline_hv
+            state.reference_point = hv_reference
+            state.progress.write(
                 "baseline_grid_evaluated",
                 device=baseline_bundle.device,
-                effective_lanes=len(baseline_drs),
+                effective_lanes=len(baseline_lane_user_ids),
                 baseline_hypervolume=baseline_hv,
                 reference_point=asdict(hv_reference),
                 metrics=[
                     {"baseline_desired_retention": dr, **asdict(metric)}
-                    for dr, metric in zip(baseline_drs, baseline_metrics, strict=True)
+                    for dr, metric in zip(
+                        state.baseline_drs,
+                        baseline_metrics,
+                        strict=True,
+                    )
                 ],
+                **batched_fields,
             )
-            del baseline_bundle
-            _clear_cuda_cache(device)
+        del baseline_bundle
+        _clear_cuda_cache(device)
 
-            train_bundle = _build_bundle(
-                config=config,
-                settings=settings,
-                lane_user_ids=[
-                    job.user_id
-                    for _candidate in range(optimizer_settings.population_size)
-                    for _weight in cost_weights
-                ],
-                benchmark_root=benchmark_root,
-                overrides=overrides,
-                benchmark_partition=benchmark_partition,
-                button_usage=button_usage,
-                device=device,
-                short_term_source=short_term_source,
-                learning_steps=learning_steps,
-                relearning_steps=relearning_steps,
-            )
-            progress.write(
+        train_lane_user_ids = [
+            state.job.user_id
+            for state in states
+            for _candidate in range(optimizer_settings.population_size)
+            for _weight in cost_weights
+        ]
+        train_bundle = _build_bundle(
+            config=config,
+            settings=settings,
+            lane_user_ids=train_lane_user_ids,
+            benchmark_root=benchmark_root,
+            overrides=overrides,
+            benchmark_partition=benchmark_partition,
+            button_usage=button_usage,
+            device=device,
+            short_term_source=short_term_source,
+            learning_steps=learning_steps,
+            relearning_steps=relearning_steps,
+        )
+        effective_lanes = len(train_lane_user_ids)
+        for state in states:
+            state.progress.write(
                 "train_bundle_built",
                 device=train_bundle.device,
-                effective_lanes=optimizer_settings.population_size * len(cost_weights),
+                effective_lanes=effective_lanes,
+                population_size=optimizer_settings.population_size,
+                cost_weight_count=len(cost_weights),
+                **batched_fields,
             )
-            result = _run_cmaes(
-                config=config,
-                settings=settings,
-                optimizer_settings=optimizer_settings,
-                optimizer_seed=optimizer_seed,
-                bundle=train_bundle,
-                baseline_drs=baseline_drs,
-                baseline_metrics=baseline_metrics,
-                baseline_hv=baseline_hv,
-                reference=hv_reference,
-                cost_weights=cost_weights,
-                progress=progress,
-            )
-            progress.write(
+        results_by_job = _run_cmaes_multiuser(
+            config=config,
+            settings=settings,
+            optimizer_settings=optimizer_settings,
+            bundle=train_bundle,
+            prepared_jobs=states,
+            cost_weights=cost_weights,
+            effective_lanes=effective_lanes,
+            batched_user_ids=batched_user_ids,
+        )
+        for state in states:
+            result = results_by_job[state.job]
+            state.progress.write(
                 "cmaes_completed",
                 device=train_bundle.device,
                 best_hypervolume=result.best_hypervolume,
                 best_hypervolume_delta=result.best_hypervolume_delta,
                 generations=len(result.history),
                 passed=result.passed,
+                effective_lanes=effective_lanes,
+                **batched_fields,
             )
+    except Exception as exc:  # noqa: BLE001 - mark every job in this batch failed.
+        error = str(exc)
+        for _job, progress in progress_by_job:
+            progress.write("failed", error=error, **batched_fields)
+        return [
+            CostADRTrainJobResult(
+                job=job,
+                passed=False,
+                artifact_paths=(),
+                progress_path=progress.path,
+                error=error,
+            )
+            for job, progress in progress_by_job
+        ]
+
+    outcomes: list[CostADRTrainJobResult] = []
+    for state in states:
+        job = state.job
+        progress = state.progress
+        try:
+            result = results_by_job[job]
             policy_path, metrics_path, metadata_path = write_artifact(
                 output_dir=job.output_dir,
                 config=config,
@@ -317,7 +410,7 @@ def run_training_jobs(
                 user_id=job.user_id,
                 training_command_path=job.command_record_path,
                 optimizer_settings=optimizer_settings,
-                optimizer_seed=optimizer_seed,
+                optimizer_seed=state.optimizer_seed,
                 cost_weights=cost_weights,
                 result=result,
             )
@@ -331,6 +424,7 @@ def run_training_jobs(
                     metadata_path,
                     base=job.output_dir,
                 ),
+                **batched_fields,
             )
             outcomes.append(
                 CostADRTrainJobResult(
@@ -341,7 +435,7 @@ def run_training_jobs(
                 )
             )
         except Exception as exc:  # noqa: BLE001 - preserve batch outcomes.
-            progress.write("failed", error=str(exc))
+            progress.write("failed", error=str(exc), **batched_fields)
             outcomes.append(
                 CostADRTrainJobResult(
                     job=job,
@@ -383,18 +477,42 @@ def _baseline_dr_values_for_user(
     return values
 
 
-def _evaluate_baseline_grid(
+def _make_strategy(
+    *,
+    optimizer_settings: CMAESSettings,
+    optimizer_seed: int,
+) -> Any:
+    return cma.CMAEvolutionStrategy(
+        list(optimizer_settings.initial_mean),
+        optimizer_settings.sigma0,
+        {
+            "bounds": [
+                list(optimizer_settings.bounds[0]),
+                list(optimizer_settings.bounds[1]),
+            ],
+            "popsize": optimizer_settings.population_size,
+            "seed": optimizer_seed,
+            "verb_disp": 0,
+            "verb_log": 0,
+            "verbose": -9,
+        },
+    )
+
+
+def _evaluate_baseline_grids_multiuser(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
     bundle: Any,
-    baseline_drs: Sequence[float],
+    jobs: Sequence[CostADRTrainJob],
+    baseline_drs_by_job: Mapping[CostADRTrainJob, tuple[float, ...]],
     seed: int,
-) -> list[CandidateMetrics]:
+) -> dict[CostADRTrainJob, list[CandidateMetrics]]:
+    flat_drs = [dr for job in jobs for dr in baseline_drs_by_job[job]]
     sched_ops = FSRS6BatchSchedulerOps(
         weights=bundle.scheduler_weights,
         desired_retention=torch.tensor(
-            list(baseline_drs),
+            flat_drs,
             device=bundle.device,
             dtype=torch.float32,
         ),
@@ -422,130 +540,166 @@ def _evaluate_baseline_grid(
         short_term_threshold=settings.short_term_threshold,
         short_term_loops_limit=settings.short_term_loops_limit,
     )
-    return [_metrics_from_stats(item) for item in stats]
+    if len(stats) != len(flat_drs):
+        raise RuntimeError(
+            "simulate_multiuser returned an unexpected baseline lane count: "
+            f"{len(stats)} != {len(flat_drs)}."
+        )
+    metrics = [_metrics_from_stats(item) for item in stats]
+    by_job: dict[CostADRTrainJob, list[CandidateMetrics]] = {}
+    offset = 0
+    for job in jobs:
+        baseline_drs = baseline_drs_by_job[job]
+        next_offset = offset + len(baseline_drs)
+        by_job[job] = metrics[offset:next_offset]
+        offset = next_offset
+    return by_job
 
 
-def _run_cmaes(
+def _run_cmaes_multiuser(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
     optimizer_settings: CMAESSettings,
-    optimizer_seed: int,
     bundle: Any,
-    baseline_drs: tuple[float, ...],
-    baseline_metrics: list[CandidateMetrics],
-    baseline_hv: float,
-    reference: ObjectivePoint,
+    prepared_jobs: Sequence[_PreparedCostADRJob],
     cost_weights: tuple[float, ...],
-    progress: TrainingProgress,
-) -> CostADRTrainingResult:
-    es = cma.CMAEvolutionStrategy(
-        list(optimizer_settings.initial_mean),
-        optimizer_settings.sigma0,
-        {
-            "bounds": [
-                list(optimizer_settings.bounds[0]),
-                list(optimizer_settings.bounds[1]),
-            ],
-            "popsize": optimizer_settings.population_size,
-            "seed": optimizer_seed,
-            "verb_disp": 0,
-            "verb_log": 0,
-            "verbose": -9,
-        },
-    )
-    baseline_points = [point_from_metrics(metric) for metric in baseline_metrics]
-    best_coefficients: torch.Tensor | None = None
-    best_metrics: list[CandidateMetrics] | None = None
-    best_hv = float("-inf")
-    best_hv_delta = float("-inf")
-    history: list[dict[str, float]] = []
+    effective_lanes: int,
+    batched_user_ids: Sequence[int],
+) -> dict[CostADRTrainJob, CostADRTrainingResult]:
+    jobs = [state.job for state in prepared_jobs]
+    batched_fields = {
+        "batched_user_count": len(prepared_jobs),
+        "batched_user_ids": list(batched_user_ids),
+    }
     for generation in range(optimizer_settings.generations):
-        solutions = [list(map(float, item)) for item in es.ask()]
-        if len(solutions) != optimizer_settings.population_size:
-            raise RuntimeError(
-                "CMA-ES returned an unexpected population size: "
-                f"{len(solutions)} != {optimizer_settings.population_size}."
-            )
-        coefficients = torch.tensor(
-            solutions,
+        solutions_by_job: list[list[list[float]]] = []
+        for state in prepared_jobs:
+            solutions = [list(map(float, item)) for item in state.optimizer.ask()]
+            if len(solutions) != optimizer_settings.population_size:
+                raise RuntimeError(
+                    "CMA-ES returned an unexpected population size: "
+                    f"{len(solutions)} != {optimizer_settings.population_size}."
+                )
+            solutions_by_job.append(solutions)
+
+        coefficients_by_job = torch.tensor(
+            solutions_by_job,
             device=bundle.device,
             dtype=torch.float32,
         )
-        metrics_by_candidate = _evaluate_cost_adr_candidates(
+        metrics_by_job = _evaluate_cost_adr_candidates_multiuser(
             config=config,
             settings=settings,
             bundle=bundle,
-            coefficients=coefficients,
+            jobs=jobs,
+            coefficients_by_job=coefficients_by_job,
             cost_weights=cost_weights,
             seed=config.seed,
         )
-        scores = [
-            objective_hypervolume_2d(
-                [
-                    *baseline_points,
-                    *[point_from_metrics(metric) for metric in candidate_metrics],
-                ],
-                reference=reference,
+        for job_index, state in enumerate(prepared_jobs):
+            reference = state.reference_point
+            if reference is None:
+                raise RuntimeError("Cost ADR baseline reference was not initialized.")
+            metrics_by_candidate = metrics_by_job[state.job]
+            scores = [
+                objective_hypervolume_2d(
+                    [
+                        *state.baseline_points,
+                        *[point_from_metrics(metric) for metric in candidate_metrics],
+                    ],
+                    reference=reference,
+                )
+                - state.baseline_hypervolume
+                for candidate_metrics in metrics_by_candidate
+            ]
+            state.optimizer.tell(
+                solutions_by_job[job_index],
+                [-score for score in scores],
             )
-            - baseline_hv
-            for candidate_metrics in metrics_by_candidate
-        ]
-        es.tell(solutions, [-score for score in scores])
-        generation_best_idx = max(range(len(scores)), key=scores.__getitem__)
-        generation_best_score = float(scores[generation_best_idx])
-        generation_best_hv = baseline_hv + generation_best_score
-        if generation_best_score > best_hv_delta:
-            best_hv_delta = generation_best_score
-            best_hv = generation_best_hv
-            best_coefficients = coefficients[generation_best_idx].detach().clone()
-            best_metrics = metrics_by_candidate[generation_best_idx]
-        history_entry = {
-            "generation": float(generation),
-            "sigma": float(es.sigma),
-            "best_hypervolume_delta": float(best_hv_delta),
-            "generation_best_hypervolume_delta": generation_best_score,
-            "mean_hypervolume_delta": float(sum(scores) / max(len(scores), 1)),
-            "generation_best_hypervolume": generation_best_hv,
-            "baseline_hypervolume": baseline_hv,
-        }
-        history.append(history_entry)
-        progress.write(
-            "cmaes_generation",
-            device=bundle.device,
-            effective_lanes=optimizer_settings.population_size * len(cost_weights),
-            **history_entry,
-        )
-    if best_coefficients is None or best_metrics is None:
-        raise RuntimeError("CMA-ES did not evaluate any candidates.")
+            generation_best_idx = max(range(len(scores)), key=scores.__getitem__)
+            generation_best_score = float(scores[generation_best_idx])
+            generation_best_hv = state.baseline_hypervolume + generation_best_score
+            if generation_best_score > state.best_hypervolume_delta:
+                state.best_hypervolume_delta = generation_best_score
+                state.best_hypervolume = generation_best_hv
+                state.best_coefficients = (
+                    coefficients_by_job[job_index, generation_best_idx].detach().clone()
+                )
+                state.best_cost_weight_metrics = metrics_by_candidate[
+                    generation_best_idx
+                ]
+            history_entry = {
+                "generation": float(generation),
+                "sigma": float(state.optimizer.sigma),
+                "best_hypervolume_delta": float(state.best_hypervolume_delta),
+                "generation_best_hypervolume_delta": generation_best_score,
+                "mean_hypervolume_delta": float(sum(scores) / max(len(scores), 1)),
+                "generation_best_hypervolume": generation_best_hv,
+                "baseline_hypervolume": state.baseline_hypervolume,
+            }
+            state.history.append(history_entry)
+            state.progress.write(
+                "cmaes_generation",
+                device=bundle.device,
+                effective_lanes=effective_lanes,
+                population_size=optimizer_settings.population_size,
+                cost_weight_count=len(cost_weights),
+                **batched_fields,
+                **history_entry,
+            )
+    return {state.job: _training_result_from_state(state) for state in prepared_jobs}
+
+
+def _training_result_from_state(
+    state: _PreparedCostADRJob,
+) -> CostADRTrainingResult:
+    if (
+        state.reference_point is None
+        or state.best_coefficients is None
+        or state.best_cost_weight_metrics is None
+    ):
+        raise RuntimeError("CMA-ES did not evaluate any cost ADR candidates.")
     return CostADRTrainingResult(
-        baseline_desired_retention_values=baseline_drs,
-        baseline_metrics=baseline_metrics,
-        baseline_hypervolume=baseline_hv,
-        reference_point=reference,
-        best_cost_weight_metrics=best_metrics,
-        best_coefficients=best_coefficients.detach().cpu(),
-        best_hypervolume=best_hv,
-        best_hypervolume_delta=best_hv_delta,
-        history=history,
-        passed=best_hv_delta > 0.0,
+        baseline_desired_retention_values=state.baseline_drs,
+        baseline_metrics=state.baseline_metrics,
+        baseline_hypervolume=state.baseline_hypervolume,
+        reference_point=state.reference_point,
+        best_cost_weight_metrics=state.best_cost_weight_metrics,
+        best_coefficients=state.best_coefficients.detach().cpu(),
+        best_hypervolume=state.best_hypervolume,
+        best_hypervolume_delta=state.best_hypervolume_delta,
+        history=state.history,
+        passed=state.best_hypervolume_delta > 0.0,
     )
 
 
-def _evaluate_cost_adr_candidates(
+def _evaluate_cost_adr_candidates_multiuser(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
     bundle: Any,
-    coefficients: torch.Tensor,
+    jobs: Sequence[CostADRTrainJob],
+    coefficients_by_job: torch.Tensor,
     cost_weights: tuple[float, ...],
     seed: int,
-) -> list[list[CandidateMetrics]]:
-    population_size = int(coefficients.shape[0])
+) -> dict[CostADRTrainJob, list[list[CandidateMetrics]]]:
+    job_count = int(coefficients_by_job.shape[0])
+    population_size = int(coefficients_by_job.shape[1])
+    if job_count != len(jobs):
+        raise ValueError("coefficients_by_job first dimension must match jobs.")
     flat_coefficients = (
-        coefficients[:, None, :]
-        .expand(population_size, len(cost_weights), coefficients.shape[1])
-        .reshape(population_size * len(cost_weights), coefficients.shape[1])
+        coefficients_by_job[:, :, None, :]
+        .expand(
+            job_count,
+            population_size,
+            len(cost_weights),
+            coefficients_by_job.shape[2],
+        )
+        .reshape(
+            job_count * population_size * len(cost_weights),
+            coefficients_by_job.shape[2],
+        )
     )
     policy = _policy_template(settings=settings)
     sched_ops = FSRS6CostConditionedADRBatchSchedulerOps(
@@ -554,6 +708,7 @@ def _evaluate_cost_adr_candidates(
         goal_cost_weight=torch.tensor(
             [
                 cost_weight
+                for _job in jobs
                 for _candidate in range(population_size)
                 for cost_weight in cost_weights
             ],
@@ -585,11 +740,23 @@ def _evaluate_cost_adr_candidates(
         short_term_threshold=settings.short_term_threshold,
         short_term_loops_limit=settings.short_term_loops_limit,
     )
+    expected_lanes = len(jobs) * population_size * len(cost_weights)
+    if len(stats) != expected_lanes:
+        raise RuntimeError(
+            "simulate_multiuser returned an unexpected cost ADR lane count: "
+            f"{len(stats)} != {expected_lanes}."
+        )
     metrics = [_metrics_from_stats(item) for item in stats]
-    return [
-        metrics[index * len(cost_weights) : (index + 1) * len(cost_weights)]
-        for index in range(population_size)
-    ]
+    by_job: dict[CostADRTrainJob, list[list[CandidateMetrics]]] = {}
+    offset = 0
+    for job in jobs:
+        candidate_metrics: list[list[CandidateMetrics]] = []
+        for _candidate in range(population_size):
+            next_offset = offset + len(cost_weights)
+            candidate_metrics.append(metrics[offset:next_offset])
+            offset = next_offset
+        by_job[job] = candidate_metrics
+    return by_job
 
 
 def _policy_template(
