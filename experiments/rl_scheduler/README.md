@@ -25,7 +25,9 @@ FSRS-6 state update to obtain `S` and `D`.
   policies over `S,D`.
 - `train_cmaes_fsrs6_cost_adr.py`: CMA-ES trainer for one 24-parameter
   `fsrs6_cost_adr` policy per user. The policy emits intervals from
-  scheduler-side `S,D` and a requested scalar cost weight.
+  scheduler-side `S,D` and a requested scalar cost weight. It can optionally
+  initialize each user's CMA-ES mean from an existing per-user Cost-ADR policy,
+  such as a single-card continuous-distill fit.
 - `train_cmaes_fsrs6_ap.py`: CMA-ES FSRS-6 trainer that searches adaptive
   scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
 - `train_fsrs6_ap_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
@@ -251,6 +253,12 @@ Representative profiles:
   between coverage-aware and quality-v2 policies by each user's training
   `best_hypervolume_delta`, then runs the standard FSRS6/LSTM sweep and Pareto
   analysis.
+- `configs/fsrs6_cost_adr_distill24_densew_users_1_8_pop16_gen20_v1.toml`: the
+  current Cost-ADR improvement profile. It initializes each user's 24-parameter
+  interval policy from the single-card continuous-distill Cost-ADR artifacts,
+  evaluates that mean in generation 0, expands CMA-ES bounds around the imported
+  coefficients, and uses the dense cost-weight grid
+  `0,0.25,0.5,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
 - `configs/fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml`: the ADR
   portfolio scheduler trained with the same pop16/off16/gen20 budget while the
   ADR scheduler state uses default FSRS-6 weights instead of per-user fitted
@@ -373,6 +381,14 @@ Matched-budget cost-conditioned ADR run:
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --config experiments/rl_scheduler/configs/fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1.toml \
   --run-id fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1_markov_off
+```
+
+Distill-initialized dense-weight Cost-ADR run:
+
+```bash
+uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_distill24_densew_users_1_8_pop16_gen20_v1.toml \
+  --run-id fsrs6_cost_adr_distill24_densew_users_1_8_pop16_gen20_v1_markov_off
 ```
 
 Coverage-aware Cost-ADR diagnostic for users 1-2:

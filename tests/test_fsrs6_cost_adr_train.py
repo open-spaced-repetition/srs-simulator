@@ -225,6 +225,7 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
     def test_cmaes_trainer_batches_users_and_writes_artifacts(self) -> None:
         bundle_lane_user_ids = []
         simulate_calls = []
+        training_coefficients = []
 
         def fake_build_bundle(**kwargs):
             lane_user_ids = kwargs.get("lane_user_ids")
@@ -252,6 +253,8 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
             sched_ops = kwargs["sched_ops"]
             lane_count = int(sched_ops._weights.shape[0])
             is_cost_adr = hasattr(sched_ops, "_goal_cost_weight")
+            if is_cost_adr:
+                training_coefficients.append(sched_ops._coefficients.detach().cpu())
             simulate_calls.append(
                 {
                     "is_cost_adr": is_cost_adr,
@@ -281,8 +284,19 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
             root = Path(tmp)
             config_path = root / "cost_adr.toml"
             output_dirs = [root / "user_1", root / "user_2"]
+            initial_policy_root = root / "initial_policies"
+            for user_id, coefficient in ((1, 20.0), (2, -20.0)):
+                FSRS6CostConditionedADRPolicy(
+                    coefficients=(coefficient,) + (0.0,) * 23,
+                    action_head=ACTION_HEAD_INTERVAL,
+                    cost_weight_min=0.0,
+                    cost_weight_max=1024.0,
+                    retention_min=0.50,
+                    retention_max=0.98,
+                    title=f"initial u{user_id}",
+                ).write_json(initial_policy_root / f"user_{user_id}" / "policy.json")
             config_path.write_text(
-                """
+                f"""
 schema_version = 1
 name = "cost-adr-smoke"
 family = "rl_scheduler"
@@ -332,6 +346,8 @@ baseline_desired_retention = 0.90
 torch_device = "cpu"
 short_term_threshold = 0.5
 short_term_loops_limit = 1
+initial_policy_root = "{initial_policy_root.as_posix()}"
+initial_policy_bounds_padding = 2.0
 
 [training.optimizer]
 name = "cma_es"
@@ -399,6 +415,10 @@ seed = 7
         )
         self.assertEqual(bundle_lane_user_ids[0], [1, 2])
         self.assertEqual(bundle_lane_user_ids[1], [1] * 32 + [2] * 32)
+        self.assertEqual(len(training_coefficients), 1)
+        coefficients = training_coefficients[0]
+        self.assertTrue(torch.all(coefficients[0:16, 0] == 20.0))
+        self.assertTrue(torch.all(coefficients[32:48, 0] == -20.0))
         self.assertEqual(
             simulate_calls,
             [
@@ -417,8 +437,13 @@ seed = 7
             self.assertEqual(metrics["training_objective"], "hypervolume_delta")
             self.assertFalse(metrics["coverage_objective"]["enabled"])
             self.assertIn("best_coverage", metrics)
+            self.assertIsNotNone(metrics["initial_policy"])
             self.assertEqual(len(metrics["selected_cost_weight_rollout_points"]), 16)
             self.assertEqual(metrics["optimizer"]["population_size"], 2)
+            if metrics["initial_policy"]["coefficient_max"] > 0.0:
+                self.assertGreaterEqual(metrics["optimizer"]["bounds"][1][0], 22.0)
+            else:
+                self.assertLessEqual(metrics["optimizer"]["bounds"][0][0], -22.0)
 
         for progress_records in progress_records_by_user:
             progress_events = [record["event"] for record in progress_records]

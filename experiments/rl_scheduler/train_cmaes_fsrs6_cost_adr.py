@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -151,6 +152,127 @@ class CostADRCandidateScore:
 
 
 @dataclass(frozen=True, slots=True)
+class InitialPolicySettings:
+    policy: Path | None = None
+    policy_root: Path | None = None
+    train_run_root: Path | None = None
+    policy_template: str | None = None
+    required: bool = False
+    expand_bounds: bool = True
+    bounds_padding: float = 4.0
+    evaluate_in_generation_zero: bool = True
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> InitialPolicySettings:
+        defaults = cls()
+        return cls(
+            policy=_optional_path_setting(
+                raw.get("initial_policy"),
+                "training.policy_search.initial_policy",
+            ),
+            policy_root=_optional_path_setting(
+                raw.get("initial_policy_root"),
+                "training.policy_search.initial_policy_root",
+            ),
+            train_run_root=_optional_path_setting(
+                raw.get("initial_policy_train_run_root"),
+                "training.policy_search.initial_policy_train_run_root",
+            ),
+            policy_template=_optional_template_setting(
+                raw.get("initial_policy_template"),
+                "training.policy_search.initial_policy_template",
+            ),
+            required=_bool_setting(
+                raw.get("initial_policy_required", defaults.required),
+                "training.policy_search.initial_policy_required",
+            ),
+            expand_bounds=_bool_setting(
+                raw.get("initial_policy_expand_bounds", defaults.expand_bounds),
+                "training.policy_search.initial_policy_expand_bounds",
+            ),
+            bounds_padding=_nonnegative_float_setting(
+                raw.get("initial_policy_bounds_padding", defaults.bounds_padding),
+                "training.policy_search.initial_policy_bounds_padding",
+            ),
+            evaluate_in_generation_zero=_bool_setting(
+                raw.get(
+                    "initial_policy_evaluate_in_generation_zero",
+                    defaults.evaluate_in_generation_zero,
+                ),
+                "training.policy_search.initial_policy_evaluate_in_generation_zero",
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        configured_sources = [
+            self.policy is not None,
+            self.policy_root is not None,
+            self.train_run_root is not None,
+            self.policy_template is not None,
+        ]
+        if sum(1 for configured in configured_sources if configured) > 1:
+            raise ValueError(
+                "Only one Cost-ADR initial policy source may be configured."
+            )
+
+    @property
+    def configured(self) -> bool:
+        return (
+            self.policy is not None
+            or self.policy_root is not None
+            or self.train_run_root is not None
+            or self.policy_template is not None
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "policy": str(self.policy) if self.policy is not None else None,
+            "policy_root": str(self.policy_root)
+            if self.policy_root is not None
+            else None,
+            "train_run_root": str(self.train_run_root)
+            if self.train_run_root is not None
+            else None,
+            "policy_template": self.policy_template,
+            "required": self.required,
+            "expand_bounds": self.expand_bounds,
+            "bounds_padding": self.bounds_padding,
+            "evaluate_in_generation_zero": self.evaluate_in_generation_zero,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InitialPolicyInfo:
+    path: Path
+    coefficients: tuple[float, ...]
+    title: str
+    cost_weight_min: float
+    cost_weight_max: float
+    retention_min: float
+    retention_max: float
+    max_interval_days: float | None
+
+    def to_dict(self, *, base: Path | None = None) -> dict[str, Any]:
+        path = (
+            _relative_path_string(self.path, base=base)
+            if base is not None
+            else self.path.as_posix()
+        )
+        return {
+            "path": path,
+            "title": self.title,
+            "parameter_count": len(self.coefficients),
+            "coefficient_min": min(self.coefficients),
+            "coefficient_max": max(self.coefficients),
+            "cost_weight_min": self.cost_weight_min,
+            "cost_weight_max": self.cost_weight_max,
+            "retention_min": self.retention_min,
+            "retention_max": self.retention_max,
+            "max_interval_days": self.max_interval_days,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _RangeCoverage:
     total_count: int
     covered_count: int
@@ -197,7 +319,10 @@ class _PreparedCostADRJob:
     progress: TrainingProgress
     baseline_drs: tuple[float, ...]
     optimizer_seed: int
+    optimizer_settings: CMAESSettings
     optimizer: Any
+    initial_policy: InitialPolicyInfo | None = None
+    evaluate_initial_policy_in_generation_zero: bool = False
     baseline_metrics: list[CandidateMetrics] = field(default_factory=list)
     baseline_points: list[ObjectivePoint] = field(default_factory=list)
     baseline_hypervolume: float = 0.0
@@ -329,6 +454,9 @@ def run_training_jobs(
     coverage_settings = CoverageObjectiveSettings.from_mapping(
         raw_training_policy_search
     )
+    initial_policy_settings = InitialPolicySettings.from_mapping(
+        raw_training_policy_search
+    )
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
         learning_steps=raw_training_policy_search.get("learning_steps"),
@@ -365,16 +493,32 @@ def run_training_jobs(
                 optimizer_settings=optimizer_settings,
                 user_id=job.user_id,
             )
+            initial_policy = _load_initial_policy_for_user(
+                settings=initial_policy_settings,
+                user_id=job.user_id,
+                repo_root=repo_root,
+                cost_weights=cost_weights,
+                policy_search_settings=settings,
+            )
+            job_optimizer_settings = _optimizer_settings_for_initial_policy(
+                optimizer_settings=optimizer_settings,
+                initial_policy=initial_policy,
+                initial_policy_settings=initial_policy_settings,
+            )
             progress.write(
                 "config_loaded",
                 settings=asdict(settings),
-                optimizer=optimizer_settings.to_dict(),
+                optimizer=job_optimizer_settings.to_dict(),
                 optimizer_seed=optimizer_seed,
                 feature_version=FEATURE_VERSION_INTERVAL_MONO,
                 action_head=ACTION_HEAD_INTERVAL,
                 parameter_count=PARAMETER_COUNT,
                 cost_weights=list(cost_weights),
                 coverage_objective=coverage_settings.to_dict(),
+                initial_policy_settings=initial_policy_settings.to_dict(),
+                initial_policy=initial_policy.to_dict(base=job.output_dir)
+                if initial_policy is not None
+                else None,
                 baseline_desired_retention_values=list(baseline_drs),
                 simulation=config.simulation.to_dict(),
                 seed=config.seed,
@@ -392,9 +536,15 @@ def run_training_jobs(
                     progress=progress,
                     baseline_drs=baseline_drs,
                     optimizer_seed=optimizer_seed,
+                    optimizer_settings=job_optimizer_settings,
                     optimizer=_make_strategy(
-                        optimizer_settings=optimizer_settings,
+                        optimizer_settings=job_optimizer_settings,
                         optimizer_seed=optimizer_seed,
+                    ),
+                    initial_policy=initial_policy,
+                    evaluate_initial_policy_in_generation_zero=(
+                        initial_policy is not None
+                        and initial_policy_settings.evaluate_in_generation_zero
                     ),
                 )
             )
@@ -541,8 +691,10 @@ def run_training_jobs(
                 settings=settings,
                 user_id=job.user_id,
                 training_command_path=job.command_record_path,
-                optimizer_settings=optimizer_settings,
+                optimizer_settings=state.optimizer_settings,
                 optimizer_seed=state.optimizer_seed,
+                initial_policy_settings=initial_policy_settings,
+                initial_policy=state.initial_policy,
                 coverage_settings=coverage_settings,
                 cost_weights=cost_weights,
                 result=result,
@@ -608,6 +760,162 @@ def _baseline_dr_values_for_user(
                 "training.policy_search retention bounds."
             )
     return values
+
+
+def _load_initial_policy_for_user(
+    *,
+    settings: InitialPolicySettings,
+    user_id: int,
+    repo_root: Path,
+    cost_weights: Sequence[float],
+    policy_search_settings: PolicySearchSettings,
+) -> InitialPolicyInfo | None:
+    policy_path = _resolve_initial_policy_path(
+        settings=settings,
+        user_id=user_id,
+        repo_root=repo_root,
+    )
+    if policy_path is None:
+        return None
+    if not policy_path.exists():
+        raise FileNotFoundError(f"Cost-ADR initial policy not found: {policy_path}")
+    policy = FSRS6CostConditionedADRPolicy.from_json(policy_path)
+    if policy.action_head != ACTION_HEAD_INTERVAL:
+        raise ValueError("Cost-ADR initial policy must use action_head='interval'.")
+    if policy.feature_version != FEATURE_VERSION_INTERVAL_MONO:
+        raise ValueError(
+            "Cost-ADR initial policy feature_version must be "
+            f"{FEATURE_VERSION_INTERVAL_MONO!r}."
+        )
+    if policy.parameter_count != PARAMETER_COUNT:
+        raise ValueError(
+            "Cost-ADR initial policy coefficient count must be "
+            f"{PARAMETER_COUNT}, got {policy.parameter_count}."
+        )
+    for index, coefficient in enumerate(policy.coefficients):
+        if not math.isfinite(coefficient):
+            raise ValueError(
+                "Cost-ADR initial policy coefficients must be finite; "
+                f"coefficient {index} is {coefficient!r}."
+            )
+    expected_cost_min = min(cost_weights)
+    expected_cost_max = max(cost_weights)
+    if abs(policy.cost_weight_min - expected_cost_min) > 1e-9:
+        raise ValueError(
+            "Cost-ADR initial policy cost_weight_min must match the training "
+            f"cost weight grid minimum ({expected_cost_min})."
+        )
+    if abs(policy.cost_weight_max - expected_cost_max) > 1e-9:
+        raise ValueError(
+            "Cost-ADR initial policy cost_weight_max must match the training "
+            f"cost weight grid maximum ({expected_cost_max})."
+        )
+    if abs(policy.retention_min - policy_search_settings.retention_min) > 1e-9:
+        raise ValueError(
+            "Cost-ADR initial policy retention_min must match "
+            "training.policy_search.retention_min."
+        )
+    if abs(policy.retention_max - policy_search_settings.retention_max) > 1e-9:
+        raise ValueError(
+            "Cost-ADR initial policy retention_max must match "
+            "training.policy_search.retention_max."
+        )
+    return InitialPolicyInfo(
+        path=policy_path,
+        coefficients=policy.coefficients,
+        title=policy.title,
+        cost_weight_min=policy.cost_weight_min,
+        cost_weight_max=policy.cost_weight_max,
+        retention_min=policy.retention_min,
+        retention_max=policy.retention_max,
+        max_interval_days=policy.max_interval_days,
+    )
+
+
+def _resolve_initial_policy_path(
+    *,
+    settings: InitialPolicySettings,
+    user_id: int,
+    repo_root: Path,
+) -> Path | None:
+    if settings.policy_template is not None:
+        if "{user_id}" not in settings.policy_template:
+            raise ValueError(
+                "training.policy_search.initial_policy_template must contain {user_id}."
+            )
+        return _resolve_repo_path(
+            Path(settings.policy_template.format(user_id=int(user_id))),
+            repo_root=repo_root,
+        )
+    if settings.policy_root is not None:
+        return _resolve_repo_path(
+            settings.policy_root / f"user_{int(user_id)}" / "policy.json",
+            repo_root=repo_root,
+        )
+    if settings.train_run_root is not None:
+        return _resolve_repo_path(
+            settings.train_run_root
+            / "train-overfit"
+            / "train_outputs"
+            / f"user_{int(user_id)}"
+            / "policy.json",
+            repo_root=repo_root,
+        )
+    if settings.policy is not None:
+        return _resolve_repo_path(settings.policy, repo_root=repo_root)
+    if settings.required:
+        raise ValueError(
+            "training.policy_search.initial_policy_required=true requires an "
+            "initial policy source."
+        )
+    return None
+
+
+def _optimizer_settings_for_initial_policy(
+    *,
+    optimizer_settings: CMAESSettings,
+    initial_policy: InitialPolicyInfo | None,
+    initial_policy_settings: InitialPolicySettings,
+) -> CMAESSettings:
+    if initial_policy is None:
+        return optimizer_settings
+    initial_mean = tuple(float(value) for value in initial_policy.coefficients)
+    lower = list(optimizer_settings.bounds[0])
+    upper = list(optimizer_settings.bounds[1])
+    out_of_bounds = [
+        index
+        for index, value in enumerate(initial_mean)
+        if value < lower[index] or value > upper[index]
+    ]
+    if out_of_bounds and not initial_policy_settings.expand_bounds:
+        first = out_of_bounds[0]
+        raise ValueError(
+            "Cost-ADR initial policy coefficients are outside "
+            "training.optimizer.bounds and "
+            "initial_policy_expand_bounds=false; first out-of-bounds "
+            f"coefficient {first}={initial_mean[first]!r}."
+        )
+    if initial_policy_settings.expand_bounds:
+        padding = initial_policy_settings.bounds_padding
+        for index, value in enumerate(initial_mean):
+            lower[index] = min(lower[index], value - padding)
+            upper[index] = max(upper[index], value + padding)
+    return CMAESSettings(
+        name=optimizer_settings.name,
+        population_size=optimizer_settings.population_size,
+        generations=optimizer_settings.generations,
+        sigma0=optimizer_settings.sigma0,
+        initial_mean=initial_mean,
+        bounds=(tuple(lower), tuple(upper)),
+        seed=optimizer_settings.seed,
+    )
+
+
+def _resolve_repo_path(path: Path, *, repo_root: Path) -> Path:
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return expanded.resolve()
+    return (repo_root / expanded).resolve()
 
 
 def _make_strategy(
@@ -715,6 +1023,8 @@ def _run_cmaes_multiuser(
                     "CMA-ES returned an unexpected population size: "
                     f"{len(solutions)} != {optimizer_settings.population_size}."
                 )
+            if generation == 0 and state.evaluate_initial_policy_in_generation_zero:
+                solutions[0] = list(state.optimizer_settings.initial_mean)
             solutions_by_job.append(solutions)
 
         coefficients_by_job = torch.tensor(
@@ -806,6 +1116,9 @@ def _run_cmaes_multiuser(
                     generation_best.coverage_diagnostics.target_span_coverage_percent
                 ),
                 "baseline_hypervolume": state.baseline_hypervolume,
+                "initial_policy_evaluated_in_generation_zero": float(
+                    generation == 0 and state.evaluate_initial_policy_in_generation_zero
+                ),
             }
             state.history.append(history_entry)
             state.progress.write(
@@ -1156,6 +1469,8 @@ def write_artifact(
     training_command_path: Path | None,
     optimizer_settings: CMAESSettings,
     optimizer_seed: int,
+    initial_policy_settings: InitialPolicySettings,
+    initial_policy: InitialPolicyInfo | None,
     coverage_settings: CoverageObjectiveSettings,
     cost_weights: tuple[float, ...],
     result: CostADRTrainingResult,
@@ -1179,6 +1494,9 @@ def write_artifact(
         **optimizer_settings.to_dict(),
         "seed_resolved": optimizer_seed,
     }
+    initial_policy_record = (
+        initial_policy.to_dict(base=output_dir) if initial_policy is not None else None
+    )
     metrics_path = output_dir / "metrics.json"
     if coverage_settings.enabled and (
         coverage_settings.filter_baseline_dominated
@@ -1228,6 +1546,8 @@ def write_artifact(
             "action_head": ACTION_HEAD_INTERVAL,
             "parameter_count": PARAMETER_COUNT,
             "optimizer": optimizer,
+            "initial_policy_settings": initial_policy_settings.to_dict(),
+            "initial_policy": initial_policy_record,
             "settings": asdict(settings),
             "history": result.history,
         },
@@ -1272,6 +1592,8 @@ def write_artifact(
             "metrics_path": "metrics.json",
             "optimizer": "cma_es",
             "optimizer_settings": optimizer,
+            "initial_policy_settings": initial_policy_settings.to_dict(),
+            "initial_policy": initial_policy_record,
             "cost_weights": list(cost_weights),
             "coverage_objective": coverage_settings.to_dict(),
             "best_hypervolume_delta": result.best_hypervolume_delta,
@@ -1332,6 +1654,22 @@ def _fraction_setting(value: Any, field_name: str) -> float:
     if result > 1.0:
         raise ValueError(f"{field_name} must be <= 1.")
     return result
+
+
+def _optional_path_setting(value: Any, field_name: str) -> Path | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string when provided.")
+    return Path(value)
+
+
+def _optional_template_setting(value: Any, field_name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string when provided.")
+    return value
 
 
 if __name__ == "__main__":
