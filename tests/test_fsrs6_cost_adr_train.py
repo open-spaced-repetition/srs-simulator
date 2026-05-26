@@ -92,6 +92,85 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
         self.assertLess(score.objective_score, score.hypervolume_delta)
         self.assertEqual(score.coverage_diagnostics.covered_budget_count, 0)
 
+    def test_quality_aware_coverage_ignores_baseline_dominated_candidates(
+        self,
+    ) -> None:
+        baseline = [
+            CandidateMetrics(
+                memorized_average=100.0,
+                time_average=10.0,
+                memorized_per_minute=10.0,
+                total_reviews=1,
+                total_lapses=0,
+                total_cost=600.0,
+            ),
+            CandidateMetrics(
+                memorized_average=200.0,
+                time_average=20.0,
+                memorized_per_minute=10.0,
+                total_reviews=2,
+                total_lapses=0,
+                total_cost=1200.0,
+            ),
+        ]
+        candidate = [
+            CandidateMetrics(
+                memorized_average=90.0,
+                time_average=10.0,
+                memorized_per_minute=9.0,
+                total_reviews=1,
+                total_lapses=0,
+                total_cost=600.0,
+            ),
+            CandidateMetrics(
+                memorized_average=190.0,
+                time_average=20.0,
+                memorized_per_minute=9.5,
+                total_reviews=2,
+                total_lapses=0,
+                total_cost=1200.0,
+            ),
+        ]
+        baseline_objective_points = [point_from_metrics(metric) for metric in baseline]
+        reference = reference_point(baseline_objective_points)
+
+        unfiltered = _score_candidate(
+            baseline_metrics=baseline,
+            baseline_points=baseline_objective_points,
+            baseline_hypervolume=1000.0,
+            reference=reference,
+            candidate_metrics=candidate,
+            coverage_settings=CoverageObjectiveSettings(
+                enabled=True,
+                min_budget_span_coverage=0.9,
+                min_target_span_coverage=0.9,
+                penalty_weight=0.1,
+            ),
+        )
+        filtered = _score_candidate(
+            baseline_metrics=baseline,
+            baseline_points=baseline_objective_points,
+            baseline_hypervolume=1000.0,
+            reference=reference,
+            candidate_metrics=candidate,
+            coverage_settings=CoverageObjectiveSettings(
+                enabled=True,
+                min_budget_span_coverage=0.9,
+                min_target_span_coverage=0.9,
+                penalty_weight=0.1,
+                filter_baseline_dominated=True,
+            ),
+        )
+
+        self.assertEqual(unfiltered.coverage_penalty, 0.0)
+        self.assertGreater(filtered.coverage_penalty, 0.0)
+        self.assertEqual(filtered.coverage_diagnostics.candidate_count, 2)
+        self.assertEqual(
+            filtered.coverage_diagnostics.baseline_dominated_candidate_count,
+            2,
+        )
+        self.assertEqual(filtered.coverage_diagnostics.coverage_candidate_count, 0)
+
     def test_fits_from_continuous_distill_teacher_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "teacher.pt"

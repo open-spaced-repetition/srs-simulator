@@ -67,6 +67,8 @@ class CoverageObjectiveSettings:
     min_budget_span_coverage: float = 0.90
     min_target_span_coverage: float = 0.90
     penalty_weight: float = 0.05
+    filter_baseline_dominated: bool = False
+    dominated_point_penalty_weight: float = 0.0
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> CoverageObjectiveSettings:
@@ -94,6 +96,20 @@ class CoverageObjectiveSettings:
                 raw.get("coverage_penalty_weight", defaults.penalty_weight),
                 "training.policy_search.coverage_penalty_weight",
             ),
+            filter_baseline_dominated=_bool_setting(
+                raw.get(
+                    "coverage_filter_baseline_dominated",
+                    defaults.filter_baseline_dominated,
+                ),
+                "training.policy_search.coverage_filter_baseline_dominated",
+            ),
+            dominated_point_penalty_weight=_nonnegative_float_setting(
+                raw.get(
+                    "coverage_dominated_point_penalty_weight",
+                    defaults.dominated_point_penalty_weight,
+                ),
+                "training.policy_search.coverage_dominated_point_penalty_weight",
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -102,11 +118,16 @@ class CoverageObjectiveSettings:
             "min_budget_span_coverage": self.min_budget_span_coverage,
             "min_target_span_coverage": self.min_target_span_coverage,
             "penalty_weight": self.penalty_weight,
+            "filter_baseline_dominated": self.filter_baseline_dominated,
+            "dominated_point_penalty_weight": self.dominated_point_penalty_weight,
         }
 
 
 @dataclass(frozen=True, slots=True)
 class CostADRCoverageDiagnostics:
+    candidate_count: int
+    baseline_dominated_candidate_count: int
+    coverage_candidate_count: int
     budget_count: int
     covered_budget_count: int
     total_budget_span: float
@@ -125,6 +146,7 @@ class CostADRCandidateScore:
     hypervolume_delta: float
     objective_score: float
     coverage_penalty: float
+    dominance_penalty: float
     coverage_diagnostics: CostADRCoverageDiagnostics
 
 
@@ -768,6 +790,15 @@ def _run_cmaes_multiuser(
                 "generation_best_coverage_penalty": float(
                     generation_best.coverage_penalty
                 ),
+                "generation_best_dominance_penalty": float(
+                    generation_best.dominance_penalty
+                ),
+                "generation_best_baseline_dominated_candidate_count": float(
+                    generation_best.coverage_diagnostics.baseline_dominated_candidate_count
+                ),
+                "generation_best_coverage_candidate_count": float(
+                    generation_best.coverage_diagnostics.coverage_candidate_count
+                ),
                 "generation_best_budget_span_coverage_percent": float(
                     generation_best.coverage_diagnostics.budget_span_coverage_percent
                 ),
@@ -833,6 +864,7 @@ def _score_candidate(
     coverage = _coverage_diagnostics(
         baseline_metrics=baseline_metrics,
         candidate_metrics=candidate_metrics,
+        filter_baseline_dominated=coverage_settings.filter_baseline_dominated,
     )
     budget_shortfall = max(
         0.0,
@@ -851,11 +883,22 @@ def _score_candidate(
         if coverage_settings.enabled
         else 0.0
     )
+    dominated_fraction = (
+        coverage.baseline_dominated_candidate_count / coverage.candidate_count
+        if coverage.candidate_count > 0
+        else 0.0
+    )
+    dominance_penalty = (
+        baseline_hypervolume
+        * coverage_settings.dominated_point_penalty_weight
+        * dominated_fraction
+    )
     return CostADRCandidateScore(
         hypervolume=hypervolume,
         hypervolume_delta=hypervolume_delta,
-        objective_score=hypervolume_delta - coverage_penalty,
+        objective_score=hypervolume_delta - coverage_penalty - dominance_penalty,
         coverage_penalty=coverage_penalty,
+        dominance_penalty=dominance_penalty,
         coverage_diagnostics=coverage,
     )
 
@@ -864,11 +907,33 @@ def _coverage_diagnostics(
     *,
     baseline_metrics: Sequence[CandidateMetrics],
     candidate_metrics: Sequence[CandidateMetrics],
+    filter_baseline_dominated: bool = False,
 ) -> CostADRCoverageDiagnostics:
+    baseline_points = [point_from_metrics(metric) for metric in baseline_metrics]
+    candidate_points = [point_from_metrics(metric) for metric in candidate_metrics]
+    baseline_dominated = [
+        _is_dominated_by_any_baseline(point, baseline_points)
+        for point in candidate_points
+    ]
+    coverage_candidate_metrics = [
+        metric
+        for metric, dominated in zip(
+            candidate_metrics,
+            baseline_dominated,
+            strict=True,
+        )
+        if not filter_baseline_dominated or not dominated
+    ]
     baseline_time_frontier = _frontier_metrics(baseline_metrics, sort_key="time")
-    candidate_time_frontier = _frontier_metrics(candidate_metrics, sort_key="time")
+    candidate_time_frontier = _frontier_metrics(
+        coverage_candidate_metrics,
+        sort_key="time",
+    )
     baseline_memory_frontier = _frontier_metrics(baseline_metrics, sort_key="memory")
-    candidate_memory_frontier = _frontier_metrics(candidate_metrics, sort_key="memory")
+    candidate_memory_frontier = _frontier_metrics(
+        coverage_candidate_metrics,
+        sort_key="memory",
+    )
     budget = _range_coverage(
         baseline_values=[metric.time_average for metric in baseline_time_frontier],
         candidate_values=[metric.time_average for metric in candidate_time_frontier],
@@ -882,6 +947,11 @@ def _coverage_diagnostics(
         ],
     )
     return CostADRCoverageDiagnostics(
+        candidate_count=len(candidate_metrics),
+        baseline_dominated_candidate_count=sum(
+            1 for value in baseline_dominated if value
+        ),
+        coverage_candidate_count=len(coverage_candidate_metrics),
         budget_count=budget.total_count,
         covered_budget_count=budget.covered_count,
         total_budget_span=budget.total_span,
@@ -893,6 +963,28 @@ def _coverage_diagnostics(
         covered_target_span=target.covered_span,
         target_span_coverage_percent=target.span_coverage_percent,
     )
+
+
+def _is_dominated_by_any_baseline(
+    point: ObjectivePoint,
+    baseline_points: Sequence[ObjectivePoint],
+) -> bool:
+    return any(
+        _objective_dominates(baseline_point, point)
+        for baseline_point in baseline_points
+    )
+
+
+def _objective_dominates(lhs: ObjectivePoint, rhs: ObjectivePoint) -> bool:
+    no_worse = (
+        lhs.memorized_average >= rhs.memorized_average
+        and lhs.negative_time_average >= rhs.negative_time_average
+    )
+    strictly_better = (
+        lhs.memorized_average > rhs.memorized_average
+        or lhs.negative_time_average > rhs.negative_time_average
+    )
+    return no_worse and strictly_better
 
 
 def _frontier_metrics(
@@ -1088,11 +1180,15 @@ def write_artifact(
         "seed_resolved": optimizer_seed,
     }
     metrics_path = output_dir / "metrics.json"
-    training_objective = (
-        "coverage_aware_hypervolume_delta"
-        if coverage_settings.enabled
-        else "hypervolume_delta"
-    )
+    if coverage_settings.enabled and (
+        coverage_settings.filter_baseline_dominated
+        or coverage_settings.dominated_point_penalty_weight > 0.0
+    ):
+        training_objective = "quality_aware_coverage_hypervolume_delta"
+    elif coverage_settings.enabled:
+        training_objective = "coverage_aware_hypervolume_delta"
+    else:
+        training_objective = "hypervolume_delta"
     _write_json(
         metrics_path,
         {

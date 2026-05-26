@@ -242,6 +242,15 @@ Representative profiles:
   multi-user in-process training batch settings as the pure-HV Cost-ADR profile,
   but enables the 90% time-span and memory-span coverage penalty during
   training.
+- `configs/fsrs6_cost_adr_quality_v2_users_1_8_pop16_gen20_v1.toml`: a
+  quality-aware Cost-ADR iteration that keeps the coverage-aware objective but
+  adds a small soft penalty for baseline-dominated candidate points. It is a
+  diagnostic training profile, not the promoted comparison row.
+- `configs/fsrs6_cost_adr_quality_hybrid_users_1_8_pop16_gen20_v1.toml`: a
+  Cost-ADR selector evaluation. It reuses prior per-user artifacts and selects
+  between coverage-aware and quality-v2 policies by each user's training
+  `best_hypervolume_delta`, then runs the standard FSRS6/LSTM sweep and Pareto
+  analysis.
 - `configs/fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml`: the ADR
   portfolio scheduler trained with the same pop16/off16/gen20 budget while the
   ADR scheduler state uses default FSRS-6 weights instead of per-user fitted
@@ -383,6 +392,35 @@ uv run python experiments/rl_scheduler/run_experiment.py \
   --stage all \
   --run-id fsrs6_cost_adr_coverage_users_1_8_pop16_gen20_v1_markov_off
 ```
+
+Quality-aware Cost-ADR v2 diagnostic for users 1-8:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_quality_v2_users_1_8_pop16_gen20_v1.toml \
+  --stage all \
+  --run-id fsrs6_cost_adr_quality_v2_users_1_8_pop16_gen20_v1_markov_off
+```
+
+Hybrid Cost-ADR selector evaluation:
+
+```bash
+uv run python experiments/rl_scheduler/build_fsrs6_cost_adr_hybrid.py \
+  --source coverage=artifacts/rl_scheduler/fsrs6_cost_adr_coverage_users_1_8/fsrs6_cost_adr_coverage_users_1_8_pop16_gen20_v1_markov_off \
+  --source quality_v2=artifacts/rl_scheduler/fsrs6_cost_adr_quality_v2_users_1_8/fsrs6_cost_adr_quality_v2_users_1_8_pop16_gen20_v1_markov_off \
+  --baseline-run-root artifacts/rl_scheduler/fsrs6_cost_adr_coverage_users_1_8/fsrs6_cost_adr_coverage_users_1_8_pop16_gen20_v1_markov_off \
+  --output-run-root artifacts/rl_scheduler/fsrs6_cost_adr_quality_hybrid_users_1_8/fsrs6_cost_adr_quality_hybrid_users_1_8_pop16_gen20_v1_markov_off \
+  --users 1-8
+
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_quality_hybrid_users_1_8_pop16_gen20_v1.toml \
+  --stage all \
+  --run-id fsrs6_cost_adr_quality_hybrid_users_1_8_pop16_gen20_v1_markov_off
+```
+
+Interpret the hybrid row as a selector over already trained Cost-ADR artifacts,
+not as a single CMA-ES run. The selector uses training HV only; external
+FSRS6/LSTM sweep metrics are held out for evaluation.
 
 Sampling benchmark:
 
