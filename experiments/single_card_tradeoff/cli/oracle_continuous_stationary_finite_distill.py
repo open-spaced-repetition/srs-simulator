@@ -61,6 +61,7 @@ from experiments.single_card_tradeoff.models.policy_runtime import (
 )
 from experiments.single_card_tradeoff.oracles import (
     FSRS6ContinuousStationaryFiniteOracle,
+    FSRS6ContinuousStationaryUniformTerminationOracle,
     retention_interval_float,
 )
 from experiments.single_card_tradeoff.oracles.dp_cache import OracleDPCacheConfig
@@ -80,6 +81,8 @@ DEFAULT_RETENTION_MAX = 0.98
 DEFAULT_INTERVAL_LOSS_WEIGHT = 1.0
 DEFAULT_RETENTION_LOGIT_LOSS_WEIGHT = 1.0
 DEFAULT_TABLE_SAMPLES_PER_WEIGHT = 256
+TEACHER_POLICY_STATIONARY_FINITE = "continuous_stationary_finite"
+TEACHER_POLICY_STATIONARY_UNIFORM_H = "continuous_stationary_uniform_h"
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,7 @@ class ContinuousStationaryFiniteOracleGuide:
         max_iterations: int,
         tolerance: float,
         progress: bool,
+        teacher_policy: str = TEACHER_POLICY_STATIONARY_FINITE,
         fsrs_config: SingleCardFSRS6Config | None = None,
         cache_config: OracleDPCacheConfig | None = None,
     ) -> None:
@@ -117,23 +121,40 @@ class ContinuousStationaryFiniteOracleGuide:
         self.cost_weights = torch.tensor(
             list(cost_weights), device=device, dtype=torch.float32
         )
-        self.oracle = FSRS6ContinuousStationaryFiniteOracle(
-            days=days,
-            s_grid_size=s_grid_size,
-            d_grid_size=d_grid_size,
-            retention_min=retention_min,
-            retention_max=retention_max,
-            interval_chunk_size=interval_chunk_size,
-            device=device,
-            cache_config=cache_config,
+        self.teacher_policy = teacher_policy
+        oracle_kwargs: dict[str, Any] = {
+            "days": days,
+            "s_grid_size": s_grid_size,
+            "d_grid_size": d_grid_size,
+            "retention_min": retention_min,
+            "retention_max": retention_max,
+            "interval_chunk_size": interval_chunk_size,
+            "device": device,
+            "cache_config": cache_config,
             **fsrs_config_kwargs(fsrs_config),
-        )
-        solution = self.oracle.solve_stationary_finite_policies(
-            cost_weights,
-            max_iterations=max_iterations,
-            tolerance=tolerance,
-            progress=progress,
-        )
+        }
+        if teacher_policy == TEACHER_POLICY_STATIONARY_UNIFORM_H:
+            uniform_oracle = FSRS6ContinuousStationaryUniformTerminationOracle(
+                **oracle_kwargs
+            )
+            solution = uniform_oracle.solve_stationary_uniform_termination_policies(
+                cost_weights,
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            self.oracle = uniform_oracle
+        elif teacher_policy == TEACHER_POLICY_STATIONARY_FINITE:
+            finite_oracle = FSRS6ContinuousStationaryFiniteOracle(**oracle_kwargs)
+            solution = finite_oracle.solve_stationary_finite_policies(
+                cost_weights,
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            self.oracle = finite_oracle
+        else:
+            raise ValueError(f"Unsupported teacher_policy: {teacher_policy}")
         if not all(solution.converged):
             failed = [
                 format_float(weight)
@@ -145,7 +166,7 @@ class ContinuousStationaryFiniteOracleGuide:
                 if not converged
             ]
             raise RuntimeError(
-                "Continuous stationary finite oracle did not converge for cost "
+                "Continuous stationary oracle did not converge for cost "
                 "weights: " + ",".join(failed)
             )
         self.policy = solution.policy.to(device=device, dtype=torch.float32)
@@ -174,6 +195,18 @@ def parse_args() -> argparse.Namespace:
             for value in DEFAULT_STATIONARY_FINITE_DISTILL_COST_WEIGHTS
         ),
         help="Comma-separated scalarization weights for the oracle teacher.",
+    )
+    parser.add_argument(
+        "--teacher-policy",
+        choices=[
+            TEACHER_POLICY_STATIONARY_FINITE,
+            TEACHER_POLICY_STATIONARY_UNIFORM_H,
+        ],
+        default=TEACHER_POLICY_STATIONARY_FINITE,
+        help=(
+            "Oracle teacher to distill. continuous_stationary_uniform_h solves "
+            "the best stationary policy under hidden H~Uniform{1,days}."
+        ),
     )
     parser.add_argument(
         "--action-retentions",
@@ -608,6 +641,29 @@ def save_model(
     fsrs_config: SingleCardFSRS6Config,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    oracle_metadata: dict[str, Any] = {
+        "teacher_policy": f"{guide.teacher_policy}_oracle",
+        "oracle_stationary_finite_max_iterations": (
+            args.oracle_stationary_finite_max_iterations
+        ),
+        "oracle_stationary_finite_tolerance": (args.oracle_stationary_finite_tolerance),
+        "oracle_stationary_finite_objectives": [
+            float(value) for value in guide.objectives.tolist()
+        ],
+        "oracle_stationary_finite_iterations": list(guide.iterations),
+        "oracle_stationary_finite_residuals": list(guide.residuals),
+    }
+    if guide.teacher_policy == TEACHER_POLICY_STATIONARY_UNIFORM_H:
+        oracle_metadata.update(
+            {
+                "termination_distribution": (
+                    FSRS6ContinuousStationaryUniformTerminationOracle.TERMINATION_DISTRIBUTION_VERSION
+                ),
+                "stationary_uniform_policy_iteration": (
+                    FSRS6ContinuousStationaryUniformTerminationOracle.STATIONARY_UNIFORM_POLICY_ITERATION_VERSION
+                ),
+            }
+        )
     torch.save(
         {
             "model_state_dict": model.state_dict(),
@@ -629,18 +685,7 @@ def save_model(
             "oracle_s_grid_size": args.oracle_s_grid_size,
             "oracle_d_grid_size": args.oracle_d_grid_size,
             "oracle_interval_chunk_size": args.oracle_interval_chunk_size,
-            "teacher_policy": "continuous_stationary_finite_oracle",
-            "oracle_stationary_finite_max_iterations": (
-                args.oracle_stationary_finite_max_iterations
-            ),
-            "oracle_stationary_finite_tolerance": (
-                args.oracle_stationary_finite_tolerance
-            ),
-            "oracle_stationary_finite_objectives": [
-                float(value) for value in guide.objectives.tolist()
-            ],
-            "oracle_stationary_finite_iterations": list(guide.iterations),
-            "oracle_stationary_finite_residuals": list(guide.residuals),
+            **oracle_metadata,
             **fsrs_config.checkpoint_payload(),
             "train_epochs": train_stats.epochs,
             "train_steps_per_epoch": train_stats.steps_per_epoch,
@@ -717,6 +762,7 @@ def main() -> None:
         max_iterations=args.oracle_stationary_finite_max_iterations,
         tolerance=args.oracle_stationary_finite_tolerance,
         progress=not args.no_progress,
+        teacher_policy=args.teacher_policy,
         fsrs_config=fsrs_config,
         cache_config=cache_config,
     )
