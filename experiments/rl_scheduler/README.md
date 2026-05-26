@@ -236,6 +236,12 @@ Representative profiles:
   objective. The objective subtracts a baseline-HV-scaled penalty when the
   candidate-only frontier covers less than 90% of the FSRS-6 baseline time span
   or memory span.
+- `configs/fsrs6_cost_adr_coverage_users_1_8_pop16_gen20_v1.toml`: the formal
+  first-eight-user Cost-ADR coverage-aware rerun. It keeps the same users,
+  pop16/gen20 CMA-ES budget, 16 cost weights, FSRS6/LSTM evaluation envs, and
+  multi-user in-process training batch settings as the pure-HV Cost-ADR profile,
+  but enables the 90% time-span and memory-span coverage penalty during
+  training.
 - `configs/fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml`: the ADR
   portfolio scheduler trained with the same pop16/off16/gen20 budget while the
   ADR scheduler state uses default FSRS-6 weights instead of per-user fitted
@@ -367,6 +373,15 @@ uv run python experiments/rl_scheduler/run_experiment.py \
   --config experiments/rl_scheduler/configs/fsrs6_cost_adr_coverage_users_1_2_pop16_gen20_v1.toml \
   --stage all \
   --run-id fsrs6_cost_adr_coverage_users_1_2_pop16_gen20_v1_markov_off
+```
+
+Coverage-aware Cost-ADR formal rerun for users 1-8:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_coverage_users_1_8_pop16_gen20_v1.toml \
+  --stage all \
+  --run-id fsrs6_cost_adr_coverage_users_1_8_pop16_gen20_v1_markov_off
 ```
 
 Sampling benchmark:
