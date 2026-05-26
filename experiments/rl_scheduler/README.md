@@ -257,8 +257,8 @@ Representative profiles:
   current Cost-ADR improvement profile. It initializes each user's 24-parameter
   interval policy from the single-card continuous-distill Cost-ADR artifacts,
   evaluates that mean in generation 0, expands CMA-ES bounds around the imported
-  coefficients, and uses the dense cost-weight grid
-  `0,0.25,0.5,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024`.
+  coefficients, trains against a 19-point dense cost-weight grid, and evaluates
+  against a 38-point dense sweep grid to improve external Pareto coverage.
 - `configs/fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml`: the ADR
   portfolio scheduler trained with the same pop16/off16/gen20 budget while the
   ADR scheduler state uses default FSRS-6 weights instead of per-user fitted
