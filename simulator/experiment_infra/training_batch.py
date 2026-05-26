@@ -20,6 +20,7 @@ SUPPORTED_TRAINERS = {
     "fsrs6_adr_portfolio",
     "fsrs6_oracle_stationary_finite_distill_portfolio",
     "fsrs6_adr_cmaes",
+    "fsrs6_cost_adr_cmaes",
     "fsrs6_ap_cmaes",
     "fsrs6_ap_portfolio",
     "anki_sm2_ap_portfolio",
@@ -69,6 +70,8 @@ def resolve_in_process_trainer(
     script_names = {Path(item).name for item in command_template}
     if "train_cmaes_fsrs6_adr.py" in script_names:
         return "fsrs6_adr_cmaes"
+    if "train_cmaes_fsrs6_cost_adr.py" in script_names:
+        return "fsrs6_cost_adr_cmaes"
     if "train_cmaes_fsrs6_ap.py" in script_names:
         return "fsrs6_ap_cmaes"
     if "train_fsrs6_ap_portfolio.py" in script_names:
@@ -113,6 +116,12 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         APSettings,
         optimizer_settings_from_mapping as ap_optimizer_settings_from_mapping,
     )
+    from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (
+        optimizer_settings_from_mapping as cost_adr_optimizer_settings_from_mapping,
+    )
+    from simulator.batched_sweep.fsrs6_cost_adr_policy import (
+        DEFAULT_COST_WEIGHTS as COST_ADR_COST_WEIGHTS,
+    )
 
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search: dict[str, Any]
@@ -130,6 +139,9 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
             feature_version=feature_version,
         )
         return max(1, optimizer.population_size)
+    if trainer == "fsrs6_cost_adr_cmaes":
+        optimizer = cost_adr_optimizer_settings_from_mapping(config.training_optimizer)
+        return max(1, optimizer.population_size * len(COST_ADR_COST_WEIGHTS))
     baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
     if config.baseline_dr_selection.manifest is not None:
         baseline_dr_values = _uniform_retention_values(
@@ -216,6 +228,10 @@ def run_in_process_train_batch(
         return []
     if trainer == "fsrs6_adr_cmaes":
         return _run_fsrs6_adr_cmaes_jobs(
+            jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
+        )
+    if trainer == "fsrs6_cost_adr_cmaes":
+        return _run_fsrs6_cost_adr_cmaes_jobs(
             jobs=jobs, config=config, config_path=config_path, repo_root=repo_root
         )
     if trainer == "fsrs6_adr_portfolio":
@@ -853,6 +869,52 @@ def _run_fsrs6_ap_cmaes_jobs(
                 passed=result.passed,
                 artifact_paths=result.artifact_paths,
                 progress_path=result.progress_path,
+            )
+        )
+    return outcomes
+
+
+def _run_fsrs6_cost_adr_cmaes_jobs(
+    *,
+    jobs: list[InProcessTrainJob],
+    config: ExperimentConfig,
+    config_path: Path,
+    repo_root: Path,
+) -> list[InProcessTrainOutcome]:
+    from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (
+        run_training_batch_jobs,
+    )
+
+    results = run_training_batch_jobs(
+        jobs=jobs,
+        config=config,
+        config_path=config_path,
+        repo_root=repo_root,
+    )
+    result_by_key = {
+        (result.job.user_id, result.job.output_dir): result for result in results
+    }
+    outcomes: list[InProcessTrainOutcome] = []
+    for job in jobs:
+        result = result_by_key.get((job.user_id, job.output_dir))
+        if result is None:
+            outcomes.append(
+                InProcessTrainOutcome(
+                    job=job,
+                    passed=False,
+                    artifact_paths=(),
+                    progress_path=None,
+                    error="Cost ADR trainer did not return an outcome for this job.",
+                )
+            )
+            continue
+        outcomes.append(
+            InProcessTrainOutcome(
+                job=job,
+                passed=result.passed,
+                artifact_paths=result.artifact_paths,
+                progress_path=result.progress_path,
+                error=result.error,
             )
         )
     return outcomes

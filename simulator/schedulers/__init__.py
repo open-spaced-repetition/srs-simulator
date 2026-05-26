@@ -6,6 +6,9 @@ from simulator.schedulers.anki_sm2 import AnkiSM2Scheduler
 from simulator.schedulers.anki_sm2_ap import AnkiSM2APScheduler
 from simulator.schedulers.memrise import MemriseScheduler
 from simulator.schedulers.fsrs6_adr import FSRS6ADRScheduler
+from simulator.schedulers.fsrs6_cost_conditioned_adr import (
+    FSRS6CostConditionedADRScheduler,
+)
 from simulator.schedulers.fsrs6_oracle_stationary_finite_distill import (
     FSRS6OracleStationaryFiniteDistillScheduler,
 )
@@ -25,6 +28,7 @@ __all__ = [
     "AnkiSM2APScheduler",
     "MemriseScheduler",
     "FSRS6ADRScheduler",
+    "FSRS6CostConditionedADRScheduler",
     "FSRS6OracleStationaryFiniteDistillScheduler",
     "FSRS6APScheduler",
     "SSPMMCScheduler",

@@ -8,9 +8,14 @@ from simulator.fsrs6_adr_policy import (
     FEATURE_VERSION_LOG_POLY,
     FEATURE_VERSION_LOG_POLY_TIME,
 )
+from simulator.fsrs6_cost_conditioned_adr_policy import (
+    FEATURE_VERSION_INTERVAL_MONO as COST_ADR_FEATURE_VERSION_INTERVAL_MONO,
+)
 from simulator.scheduler_catalog import (
+    action_space_allows_lambda_none,
     batched_scheduler_names,
     event_scheduler_names,
+    fsrs6_cost_adr_action_space_for_feature_version,
     fsrs6_adr_variant_for_feature_version,
     run_id_scoped_sweep_schedulers,
 )
@@ -39,6 +44,7 @@ class SchedulerCatalogTests(unittest.TestCase):
                     "anki_sm2_ap",
                     "fsrs6_adr",
                     "fsrs6_adr_time",
+                    "fsrs6_cost_adr",
                     "fsrs6_oracle_stationary_finite_distill",
                     "fsrs6_ap",
                     "fsrs6_default_adr",
@@ -59,6 +65,14 @@ class SchedulerCatalogTests(unittest.TestCase):
             time.portfolio_child_action_space,
             "sdt_retention_function_portfolio_child",
         )
+
+    def test_fsrs6_cost_adr_action_space_allows_lambda_none(self) -> None:
+        action_space = fsrs6_cost_adr_action_space_for_feature_version(
+            COST_ADR_FEATURE_VERSION_INTERVAL_MONO
+        )
+
+        self.assertEqual(action_space, "sd_cost_interval_function")
+        self.assertTrue(action_space_allows_lambda_none(action_space))
 
 
 if __name__ == "__main__":

@@ -26,6 +26,11 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
     FSRS6ADRPolicySpec,
     resolve_fsrs6_adr_policy_specs,
 )
+from simulator.batched_sweep.fsrs6_cost_adr_policy import (
+    DEFAULT_COST_WEIGHTS,
+    FSRS6CostADRPolicySpec,
+    resolve_fsrs6_cost_adr_policy_specs,
+)
 from simulator.batched_sweep.fsrs6_ap_policy import (
     FSRS6APPolicySpec,
     resolve_fsrs6_ap_policy_specs,
@@ -67,6 +72,9 @@ __all__ = [
     "build_batched_sweep_plan",
     "FSRS6ADRPolicySpec",
     "resolve_fsrs6_adr_policy_specs",
+    "DEFAULT_COST_WEIGHTS",
+    "FSRS6CostADRPolicySpec",
+    "resolve_fsrs6_cost_adr_policy_specs",
     "FSRS6APPolicySpec",
     "resolve_fsrs6_ap_policy_specs",
     "AnkiSM2APPolicySpec",

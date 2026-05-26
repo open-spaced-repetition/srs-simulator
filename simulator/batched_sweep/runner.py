@@ -20,10 +20,16 @@ from simulator.schedulers.fsrs import FSRS3BatchSchedulerOps, FSRS6BatchSchedule
 from simulator.schedulers.lstm import LSTMBatchSchedulerOps
 from simulator.schedulers.memrise import MemriseBatchSchedulerOps, MemriseScheduler
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
+from simulator.schedulers.fsrs6_cost_conditioned_adr import (
+    FSRS6CostConditionedADRBatchSchedulerOps,
+)
 from simulator.schedulers.fsrs6_oracle_stationary_finite_distill import (
     FSRS6OracleStationaryFiniteDistillBatchSchedulerOps,
 )
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.fsrs6_cost_conditioned_adr_policy import (
+    FSRS6CostConditionedADRPolicy,
+)
 from simulator.fsrs6_oracle_stationary_finite_distill_policy import (
     FSRS6OracleStationaryFiniteDistillPolicy,
 )
@@ -49,6 +55,10 @@ from simulator.batched_sweep.weights import (
     resolve_lstm_paths,
 )
 from simulator.batched_sweep.fsrs6_adr_policy import FSRS6ADRPolicySpec
+from simulator.batched_sweep.fsrs6_cost_adr_policy import (
+    DEFAULT_COST_WEIGHTS,
+    FSRS6CostADRPolicySpec,
+)
 from simulator.batched_sweep.fsrs6_oracle_stationary_finite_distill_policy import (
     FSRS6OracleStationaryFiniteDistillPolicySpec,
 )
@@ -75,6 +85,9 @@ class BatchedSweepContext:
     log_layout: str = "user"
     fsrs6_adr_policy: Path | None = None
     fsrs6_adr_policy_specs: tuple[FSRS6ADRPolicySpec, ...] = ()
+    fsrs6_cost_adr_policy: Path | None = None
+    fsrs6_cost_adr_policy_specs: tuple[FSRS6CostADRPolicySpec, ...] = ()
+    fsrs6_cost_adr_cost_weights: tuple[float, ...] = DEFAULT_COST_WEIGHTS
     fsrs6_oracle_stationary_finite_distill_policy: Path | None = None
     fsrs6_oracle_stationary_finite_distill_policy_specs: tuple[
         FSRS6OracleStationaryFiniteDistillPolicySpec, ...
@@ -92,6 +105,7 @@ _DR_SCHEDULERS = {
     if get_scheduler_descriptor(name).uses_desired_retention
 }
 _ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
+_COST_ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_COST_ADR)
 _ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_stationary_finite_distill"
 _LOG_LAYOUTS = {"user", "sweep"}
 
@@ -238,6 +252,43 @@ def _build_sweep_lanes(
                 )
             continue
 
+        if name in _COST_ADR_POLICY_SCHEDULERS and ctx.fsrs6_cost_adr_policy_specs:
+            batch_users = set(batch)
+            for spec in ctx.fsrs6_cost_adr_policy_specs:
+                if spec.user_id not in batch_users:
+                    continue
+                policy_token = (
+                    f"policy_{spec.policy_index}"
+                    if spec.policy_index is not None
+                    else f"policy_{spec.path.parent.name}"
+                )
+                scheduler_subpath = (
+                    Path(f"sched_{name}")
+                    / policy_token
+                    / f"costw_{_format_float_token(spec.cost_weight)}"
+                )
+                scheduler_root = ctx.log_root / scheduler_subpath
+                lanes.append(
+                    BatchedSweepLogLane(
+                        user_id=spec.user_id,
+                        log_root=scheduler_root,
+                        log_dir=_lane_log_dir(
+                            log_root=ctx.log_root,
+                            user_id=spec.user_id,
+                            scheduler_subpath=scheduler_subpath,
+                            log_layout=ctx.log_layout,
+                        ),
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=None,
+                        fixed_interval=None,
+                        fsrs6_cost_adr_policy=spec.path,
+                        fsrs6_cost_adr_goal_cost_weight=spec.cost_weight,
+                    )
+                )
+            continue
+
         if name == "fsrs6_ap" and ctx.fsrs6_ap_policy_specs:
             batch_users = set(batch)
             for spec in ctx.fsrs6_ap_policy_specs:
@@ -353,6 +404,9 @@ def _build_sweep_lanes(
             continue
 
         policy = ctx.fsrs6_adr_policy if name in _ADR_POLICY_SCHEDULERS else None
+        cost_adr_policy = (
+            ctx.fsrs6_cost_adr_policy if name in _COST_ADR_POLICY_SCHEDULERS else None
+        )
         oracle_distill_policy = (
             ctx.fsrs6_oracle_stationary_finite_distill_policy
             if name == _ORACLE_DISTILL_SCHEDULER
@@ -367,6 +421,8 @@ def _build_sweep_lanes(
             )
         elif name in _ADR_POLICY_SCHEDULERS and policy is not None:
             scheduler_subpath = scheduler_subpath / f"policy_{policy.stem}"
+        elif name in _COST_ADR_POLICY_SCHEDULERS and cost_adr_policy is not None:
+            scheduler_subpath = scheduler_subpath / f"policy_{cost_adr_policy.stem}"
         elif name == "fsrs6_ap" and ap_policy is not None:
             scheduler_subpath = scheduler_subpath / f"policy_{ap_policy.stem}"
         elif name == _ORACLE_DISTILL_SCHEDULER and oracle_distill_policy is not None:
@@ -376,28 +432,45 @@ def _build_sweep_lanes(
         elif name == "anki_sm2_ap" and anki_sm2_ap_policy is not None:
             scheduler_subpath = scheduler_subpath / f"policy_{anki_sm2_ap_policy.stem}"
         scheduler_root = ctx.log_root / scheduler_subpath
-        lanes.extend(
-            BatchedSweepLogLane(
-                user_id=user_id,
-                log_root=scheduler_root,
-                log_dir=_lane_log_dir(
-                    log_root=ctx.log_root,
-                    user_id=user_id,
-                    scheduler_subpath=scheduler_subpath,
-                    log_layout=ctx.log_layout,
-                ),
-                environment=environment,
-                scheduler_name=name,
-                scheduler_spec=raw,
-                desired_retention=None,
-                fixed_interval=interval,
-                fsrs6_adr_policy=policy,
-                fsrs6_oracle_stationary_finite_distill_policy=oracle_distill_policy,
-                fsrs6_ap_policy=ap_policy,
-                anki_sm2_ap_policy=anki_sm2_ap_policy,
+        for user_id in batch:
+            cost_weights = (
+                ctx.fsrs6_cost_adr_cost_weights
+                if cost_adr_policy is not None
+                else (None,)
             )
-            for user_id in batch
-        )
+            for cost_weight in cost_weights:
+                lane_subpath = scheduler_subpath
+                if cost_weight is not None:
+                    lane_subpath = lane_subpath / (
+                        f"costw_{_format_float_token(float(cost_weight))}"
+                    )
+                lanes.append(
+                    BatchedSweepLogLane(
+                        user_id=user_id,
+                        log_root=scheduler_root,
+                        log_dir=_lane_log_dir(
+                            log_root=ctx.log_root,
+                            user_id=user_id,
+                            scheduler_subpath=lane_subpath,
+                            log_layout=ctx.log_layout,
+                        ),
+                        environment=environment,
+                        scheduler_name=name,
+                        scheduler_spec=raw,
+                        desired_retention=None,
+                        fixed_interval=interval,
+                        fsrs6_adr_policy=policy,
+                        fsrs6_cost_adr_policy=cost_adr_policy,
+                        fsrs6_cost_adr_goal_cost_weight=(
+                            float(cost_weight) if cost_weight is not None else None
+                        ),
+                        fsrs6_oracle_stationary_finite_distill_policy=(
+                            oracle_distill_policy
+                        ),
+                        fsrs6_ap_policy=ap_policy,
+                        anki_sm2_ap_policy=anki_sm2_ap_policy,
+                    )
+                )
     return lanes
 
 
@@ -457,6 +530,8 @@ def _mixed_scheduler_group_key(lane: BatchedSweepLogLane) -> tuple[Any, ...]:
     if lane.scheduler_name == "fixed":
         return (lane.scheduler_name, lane.scheduler_spec, lane.fixed_interval)
     if lane.scheduler_name in _ADR_POLICY_SCHEDULERS:
+        return (lane.scheduler_name, lane.scheduler_spec)
+    if lane.scheduler_name in _COST_ADR_POLICY_SCHEDULERS:
         return (lane.scheduler_name, lane.scheduler_spec)
     if lane.scheduler_name == _ORACLE_DISTILL_SCHEDULER:
         return (lane.scheduler_name, lane.scheduler_spec)
@@ -537,6 +612,34 @@ def _same_adr_policy_bounds(lhs: FSRS6ADRPolicy, rhs: FSRS6ADRPolicy) -> bool:
         and math.isclose(
             lhs.retention_max, rhs.retention_max, rel_tol=0.0, abs_tol=1e-9
         )
+        and math.isclose(lhs.bounds.s_min, rhs.bounds.s_min, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs.bounds.s_max, rhs.bounds.s_max, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs.bounds.d_min, rhs.bounds.d_min, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(lhs.bounds.d_max, rhs.bounds.d_max, rel_tol=0.0, abs_tol=1e-9)
+    )
+
+
+def _same_cost_adr_policy_shape(
+    lhs: FSRS6CostConditionedADRPolicy,
+    rhs: FSRS6CostConditionedADRPolicy,
+) -> bool:
+    return (
+        lhs.feature_version == rhs.feature_version
+        and lhs.action_head == rhs.action_head
+        and lhs.parameter_count == rhs.parameter_count
+        and math.isclose(
+            lhs.cost_weight_min, rhs.cost_weight_min, rel_tol=0.0, abs_tol=1e-9
+        )
+        and math.isclose(
+            lhs.cost_weight_max, rhs.cost_weight_max, rel_tol=0.0, abs_tol=1e-9
+        )
+        and math.isclose(
+            lhs.retention_min, rhs.retention_min, rel_tol=0.0, abs_tol=1e-9
+        )
+        and math.isclose(
+            lhs.retention_max, rhs.retention_max, rel_tol=0.0, abs_tol=1e-9
+        )
+        and lhs.max_interval_days == rhs.max_interval_days
         and math.isclose(lhs.bounds.s_min, rhs.bounds.s_min, rel_tol=0.0, abs_tol=1e-9)
         and math.isclose(lhs.bounds.s_max, rhs.bounds.s_max, rel_tol=0.0, abs_tol=1e-9)
         and math.isclose(lhs.bounds.d_min, rhs.bounds.d_min, rel_tol=0.0, abs_tol=1e-9)
@@ -780,6 +883,57 @@ def _build_mixed_scheduler_ops(
                 device=device,
                 dtype=torch.float32,
             )
+        elif name in _COST_ADR_POLICY_SCHEDULERS:
+            if fsrs_weights is None:
+                raise ValueError(f"Expected FSRS-6 weights for {name} scheduler.")
+            policy_paths: list[Path] = []
+            goal_cost_weights: list[float] = []
+            for lane in group_lanes:
+                policy_path = lane.fsrs6_cost_adr_policy
+                if policy_path is None:
+                    raise ValueError(
+                        f"--sched {name} requires an FSRS6 cost ADR policy source."
+                    )
+                if lane.fsrs6_cost_adr_goal_cost_weight is None:
+                    raise ValueError(f"{name} lanes require a goal cost weight.")
+                policy_paths.append(policy_path)
+                goal_cost_weights.append(float(lane.fsrs6_cost_adr_goal_cost_weight))
+            policies = [
+                FSRS6CostConditionedADRPolicy.from_json(policy_path)
+                for policy_path in policy_paths
+            ]
+            policy = policies[0]
+            for policy_path, candidate in zip(policy_paths, policies, strict=True):
+                if not _same_cost_adr_policy_shape(candidate, policy):
+                    raise ValueError(
+                        f"Batched {name} sweep requires identical policy feature "
+                        "version, action head, bounds, and cost range. "
+                        f"Mismatch at {policy_path}."
+                    )
+            coefficients = torch.tensor(
+                [candidate.coefficients for candidate in policies],
+                device=device,
+                dtype=torch.float32,
+            )
+            scheduler_weights = _repeat_weights_for_lanes(
+                weights=fsrs_weights.to(device),
+                active_batch=active_batch,
+                lanes=group_lanes,
+            )
+            ops = FSRS6CostConditionedADRBatchSchedulerOps(
+                weights=scheduler_weights,
+                policy=policy,
+                goal_cost_weight=torch.tensor(
+                    goal_cost_weights,
+                    device=device,
+                    dtype=torch.float32,
+                ),
+                coefficients=coefficients,
+                bounds=policy.bounds,
+                priority_mode=args.scheduler_priority,
+                device=device,
+                dtype=torch.float32,
+            )
         elif name == _ORACLE_DISTILL_SCHEDULER:
             if fsrs_weights is None:
                 raise ValueError(
@@ -973,6 +1127,7 @@ def run_batch_core(
             environment == "fsrs6"
             or "fsrs6" in scheduler_names
             or _ORACLE_DISTILL_SCHEDULER in scheduler_names
+            or bool(_COST_ADR_POLICY_SCHEDULERS.intersection(scheduler_names))
             or bool(
                 _ADR_POLICY_SCHEDULERS.intersection(scheduler_names)
                 - {"fsrs6_default_adr"}

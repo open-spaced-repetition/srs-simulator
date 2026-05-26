@@ -42,7 +42,7 @@ from simulator.batched_engine.mixed_scheduler import (
 )
 from simulator.scheduler_catalog import (
     PolicySource,
-    PORTFOLIO_CHILD_ACTION_SPACES,
+    action_space_allows_lambda_none,
     run_id_scoped_sweep_schedulers,
     schedulers_for_policy_source,
 )
@@ -67,6 +67,9 @@ TRAIN_OVERFIT_GATE_PASS_FRACTION = 0.8
 RUN_ID_SCOPED_SWEEP_SCHEDULERS = run_id_scoped_sweep_schedulers()
 FSRS6_ADR_POLICY_SOURCE_SCHEDULERS = schedulers_for_policy_source(
     PolicySource.FSRS6_ADR
+)
+FSRS6_COST_ADR_POLICY_SOURCE_SCHEDULERS = schedulers_for_policy_source(
+    PolicySource.FSRS6_COST_ADR
 )
 
 
@@ -941,8 +944,8 @@ def run_sweep(
                 break
 
             user_id = metadata.training_user_ids[0]
-            is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
-            if metadata.lambda_value is None and not is_portfolio_child:
+            allows_lambda_none = action_space_allows_lambda_none(metadata.action_space)
+            if metadata.lambda_value is None and not allows_lambda_none:
                 failures.append(FailureClass.INVALID_ARTIFACT)
                 notes.append(
                     f"Invalid scheduler artifact metadata {metadata_path}: "
@@ -968,7 +971,7 @@ def run_sweep(
                 )
             else:
                 baseline_dr_token = None
-                if is_portfolio_child:
+                if allows_lambda_none:
                     policy_token = metadata.policy_path.parent.name
                     output_dir = outputs_root / f"user_{user_id}" / policy_token
                     command_stem = f"user_{user_id}_{policy_token}"
@@ -4637,8 +4640,8 @@ def _build_sweep_artifact_lane(
     outputs_root: Path,
 ) -> SweepBatchLane:
     lambda_value = metadata.lambda_value
-    is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
-    if lambda_value is None and not is_portfolio_child:
+    allows_lambda_none = action_space_allows_lambda_none(metadata.action_space)
+    if lambda_value is None and not allows_lambda_none:
         raise ValueError(
             f"Invalid scheduler artifact metadata {metadata_path}: "
             "lambda_value is required for sweep."
@@ -4662,7 +4665,7 @@ def _build_sweep_artifact_lane(
         output_dir = (
             outputs_root / f"user_{user_id}" / f"sched_{metadata.scheduler_name}"
         )
-        if is_portfolio_child:
+        if allows_lambda_none:
             output_dir = output_dir / metadata.policy_path.parent.name
         else:
             assert lambda_token is not None
@@ -5245,6 +5248,13 @@ def _run_configured_batched_retention_sweep(
         fsrs6_adr_lambda_values=_sweep_policy_lambda_values(config)
         if scheduler_names & FSRS6_ADR_POLICY_SOURCE_SCHEDULERS
         else None,
+        fsrs6_cost_adr_policy=None,
+        fsrs6_cost_adr_policy_root=None,
+        fsrs6_cost_adr_train_run_root=run_root
+        if scheduler_names & FSRS6_COST_ADR_POLICY_SOURCE_SCHEDULERS
+        else None,
+        fsrs6_cost_adr_policy_manifest=None,
+        fsrs6_cost_adr_cost_weights=sweep_config.fsrs6_cost_adr_cost_weights,
         fsrs6_oracle_stationary_finite_distill_policy=None,
         fsrs6_oracle_stationary_finite_distill_policy_root=None,
         fsrs6_oracle_stationary_finite_distill_train_run_root=run_root
@@ -5356,6 +5366,12 @@ def _run_configured_batched_retention_sweep(
                     lane.fsrs6_adr_baseline_desired_retention
                 ),
                 "fsrs6_adr_lambda_value": lane.fsrs6_adr_lambda_value,
+                "fsrs6_cost_adr_policy": str(lane.fsrs6_cost_adr_policy)
+                if lane.fsrs6_cost_adr_policy is not None
+                else None,
+                "fsrs6_cost_adr_goal_cost_weight": (
+                    lane.fsrs6_cost_adr_goal_cost_weight
+                ),
                 "fsrs6_oracle_stationary_finite_distill_policy": str(
                     lane.fsrs6_oracle_stationary_finite_distill_policy
                 )
@@ -5516,6 +5532,26 @@ def _validate_batched_retention_lane_logs(
                     "metadata fsrs6_ap_baseline_desired_retention expected "
                     f"{lane.fsrs6_ap_baseline_desired_retention!r}, "
                     f"got {actual_baseline_dr!r}"
+                )
+        if lane.fsrs6_cost_adr_policy is not None:
+            actual_policy = meta.get("fsrs6_cost_adr_policy")
+            if actual_policy != str(lane.fsrs6_cost_adr_policy):
+                errors.append(
+                    "metadata fsrs6_cost_adr_policy expected "
+                    f"{lane.fsrs6_cost_adr_policy!s}, got {actual_policy!r}"
+                )
+        if lane.fsrs6_cost_adr_goal_cost_weight is not None:
+            actual_weight = meta.get("fsrs6_cost_adr_goal_cost_weight")
+            if not isinstance(actual_weight, (float, int)) or not math.isclose(
+                float(actual_weight),
+                lane.fsrs6_cost_adr_goal_cost_weight,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            ):
+                errors.append(
+                    "metadata fsrs6_cost_adr_goal_cost_weight expected "
+                    f"{lane.fsrs6_cost_adr_goal_cost_weight!r}, "
+                    f"got {actual_weight!r}"
                 )
         if lane.anki_sm2_ap_policy is not None:
             actual_policy = meta.get("anki_sm2_ap_policy")
@@ -6058,6 +6094,7 @@ def _training_uses_portfolio_trainer(config: ExperimentConfig) -> bool:
     if config.training_portfolio and not config.training_optimizer:
         return True
     if config.training_batch.trainer in {
+        "fsrs6_cost_adr_cmaes",
         "fsrs6_adr_portfolio",
         "fsrs6_oracle_stationary_finite_distill_portfolio",
         "fsrs6_ap_portfolio",
@@ -6067,6 +6104,7 @@ def _training_uses_portfolio_trainer(config: ExperimentConfig) -> bool:
     script_names = {Path(item).name for item in config.train_command_template}
     return bool(
         {
+            "train_cmaes_fsrs6_cost_adr.py",
             "train_fsrs6_adr_portfolio.py",
             "train_fsrs6_oracle_stationary_finite_distill_portfolio.py",
             "train_fsrs6_ap_portfolio.py",
@@ -6164,8 +6202,8 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: training_user_ids "
                 f"expected [{user_id}], got {list(metadata.training_user_ids)}."
             )
-        is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
-        if not is_portfolio_child:
+        allows_lambda_none = action_space_allows_lambda_none(metadata.action_space)
+        if not allows_lambda_none:
             if lambda_value is None:
                 return (
                     f"Invalid scheduler artifact metadata {path}: lambda_value is "
@@ -6196,7 +6234,7 @@ def _validate_train_artifacts(
                 f"Invalid scheduler artifact metadata {path}: lambda_value expected "
                 f"{lambda_value}, got {metadata.lambda_value}."
             )
-        if baseline_desired_retention is not None and not is_portfolio_child:
+        if baseline_desired_retention is not None and not allows_lambda_none:
             if metadata.baseline_desired_retention is None or not math.isclose(
                 metadata.baseline_desired_retention,
                 baseline_desired_retention,
@@ -6209,7 +6247,7 @@ def _validate_train_artifacts(
                     f"{baseline_desired_retention}, "
                     f"got {metadata.baseline_desired_retention}."
                 )
-        if allowed_baseline_desired_retentions is not None and not is_portfolio_child:
+        if allowed_baseline_desired_retentions is not None and not allows_lambda_none:
             if metadata.baseline_desired_retention is None:
                 return (
                     f"Invalid scheduler artifact metadata {path}: "
@@ -6335,14 +6373,14 @@ def _validate_sweep_artifact_metadata(
             f"Invalid scheduler artifact metadata {metadata_path}: sweep requires "
             "exactly one training_user_id."
         )
-    is_portfolio_child = metadata.action_space in PORTFOLIO_CHILD_ACTION_SPACES
-    if metadata.lambda_value is None and not is_portfolio_child:
+    allows_lambda_none = action_space_allows_lambda_none(metadata.action_space)
+    if metadata.lambda_value is None and not allows_lambda_none:
         return (
             f"Invalid scheduler artifact metadata {metadata_path}: lambda_value is "
             "required for sweep."
         )
     baseline_dr_values = _training_baseline_desired_retention_values(config)
-    if _training_metadata_requires_baseline_dr(config) and not is_portfolio_child:
+    if _training_metadata_requires_baseline_dr(config) and not allows_lambda_none:
         actual_dr = metadata.baseline_desired_retention
         if actual_dr is None or not any(
             math.isclose(actual_dr, expected, rel_tol=0.0, abs_tol=1e-9)

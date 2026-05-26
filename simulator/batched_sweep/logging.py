@@ -51,6 +51,8 @@ class BatchedSweepLogLane:
     fsrs6_adr_policy: Path | None = None
     fsrs6_adr_baseline_desired_retention: float | None = None
     fsrs6_adr_lambda_value: float | None = None
+    fsrs6_cost_adr_policy: Path | None = None
+    fsrs6_cost_adr_goal_cost_weight: float | None = None
     fsrs6_oracle_stationary_finite_distill_policy: Path | None = None
     fsrs6_oracle_stationary_finite_distill_goal_cost_weight: float | None = None
     fsrs6_ap_policy: Path | None = None
@@ -122,6 +124,7 @@ def _build_log_args(
     relearning_steps_arg: str | None,
     log_dir: Path,
     fsrs6_adr_policy: Path | None = None,
+    fsrs6_cost_adr_policy: Path | None = None,
     fsrs6_oracle_stationary_finite_distill_policy: Path | None = None,
     fsrs6_ap_policy: Path | None = None,
     anki_sm2_ap_policy: Path | None = None,
@@ -147,6 +150,8 @@ def _build_log_args(
         fsrs6_adr_policy=fsrs6_adr_policy,
         fsrs6_adr_baseline_desired_retention=None,
         fsrs6_adr_lambda_value=None,
+        fsrs6_cost_adr_policy=fsrs6_cost_adr_policy,
+        fsrs6_cost_adr_goal_cost_weight=None,
         fsrs6_oracle_stationary_finite_distill_policy=(
             fsrs6_oracle_stationary_finite_distill_policy
         ),
@@ -269,6 +274,7 @@ def simulate_and_log_lanes(
             relearning_steps_arg=relearning_steps_arg,
             log_dir=user_log_dir,
             fsrs6_adr_policy=lane.fsrs6_adr_policy,
+            fsrs6_cost_adr_policy=lane.fsrs6_cost_adr_policy,
             fsrs6_oracle_stationary_finite_distill_policy=(
                 lane.fsrs6_oracle_stationary_finite_distill_policy
             ),
@@ -279,6 +285,7 @@ def simulate_and_log_lanes(
             lane.fsrs6_adr_baseline_desired_retention
         )
         log_args.fsrs6_adr_lambda_value = lane.fsrs6_adr_lambda_value
+        log_args.fsrs6_cost_adr_goal_cost_weight = lane.fsrs6_cost_adr_goal_cost_weight
         log_args.fsrs6_oracle_stationary_finite_distill_goal_cost_weight = (
             lane.fsrs6_oracle_stationary_finite_distill_goal_cost_weight
         )
@@ -325,6 +332,7 @@ def simulate_and_log(
             desired_retention=desired_retention,
             fixed_interval=fixed_interval,
             fsrs6_adr_policy=getattr(args, "fsrs6_adr_policy", None),
+            fsrs6_cost_adr_policy=getattr(args, "fsrs6_cost_adr_policy", None),
             fsrs6_oracle_stationary_finite_distill_policy=getattr(
                 args, "fsrs6_oracle_stationary_finite_distill_policy", None
             ),

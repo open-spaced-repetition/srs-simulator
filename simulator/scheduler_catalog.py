@@ -8,6 +8,9 @@ from simulator.fsrs6_adr_policy import (
     FEATURE_VERSION_LOG_POLY,
     FEATURE_VERSION_LOG_POLY_TIME,
 )
+from simulator.fsrs6_cost_conditioned_adr_policy import (
+    FEATURE_VERSION_INTERVAL_MONO as COST_ADR_FEATURE_VERSION_INTERVAL_MONO,
+)
 from simulator.fsrs6_oracle_stationary_finite_distill_policy import (
     PORTFOLIO_CHILD_ACTION_SPACE as ORACLE_DISTILL_PORTFOLIO_CHILD_ACTION_SPACE,
 )
@@ -15,6 +18,7 @@ from simulator.fsrs6_oracle_stationary_finite_distill_policy import (
 
 class PolicySource(StrEnum):
     FSRS6_ADR = "fsrs6_adr"
+    FSRS6_COST_ADR = "fsrs6_cost_adr"
     FSRS6_ORACLE_STATIONARY_FINITE_DISTILL = "fsrs6_oracle_stationary_finite_distill"
     FSRS6_AP = "fsrs6_ap"
     ANKI_SM2_AP = "anki_sm2_ap"
@@ -170,6 +174,14 @@ SCHEDULER_DESCRIPTORS: dict[str, SchedulerDescriptor] = {
         policy_source=PolicySource.FSRS6_ADR,
         run_id_scoped_sweep=True,
     ),
+    "fsrs6_cost_adr": SchedulerDescriptor(
+        name="fsrs6_cost_adr",
+        supports_event=True,
+        supports_batched=True,
+        uses_desired_retention=False,
+        policy_source=PolicySource.FSRS6_COST_ADR,
+        run_id_scoped_sweep=True,
+    ),
     "fsrs6_oracle_stationary_finite_distill": SchedulerDescriptor(
         name="fsrs6_oracle_stationary_finite_distill",
         supports_event=True,
@@ -181,6 +193,8 @@ SCHEDULER_DESCRIPTORS: dict[str, SchedulerDescriptor] = {
 }
 
 
+FSRS6_COST_ADR_ACTION_SPACE = "sd_cost_interval_function"
+
 PORTFOLIO_CHILD_ACTION_SPACES = frozenset(
     {
         "sd_retention_function_portfolio_child",
@@ -189,6 +203,10 @@ PORTFOLIO_CHILD_ACTION_SPACES = frozenset(
         "fsrs6_ap_weight_delta_portfolio_child",
         "anki_sm2_ap_params_portfolio_child",
     }
+)
+
+LAMBDALESS_ACTION_SPACES = PORTFOLIO_CHILD_ACTION_SPACES | frozenset(
+    {FSRS6_COST_ADR_ACTION_SPACE}
 )
 
 
@@ -208,6 +226,11 @@ _FSRS6_ADR_VARIANTS: dict[str, FSRS6ADRVariant] = {
         action_space="sdt_retention_function",
         portfolio_child_action_space="sdt_retention_function_portfolio_child",
     ),
+}
+
+
+_FSRS6_COST_ADR_ACTION_SPACES: dict[str, str] = {
+    COST_ADR_FEATURE_VERSION_INTERVAL_MONO: FSRS6_COST_ADR_ACTION_SPACE,
 }
 
 
@@ -258,6 +281,10 @@ def is_portfolio_child_action_space(action_space: str) -> bool:
     return action_space in PORTFOLIO_CHILD_ACTION_SPACES
 
 
+def action_space_allows_lambda_none(action_space: str) -> bool:
+    return action_space in LAMBDALESS_ACTION_SPACES
+
+
 def fsrs6_adr_variant_for_feature_version(feature_version: str) -> FSRS6ADRVariant:
     try:
         return _FSRS6_ADR_VARIANTS[feature_version]
@@ -265,5 +292,16 @@ def fsrs6_adr_variant_for_feature_version(feature_version: str) -> FSRS6ADRVaria
         supported = ", ".join(sorted(_FSRS6_ADR_VARIANTS))
         raise ValueError(
             f"Unsupported FSRS6 ADR feature_version {feature_version!r}; "
+            f"expected one of: {supported}."
+        ) from exc
+
+
+def fsrs6_cost_adr_action_space_for_feature_version(feature_version: str) -> str:
+    try:
+        return _FSRS6_COST_ADR_ACTION_SPACES[feature_version]
+    except KeyError as exc:
+        supported = ", ".join(sorted(_FSRS6_COST_ADR_ACTION_SPACES))
+        raise ValueError(
+            f"Unsupported FSRS6 cost ADR feature_version {feature_version!r}; "
             f"expected one of: {supported}."
         ) from exc

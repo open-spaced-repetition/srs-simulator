@@ -9,6 +9,7 @@ from typing import Any
 import tomllib
 
 from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
+from simulator.batched_sweep.fsrs6_cost_adr_policy import DEFAULT_COST_WEIGHTS
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
 from simulator.defaults import (
     DEFAULT_COST_LIMIT_MINUTES,
@@ -87,6 +88,7 @@ class BatchedSweepConfig:
         logging_config = _table(raw, "logging", required=False)
         short_term = _table(raw, "short_term", required=False)
         fsrs6_adr = _table(raw, "fsrs6_adr", required=False)
+        fsrs6_cost_adr = _table(raw, "fsrs6_cost_adr", required=False)
         fsrs6_oracle_distill = _table(
             raw, "fsrs6_oracle_stationary_finite_distill", required=False
         )
@@ -226,6 +228,31 @@ class BatchedSweepConfig:
                 fsrs6_adr.get("lambda_values"),
                 "fsrs6_adr.lambda_values",
             ),
+            fsrs6_cost_adr_policy=_optional_path(
+                fsrs6_cost_adr.get("policy"),
+                "fsrs6_cost_adr.policy",
+                base_path=base_path,
+            ),
+            fsrs6_cost_adr_policy_root=_optional_path(
+                fsrs6_cost_adr.get("policy_root"),
+                "fsrs6_cost_adr.policy_root",
+                base_path=base_path,
+            ),
+            fsrs6_cost_adr_train_run_root=_optional_path(
+                fsrs6_cost_adr.get("train_run_root"),
+                "fsrs6_cost_adr.train_run_root",
+                base_path=base_path,
+            ),
+            fsrs6_cost_adr_policy_manifest=_optional_path(
+                fsrs6_cost_adr.get("policy_manifest"),
+                "fsrs6_cost_adr.policy_manifest",
+                base_path=base_path,
+            ),
+            fsrs6_cost_adr_cost_weights=_optional_float_list(
+                fsrs6_cost_adr.get("cost_weights"),
+                "fsrs6_cost_adr.cost_weights",
+            )
+            or DEFAULT_COST_WEIGHTS,
             fsrs6_oracle_stationary_finite_distill_policy=_optional_path(
                 fsrs6_oracle_distill.get("policy"),
                 "fsrs6_oracle_stationary_finite_distill.policy",
@@ -365,6 +392,9 @@ def _adapt_experiment_config(
     uses_fsrs6_adr_policy_source = bool(
         scheduler_names & schedulers_for_policy_source(PolicySource.FSRS6_ADR)
     )
+    uses_fsrs6_cost_adr_policy_source = bool(
+        scheduler_names & schedulers_for_policy_source(PolicySource.FSRS6_COST_ADR)
+    )
     uses_fsrs6_oracle_distill_policy_source = (
         "fsrs6_oracle_stationary_finite_distill" in scheduler_names
     )
@@ -389,6 +419,19 @@ def _adapt_experiment_config(
         if uses_fsrs6_adr_policy_source
         else None,
     )
+    fsrs6_cost_adr = _adapt_experiment_policy_source(
+        sweep,
+        prefix="fsrs6_cost_adr",
+        lambda_grid=None,
+        default_train_run_root=default_train_run_root
+        if uses_fsrs6_cost_adr_policy_source
+        else None,
+    )
+    if "cost_weights" not in fsrs6_cost_adr:
+        fsrs6_cost_adr["cost_weights"] = sweep.get(
+            "fsrs6_cost_adr_cost_weights",
+            list(DEFAULT_COST_WEIGHTS),
+        )
     fsrs6_oracle_distill = _adapt_experiment_policy_source(
         sweep,
         prefix="fsrs6_oracle_stationary_finite_distill",
@@ -443,6 +486,7 @@ def _adapt_experiment_config(
         "short_term": short_term,
         "fsrs6": fsrs6,
         "fsrs6_adr": fsrs6_adr,
+        "fsrs6_cost_adr": fsrs6_cost_adr,
         "fsrs6_oracle_stationary_finite_distill": fsrs6_oracle_distill,
         "fsrs6_ap": fsrs6_ap,
         "anki_sm2_ap": anki_sm2_ap,
@@ -484,6 +528,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     if isinstance(batch, Mapping):
         trainer = batch.get("trainer")
         if trainer in {
+            "fsrs6_cost_adr_cmaes",
             "fsrs6_adr_portfolio",
             "fsrs6_oracle_stationary_finite_distill_portfolio",
             "fsrs6_ap_portfolio",
@@ -496,6 +541,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     script_names = {Path(str(item)).name for item in command_template}
     return bool(
         {
+            "train_cmaes_fsrs6_cost_adr.py",
             "train_fsrs6_adr_portfolio.py",
             "train_fsrs6_oracle_stationary_finite_distill_portfolio.py",
             "train_fsrs6_ap_portfolio.py",

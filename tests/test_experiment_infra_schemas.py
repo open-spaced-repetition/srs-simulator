@@ -226,6 +226,32 @@ question = "Does candidate beat comparison?"
         self.assertTrue(config.to_dict()["training"]["batch"]["enabled"])
         self.assertEqual(config.to_dict()["training"]["ap"]["dr_batch_size"], 3)
 
+    def test_cost_adr_cmaes_profile_is_lambda_less(self) -> None:
+        raw = VALID_CONFIG.replace(
+            "lambda_grid = [0.0, 0.25, 0.5]",
+            (
+                'artifact_metadata_glob = "metadata.json"\n'
+                'command_template = ["uv", "run", "python", '
+                '"experiments/rl_scheduler/train_cmaes_fsrs6_cost_adr.py"]\n\n'
+                "[training.batch]\n"
+                "enabled = true\n"
+                'trainer = "auto"\n\n'
+                "[training.optimizer]\n"
+                'name = "cma_es"\n'
+                "population_size = 2\n"
+                "generations = 1\n"
+                "sigma0 = 1.0"
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertEqual(config.lambda_grid, ())
+        self.assertEqual(config.training_batch.trainer, "auto")
+
     def test_rejects_invalid_training_batch_trainer(self) -> None:
         raw = VALID_CONFIG.replace(
             "lambda_grid = [0.0, 0.25, 0.5]",

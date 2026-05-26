@@ -32,6 +32,10 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
     format_float_token,
     resolve_fsrs6_adr_policy_specs,
 )
+from simulator.batched_sweep.fsrs6_cost_adr_policy import (
+    DEFAULT_COST_WEIGHTS as DEFAULT_COST_ADR_COST_WEIGHTS,
+    resolve_fsrs6_cost_adr_policy_specs,
+)
 from simulator.batched_sweep.fsrs6_ap_policy import (
     resolve_fsrs6_ap_policy_specs,
 )
@@ -41,6 +45,11 @@ from simulator.batched_sweep.anki_sm2_ap_policy import (
 from simulator.defaults import DEFAULT_MAX_LANES_PER_BATCH
 from simulator.fsrs_defaults import DEFAULT_FSRS3_WEIGHTS, DEFAULT_FSRS6_WEIGHTS
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.fsrs6_cost_conditioned_adr_policy import (
+    ACTION_HEAD_INTERVAL,
+    FEATURE_VERSION_INTERVAL_MONO as COST_ADR_FEATURE_VERSION_INTERVAL_MONO,
+    FSRS6CostConditionedADRPolicy,
+)
 from simulator.fsrs6_ap_policy import FSRS6APPolicy
 from simulator.anki_sm2_ap_policy import AnkiSM2APPolicy
 from tests.lstm_batch_helpers import dummy_lstm_weights
@@ -103,6 +112,18 @@ def _write_ap_policy(path: Path, *, dr: float, offset: float = 0.0) -> None:
         base_weights=DEFAULT_FSRS6_WEIGHTS,
         search_vector=search_vector,
         baseline_desired_retention=dr,
+    )
+    policy.write_json(path)
+
+
+def _write_cost_adr_policy(path: Path, *, offset: float = 0.0) -> None:
+    coefficients = [0.0] * 24
+    coefficients[0] = offset
+    policy = FSRS6CostConditionedADRPolicy(
+        coefficients=tuple(coefficients),
+        action_head=ACTION_HEAD_INTERVAL,
+        feature_version=COST_ADR_FEATURE_VERSION_INTERVAL_MONO,
+        max_interval_days=36500.0,
     )
     policy.write_json(path)
 
@@ -226,6 +247,32 @@ class BatchedSweepConfigTests(unittest.TestCase):
         )
         self.assertIsNone(config.args.fsrs6_oracle_stationary_finite_distill_policy)
         self.assertFalse(config.args.no_progress)
+
+    def test_loads_cost_adr_cmaes_experiment_config(self) -> None:
+        config = load_batched_sweep_config(
+            REPO_ROOT
+            / "experiments"
+            / "rl_scheduler"
+            / "configs"
+            / "fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1.toml",
+            repo_root=REPO_ROOT,
+        )
+
+        self.assertEqual(config.args.user_ids, list(range(1, 9)))
+        self.assertEqual(config.envs, ("fsrs6", "lstm"))
+        self.assertEqual(config.schedulers, ("fsrs6_cost_adr",))
+        self.assertEqual(
+            config.args.fsrs6_cost_adr_cost_weights,
+            DEFAULT_COST_ADR_COST_WEIGHTS,
+        )
+        self.assertEqual(
+            config.args.fsrs6_cost_adr_train_run_root,
+            REPO_ROOT
+            / "artifacts"
+            / "rl_scheduler"
+            / "fsrs6_cost_adr_cmaes_users_1_8"
+            / "fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1_markov_off",
+        )
 
     def test_dry_run_accepts_rl_scheduler_experiment_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1192,6 +1239,124 @@ path = "policy.json"
         self.assertEqual(len(ops._groups), 1)
         group = ops._groups[0]
         self.assertEqual(int(group.lane_indices.numel()), 1)
+
+
+class FSRS6CostADRPolicyExpansionTests(unittest.TestCase):
+    def test_policy_root_expands_user_cost_weight_lanes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "train_outputs"
+            for user_id in (1, 2):
+                _write_cost_adr_policy(root / f"user_{user_id}" / "policy.json")
+
+            specs = resolve_fsrs6_cost_adr_policy_specs(
+                user_ids=[1, 2],
+                cost_weights=[0.0, 4.0],
+                policy_root=root,
+            )
+            ctx = BatchedSweepContext(
+                repo_root=REPO_ROOT,
+                benchmark_root=REPO_ROOT,
+                overrides={},
+                log_root=Path(tmp) / "logs",
+                batch_log_root=Path(tmp) / "logs" / "batch_logs",
+                envs=["fsrs6"],
+                schedulers=["fsrs6_cost_adr"],
+                dr_values=[0.50, 0.52],
+                fsrs6_cost_adr_policy_specs=specs,
+            )
+
+            lanes = _build_sweep_lanes(batch=[1, 2], ctx=ctx, environment="fsrs6")
+
+        self.assertEqual(len(specs), 4)
+        self.assertEqual(
+            [(spec.user_id, spec.cost_weight) for spec in specs],
+            [(1, 0.0), (1, 4.0), (2, 0.0), (2, 4.0)],
+        )
+        self.assertEqual(
+            [
+                (
+                    lane.user_id,
+                    lane.fsrs6_cost_adr_policy,
+                    lane.fsrs6_cost_adr_goal_cost_weight,
+                )
+                for lane in lanes
+            ],
+            [
+                (1, specs[0].path, 0.0),
+                (1, specs[1].path, 4.0),
+                (2, specs[2].path, 0.0),
+                (2, specs[3].path, 4.0),
+            ],
+        )
+        self.assertEqual(
+            [
+                lane.final_log_dir.relative_to(Path(tmp) / "logs").as_posix()
+                for lane in lanes
+            ],
+            [
+                "user_1/sched_fsrs6_cost_adr/policy_user_1/costw_0",
+                "user_1/sched_fsrs6_cost_adr/policy_user_1/costw_4",
+                "user_2/sched_fsrs6_cost_adr/policy_user_2/costw_0",
+                "user_2/sched_fsrs6_cost_adr/policy_user_2/costw_4",
+            ],
+        )
+
+    def test_multiple_cost_adr_lanes_share_one_scheduler_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "p1.json"
+            second = root / "p2.json"
+            _write_cost_adr_policy(first)
+            _write_cost_adr_policy(second, offset=1.0)
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=1,
+                    log_root=root / "logs" / "a",
+                    environment="lstm",
+                    scheduler_name="fsrs6_cost_adr",
+                    scheduler_spec="fsrs6_cost_adr",
+                    desired_retention=None,
+                    fixed_interval=None,
+                    fsrs6_cost_adr_policy=first,
+                    fsrs6_cost_adr_goal_cost_weight=0.0,
+                ),
+                BatchedSweepLogLane(
+                    user_id=2,
+                    log_root=root / "logs" / "b",
+                    environment="lstm",
+                    scheduler_name="fsrs6_cost_adr",
+                    scheduler_spec="fsrs6_cost_adr",
+                    desired_retention=None,
+                    fixed_interval=None,
+                    fsrs6_cost_adr_policy=second,
+                    fsrs6_cost_adr_goal_cost_weight=4.0,
+                ),
+            ]
+
+            ops = _build_mixed_scheduler_ops(
+                args=argparse.Namespace(scheduler_priority="low_retrievability"),
+                active_batch=[1, 2],
+                lanes=lanes,
+                fsrs_weights=torch.tensor(
+                    [DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS],
+                    dtype=torch.float32,
+                ),
+                fsrs_default_weights=None,
+                fsrs3_weights=None,
+                fsrs3_default_weights=None,
+                lstm_packed=None,
+                short_term_source=None,
+                device=torch.device("cpu"),
+            )
+
+        self.assertEqual(len(ops._groups), 1)
+        group = ops._groups[0]
+        self.assertEqual(int(group.lane_indices.numel()), 2)
+        self.assertEqual(tuple(group.ops._coefficients.shape), (2, 24))
+        self.assertEqual(
+            [round(float(value), 1) for value in group.ops._goal_cost_weight.tolist()],
+            [0.0, 4.0],
+        )
 
 
 class FSRS6APPolicyExpansionTests(unittest.TestCase):

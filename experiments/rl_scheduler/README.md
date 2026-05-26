@@ -7,10 +7,11 @@ CEM, CMA-ES, portfolio search, and other policy-search methods as long as the
 output is a scheduler artifact that can enter the same external evaluation
 pipeline.
 
-The current implemented research lines are `fsrs6_adr`, `fsrs6_ap`
-(Adaptive Parameters), and `anki_sm2_ap`: black-box optimizers learn
-scheduler-side FSRS-6 retention policies, directly search the 21 FSRS-6
-scheduler weights, or search the 7 Anki SM2 runtime parameters.
+The current implemented research lines are `fsrs6_adr`, `fsrs6_cost_adr`,
+`fsrs6_ap` (Adaptive Parameters), and `anki_sm2_ap`: black-box optimizers learn
+scheduler-side FSRS-6 retention policies, learn a cost-conditioned interval
+policy, directly search the 21 FSRS-6 scheduler weights, or search the 7 Anki
+SM2 runtime parameters.
 A core rule is
 that training and evaluation must not read the environment's hidden memory
 state. A learned scheduler must maintain its own scheduler state. For these
@@ -22,6 +23,9 @@ FSRS-6 state update to obtain `S` and `D`.
 - `run_experiment.py`: TOML-driven stage runner.
 - `train_cmaes_fsrs6_adr.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr`
   policies over `S,D`.
+- `train_cmaes_fsrs6_cost_adr.py`: CMA-ES trainer for one 24-parameter
+  `fsrs6_cost_adr` policy per user. The policy emits intervals from
+  scheduler-side `S,D` and a requested scalar cost weight.
 - `train_cmaes_fsrs6_ap.py`: CMA-ES FSRS-6 trainer that searches adaptive
   scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
 - `train_fsrs6_ap_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
@@ -219,6 +223,13 @@ Representative profiles:
   `fsrs6_adr` scheduler trained as 23 simplified 3-parameter
   `fsrs6_adr_log_linear_v1` portfolio children per user with SMS-EMOA
   hypervolume optimization.
+- `configs/fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1.toml`: the
+  cost-conditioned ADR scheduler trained as one 24-parameter
+  `fsrs6_cost_adr` interval policy per user with CMA-ES pop16/gen20. CMA-ES
+  starts from all-zero coefficients, evaluates exactly the 16 goal cost weights
+  `0,1,2,4,8,16,32,48,64,96,128,192,256,384,512,1024`, and maximizes pure
+  hypervolume delta over the FSRS-6 baseline frontier. Coverage is a diagnostic,
+  not a training penalty or promotion metric.
 - `configs/fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml`: the ADR
   portfolio scheduler trained with the same pop16/off16/gen20 budget while the
   ADR scheduler state uses default FSRS-6 weights instead of per-user fitted
@@ -257,6 +268,10 @@ Training target:
 - Baseline scheduler: FSRS-6.
 - Candidate schedulers: FSRS6 ADR and FSRS6 AP (Adaptive Parameters).
 - ADR action: emit desired retention from scheduler-side FSRS-6 `S,D`.
+- Cost-conditioned ADR action: emit an interval from scheduler-side FSRS-6
+  `S,D` and a goal cost weight. These artifacts use action space
+  `sd_cost_interval_function`, have no lambda, and have no baseline DR because
+  one policy supplies the whole cost-weight curve.
 - AP action: search the full 21 FSRS-6 scheduler weights as bounded
   standardized deltas from each user's fitted FSRS-6 weights, then evaluate the
   resulting ordinary FSRS-6 scheduler.
@@ -329,6 +344,14 @@ Portfolio baseline selection:
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --config experiments/rl_scheduler/configs/fsrs6_adr_portfolio_users_1_8_v3.toml \
   --run-id fsrs6_adr_portfolio_users_1_8_v3
+```
+
+Matched-budget cost-conditioned ADR run:
+
+```bash
+uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1.toml \
+  --run-id fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1_markov_off
 ```
 
 Sampling benchmark:

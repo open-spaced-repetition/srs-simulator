@@ -265,6 +265,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     if isinstance(batch, Mapping):
         trainer = batch.get("trainer")
         if trainer in {
+            "fsrs6_cost_adr_cmaes",
             "fsrs6_adr_portfolio",
             "fsrs6_oracle_stationary_finite_distill_portfolio",
             "fsrs6_ap_portfolio",
@@ -277,6 +278,7 @@ def _training_uses_portfolio_trainer(training: Mapping[str, Any]) -> bool:
     script_names = {Path(str(item)).name for item in command_template}
     return bool(
         {
+            "train_cmaes_fsrs6_cost_adr.py",
             "train_fsrs6_adr_portfolio.py",
             "train_fsrs6_oracle_stationary_finite_distill_portfolio.py",
             "train_fsrs6_ap_portfolio.py",
@@ -639,6 +641,7 @@ class BatchedSweepStageConfig:
     start_retention: float = 0.50
     end_retention: float = 0.98
     step: float = 0.02
+    fsrs6_cost_adr_cost_weights: tuple[float, ...] | None = None
     no_progress: bool = True
     no_log: bool = False
 
@@ -647,6 +650,7 @@ class BatchedSweepStageConfig:
         log_dir = raw.get("log_dir")
         torch_device = raw.get("torch_device")
         cuda_devices = raw.get("cuda_devices")
+        cost_adr_cost_weights = raw.get("fsrs6_cost_adr_cost_weights")
         env_overrides = _sweep_environment_batch_configs(
             raw.get("env_overrides"),
             "sweep.env_overrides",
@@ -685,6 +689,12 @@ class BatchedSweepStageConfig:
                 or 0.98
             ),
             step=float(_optional_float(raw.get("step", 0.02), "sweep.step") or 0.02),
+            fsrs6_cost_adr_cost_weights=_float_tuple(
+                cost_adr_cost_weights,
+                "sweep.fsrs6_cost_adr_cost_weights",
+            )
+            if cost_adr_cost_weights is not None
+            else None,
             no_progress=_require_bool(
                 raw.get("no_progress", True), "sweep.no_progress"
             ),
@@ -735,6 +745,9 @@ class BatchedSweepStageConfig:
             "start_retention": self.start_retention,
             "end_retention": self.end_retention,
             "step": self.step,
+            "fsrs6_cost_adr_cost_weights": list(self.fsrs6_cost_adr_cost_weights)
+            if self.fsrs6_cost_adr_cost_weights is not None
+            else None,
             "no_progress": self.no_progress,
             "no_log": self.no_log,
         }
@@ -769,12 +782,14 @@ class TrainingBatchConfig:
             "fsrs6_adr_portfolio",
             "fsrs6_oracle_stationary_finite_distill_portfolio",
             "fsrs6_adr_cmaes",
+            "fsrs6_cost_adr_cmaes",
             "fsrs6_ap_cmaes",
             "fsrs6_ap_portfolio",
             "anki_sm2_ap_portfolio",
         }:
             raise ValueError(
                 "training.batch.trainer must be auto, fsrs6_adr_cmaes, "
+                "fsrs6_cost_adr_cmaes, "
                 "fsrs6_adr_portfolio, "
                 "fsrs6_oracle_stationary_finite_distill_portfolio, "
                 "fsrs6_ap_cmaes, fsrs6_ap_portfolio, or anki_sm2_ap_portfolio."

@@ -34,6 +34,7 @@ from simulator.experiment_infra.baseline_dr_selection import (
 
 RUN_ID_SCOPED_SCHEDULERS = run_id_scoped_sweep_schedulers()
 ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
+COST_ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_COST_ADR)
 ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_stationary_finite_distill"
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
@@ -365,6 +366,34 @@ def _resolve_fsrs6_adr_label(
 def _resolve_fsrs6_adr_title(meta: Dict[str, Any], base_dirs: Sequence[Path]) -> str:
     title, _retention = _resolve_fsrs6_adr_label(meta, base_dirs)
     return title
+
+
+def _resolve_fsrs6_cost_adr_label(
+    meta: Dict[str, Any], base_dirs: Sequence[Path]
+) -> str:
+    weight = meta.get("fsrs6_cost_adr_goal_cost_weight")
+    if isinstance(weight, (float, int)) and not isinstance(weight, bool):
+        return f"w={float(weight):.6g}"
+    policy_path = meta.get("fsrs6_cost_adr_policy")
+    if not policy_path:
+        return "FSRS6 cost ADR"
+    path = Path(policy_path)
+    if not path.is_absolute():
+        for base_dir in base_dirs:
+            candidate = (base_dir / path).resolve()
+            if candidate.exists():
+                path = candidate
+                break
+    if path.exists():
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            raw_title = payload.get("title")
+            if isinstance(raw_title, str) and raw_title.strip():
+                return raw_title.strip()
+        except (OSError, json.JSONDecodeError):
+            pass
+    return f"Cost ADR {path.parent.name}"
 
 
 def _load_policy_sibling_metadata(
@@ -794,6 +823,8 @@ def _iter_log_entries(
                 )
             ):
                 continue
+        elif scheduler in COST_ADR_POLICY_SCHEDULERS:
+            title = _resolve_fsrs6_cost_adr_label(meta, base_dirs)
         elif scheduler == "fsrs6_ap":
             title, fsrs6_ap_baseline_dr = _resolve_fsrs6_ap_label(meta, base_dirs)
             if fsrs6_ap_baseline_dr is not None and (
@@ -857,6 +888,18 @@ def _iter_log_entries(
             series_identity = _run_series_identity(entry)
             entry["series_key"] = series_identity
             entry["series_label"] = series_identity
+        elif scheduler in COST_ADR_POLICY_SCHEDULERS:
+            entry.update(
+                {
+                    "fsrs6_cost_adr_policy": meta.get("fsrs6_cost_adr_policy"),
+                    "fsrs6_cost_adr_goal_cost_weight": meta.get(
+                        "fsrs6_cost_adr_goal_cost_weight"
+                    ),
+                }
+            )
+            series_identity = _run_series_identity(entry)
+            entry["series_key"] = series_identity
+            entry["series_label"] = series_identity
         elif scheduler == "fsrs6_ap":
             entry.update(
                 {
@@ -908,6 +951,16 @@ def _no_desired_dedupe_key(
                 title_key = f"{title_key}|dr={baseline_dr}"
             if lambda_value is not None:
                 title_key = f"{title_key}|lambda={lambda_value}"
+        series_key = entry.get("series_key")
+        if isinstance(series_key, str) and series_key:
+            title_key = f"{title_key}|{series_key}"
+    if scheduler_name in COST_ADR_POLICY_SCHEDULERS:
+        policy_path = entry.get("fsrs6_cost_adr_policy")
+        if isinstance(policy_path, str) and policy_path:
+            title_key = policy_path
+            goal_weight = entry.get("fsrs6_cost_adr_goal_cost_weight")
+            if goal_weight is not None:
+                title_key = f"{title_key}|w={goal_weight}"
         series_key = entry.get("series_key")
         if isinstance(series_key, str) and series_key:
             title_key = f"{title_key}|{series_key}"

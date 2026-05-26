@@ -87,7 +87,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(fsrs6, fsrs6_default, fsrs3, fsrs3_default, lstm, "
             "anki_sm2, anki_sm2_ap, memrise, fixed, fsrs6_adr, "
             "fsrs6_adr_time, fsrs6_default_adr, "
-            "fsrs6_oracle_stationary_finite_distill, fsrs6_ap)."
+            "fsrs6_cost_adr, fsrs6_oracle_stationary_finite_distill, fsrs6_ap)."
         ),
     )
     add_retention_range_args(parser)
@@ -137,6 +137,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Optional comma-separated lambda values to select from an FSRS6 ADR "
             "policy root or manifest."
         ),
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-policy",
+        type=Path,
+        default=None,
+        help="Path to an FSRS6 cost-conditioned ADR policy JSON when using --sched fsrs6_cost_adr.",
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-policy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Root containing trained FSRS6 cost ADR policy artifacts, usually "
+            "train-overfit/train_outputs."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-train-run-root",
+        type=Path,
+        default=None,
+        help=(
+            "Training run root; treated as "
+            "<root>/train-overfit/train_outputs for FSRS6 cost ADR policy discovery."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-policy-manifest",
+        type=Path,
+        default=None,
+        help="TOML manifest with [[policies]] FSRS6 cost ADR entries.",
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-cost-weights",
+        default=None,
+        help="Optional comma-separated goal cost weights for fsrs6_cost_adr lanes.",
     )
     parser.add_argument(
         "--fsrs6-ap-policy",
@@ -306,6 +341,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.fsrs6_adr_lambda_values = tuple(
             float(item) for item in parse_csv(args.fsrs6_adr_lambda_values)
         )
+    if isinstance(args.fsrs6_cost_adr_cost_weights, str):
+        args.fsrs6_cost_adr_cost_weights = tuple(
+            float(item) for item in parse_csv(args.fsrs6_cost_adr_cost_weights)
+        )
     if isinstance(args.fsrs6_ap_lambda_values, str):
         args.fsrs6_ap_lambda_values = tuple(
             float(item) for item in parse_csv(args.fsrs6_ap_lambda_values)
@@ -392,6 +431,11 @@ def _merge_config_args(
         "fsrs6_adr_train_run_root": ("--fsrs6-adr-train-run-root",),
         "fsrs6_adr_policy_manifest": ("--fsrs6-adr-policy-manifest",),
         "fsrs6_adr_lambda_values": ("--fsrs6-adr-lambda-values",),
+        "fsrs6_cost_adr_policy": ("--fsrs6-cost-adr-policy",),
+        "fsrs6_cost_adr_policy_root": ("--fsrs6-cost-adr-policy-root",),
+        "fsrs6_cost_adr_train_run_root": ("--fsrs6-cost-adr-train-run-root",),
+        "fsrs6_cost_adr_policy_manifest": ("--fsrs6-cost-adr-policy-manifest",),
+        "fsrs6_cost_adr_cost_weights": ("--fsrs6-cost-adr-cost-weights",),
         "fsrs6_oracle_stationary_finite_distill_policy": (
             "--fsrs6-oracle-stationary-finite-distill-policy",
         ),
@@ -456,6 +500,8 @@ def _print_dry_run(plan) -> None:
         print(f"example log dir: {plan.example_log_dir}")
     if plan.ctx.fsrs6_adr_policy_specs:
         print(f"fsrs6_adr policies: {len(plan.ctx.fsrs6_adr_policy_specs)}")
+    if plan.ctx.fsrs6_cost_adr_policy_specs:
+        print(f"fsrs6_cost_adr lanes: {len(plan.ctx.fsrs6_cost_adr_policy_specs)}")
     if plan.ctx.fsrs6_oracle_stationary_finite_distill_policy_specs:
         print(
             "fsrs6_oracle_stationary_finite_distill policies: "
