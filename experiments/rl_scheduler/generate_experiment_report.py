@@ -227,7 +227,7 @@ def render_report_from_summary(
                 "run",
                 "scheduler",
                 "config",
-                "portfolio budget",
+                "training budget",
                 "review Markov",
                 "baseline DR manifest",
             ],
@@ -477,6 +477,8 @@ def _run_metadata(
     run_record = _read_optional_json(run_root / "analyze-pareto" / "run_record.json")
     training = _mapping(resolved.get("training"))
     portfolio = _mapping(training.get("portfolio"))
+    optimizer = _mapping(training.get("optimizer"))
+    policy_search = _mapping(training.get("policy_search"))
     baseline_dr_selection = _mapping(resolved.get("baseline_dr_selection"))
     simulation = _mapping(resolved.get("simulation"))
     users = _mapping(resolved.get("users"))
@@ -501,7 +503,11 @@ def _run_metadata(
         if isinstance(analyze_filters.get("envs"), list)
         else [],
         "portfolio_budget": dict(portfolio),
-        "portfolio_budget_text": _portfolio_budget_text(portfolio),
+        "portfolio_budget_text": _training_budget_text(
+            portfolio=portfolio,
+            optimizer=optimizer,
+            policy_search=policy_search,
+        ),
         "baseline_dr_manifest": _display_path_value(
             baseline_dr_selection.get("manifest")
         ),
@@ -544,6 +550,35 @@ def _portfolio_budget_text(portfolio: dict[str, Any]) -> str:
         for key in keys
         if portfolio.get(key) is not None
     ]
+    return ", ".join(parts) if parts else "-"
+
+
+def _training_budget_text(
+    *,
+    portfolio: dict[str, Any],
+    optimizer: dict[str, Any],
+    policy_search: dict[str, Any],
+) -> str:
+    portfolio_text = _portfolio_budget_text(portfolio)
+    if portfolio_text != "-":
+        return portfolio_text
+    labels = {
+        "population_size": "population",
+        "generations": "generations",
+        "sigma0": "sigma0",
+    }
+    parts = []
+    optimizer_name = optimizer.get("name")
+    if optimizer_name is not None:
+        parts.append(f"optimizer={optimizer_name}")
+    parts.extend(
+        f"{labels[key]}={optimizer[key]}"
+        for key in ("population_size", "generations", "sigma0")
+        if optimizer.get(key) is not None
+    )
+    cost_weights = policy_search.get("cost_weights")
+    if isinstance(cost_weights, list):
+        parts.append(f"cost_weights={len(cost_weights)}")
     return ", ".join(parts) if parts else "-"
 
 
@@ -645,6 +680,11 @@ def _training_hv_gains(run_root: Path) -> dict[str, Any]:
                     user_id = int(record["user_id"])
                 if record.get("event") == "sms_emoa_generation":
                     final_gain = _number(record.get("hypervolume_improvement"))
+                elif record.get("event") in {
+                    "cmaes_generation",
+                    "cmaes_completed",
+                }:
+                    final_gain = _number(record.get("best_hypervolume_delta"))
         if user_id is None:
             user_id = _user_id_from_path(path)
         if user_id is not None and final_gain is not None:
@@ -1039,9 +1079,19 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
     all_hv_negative = bool(deltas) and all(
         (_number(delta.get("hv_delta_sum")) or 0.0) < 0.0 for delta in deltas
     )
+    all_primary_metrics_positive = bool(deltas) and all(
+        (_number(delta.get(key)) or 0.0) > 0.0
+        for delta in deltas
+        for key in (
+            "hv_delta_sum",
+            "same_budget_memory_lift_auc",
+            "same_target_time_saved_auc",
+        )
+    )
     if all_hv_negative:
+        decision = f"Do not promote `{candidate_scheduler}`."
         interpretation = (
-            f"With the matched portfolio budget, {candidate_label} remains behind "
+            f"With the matched training budget, {candidate_label} remains behind "
             f"{comparison_label} on HV; same-budget memory lift and same-target "
             "time saved deltas are:"
         )
@@ -1049,7 +1099,20 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
             "Training HV gains and lower-time sampled policy points do not survive "
             "external Pareto evaluation."
         )
+    elif all_primary_metrics_positive:
+        decision = f"Promote `{candidate_scheduler}`."
+        interpretation = (
+            f"With the matched training budget, {candidate_label} exceeds "
+            f"{comparison_label} on every reported external Pareto environment for "
+            "HV, same-budget memory lift, and same-target time saved. "
+            "Candidate-minus-comparison deltas are:"
+        )
+        diagnostic_note = (
+            "Coverage and sampled policy-point diagnostics remain secondary checks; "
+            "the promotion decision is based on external Pareto metrics."
+        )
     else:
+        decision = f"Promotion decision for `{candidate_scheduler}` is inconclusive."
         interpretation = (
             "Candidate-minus-comparison deltas on the primary external Pareto "
             "metrics are:"
@@ -1059,9 +1122,7 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
             "against the external Pareto metrics."
         )
     lines = [
-        f"Do not promote `{candidate_scheduler}`."
-        if all_hv_negative
-        else f"Promotion decision for `{candidate_scheduler}` is inconclusive.",
+        decision,
         "",
         interpretation,
         "",

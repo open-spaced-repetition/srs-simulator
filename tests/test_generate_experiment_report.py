@@ -119,7 +119,28 @@ def _write_run(
     include_gpu_monitor: bool = True,
     include_relative_metrics: bool = True,
     legacy_metric_names: bool = False,
+    use_policy_search_budget: bool = False,
 ) -> None:
+    if use_policy_search_budget:
+        training_config: dict[str, object] = {
+            "optimizer": {
+                "name": "cma_es",
+                "population_size": 16,
+                "generations": 20,
+                "sigma0": 1.0,
+            },
+            "policy_search": {"cost_weights": [0.0, 1.0, 2.0]},
+            "portfolio": {},
+        }
+    else:
+        training_config = {
+            "portfolio": {
+                "population_size": 16,
+                "offspring_size": 16,
+                "generations": 20,
+                "portfolio_size": 16,
+            }
+        }
     _write_json(
         root / "analyze-pareto" / "analyze_pareto_outputs" / "analysis_summary.json",
         _analysis_summary(
@@ -166,14 +187,7 @@ def _write_run(
                 "manifest": "artifacts/rl_scheduler/baseline_dr_selection/test.json",
                 "target_count": 16,
             },
-            "training": {
-                "portfolio": {
-                    "population_size": 16,
-                    "offspring_size": 16,
-                    "generations": 20,
-                    "portfolio_size": 16,
-                }
-            },
+            "training": training_config,
         },
     )
     _write_json(root / "train-overfit" / "gate_summary.json", {"passed": True})
@@ -263,6 +277,7 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertIn(f"Machine summary: `{summary_path}`", markdown)
         self.assertIn("## Provenance", markdown)
         self.assertIn("## Conclusion", markdown)
+        self.assertIn("Promote `candidate_sched`.", markdown)
         self.assertIn("## Diagnostics", markdown)
         self.assertIn("policy-point avg memorized", markdown)
         self.assertIn("same-budget memory lift / baseline", markdown)
@@ -305,6 +320,93 @@ class GenerateExperimentReportTests(unittest.TestCase):
             2.0,
         )
         self.assertIn("Candidate - Comparison", markdown)
+
+    def test_policy_search_budget_is_reported_when_portfolio_budget_is_absent(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "candidate"
+            comparison = root / "comparison"
+            _write_run(
+                candidate,
+                scheduler="candidate_sched",
+                hv_delta=20.0,
+                user_delta=3.0,
+                use_policy_search_budget=True,
+            )
+            _write_run(
+                comparison, scheduler="comparison_sched", hv_delta=12.0, user_delta=1.0
+            )
+
+            _, report_path, _ = generate_report(
+                run_root=candidate,
+                comparison_run_root=comparison,
+                output_path=root / "docs" / "report.md",
+                candidate_label="Candidate",
+                comparison_label="Comparison",
+            )
+
+            markdown = report_path.read_text(encoding="utf-8")
+
+        self.assertIn("training budget", markdown)
+        self.assertIn(
+            "optimizer=cma_es, population=16, generations=20, sigma0=1.0, "
+            "cost_weights=3",
+            markdown,
+        )
+
+    def test_cmaes_training_progress_reports_final_best_hv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "candidate"
+            comparison = root / "comparison"
+            _write_run(
+                candidate, scheduler="candidate_sched", hv_delta=20.0, user_delta=3.0
+            )
+            _write_run(
+                comparison, scheduler="comparison_sched", hv_delta=12.0, user_delta=1.0
+            )
+            progress = (
+                candidate
+                / "train-overfit"
+                / "train_outputs"
+                / "user_1"
+                / "training_progress.jsonl"
+            )
+            progress.write_text(
+                json.dumps({"event": "started", "user_id": 1})
+                + "\n"
+                + json.dumps(
+                    {
+                        "event": "cmaes_generation",
+                        "best_hypervolume_delta": 7.0,
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "event": "cmaes_completed",
+                        "best_hypervolume_delta": 9.0,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            _, report_path, summary = generate_report(
+                run_root=candidate,
+                comparison_run_root=comparison,
+                output_path=root / "docs" / "report.md",
+                candidate_label="Candidate",
+                comparison_label="Comparison",
+            )
+
+            markdown = report_path.read_text(encoding="utf-8")
+
+        self.assertEqual(summary["training_hv_gains"]["candidate"]["users"], 1)
+        self.assertEqual(summary["training_hv_gains"]["candidate"]["sum"], 9.0)
+        self.assertIn("| Candidate | 1 | 9 |", markdown)
 
     def test_historical_runs_without_monitor_report_torch_cuda_peaks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
