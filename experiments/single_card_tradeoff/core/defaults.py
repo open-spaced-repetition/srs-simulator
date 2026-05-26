@@ -81,6 +81,9 @@ DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT = Path(
     "artifacts/rl_scheduler/fsrs6_adr_portfolio_users_1_8/"
     "fsrs6_adr_portfolio_users_1_8_pop16_v1"
 )
+DEFAULT_FSRS6_COST_ADR_POLICY = Path(
+    "artifacts/single_card_tradeoff/fsrs6_cost_adr_policy.json"
+)
 
 FSRS6_ORACLE_SCHEDULER = "fsrs6_oracle"
 FSRS6_ORACLE_INFINITE_SCHEDULER = "fsrs6_oracle_infinite"
@@ -105,4 +108,5 @@ FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER = (
 )
 UVFA_PPO_SCHEDULER = "uvfa_ppo"
 UVFA_PPO_RNN_INTERVAL_SCHEDULER = "uvfa_ppo_rnn_interval"
+FSRS6_COST_ADR_SCHEDULER = "fsrs6_cost_adr"
 FSRS6_ADR_SCHEDULERS = frozenset(schedulers_for_policy_source(PolicySource.FSRS6_ADR))

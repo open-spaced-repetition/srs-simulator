@@ -15,11 +15,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.single_card_tradeoff.cli import run_tradeoff_config
 from experiments.single_card_tradeoff.cli import tradeoff
+from experiments.single_card_tradeoff.core.results import write_csv
 from experiments.single_card_tradeoff.core.tradeoff_runner import _plot_sort_key
 from experiments.single_card_tradeoff.core import tradeoff_runner
 from simulator.batched_sweep.fsrs6_adr_policy import format_float_token
 from simulator.experiment_infra import validate_scheduler_artifact
 from simulator.fsrs6_adr_policy import FEATURE_VERSION_LOG_POLY, FSRS6ADRPolicy
+from simulator.fsrs6_cost_conditioned_adr_policy import FSRS6CostConditionedADRPolicy
 from simulator.scheduler_catalog import fsrs6_adr_variant_for_feature_version
 
 
@@ -46,6 +48,9 @@ def _base_args(policy_path: Path | None) -> argparse.Namespace:
         fsrs6_adr_train_run_root=None,
         fsrs6_adr_policy_manifest=None,
         fsrs6_adr_lambda_values=None,
+        fsrs6_cost_adr_policy=None,
+        fsrs6_cost_adr_policy_template=None,
+        fsrs6_cost_adr_cost_weights="0,4",
     )
 
 
@@ -59,6 +64,13 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
             specs,
             [("fsrs6", "fsrs6", None), ("fsrs6_adr", "fsrs6_adr", None)],
         )
+
+    def test_run_specs_accepts_cost_conditioned_adr(self) -> None:
+        args = argparse.Namespace(sched="fsrs6_cost_adr", fixed_intervals=None)
+
+        specs = tradeoff._run_specs(args)
+
+        self.assertEqual(specs, [("fsrs6_cost_adr", "fsrs6_cost_adr", None)])
 
     def test_run_specs_accepts_interval_action_interpolation(self) -> None:
         args = argparse.Namespace(
@@ -136,6 +148,58 @@ class SingleCardTradeoffADRTests(unittest.TestCase):
         self.assertEqual(rows[0]["fsrs6_adr_policy"], str(policy_path.resolve()))
         self.assertEqual(rows[0]["fsrs6_adr_baseline_desired_retention"], 0.9)
         self.assertGreater(rows[0]["card_total_reviews"], 0.0)
+
+    def test_runs_cost_conditioned_policy_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_path = Path(tmp) / "policy.json"
+            FSRS6CostConditionedADRPolicy.baseline_retention(
+                desired_retention=0.9,
+            ).write_json(policy_path)
+            args = _base_args(None)
+            args.fsrs6_cost_adr_policy = policy_path
+            args.fsrs6_cost_adr_cost_weights = "0,4"
+
+            rows = tradeoff_runner._run_fsrs6_cost_adr(
+                args,
+                environment_name="fsrs6_default",
+                scheduler_spec="fsrs6_cost_adr",
+                seed=42,
+            )
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["scheduler"] for row in rows}, {"fsrs6_cost_adr"})
+        self.assertEqual([row["goal_cost_weight"] for row in rows], [0.0, 4.0])
+        self.assertTrue(
+            all(row["fsrs6_cost_adr_policy"] == str(policy_path) for row in rows)
+        )
+        self.assertTrue(all(row["card_total_reviews"] > 0.0 for row in rows))
+
+    def test_result_csv_accepts_cost_conditioned_policy_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "results.csv"
+
+            write_csv(
+                output,
+                [
+                    {"scheduler": "fsrs6"},
+                    {
+                        "scheduler": "fsrs6_cost_adr",
+                        "fsrs6_cost_adr_policy": "policy.json",
+                        "fsrs6_cost_adr_policy_title": "policy",
+                        "fsrs6_cost_adr_feature_version": (
+                            "fsrs6_cost_adr_interval_mono_v1"
+                        ),
+                        "fsrs6_cost_adr_action_head": "interval",
+                        "fsrs6_cost_adr_parameter_count": 32,
+                        "fsrs6_cost_adr_cost_weight_min": 0.0,
+                        "fsrs6_cost_adr_cost_weight_max": 1024.0,
+                    },
+                ],
+            )
+            self.assertIn(
+                "fsrs6_cost_adr_policy",
+                output.read_text(encoding="utf-8"),
+            )
 
     def test_plot_sort_key_orders_native_adr_by_lambda(self) -> None:
         rows = [

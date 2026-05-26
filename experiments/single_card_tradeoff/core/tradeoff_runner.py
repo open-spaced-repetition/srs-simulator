@@ -39,6 +39,7 @@ from experiments.single_card_tradeoff.core.config import (
 from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_FIXED_INTERVALS,
     DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT,
+    DEFAULT_FSRS6_COST_ADR_POLICY,
     DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_INFINITE_DISTILL_POLICY,
@@ -51,6 +52,7 @@ from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_UVFA_PPO_POLICY,
     DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY,
     FSRS6_ADR_SCHEDULERS,
+    FSRS6_COST_ADR_SCHEDULER,
     FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER,
     FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER,
@@ -107,6 +109,9 @@ from simulator.batched_sweep.fsrs6_adr_policy import (
     resolve_fsrs6_adr_policy_specs,
 )
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.fsrs6_cost_conditioned_adr_policy import (
+    FSRS6CostConditionedADRPolicy,
+)
 from simulator.scheduler_spec import (
     format_float,
     normalize_fixed_interval,
@@ -116,6 +121,9 @@ from simulator.schedulers.anki_sm2 import AnkiSM2BatchSchedulerOps
 from simulator.schedulers.fixed import FixedBatchSchedulerOps
 from simulator.schedulers.fsrs import FSRS3BatchSchedulerOps, FSRS6BatchSchedulerOps
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
+from simulator.schedulers.fsrs6_cost_conditioned_adr import (
+    FSRS6CostConditionedADRBatchSchedulerOps,
+)
 from simulator.schedulers.hlr import HLRBatchSchedulerOps
 from simulator.schedulers.lstm import LSTMBatchSchedulerOps
 from simulator.schedulers.memrise import MemriseBatchSchedulerOps
@@ -153,6 +161,7 @@ __all__ = [
     "DEFAULT_FSRS6_ORACLE_INTERVAL_DISTILL_POLICY",
     "DEFAULT_FSRS6_ORACLE_RETENTION_DISTILL_POLICY",
     "DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY",
+    "DEFAULT_FSRS6_COST_ADR_POLICY",
     "DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS",
     "DEFAULT_SCALARIZATION_TRAIN_COST_WEIGHTS",
     "DEFAULT_TARGET_RETENTIONS",
@@ -171,6 +180,7 @@ __all__ = [
     "FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER",
     "FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER",
     "FSRS6_ORACLE_SCHEDULER",
+    "FSRS6_COST_ADR_SCHEDULER",
     "MIN_TARGET_RETENTION",
     "UVFA_PPO_RNN_INTERVAL_SCHEDULER",
     "UVFA_PPO_SCHEDULER",
@@ -1405,6 +1415,122 @@ def _policy_batches(
     ]
 
 
+@dataclass(frozen=True)
+class FSRS6CostADRPolicySpec:
+    user_id: int
+    cost_weight: float
+    path: Path
+
+
+def _cost_adr_policy_batches(
+    specs: Sequence[FSRS6CostADRPolicySpec],
+    *,
+    batch_size: int,
+) -> list[list[FSRS6CostADRPolicySpec]]:
+    if not specs:
+        return []
+    chunk_size = len(specs) if batch_size <= 0 else batch_size
+    return [
+        list(specs[idx : idx + chunk_size]) for idx in range(0, len(specs), chunk_size)
+    ]
+
+
+def _fsrs6_cost_adr_cost_weights(args: argparse.Namespace) -> list[float]:
+    raw = getattr(args, "fsrs6_cost_adr_cost_weights", None)
+    if raw is None or not str(raw).strip():
+        return [float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS]
+    values = _parse_float_list(raw, label="FSRS6 cost-conditioned ADR cost weight")
+    if any(value < 0.0 for value in values):
+        raise SystemExit("FSRS6 cost-conditioned ADR cost weights must be >= 0.")
+    return values
+
+
+def _resolve_fsrs6_cost_adr_policy_path(
+    args: argparse.Namespace,
+    *,
+    user_id: int,
+    multiuser: bool,
+) -> Path:
+    template = getattr(args, "fsrs6_cost_adr_policy_template", None)
+    if template is not None and str(template).strip():
+        from experiments.single_card_tradeoff.core.tradeoff_args import (
+            _resolve_user_policy_template,
+        )
+
+        return _resolve_user_policy_template(str(template), user_id=user_id)
+    if multiuser:
+        return Path(args.fsrs6_cost_adr_policy)
+    return Path(args.fsrs6_cost_adr_policy)
+
+
+def _validate_fsrs6_cost_adr_policy_batch(
+    policies: Sequence[FSRS6CostConditionedADRPolicy],
+    specs: Sequence[FSRS6CostADRPolicySpec],
+) -> None:
+    if not policies:
+        raise ValueError("Cost-conditioned ADR policy batch must not be empty.")
+    first = policies[0]
+    for policy, spec in zip(policies[1:], specs[1:], strict=True):
+        if policy.feature_version != first.feature_version:
+            raise SystemExit(
+                "Cannot batch cost-conditioned ADR policies with mixed feature "
+                f"versions: {first.feature_version!r} and "
+                f"{policy.feature_version!r} ({spec.path})."
+            )
+        if policy.action_head != first.action_head:
+            raise SystemExit(
+                "Cannot batch cost-conditioned ADR policies with mixed action "
+                f"heads: {first.action_head!r} and {policy.action_head!r} "
+                f"({spec.path})."
+            )
+        if policy.parameter_count != first.parameter_count:
+            raise SystemExit(
+                "Cannot batch cost-conditioned ADR policies with mixed parameter "
+                f"counts: {first.parameter_count} and {policy.parameter_count} "
+                f"({spec.path})."
+            )
+        if not math.isclose(
+            policy.retention_min,
+            first.retention_min,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ) or not math.isclose(
+            policy.retention_max,
+            first.retention_max,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise SystemExit(
+                "Cannot batch cost-conditioned ADR policies with mixed retention "
+                f"bounds: {spec.path}."
+            )
+        if not math.isclose(
+            policy.cost_weight_min,
+            first.cost_weight_min,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ) or not math.isclose(
+            policy.cost_weight_max,
+            first.cost_weight_max,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
+            raise SystemExit(
+                "Cannot batch cost-conditioned ADR policies with mixed cost-weight "
+                f"bounds: {spec.path}."
+            )
+        if not _same_bounds(policy.bounds, first.bounds):
+            raise SystemExit(
+                "Cannot batch cost-conditioned ADR policies with mixed FSRS state "
+                f"bounds: {spec.path}."
+            )
+        if policy.max_interval_days != first.max_interval_days:
+            raise SystemExit(
+                "Cannot batch cost-conditioned ADR policies with mixed max "
+                f"intervals: {spec.path}."
+            )
+
+
 def _same_bounds(left: Bounds, right: Bounds) -> bool:
     return (
         math.isclose(left.s_min, right.s_min, rel_tol=0.0, abs_tol=1e-12)
@@ -1461,6 +1587,158 @@ def _fsrs6_adr_point_label(spec: FSRS6ADRPolicySpec) -> str:
     if spec.path.name == "policy.json":
         return spec.path.parent.name
     return spec.path.stem
+
+
+def _run_fsrs6_cost_adr(
+    args: argparse.Namespace,
+    *,
+    environment_name: str,
+    scheduler_spec: str,
+    seed: int,
+    user_contexts: Sequence[UserContext] | None = None,
+) -> list[dict[str, Any]]:
+    scheduler_name = FSRS6_COST_ADR_SCHEDULER
+    if environment_name not in SUPPORTED_SINGLE_CARD_ENVS:
+        raise SystemExit(
+            f"{scheduler_name} currently supports only --env fsrs6_default or "
+            "--env fsrs6 in single-card tradeoff."
+        )
+    if args.engine != "vectorized":
+        raise SystemExit(
+            f"{scheduler_name} is supported only with --engine vectorized."
+        )
+    if user_contexts is None:
+        user_contexts = _load_user_contexts(
+            args,
+            environment_name=environment_name,
+            user_ids=[int(args.user_id or 1)],
+        )
+    context_by_user_id = {context.user_id: context for context in user_contexts}
+    cost_weights = _fsrs6_cost_adr_cost_weights(args)
+    specs = [
+        FSRS6CostADRPolicySpec(
+            user_id=context.user_id,
+            cost_weight=cost_weight,
+            path=_resolve_fsrs6_cost_adr_policy_path(
+                args,
+                user_id=context.user_id,
+                multiuser=len(user_contexts) > 1,
+            ),
+        )
+        for context in user_contexts
+        for cost_weight in cost_weights
+    ]
+    device = _resolve_torch_device(args, prefer_cuda=True)
+    dtype = torch.float64
+
+    rows: list[dict[str, Any]] = []
+    for batch_index, batch_specs in enumerate(
+        _cost_adr_policy_batches(specs, batch_size=args.target_batch_size)
+    ):
+        policies = [
+            FSRS6CostConditionedADRPolicy.from_json(spec.path) for spec in batch_specs
+        ]
+        _validate_fsrs6_cost_adr_policy_batch(policies, batch_specs)
+        first_policy = policies[0]
+        row_count = len(batch_specs)
+        batch_contexts: list[UserContext] = []
+        for spec in batch_specs:
+            context = context_by_user_id.get(int(spec.user_id))
+            if context is None:
+                raise SystemExit(
+                    f"No user context loaded for cost-conditioned ADR user "
+                    f"{spec.user_id}."
+                )
+            batch_contexts.append(context)
+        env_weights = torch.tensor(
+            [context.fsrs_config.fsrs_weights for context in batch_contexts],
+            device=device,
+            dtype=dtype,
+        )
+        env_ops = FSRS6BatchEnvOps(
+            weights=env_weights,
+            bounds=Bounds(),
+            device=device,
+            dtype=dtype,
+        )
+        sched_weights = torch.tensor(
+            [context.fsrs_config.fsrs_weights for context in batch_contexts],
+            device=device,
+            dtype=dtype,
+        )
+        coefficients = torch.tensor(
+            [policy.coefficients for policy in policies],
+            device=device,
+            dtype=dtype,
+        )
+        sched_ops = FSRS6CostConditionedADRBatchSchedulerOps(
+            weights=sched_weights,
+            policy=first_policy,
+            coefficients=coefficients,
+            goal_cost_weight=torch.tensor(
+                [spec.cost_weight for spec in batch_specs],
+                device=device,
+                dtype=dtype,
+            ),
+            bounds=first_policy.bounds,
+            priority_mode=args.scheduler_priority,
+            device=device,
+            dtype=dtype,
+        )
+        behavior, cost_model = _make_multiuser_behavior_cost(
+            args,
+            rows=row_count,
+            device=device,
+            dtype=dtype,
+            user_contexts=batch_contexts,
+        )
+        label_suffix = "" if len(specs) == row_count else f" batch {batch_index + 1}"
+        start = time.perf_counter()
+        stats_by_policy = simulate_multiuser(
+            days=args.days,
+            deck_size=args.particles,
+            env_ops=env_ops,
+            sched_ops=sched_ops,
+            behavior=behavior,
+            cost_model=cost_model,
+            priority_mode="new-first",
+            seed=seed,
+            device=device,
+            dtype=dtype,
+            fuzz=args.fuzz,
+            progress=not args.no_progress,
+            progress_label=f"{environment_name}/{scheduler_spec}{label_suffix}",
+        )
+        runtime_per_policy = (time.perf_counter() - start) / max(1, row_count)
+        for spec, policy, stats in zip(
+            batch_specs, policies, stats_by_policy, strict=True
+        ):
+            row = _row_from_stats(
+                args,
+                user_id=spec.user_id,
+                environment_name=environment_name,
+                scheduler_name=scheduler_name,
+                scheduler_spec=scheduler_spec,
+                fixed_interval=None,
+                desired_retention=None,
+                seed=seed,
+                stats=stats,
+                runtime_s=runtime_per_policy,
+            )
+            row.update(
+                {
+                    "goal_cost_weight": spec.cost_weight,
+                    "fsrs6_cost_adr_policy": str(spec.path),
+                    "fsrs6_cost_adr_policy_title": policy.title,
+                    "fsrs6_cost_adr_feature_version": policy.feature_version,
+                    "fsrs6_cost_adr_action_head": policy.action_head,
+                    "fsrs6_cost_adr_parameter_count": policy.parameter_count,
+                    "fsrs6_cost_adr_cost_weight_min": policy.cost_weight_min,
+                    "fsrs6_cost_adr_cost_weight_max": policy.cost_weight_max,
+                }
+            )
+            rows.append(row)
+    return rows
 
 
 def _run_fsrs6_adr(
@@ -4810,6 +5088,7 @@ _CUSTOM_SINGLE_USER_RUNNERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     UVFA_PPO_SCHEDULER: _run_uvfa_ppo,
     FSRS6_ORACLE_DISTILL_SCHEDULER: _run_fsrs6_oracle_distill,
     UVFA_PPO_RNN_INTERVAL_SCHEDULER: _run_uvfa_ppo_rnn_interval,
+    FSRS6_COST_ADR_SCHEDULER: _run_fsrs6_cost_adr,
 }
 
 

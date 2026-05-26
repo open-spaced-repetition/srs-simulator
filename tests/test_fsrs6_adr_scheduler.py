@@ -22,6 +22,10 @@ from simulator.fsrs6_adr_policy import (
     FEATURE_VERSION_LOG_POLY_TIME as SA_FEATURE_VERSION_LOG_POLY_TIME,
 )
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
+from simulator.fsrs6_cost_conditioned_adr_policy import (
+    ACTION_HEAD_INTERVAL,
+    FSRS6CostConditionedADRPolicy,
+)
 from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps,
     MixedSchedulerGroup,
@@ -36,6 +40,10 @@ from simulator.schedulers.fsrs6_adr import (
     FSRS6ADRBatchSchedulerOps,
     FSRS6ADRScheduler,
     FSRS6ADRBatchedSchedulerOps,
+)
+from simulator.schedulers.fsrs6_cost_conditioned_adr import (
+    FSRS6CostConditionedADRBatchSchedulerOps,
+    FSRS6CostConditionedADRScheduler,
 )
 
 
@@ -244,6 +252,130 @@ class FSRS6ADRSchedulerTests(unittest.TestCase):
             weights=weights,
             policy=policy,
             coefficients=coefficients,
+            bounds=Bounds(),
+            priority_mode="low_retrievability",
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+        )
+        state = ops.init_state(user_count=2, deck_size=1)
+        intervals = ops.update_learn(
+            state,
+            user_idx=torch.tensor([0, 1]),
+            card_idx=torch.tensor([0, 0]),
+            rating=torch.tensor([3, 3]),
+        )
+
+        self.assertGreater(float(intervals[1]), float(intervals[0]))
+
+
+class FSRS6CostConditionedADRTests(unittest.TestCase):
+    def test_retention_baseline_matches_fsrs6_scheduler(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            policy_path = Path(tmp) / "policy.json"
+            FSRS6CostConditionedADRPolicy.baseline_retention(
+                desired_retention=0.9,
+            ).write_json(policy_path)
+
+            fsrs = FSRS6Scheduler(weights=None, desired_retention=0.9)
+            cost_adr = FSRS6CostConditionedADRScheduler(
+                policy_json=policy_path,
+                goal_cost_weight=1024.0,
+                fsrs_weights=None,
+            )
+
+            fsrs_interval, _fsrs_state = fsrs.init_card(_view(None), 3, 0.0)
+            adr_interval, _adr_state = cost_adr.init_card(_view(None), 3, 0.0)
+
+        self.assertAlmostEqual(adr_interval, fsrs_interval, places=6)
+
+    def test_retention_policy_is_anti_monotone_in_cost_weight(self) -> None:
+        policy = FSRS6CostConditionedADRPolicy(
+            coefficients=(
+                2.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                2.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -40.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -40.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ),
+            action_head="desired_retention",
+            feature_version="fsrs6_cost_adr_retention_mono_v1",
+        )
+
+        low_cost = policy.evaluate_retention(10.0, 5.0, cost_weight=0.0)
+        high_cost = policy.evaluate_retention(10.0, 5.0, cost_weight=1024.0)
+
+        self.assertGreater(low_cost, high_cost)
+
+    def test_interval_batch_ops_are_monotone_in_cost_weight(self) -> None:
+        policy = FSRS6CostConditionedADRPolicy(
+            coefficients=(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                2.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -40.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -40.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            ),
+            action_head=ACTION_HEAD_INTERVAL,
+            feature_version="fsrs6_cost_adr_interval_mono_v1",
+        )
+        ops = FSRS6CostConditionedADRBatchSchedulerOps(
+            weights=torch.tensor([DEFAULT_FSRS6_WEIGHTS, DEFAULT_FSRS6_WEIGHTS]),
+            policy=policy,
+            goal_cost_weight=torch.tensor([0.0, 1024.0]),
             bounds=Bounds(),
             priority_mode="low_retrievability",
             device=torch.device("cpu"),

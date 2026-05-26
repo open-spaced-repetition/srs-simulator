@@ -326,6 +326,17 @@ Use `--loss-weighting baseline|underpred|qgap|underpred_qgap` to run the continu
 
 Use `--table-sampling uniform_table|teacher_occupancy|mixed` to choose where continuous table supervision samples states. `teacher_occupancy` is the default and samples states by exact stationary teacher occupancy. `uniform_table` preserves the original full-table distribution, and `mixed` combines occupancy samples with uniform table samples; tune the uniform share with `--mixed-table-uniform-fraction` (default `0.5`).
 
+The cost-weight-conditioned ADR policy is a compact one-artifact-per-user
+alternative to a per-cost ADR portfolio. It fits a 24- or 32-parameter monotone
+family `policy(S, D, cost_weight) -> interval|desired_retention`. For fast
+experiments, reuse the continuous stationary finite distill checkpoints as the
+teacher:
+
+```bash
+uv run python -m experiments.single_card_tradeoff.cli.fsrs6_cost_adr_train --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --cost-weights 0,4,16,64,256,1024 --eval-cost-weights 0,0.25,0.5,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024 --teacher-continuous-stationary-finite-distill-policy-template artifacts/single_card_tradeoff/continuous_stationary_finite_distill_first8_eval_weights_add_025_05_markov_off/user_{user_id}_policy.pt --oracle-s-grid-size 64 --oracle-d-grid-size 32 --epochs 4096 --state-feature-count 6 --action-head interval --torch-device cuda --out-dir artifacts/single_card_tradeoff/fsrs6_cost_adr_distill_first8_24p_from_continuous_distill --no-progress
+uv run python -m experiments.single_card_tradeoff.cli.tradeoff --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 --button-usage ../Anki-button-usage/button_usage.jsonl --sched fsrs6,fsrs6_adr,fsrs6_cost_adr --fsrs6-adr-train-run-root artifacts/single_card_tradeoff/native_adr_first8_eval_weights_add_025_05_markov_off --fsrs6-cost-adr-policy-template artifacts/single_card_tradeoff/fsrs6_cost_adr_distill_first8_24p_from_continuous_distill/user_{user_id}/policy.json --torch-device cuda --out artifacts/single_card_tradeoff/fsrs6_cost_adr_24p_first8_eval_vs_adr/results.csv --no-progress --no-plot
+```
+
 All oracle DP entrypoints now cache per `(user, weight)` under `artifacts/single_card_tradeoff/dp_cache` by default. Pass `--no-dp-cache` to disable it or `--refresh-dp-cache` to force recomputation.
 
 ```bash

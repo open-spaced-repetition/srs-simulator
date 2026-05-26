@@ -15,6 +15,7 @@ from experiments.retention_sweep.cli_utils import (
 )
 from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_FIXED_INTERVALS,
+    DEFAULT_FSRS6_COST_ADR_POLICY,
     DEFAULT_FSRS6_ADR_TRAIN_RUN_ROOT,
     DEFAULT_FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_POLICY,
     DEFAULT_FSRS6_ORACLE_DISTILL_POLICY,
@@ -27,6 +28,7 @@ from experiments.single_card_tradeoff.core.defaults import (
     DEFAULT_UVFA_PPO_POLICY,
     DEFAULT_UVFA_PPO_RNN_INTERVAL_POLICY,
     FSRS6_ADR_SCHEDULERS,
+    FSRS6_COST_ADR_SCHEDULER,
     FSRS6_ORACLE_CONTINUOUS_RETENTION_SCHEDULER,
     FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_DISTILL_SCHEDULER,
     FSRS6_ORACLE_CONTINUOUS_STATIONARY_FINITE_SCHEDULER,
@@ -161,6 +163,33 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Comma-separated lambda values to keep when using an expanded FSRS6 "
             "ADR policy source."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-policy",
+        type=Path,
+        default=DEFAULT_FSRS6_COST_ADR_POLICY,
+        help=(
+            "Path to one cost-weight-conditioned FSRS6 ADR policy JSON when "
+            "--sched contains fsrs6_cost_adr."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-policy-template",
+        default=None,
+        help=(
+            "Per-user cost-weight-conditioned FSRS6 ADR policy template for "
+            "multi-user runs. Must contain {user_id}."
+        ),
+    )
+    parser.add_argument(
+        "--fsrs6-cost-adr-cost-weights",
+        default=",".join(
+            format_float(value) for value in DEFAULT_SCALARIZATION_EVAL_COST_WEIGHTS
+        ),
+        help=(
+            "Comma-separated scalarization weights for fsrs6_cost_adr. Defaults "
+            "to 0,1,2,4,8,16,32,48,64,96,128,192,256,320,384,512,1024."
         ),
     )
     parser.add_argument(
@@ -680,6 +709,7 @@ def _run_specs(args: argparse.Namespace) -> list[tuple[str, str, float | None]]:
             FSRS6_ORACLE_RETENTION_DISTILL_SCHEDULER,
             UVFA_PPO_SCHEDULER,
             UVFA_PPO_RNN_INTERVAL_SCHEDULER,
+            FSRS6_COST_ADR_SCHEDULER,
             *FSRS6_ADR_SCHEDULERS,
         }
         if (

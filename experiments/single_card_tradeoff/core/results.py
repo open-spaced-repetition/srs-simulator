@@ -45,6 +45,13 @@ RESULT_FIELDNAMES = [
     "fsrs6_adr_policy_title",
     "fsrs6_adr_feature_version",
     "fsrs6_adr_point_label",
+    "fsrs6_cost_adr_policy",
+    "fsrs6_cost_adr_policy_title",
+    "fsrs6_cost_adr_feature_version",
+    "fsrs6_cost_adr_action_head",
+    "fsrs6_cost_adr_parameter_count",
+    "fsrs6_cost_adr_cost_weight_min",
+    "fsrs6_cost_adr_cost_weight_max",
 ]
 
 REGRET_AUC_FIELDNAMES = [
