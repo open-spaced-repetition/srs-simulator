@@ -230,6 +230,12 @@ Representative profiles:
   `0,1,2,4,8,16,32,48,64,96,128,192,256,384,512,1024`, and maximizes pure
   hypervolume delta over the FSRS-6 baseline frontier. Coverage is a diagnostic,
   not a training penalty or promotion metric.
+- `configs/fsrs6_cost_adr_coverage_users_1_2_pop16_gen20_v1.toml`: a
+  diagnostic Cost-ADR rerun for users 1-2 that keeps the same pop16/gen20 and
+  16 cost weights, but scores candidates with a coverage-aware hypervolume
+  objective. The objective subtracts a baseline-HV-scaled penalty when the
+  candidate-only frontier covers less than 90% of the FSRS-6 baseline time span
+  or memory span.
 - `configs/fsrs6_default_adr_portfolio_users_1_8_pop16_20_v1.toml`: the ADR
   portfolio scheduler trained with the same pop16/off16/gen20 budget while the
   ADR scheduler state uses default FSRS-6 weights instead of per-user fitted
@@ -352,6 +358,15 @@ Matched-budget cost-conditioned ADR run:
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --config experiments/rl_scheduler/configs/fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1.toml \
   --run-id fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1_markov_off
+```
+
+Coverage-aware Cost-ADR diagnostic for users 1-2:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_coverage_users_1_2_pop16_gen20_v1.toml \
+  --stage all \
+  --run-id fsrs6_cost_adr_coverage_users_1_2_pop16_gen20_v1_markov_off
 ```
 
 Sampling benchmark:

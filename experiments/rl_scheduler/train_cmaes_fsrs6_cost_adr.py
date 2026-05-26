@@ -32,6 +32,7 @@ from experiments.rl_scheduler.policy_search_common import (
 from experiments.rl_scheduler.portfolio_selection import (
     ObjectivePoint,
     objective_hypervolume_2d,
+    objective_non_dominated_indices,
     point_from_metrics,
     reference_point,
 )
@@ -61,6 +62,82 @@ REFERENCE_MARGIN_FRACTION = 0.05
 
 
 @dataclass(frozen=True, slots=True)
+class CoverageObjectiveSettings:
+    enabled: bool = False
+    min_budget_span_coverage: float = 0.90
+    min_target_span_coverage: float = 0.90
+    penalty_weight: float = 0.05
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> CoverageObjectiveSettings:
+        defaults = cls()
+        return cls(
+            enabled=_bool_setting(
+                raw.get("coverage_objective_enabled", defaults.enabled),
+                "training.policy_search.coverage_objective_enabled",
+            ),
+            min_budget_span_coverage=_fraction_setting(
+                raw.get(
+                    "coverage_min_budget_span",
+                    defaults.min_budget_span_coverage,
+                ),
+                "training.policy_search.coverage_min_budget_span",
+            ),
+            min_target_span_coverage=_fraction_setting(
+                raw.get(
+                    "coverage_min_target_span",
+                    defaults.min_target_span_coverage,
+                ),
+                "training.policy_search.coverage_min_target_span",
+            ),
+            penalty_weight=_nonnegative_float_setting(
+                raw.get("coverage_penalty_weight", defaults.penalty_weight),
+                "training.policy_search.coverage_penalty_weight",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "min_budget_span_coverage": self.min_budget_span_coverage,
+            "min_target_span_coverage": self.min_target_span_coverage,
+            "penalty_weight": self.penalty_weight,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CostADRCoverageDiagnostics:
+    budget_count: int
+    covered_budget_count: int
+    total_budget_span: float
+    covered_budget_span: float
+    budget_span_coverage_percent: float
+    target_count: int
+    covered_target_count: int
+    total_target_span: float
+    covered_target_span: float
+    target_span_coverage_percent: float
+
+
+@dataclass(frozen=True, slots=True)
+class CostADRCandidateScore:
+    hypervolume: float
+    hypervolume_delta: float
+    objective_score: float
+    coverage_penalty: float
+    coverage_diagnostics: CostADRCoverageDiagnostics
+
+
+@dataclass(frozen=True, slots=True)
+class _RangeCoverage:
+    total_count: int
+    covered_count: int
+    total_span: float
+    covered_span: float
+    span_coverage_percent: float
+
+
+@dataclass(frozen=True, slots=True)
 class CostADRTrainingResult:
     baseline_desired_retention_values: tuple[float, ...]
     baseline_metrics: list[CandidateMetrics]
@@ -70,6 +147,8 @@ class CostADRTrainingResult:
     best_coefficients: torch.Tensor
     best_hypervolume: float
     best_hypervolume_delta: float
+    best_objective_score: float
+    best_coverage_diagnostics: CostADRCoverageDiagnostics
     history: list[dict[str, float]]
     passed: bool
 
@@ -105,6 +184,8 @@ class _PreparedCostADRJob:
     best_coefficients: torch.Tensor | None = None
     best_hypervolume: float = float("-inf")
     best_hypervolume_delta: float = float("-inf")
+    best_objective_score: float = float("-inf")
+    best_coverage_diagnostics: CostADRCoverageDiagnostics | None = None
     history: list[dict[str, float]] = field(default_factory=list)
 
 
@@ -160,6 +241,28 @@ def optimizer_settings_from_mapping(raw: Mapping[str, Any]) -> CMAESSettings:
     )
 
 
+def cost_weights_from_mapping(raw: Mapping[str, Any]) -> tuple[float, ...]:
+    raw_weights = raw.get("cost_weights")
+    if raw_weights is None:
+        return DEFAULT_COST_WEIGHTS
+    if isinstance(raw_weights, str) or not isinstance(raw_weights, Sequence):
+        raise ValueError("training.policy_search.cost_weights must be an array.")
+    weights = tuple(
+        _nonnegative_float_setting(
+            item,
+            f"training.policy_search.cost_weights[{index}]",
+        )
+        for index, item in enumerate(raw_weights)
+    )
+    if not weights:
+        raise ValueError("training.policy_search.cost_weights must not be empty.")
+    if len(set(weights)) != len(weights):
+        raise ValueError(
+            "training.policy_search.cost_weights must not contain duplicates."
+        )
+    return weights
+
+
 def run_training_batch_jobs(
     *,
     jobs: Sequence[Any],
@@ -200,7 +303,10 @@ def run_training_jobs(
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(config_path))
     optimizer_settings = optimizer_settings_from_mapping(config.training_optimizer)
-    cost_weights = DEFAULT_COST_WEIGHTS
+    cost_weights = cost_weights_from_mapping(raw_training_policy_search)
+    coverage_settings = CoverageObjectiveSettings.from_mapping(
+        raw_training_policy_search
+    )
     short_term_args = argparse.Namespace(
         short_term_source=config.simulation.short_term_source,
         learning_steps=raw_training_policy_search.get("learning_steps"),
@@ -246,6 +352,7 @@ def run_training_jobs(
                 action_head=ACTION_HEAD_INTERVAL,
                 parameter_count=PARAMETER_COUNT,
                 cost_weights=list(cost_weights),
+                coverage_objective=coverage_settings.to_dict(),
                 baseline_desired_retention_values=list(baseline_drs),
                 simulation=config.simulation.to_dict(),
                 seed=config.seed,
@@ -363,6 +470,7 @@ def run_training_jobs(
             config=config,
             settings=settings,
             optimizer_settings=optimizer_settings,
+            coverage_settings=coverage_settings,
             bundle=train_bundle,
             prepared_jobs=states,
             cost_weights=cost_weights,
@@ -376,6 +484,8 @@ def run_training_jobs(
                 device=train_bundle.device,
                 best_hypervolume=result.best_hypervolume,
                 best_hypervolume_delta=result.best_hypervolume_delta,
+                best_objective_score=result.best_objective_score,
+                best_coverage=asdict(result.best_coverage_diagnostics),
                 generations=len(result.history),
                 passed=result.passed,
                 effective_lanes=effective_lanes,
@@ -411,6 +521,7 @@ def run_training_jobs(
                 training_command_path=job.command_record_path,
                 optimizer_settings=optimizer_settings,
                 optimizer_seed=state.optimizer_seed,
+                coverage_settings=coverage_settings,
                 cost_weights=cost_weights,
                 result=result,
             )
@@ -561,6 +672,7 @@ def _run_cmaes_multiuser(
     config: ExperimentConfig,
     settings: PolicySearchSettings,
     optimizer_settings: CMAESSettings,
+    coverage_settings: CoverageObjectiveSettings,
     bundle: Any,
     prepared_jobs: Sequence[_PreparedCostADRJob],
     cost_weights: tuple[float, ...],
@@ -602,40 +714,66 @@ def _run_cmaes_multiuser(
             if reference is None:
                 raise RuntimeError("Cost ADR baseline reference was not initialized.")
             metrics_by_candidate = metrics_by_job[state.job]
-            scores = [
-                objective_hypervolume_2d(
-                    [
-                        *state.baseline_points,
-                        *[point_from_metrics(metric) for metric in candidate_metrics],
-                    ],
+            candidate_scores = [
+                _score_candidate(
+                    baseline_metrics=state.baseline_metrics,
+                    baseline_points=state.baseline_points,
+                    baseline_hypervolume=state.baseline_hypervolume,
                     reference=reference,
+                    candidate_metrics=candidate_metrics,
+                    coverage_settings=coverage_settings,
                 )
-                - state.baseline_hypervolume
                 for candidate_metrics in metrics_by_candidate
             ]
             state.optimizer.tell(
                 solutions_by_job[job_index],
-                [-score for score in scores],
+                [-score.objective_score for score in candidate_scores],
             )
-            generation_best_idx = max(range(len(scores)), key=scores.__getitem__)
-            generation_best_score = float(scores[generation_best_idx])
-            generation_best_hv = state.baseline_hypervolume + generation_best_score
-            if generation_best_score > state.best_hypervolume_delta:
-                state.best_hypervolume_delta = generation_best_score
-                state.best_hypervolume = generation_best_hv
+            generation_best_idx = max(
+                range(len(candidate_scores)),
+                key=lambda index: candidate_scores[index].objective_score,
+            )
+            generation_best = candidate_scores[generation_best_idx]
+            if generation_best.objective_score > state.best_objective_score:
+                state.best_objective_score = generation_best.objective_score
+                state.best_hypervolume_delta = generation_best.hypervolume_delta
+                state.best_hypervolume = generation_best.hypervolume
+                state.best_coverage_diagnostics = generation_best.coverage_diagnostics
                 state.best_coefficients = (
                     coefficients_by_job[job_index, generation_best_idx].detach().clone()
                 )
                 state.best_cost_weight_metrics = metrics_by_candidate[
                     generation_best_idx
                 ]
+            hypervolume_deltas = [score.hypervolume_delta for score in candidate_scores]
+            objective_scores = [score.objective_score for score in candidate_scores]
             history_entry = {
                 "generation": float(generation),
                 "sigma": float(state.optimizer.sigma),
+                "best_objective_score": float(state.best_objective_score),
+                "generation_best_objective_score": float(
+                    generation_best.objective_score
+                ),
                 "best_hypervolume_delta": float(state.best_hypervolume_delta),
-                "generation_best_hypervolume_delta": generation_best_score,
-                "mean_hypervolume_delta": float(sum(scores) / max(len(scores), 1)),
-                "generation_best_hypervolume": generation_best_hv,
+                "generation_best_hypervolume_delta": float(
+                    generation_best.hypervolume_delta
+                ),
+                "mean_objective_score": float(
+                    sum(objective_scores) / max(len(objective_scores), 1)
+                ),
+                "mean_hypervolume_delta": float(
+                    sum(hypervolume_deltas) / max(len(hypervolume_deltas), 1)
+                ),
+                "generation_best_hypervolume": float(generation_best.hypervolume),
+                "generation_best_coverage_penalty": float(
+                    generation_best.coverage_penalty
+                ),
+                "generation_best_budget_span_coverage_percent": float(
+                    generation_best.coverage_diagnostics.budget_span_coverage_percent
+                ),
+                "generation_best_target_span_coverage_percent": float(
+                    generation_best.coverage_diagnostics.target_span_coverage_percent
+                ),
                 "baseline_hypervolume": state.baseline_hypervolume,
             }
             state.history.append(history_entry)
@@ -658,6 +796,7 @@ def _training_result_from_state(
         state.reference_point is None
         or state.best_coefficients is None
         or state.best_cost_weight_metrics is None
+        or state.best_coverage_diagnostics is None
     ):
         raise RuntimeError("CMA-ES did not evaluate any cost ADR candidates.")
     return CostADRTrainingResult(
@@ -669,8 +808,147 @@ def _training_result_from_state(
         best_coefficients=state.best_coefficients.detach().cpu(),
         best_hypervolume=state.best_hypervolume,
         best_hypervolume_delta=state.best_hypervolume_delta,
+        best_objective_score=state.best_objective_score,
+        best_coverage_diagnostics=state.best_coverage_diagnostics,
         history=state.history,
         passed=state.best_hypervolume_delta > 0.0,
+    )
+
+
+def _score_candidate(
+    *,
+    baseline_metrics: Sequence[CandidateMetrics],
+    baseline_points: Sequence[ObjectivePoint],
+    baseline_hypervolume: float,
+    reference: ObjectivePoint,
+    candidate_metrics: Sequence[CandidateMetrics],
+    coverage_settings: CoverageObjectiveSettings,
+) -> CostADRCandidateScore:
+    candidate_points = [point_from_metrics(metric) for metric in candidate_metrics]
+    hypervolume = objective_hypervolume_2d(
+        [*baseline_points, *candidate_points],
+        reference=reference,
+    )
+    hypervolume_delta = hypervolume - baseline_hypervolume
+    coverage = _coverage_diagnostics(
+        baseline_metrics=baseline_metrics,
+        candidate_metrics=candidate_metrics,
+    )
+    budget_shortfall = max(
+        0.0,
+        coverage_settings.min_budget_span_coverage
+        - coverage.budget_span_coverage_percent / 100.0,
+    )
+    target_shortfall = max(
+        0.0,
+        coverage_settings.min_target_span_coverage
+        - coverage.target_span_coverage_percent / 100.0,
+    )
+    coverage_penalty = (
+        baseline_hypervolume
+        * coverage_settings.penalty_weight
+        * (budget_shortfall + target_shortfall)
+        if coverage_settings.enabled
+        else 0.0
+    )
+    return CostADRCandidateScore(
+        hypervolume=hypervolume,
+        hypervolume_delta=hypervolume_delta,
+        objective_score=hypervolume_delta - coverage_penalty,
+        coverage_penalty=coverage_penalty,
+        coverage_diagnostics=coverage,
+    )
+
+
+def _coverage_diagnostics(
+    *,
+    baseline_metrics: Sequence[CandidateMetrics],
+    candidate_metrics: Sequence[CandidateMetrics],
+) -> CostADRCoverageDiagnostics:
+    baseline_time_frontier = _frontier_metrics(baseline_metrics, sort_key="time")
+    candidate_time_frontier = _frontier_metrics(candidate_metrics, sort_key="time")
+    baseline_memory_frontier = _frontier_metrics(baseline_metrics, sort_key="memory")
+    candidate_memory_frontier = _frontier_metrics(candidate_metrics, sort_key="memory")
+    budget = _range_coverage(
+        baseline_values=[metric.time_average for metric in baseline_time_frontier],
+        candidate_values=[metric.time_average for metric in candidate_time_frontier],
+    )
+    target = _range_coverage(
+        baseline_values=[
+            metric.memorized_average for metric in baseline_memory_frontier
+        ],
+        candidate_values=[
+            metric.memorized_average for metric in candidate_memory_frontier
+        ],
+    )
+    return CostADRCoverageDiagnostics(
+        budget_count=budget.total_count,
+        covered_budget_count=budget.covered_count,
+        total_budget_span=budget.total_span,
+        covered_budget_span=budget.covered_span,
+        budget_span_coverage_percent=budget.span_coverage_percent,
+        target_count=target.total_count,
+        covered_target_count=target.covered_count,
+        total_target_span=target.total_span,
+        covered_target_span=target.covered_span,
+        target_span_coverage_percent=target.span_coverage_percent,
+    )
+
+
+def _frontier_metrics(
+    metrics: Sequence[CandidateMetrics],
+    *,
+    sort_key: str,
+) -> list[CandidateMetrics]:
+    points = [point_from_metrics(metric) for metric in metrics]
+    indices = objective_non_dominated_indices(points)
+    frontier = [metrics[index] for index in indices]
+    if sort_key == "time":
+        return sorted(
+            frontier,
+            key=lambda metric: (metric.time_average, metric.memorized_average),
+        )
+    if sort_key == "memory":
+        return sorted(
+            frontier,
+            key=lambda metric: (metric.memorized_average, -metric.time_average),
+        )
+    raise ValueError(f"Unknown frontier sort key: {sort_key!r}.")
+
+
+def _range_coverage(
+    *,
+    baseline_values: Sequence[float],
+    candidate_values: Sequence[float],
+) -> _RangeCoverage:
+    baseline = sorted({float(value) for value in baseline_values})
+    candidate = sorted({float(value) for value in candidate_values})
+    total_span = max(baseline) - min(baseline) if len(baseline) > 1 else 0.0
+    covered_span = 0.0
+    covered_count = 0
+    if baseline and candidate and total_span > 0.0:
+        start = max(min(baseline), min(candidate))
+        end = min(max(baseline), max(candidate))
+        if end > start:
+            covered_span = end - start
+            covered_count = sum(
+                1
+                for value in baseline
+                if (start < value < end)
+                or value == start
+                or value == end
+                or abs(value - start) <= 1e-9
+                or abs(value - end) <= 1e-9
+            )
+    span_coverage_percent = (
+        (covered_span / total_span) * 100.0 if total_span > 0.0 else 0.0
+    )
+    return _RangeCoverage(
+        total_count=len(baseline),
+        covered_count=covered_count,
+        total_span=float(total_span),
+        covered_span=float(covered_span),
+        span_coverage_percent=float(span_coverage_percent),
     )
 
 
@@ -701,7 +979,7 @@ def _evaluate_cost_adr_candidates_multiuser(
             coefficients_by_job.shape[2],
         )
     )
-    policy = _policy_template(settings=settings)
+    policy = _policy_template(settings=settings, cost_weights=cost_weights)
     sched_ops = FSRS6CostConditionedADRBatchSchedulerOps(
         weights=bundle.scheduler_weights,
         policy=policy,
@@ -760,14 +1038,14 @@ def _evaluate_cost_adr_candidates_multiuser(
 
 
 def _policy_template(
-    *, settings: PolicySearchSettings
+    *, settings: PolicySearchSettings, cost_weights: Sequence[float]
 ) -> FSRS6CostConditionedADRPolicy:
     return FSRS6CostConditionedADRPolicy(
         coefficients=(0.0,) * PARAMETER_COUNT,
         action_head=ACTION_HEAD_INTERVAL,
         feature_version=FEATURE_VERSION_INTERVAL_MONO,
-        cost_weight_min=min(DEFAULT_COST_WEIGHTS),
-        cost_weight_max=max(DEFAULT_COST_WEIGHTS),
+        cost_weight_min=min(cost_weights),
+        cost_weight_max=max(cost_weights),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
         max_interval_days=MAX_INTERVAL_DAYS,
@@ -786,6 +1064,7 @@ def write_artifact(
     training_command_path: Path | None,
     optimizer_settings: CMAESSettings,
     optimizer_seed: int,
+    coverage_settings: CoverageObjectiveSettings,
     cost_weights: tuple[float, ...],
     result: CostADRTrainingResult,
 ) -> tuple[Path, Path, Path]:
@@ -809,14 +1088,22 @@ def write_artifact(
         "seed_resolved": optimizer_seed,
     }
     metrics_path = output_dir / "metrics.json"
+    training_objective = (
+        "coverage_aware_hypervolume_delta"
+        if coverage_settings.enabled
+        else "hypervolume_delta"
+    )
     _write_json(
         metrics_path,
         {
             "passed_overfit_gate": result.passed,
-            "training_objective": "hypervolume_delta",
+            "training_objective": training_objective,
+            "coverage_objective": coverage_settings.to_dict(),
             "baseline_hypervolume": result.baseline_hypervolume,
             "best_hypervolume": result.best_hypervolume,
             "best_hypervolume_delta": result.best_hypervolume_delta,
+            "best_objective_score": result.best_objective_score,
+            "best_coverage": asdict(result.best_coverage_diagnostics),
             "reference_point": asdict(result.reference_point),
             "baseline_desired_retention_values": list(
                 result.baseline_desired_retention_values
@@ -875,7 +1162,7 @@ def write_artifact(
             "code_commit": _git_commit(),
             "lambda_value": None,
             "baseline_desired_retention": None,
-            "training_objective": "hypervolume_delta",
+            "training_objective": training_objective,
             "config_snapshot_path": _relative_path_string(
                 config_path,
                 base=metadata_dir,
@@ -890,7 +1177,9 @@ def write_artifact(
             "optimizer": "cma_es",
             "optimizer_settings": optimizer,
             "cost_weights": list(cost_weights),
+            "coverage_objective": coverage_settings.to_dict(),
             "best_hypervolume_delta": result.best_hypervolume_delta,
+            "best_objective_score": result.best_objective_score,
             "capabilities": ["event", "batched"],
         },
     )
@@ -925,6 +1214,28 @@ def _progress_for_job(*, job: CostADRTrainJob, config_path: Path) -> TrainingPro
 def _clear_cuda_cache(device: torch.device) -> None:
     if device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+def _bool_setting(value: Any, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean.")
+    return value
+
+
+def _nonnegative_float_setting(value: Any, field_name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a number.")
+    result = float(value)
+    if result < 0.0:
+        raise ValueError(f"{field_name} must be >= 0.")
+    return result
+
+
+def _fraction_setting(value: Any, field_name: str) -> float:
+    result = _nonnegative_float_setting(value, field_name)
+    if result > 1.0:
+        raise ValueError(f"{field_name} must be <= 1.")
+    return result
 
 
 if __name__ == "__main__":

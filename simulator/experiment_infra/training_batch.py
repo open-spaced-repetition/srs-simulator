@@ -117,10 +117,8 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         optimizer_settings_from_mapping as ap_optimizer_settings_from_mapping,
     )
     from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (
+        cost_weights_from_mapping as cost_adr_cost_weights_from_mapping,
         optimizer_settings_from_mapping as cost_adr_optimizer_settings_from_mapping,
-    )
-    from simulator.batched_sweep.fsrs6_cost_adr_policy import (
-        DEFAULT_COST_WEIGHTS as COST_ADR_COST_WEIGHTS,
     )
 
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
@@ -141,7 +139,8 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         return max(1, optimizer.population_size)
     if trainer == "fsrs6_cost_adr_cmaes":
         optimizer = cost_adr_optimizer_settings_from_mapping(config.training_optimizer)
-        return max(1, optimizer.population_size * len(COST_ADR_COST_WEIGHTS))
+        cost_weights = cost_adr_cost_weights_from_mapping(raw_training_policy_search)
+        return max(1, optimizer.population_size * len(cost_weights))
     baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)
     if config.baseline_dr_selection.manifest is not None:
         baseline_dr_values = _uniform_retention_values(

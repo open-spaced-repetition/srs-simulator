@@ -20,7 +20,14 @@ from experiments.single_card_tradeoff.cli.fsrs6_cost_adr_train import (  # noqa:
 )
 from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (  # noqa: E402
     CostADRTrainJob,
+    CoverageObjectiveSettings,
     run_training_jobs,
+    _score_candidate,
+)
+from experiments.rl_scheduler.policy_search_common import CandidateMetrics  # noqa: E402
+from experiments.rl_scheduler.portfolio_selection import (  # noqa: E402
+    point_from_metrics,
+    reference_point,
 )
 from experiments.single_card_tradeoff.models.policy_runtime import (  # noqa: E402
     RetentionDistillNet,
@@ -35,6 +42,56 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
 
 
 class FSRS6CostADRTrainTests(unittest.TestCase):
+    def test_coverage_objective_penalizes_narrow_frontier_overlap(self) -> None:
+        baseline = [
+            CandidateMetrics(
+                memorized_average=100.0,
+                time_average=10.0,
+                memorized_per_minute=10.0,
+                total_reviews=1,
+                total_lapses=0,
+                total_cost=600.0,
+            ),
+            CandidateMetrics(
+                memorized_average=200.0,
+                time_average=20.0,
+                memorized_per_minute=10.0,
+                total_reviews=2,
+                total_lapses=0,
+                total_cost=1200.0,
+            ),
+        ]
+        candidate = [
+            CandidateMetrics(
+                memorized_average=190.0,
+                time_average=19.0,
+                memorized_per_minute=10.0,
+                total_reviews=2,
+                total_lapses=0,
+                total_cost=1140.0,
+            )
+        ]
+        baseline_objective_points = [point_from_metrics(metric) for metric in baseline]
+        reference = reference_point(baseline_objective_points)
+
+        score = _score_candidate(
+            baseline_metrics=baseline,
+            baseline_points=baseline_objective_points,
+            baseline_hypervolume=1000.0,
+            reference=reference,
+            candidate_metrics=candidate,
+            coverage_settings=CoverageObjectiveSettings(
+                enabled=True,
+                min_budget_span_coverage=0.9,
+                min_target_span_coverage=0.9,
+                penalty_weight=0.1,
+            ),
+        )
+
+        self.assertGreater(score.coverage_penalty, 0.0)
+        self.assertLess(score.objective_score, score.hypervolume_delta)
+        self.assertEqual(score.coverage_diagnostics.covered_budget_count, 0)
+
     def test_fits_from_continuous_distill_teacher_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             policy_path = Path(tmp) / "teacher.pt"
@@ -278,6 +335,9 @@ seed = 7
             self.assertIsNone(metadata["lambda_value"])
             self.assertIsNone(metadata["baseline_desired_retention"])
             self.assertGreater(metrics["best_hypervolume_delta"], 0.0)
+            self.assertEqual(metrics["training_objective"], "hypervolume_delta")
+            self.assertFalse(metrics["coverage_objective"]["enabled"])
+            self.assertIn("best_coverage", metrics)
             self.assertEqual(len(metrics["selected_cost_weight_rollout_points"]), 16)
             self.assertEqual(metrics["optimizer"]["population_size"], 2)
 
