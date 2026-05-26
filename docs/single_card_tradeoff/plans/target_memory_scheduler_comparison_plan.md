@@ -123,13 +123,13 @@ Recommended layout:
 
 ```text
 target_memory_scheduler_comparison_first8/
-  oracle_stationary/
+  oracle_stationary_certified_target_local/
     points.csv
     frontier.csv
     target_answers.csv
     segments.csv
     metadata.json
-  oracle_continuous_stationary/
+  oracle_continuous_stationary_certified_target_local/
     ...
   fsrs6/
     ...
@@ -178,19 +178,22 @@ uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --button-usage "$BUTTON_USAGE" \
   --family fsrs6_oracle_stationary_finite \
   --target-memories "$TARGETS" \
-  --theta-grid 0,16,64,256,1024 \
-  --max-refinement-rounds 6 \
-  --candidates-per-round 4 \
+  --theta-grid 0,16,64,256,1024,4096,16384 \
+  --theta-max 16384 \
+  --max-refinement-rounds 200 \
+  --candidates-per-round 100000 \
+  --eval-group-batch-size 32 \
   --certificate-tolerance 1e-9 \
-  --out-dir "$ROOT/oracle_stationary"
+  --out-dir "$ROOT/oracle_stationary_certified_target_local"
 ```
 
 Acceptance checks:
 
 - `target_answers.csv` has `8 * 7 = 56` rows.
 - `metadata.json` has `certification_scope = oracle_target_local`.
-- Most target-local `certified` rows should be `True`. Any uncertified rows
-  must be reported in the final analysis.
+- `metadata.json` has `certified_targets = target_count = 56`.
+- Recomputing target-local certificates from the written `points.csv` has zero
+  remaining target-local `lambda_AB` candidates.
 
 ### 5.2 Continuous Stationary Oracle
 
@@ -204,20 +207,24 @@ uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --button-usage "$BUTTON_USAGE" \
   --family fsrs6_oracle_continuous_stationary_finite \
   --target-memories "$TARGETS" \
-  --theta-grid 0,16,64,256,1024 \
-  --max-refinement-rounds 6 \
-  --candidates-per-round 4 \
+  --theta-grid 0,16,64,256,1024,4096,16384 \
+  --theta-max 16384 \
+  --max-refinement-rounds 200 \
+  --candidates-per-round 100000 \
+  --eval-group-batch-size 32 \
   --certificate-tolerance 1e-9 \
   --progress-log-interval-seconds 30 \
-  --out-dir "$ROOT/oracle_continuous_stationary"
+  --out-dir "$ROOT/oracle_continuous_stationary_certified_target_local"
 ```
 
 Acceptance checks:
 
 - Same row count as the discrete oracle.
-- Compare `achieved_T` against `oracle_stationary/target_answers.csv`.
-- Continuous should not be interpreted as globally better unless target-local
-  certificates are present.
+- `metadata.json` has `certified_targets = target_count = 56`.
+- Compare `achieved_T` against
+  `oracle_stationary_certified_target_local/target_answers.csv`.
+- Continuous should not be interpreted as a target-memory result unless this
+  target-local certification pass has completed.
 
 ### 5.3 FSRS6 Desired-Retention Baseline
 
@@ -240,7 +247,7 @@ Then run the gap report:
 ```bash
 uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
   --candidate-target-answers "$ROOT/fsrs6" \
-  --oracle-target-answers "$ROOT/oracle_stationary" \
+  --oracle-target-answers "$ROOT/oracle_stationary_certified_target_local" \
   --out-dir "$ROOT/fsrs6"
 ```
 
@@ -266,7 +273,7 @@ Then:
 ```bash
 uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
   --candidate-target-answers "$ROOT/fixed" \
-  --oracle-target-answers "$ROOT/oracle_stationary" \
+  --oracle-target-answers "$ROOT/oracle_stationary_certified_target_local" \
   --out-dir "$ROOT/fixed"
 ```
 
@@ -285,7 +292,7 @@ uv run python -m experiments.single_card_tradeoff.cli.target_constrained_direct_
   --generations 64 \
   --train-particles 64 \
   --eval-particles 10000 \
-  --oracle-target-answers "$ROOT/oracle_stationary" \
+  --oracle-target-answers "$ROOT/oracle_stationary_certified_target_local" \
   --out-dir "$ROOT/direct"
 ```
 
@@ -310,7 +317,7 @@ uv run python -m experiments.single_card_tradeoff.cli.target_conditioned_retenti
   --steps-per-epoch 32 \
   --samples-per-job 256 \
   --eval-particles 10000 \
-  --oracle-target-answers "$ROOT/oracle_stationary" \
+  --oracle-target-answers "$ROOT/oracle_stationary_certified_target_local" \
   --out-dir "$ROOT/target_conditioned_distill"
 ```
 
@@ -372,7 +379,7 @@ After conversion, run:
 ```bash
 uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
   --candidate-target-answers "$ROOT/converted/adr_target_answers.csv" \
-  --oracle-target-answers "$ROOT/oracle_stationary" \
+  --oracle-target-answers "$ROOT/oracle_stationary_certified_target_local" \
   --out-dir "$ROOT/converted/adr_gap"
 ```
 
@@ -380,8 +387,8 @@ uv run python -m experiments.single_card_tradeoff.cli.target_oracle_gap_report \
 
 Build `comparison/combined_target_answers.csv` by concatenating:
 
-- `oracle_stationary/target_answers.csv`
-- `oracle_continuous_stationary/target_answers.csv`
+- `oracle_stationary_certified_target_local/target_answers.csv`
+- `oracle_continuous_stationary_certified_target_local/target_answers.csv`
 - `fsrs6/target_answers.csv`
 - `fixed/target_answers.csv`
 - `direct/target_answers.csv`
@@ -479,7 +486,7 @@ The experiment is complete when:
 - every scheduler has a `target_answers.csv`-compatible file for the fixed
   target grid;
 - every non-oracle scheduler has a `target_oracle_gaps.csv` comparison against
-  `oracle_stationary`;
+  `oracle_stationary_certified_target_local`;
 - `combined_target_answers.csv` and `scheduler_target_matrix.csv` are written;
 - the final report includes coverage, mean extra time versus oracle, and
   infeasible targets;

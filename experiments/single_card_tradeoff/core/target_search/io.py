@@ -19,7 +19,7 @@ def format_optional_float(value: float | None) -> str:
         return ""
     if math.isinf(value):
         return "inf" if value > 0 else "-inf"
-    return f"{value:.12g}"
+    return f"{value:.17g}"
 
 
 def point_row(point: EvaluatedPoint) -> dict[str, Any]:

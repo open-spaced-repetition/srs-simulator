@@ -509,6 +509,36 @@ class FSRS6IntervalOracleTests(unittest.TestCase):
         self.assertEqual(len(solution.converged), 2)
         self.assertEqual(len(solution.converged[0]), 2)
 
+    def test_batched_continuous_user_weight_stationary_matches_shared_diagonal(
+        self,
+    ) -> None:
+        oracle = _batched_continuous_oracle(days=4)
+
+        shared = oracle.solve_stationary_finite_policies(
+            [0.0, 16.0],
+            max_iterations=2,
+            tolerance=1e9,
+            progress=False,
+        )
+        jagged = oracle.solve_stationary_finite_policies_for_user_weights(
+            [0.0, 16.0],
+            max_iterations=2,
+            tolerance=1e9,
+            progress=False,
+        )
+
+        self.assertEqual(jagged.policy.shape, (2, 1, 8, 8))
+        self.assertTrue(torch.allclose(jagged.policy[0, 0], shared.policy[0, 0]))
+        self.assertTrue(torch.allclose(jagged.policy[1, 0], shared.policy[1, 1]))
+        self.assertAlmostEqual(
+            jagged.metrics[0][0].card_expected_retrievability,
+            shared.metrics[0][0].card_expected_retrievability,
+        )
+        self.assertAlmostEqual(
+            jagged.metrics[1][0].card_minutes_per_day,
+            shared.metrics[1][1].card_minutes_per_day,
+        )
+
     def test_active_cell_attainable_mask_matches_grid_mask(self) -> None:
         oracle = _batched_continuous_oracle(days=5)
         intervals = torch.arange(1, oracle.horizon + 2, device=oracle.device)

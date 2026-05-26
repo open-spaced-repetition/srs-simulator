@@ -359,6 +359,79 @@ class OracleDpCacheTest(unittest.TestCase):
                 },
             )
 
+    def test_batched_user_weight_policy_matches_shared_diagonal(self) -> None:
+        oracle = _batched_oracle(
+            cache_config=OracleDPCacheConfig(enabled=False),
+            user_count=2,
+        )
+
+        shared = oracle.solve_policies([0.0, 1.0])
+        jagged = oracle.solve_policies_for_user_weights([0.0, 1.0])
+
+        self.assertEqual(jagged.shape, (2, 1, 8, 64))
+        self.assertTrue(torch.equal(jagged[0, 0], shared[0, 0]))
+        self.assertTrue(torch.equal(jagged[1, 0], shared[1, 1]))
+
+    def test_batched_user_weight_stationary_matches_shared_diagonal(self) -> None:
+        oracle = _batched_oracle(
+            cache_config=OracleDPCacheConfig(enabled=False),
+            user_count=2,
+        )
+
+        shared = oracle.solve_stationary_finite_policies(
+            [0.0, 1.0],
+            max_iterations=2,
+            tolerance=1e9,
+        )
+        jagged = oracle.solve_stationary_finite_policies_for_user_weights(
+            [0.0, 1.0],
+            max_iterations=2,
+            tolerance=1e9,
+        )
+
+        self.assertEqual(jagged.policy.shape, (2, 1, 8, 8))
+        self.assertTrue(torch.equal(jagged.policy[0, 0], shared.policy[0, 0]))
+        self.assertTrue(torch.equal(jagged.policy[1, 0], shared.policy[1, 1]))
+        self.assertAlmostEqual(
+            jagged.metrics[0][0].card_expected_retrievability,
+            shared.metrics[0][0].card_expected_retrievability,
+        )
+        self.assertAlmostEqual(
+            jagged.metrics[1][0].card_minutes_per_day,
+            shared.metrics[1][1].card_minutes_per_day,
+        )
+
+    def test_batched_user_weight_policy_cache_reuses_shared_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = _cache_config(Path(tmp))
+            oracle = _batched_oracle(cache_config=config, user_count=2)
+            shared = oracle.solve_policies([0.0, 1.0])
+
+            reset_oracle_dp_cache_stats()
+            jagged = oracle.solve_policies_for_user_weights([0.0, 1.0])
+
+            self.assertTrue(torch.equal(jagged[0, 0], shared[0, 0]))
+            self.assertTrue(torch.equal(jagged[1, 0], shared[1, 1]))
+            self.assertEqual(
+                oracle_dp_cache_stats_snapshot(),
+                {
+                    "hits": 2,
+                    "misses": 0,
+                    "writes": 0,
+                    "refreshes": 0,
+                },
+            )
+
+    def test_batched_user_weight_policy_validates_inputs(self) -> None:
+        oracle = _batched_oracle(
+            cache_config=OracleDPCacheConfig(enabled=False),
+            user_count=2,
+        )
+
+        for weights in ([], [0.0], [0.0, -1.0], [0.0, float("nan")]):
+            with self.assertRaises(ValueError):
+                oracle.solve_policies_for_user_weights(weights)
+
     def test_batched_stationary_cache_reuses_single_user_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             config = _cache_config(Path(tmp))

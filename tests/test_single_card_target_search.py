@@ -324,6 +324,44 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertEqual(loaded[0], parsed)
             self.assertTrue(loaded[0].exact)
 
+    def test_point_csv_precision_preserves_oracle_certificate_keys(self) -> None:
+        family = "fsrs6_oracle_stationary_finite"
+        low = _point(
+            364.427075545,
+            0.698828193521,
+            0.00267916627735,
+            family=family,
+            exact=True,
+        )
+        high = _point(
+            343.311743737,
+            0.700048428679,
+            0.00268260703721,
+            family=family,
+            exact=True,
+        )
+        lambda_ab = (high.memory - low.memory) / (high.minutes - low.minutes)
+        certificate = _point(
+            lambda_ab,
+            0.699673923934,
+            0.00268158070552,
+            family=family,
+            exact=True,
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "points.csv"
+            _write_csv(path, [point_row(point) for point in [low, high, certificate]])
+
+            loaded = read_points_csv(path)
+            certified = certify_oracle_segments(
+                frontier_segments(loaded[:2]),
+                loaded,
+                family=family,
+                tolerance=1e-9,
+            )
+
+        self.assertTrue(certified[0].certified)
+
     def test_target_oracle_gap_rows_report_deterministic_and_mixed_gaps(
         self,
     ) -> None:
@@ -660,6 +698,41 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             self.assertTrue(answers_path.exists())
             self.assertIn("fixed", answers_path.read_text(encoding="utf-8"))
 
+    def test_oracle_certification_scope_flag_is_not_exposed(self) -> None:
+        with self.assertRaises(SystemExit):
+            target_search.parse_args(
+                [
+                    "--env",
+                    "fsrs6_default",
+                    "--family",
+                    "fsrs6_oracle_stationary_finite",
+                    "--target-memories",
+                    "0.8",
+                    "--theta-grid",
+                    "0,1024",
+                    "--oracle-certification-scope",
+                    "frontier",
+                ]
+            )
+
+    def test_oracle_refinement_defaults_to_user_scoped_target_local(self) -> None:
+        args = target_search.parse_args(
+            [
+                "--env",
+                "fsrs6_default",
+                "--family",
+                "fsrs6_oracle_stationary_finite",
+                "--target-memories",
+                "0.8",
+                "--theta-grid",
+                "0,1024",
+                "--out-dir",
+                "unused",
+            ]
+        )
+
+        self.assertEqual(args.oracle_refinement_scope, "user")
+
     def test_oracle_cli_branch_writes_certified_answers(self) -> None:
         family = "fsrs6_oracle_stationary_finite"
 
@@ -787,7 +860,7 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             )
             self.assertIn("fsrs6_oracle_stationary_finite", points_text)
 
-    def test_oracle_user_scoped_refinement_evaluates_only_relevant_user(
+    def test_oracle_user_scoped_refinement_batches_jagged_user_requests(
         self,
     ) -> None:
         family = "fsrs6_oracle_stationary_finite"
@@ -842,27 +915,29 @@ class SingleCardTargetSearchTests(unittest.TestCase):
             )
             calls: list[tuple[tuple[int, ...], tuple[float, ...]]] = []
 
-            def fake_evaluate_oracle_points(
+            def fake_evaluate_oracle_point_requests(
                 **kwargs: object,
             ) -> list[EvaluatedPoint]:
-                theta_values = kwargs["theta_values"]
-                called_user_ids = kwargs["user_ids"]
-                assert isinstance(theta_values, list)
-                assert isinstance(called_user_ids, list)
-                calls.append((tuple(called_user_ids), tuple(theta_values)))
+                requests = kwargs["requests"]
+                assert isinstance(requests, list)
+                calls.append(
+                    (
+                        tuple(request.user_id for request in requests),
+                        tuple(request.cost_weight for request in requests),
+                    )
+                )
                 return [
                     EvaluatedPoint(
-                        user_id=user_id,
+                        user_id=request.user_id,
                         family=family,
                         theta_name="goal_cost_weight",
-                        theta_value=theta,
+                        theta_value=request.cost_weight,
                         memory=0.80,
                         minutes=2.0,
                         exact=True,
                         eval_stage="exact",
                     )
-                    for user_id in called_user_ids
-                    for theta in theta_values
+                    for request in requests
                 ]
 
             args = target_search.parse_args(
@@ -883,8 +958,6 @@ class SingleCardTargetSearchTests(unittest.TestCase):
                     "1",
                     "--candidates-per-round",
                     "8",
-                    "--oracle-refinement-scope",
-                    "user",
                     "--init-points",
                     str(init_path),
                     "--torch-device",
@@ -898,16 +971,62 @@ class SingleCardTargetSearchTests(unittest.TestCase):
 
             with mock.patch.object(
                 target_search,
-                "evaluate_oracle_points",
-                side_effect=fake_evaluate_oracle_points,
+                "evaluate_oracle_point_requests",
+                side_effect=fake_evaluate_oracle_point_requests,
             ):
                 target_search.run_search(args)
 
-            self.assertEqual(len(calls), 2)
-            self.assertEqual(calls[0][0], (1,))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][0], (1, 2))
             self.assertAlmostEqual(calls[0][1][0], (0.90 - 0.70) / (4.0 - 1.0))
-            self.assertEqual(calls[1][0], (2,))
-            self.assertAlmostEqual(calls[1][1][0], (0.95 - 0.75) / (2.0 - 1.0))
+            self.assertAlmostEqual(calls[0][1][1], (0.95 - 0.75) / (2.0 - 1.0))
+
+    def test_oracle_point_request_chunks_use_pair_batch_size(self) -> None:
+        requests = [
+            target_search._OraclePointRequest(user_id=1, cost_weight=1.0),
+            target_search._OraclePointRequest(user_id=2, cost_weight=2.0),
+        ]
+        one_at_a_time_args = target_search.parse_args(
+            [
+                "--env",
+                "fsrs6_default",
+                "--family",
+                "fsrs6_oracle_stationary_finite",
+                "--target-memories",
+                "0.8",
+                "--theta-grid",
+                "0,1024",
+                "--eval-group-batch-size",
+                "1",
+                "--out-dir",
+                "unused",
+            ]
+        )
+        unbounded_args = target_search.parse_args(
+            [
+                "--env",
+                "fsrs6_default",
+                "--family",
+                "fsrs6_oracle_stationary_finite",
+                "--target-memories",
+                "0.8",
+                "--theta-grid",
+                "0,1024",
+                "--eval-group-batch-size",
+                "0",
+                "--out-dir",
+                "unused",
+            ]
+        )
+
+        self.assertEqual(
+            target_search._oracle_point_request_chunks(requests, one_at_a_time_args),
+            [[requests[0]], [requests[1]]],
+        )
+        self.assertEqual(
+            target_search._oracle_point_request_chunks(requests, unbounded_args),
+            [requests],
+        )
 
     def test_constrained_direct_cli_smoke_writes_policy_and_answers(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

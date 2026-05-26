@@ -3150,6 +3150,65 @@ class FSRS6BatchedStationaryFiniteOracle:
             extra["tolerance"] = tolerance
         return extra
 
+    def _cost_weight_tensor(
+        self,
+        cost_weights: Sequence[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        tensor = torch.as_tensor(cost_weights, device=self.device, dtype=self.dtype)
+        if tensor.ndim == 0:
+            tensor = tensor.reshape(1)
+        if tensor.ndim > 2:
+            trailing = int(math.prod(tensor.shape[2:]))
+            if trailing != 1:
+                raise ValueError(
+                    "cost_weights broadcast tensor must have singleton trailing dims."
+                )
+            tensor = tensor.reshape(int(tensor.shape[0]), int(tensor.shape[1]))
+        if tensor.ndim not in (1, 2):
+            raise ValueError("cost_weights must be a 1D shared or 2D user grid.")
+        if tensor.numel() <= 0:
+            raise ValueError("cost_weights must contain at least one value.")
+        if tensor.ndim == 2 and int(tensor.shape[0]) not in (1, self.user_count):
+            raise ValueError(
+                "2D cost_weights must have shape [user_count, weight_count] "
+                "or [1, weight_count]."
+            )
+        if not bool(torch.isfinite(tensor).all().item()):
+            raise ValueError("cost_weights must be finite.")
+        if bool((tensor < 0.0).any().item()):
+            raise ValueError("cost_weights must be non-negative.")
+        return tensor.contiguous()
+
+    def _cost_weight_grid(
+        self,
+        cost_weights: Sequence[float] | torch.Tensor,
+    ) -> torch.Tensor:
+        tensor = self._cost_weight_tensor(cost_weights)
+        if tensor.ndim == 1:
+            return tensor.view(1, int(tensor.numel())).expand(self.user_count, -1)
+        if int(tensor.shape[0]) == 1:
+            return tensor.expand(self.user_count, -1)
+        return tensor
+
+    def _cost_weight_count(
+        self,
+        cost_weights: Sequence[float] | torch.Tensor,
+    ) -> int:
+        tensor = self._cost_weight_tensor(cost_weights)
+        return int(tensor.numel()) if tensor.ndim == 1 else int(tensor.shape[1])
+
+    def _user_cost_weight_list(
+        self,
+        cost_weights_by_user: Sequence[float],
+    ) -> list[float]:
+        weights = [float(weight) for weight in cost_weights_by_user]
+        if not weights:
+            raise ValueError("cost_weights_by_user must contain at least one value.")
+        if len(weights) != self.user_count:
+            raise ValueError("cost_weights_by_user length must equal user_count.")
+        self._cost_weight_tensor(weights)
+        return weights
+
     def _suboracle(
         self, user_indices: Sequence[int]
     ) -> FSRS6BatchedStationaryFiniteOracle:
@@ -3334,25 +3393,148 @@ class FSRS6BatchedStationaryFiniteOracle:
             runtime_s=time.perf_counter() - start,
         )
 
+    def solve_stationary_finite_policies_for_user_weights(
+        self,
+        cost_weights_by_user: Sequence[float],
+        *,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+        progress: bool = False,
+    ) -> BatchedStationaryFiniteOracleSolution:
+        weight_list = self._user_cost_weight_list(cost_weights_by_user)
+        if max_iterations <= 0:
+            raise ValueError("max_iterations must be > 0.")
+        if tolerance <= 0.0:
+            raise ValueError("tolerance must be > 0.")
+
+        start = time.perf_counter()
+        policies: list[torch.Tensor | None] = [None for _ in range(self.user_count)]
+        metrics: list[OracleMetrics | None] = [None for _ in range(self.user_count)]
+        objectives = torch.zeros(
+            (self.user_count, 1),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        iterations: list[int | None] = [None for _ in range(self.user_count)]
+        converged: list[bool | None] = [None for _ in range(self.user_count)]
+        residuals: list[float | None] = [None for _ in range(self.user_count)]
+        missing_user_indices: list[int] = []
+        extra = self._stationary_cache_extra(
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+        )
+        for user_idx, weight in enumerate(weight_list):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="stationary_finite",
+                    method="solve_stationary_finite_policies",
+                    user_idx=user_idx,
+                    cost_weight=weight,
+                    extra=extra,
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing_user_indices.append(user_idx)
+                continue
+            policies[user_idx] = entry["policy"].to(device=self.device)
+            metrics[user_idx] = _metrics_from_payload(
+                entry["metrics"],
+                runtime_s=0.0,
+            )
+            objectives[user_idx, 0] = float(entry["objective"])
+            iterations[user_idx] = int(entry["iterations"])
+            converged[user_idx] = bool(entry["converged"])
+            residuals[user_idx] = float(entry["residual"])
+
+        if missing_user_indices:
+            suboracle = self._suboracle(missing_user_indices)
+            group_weights = [weight_list[idx] for idx in missing_user_indices]
+            solution = suboracle._solve_stationary_finite_policies_uncached(
+                torch.tensor(
+                    group_weights,
+                    device=self.device,
+                    dtype=self.dtype,
+                ).view(len(group_weights), 1),
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            for local_user_idx, user_idx in enumerate(missing_user_indices):
+                policy = solution.policy[local_user_idx, 0].to(device=self.device)
+                metric = solution.metrics[local_user_idx][0]
+                objective = float(solution.objectives[local_user_idx, 0].item())
+                iteration = solution.iterations[local_user_idx][0]
+                did_converge = solution.converged[local_user_idx][0]
+                residual = solution.residuals[local_user_idx][0]
+                policies[user_idx] = policy
+                metrics[user_idx] = metric
+                objectives[user_idx, 0] = objective
+                iterations[user_idx] = iteration
+                converged[user_idx] = did_converge
+                residuals[user_idx] = residual
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="stationary_finite",
+                        method="solve_stationary_finite_policies",
+                        user_idx=user_idx,
+                        cost_weight=weight_list[user_idx],
+                        extra=extra,
+                    ),
+                    data={
+                        "policy": policy,
+                        "metrics": _metrics_payload(metric),
+                        "objective": objective,
+                        "iterations": iteration,
+                        "converged": did_converge,
+                        "residual": residual,
+                    },
+                )
+
+        return BatchedStationaryFiniteOracleSolution(
+            policy=torch.stack(
+                [policy for policy in policies if policy is not None],
+                dim=0,
+            )
+            .to(device=self.device, dtype=torch.int64)
+            .reshape(self.user_count, 1, self.s_count, self.d_count),
+            metrics=[[metric] for metric in metrics if metric is not None],
+            objectives=objectives,
+            iterations=[[int(value)] for value in iterations if value is not None],
+            converged=[[bool(value)] for value in converged if value is not None],
+            residuals=[[float(value)] for value in residuals if value is not None],
+            runtime_s=time.perf_counter() - start,
+        )
+
     def _solve_stationary_finite_policies_uncached(
         self,
-        cost_weights: Sequence[float],
+        cost_weights: Sequence[float] | torch.Tensor,
         *,
         max_iterations: int = 128,
         tolerance: float = 1e-10,
         progress: bool = False,
     ) -> BatchedStationaryFiniteOracleSolution:
         start = time.perf_counter()
-        weight_tensor = torch.tensor(
-            list(cost_weights), device=self.device, dtype=self.dtype
-        )
-        finite_policies = self.solve_policies(cost_weights, progress=progress)
+        weight_tensor = self._cost_weight_tensor(cost_weights)
+        weight_count = self._cost_weight_count(weight_tensor)
+        if weight_tensor.ndim == 1:
+            finite_policies = self.solve_policies(
+                _tensor_float_list(weight_tensor),
+                progress=progress,
+            )
+        else:
+            finite_policies = self._solve_policies_uncached(
+                weight_tensor,
+                progress=progress,
+            )
         progress_bar = None
         if progress:
             from tqdm import tqdm
 
             progress_bar = tqdm(
-                total=self.user_count * int(weight_tensor.numel()) * max_iterations,
+                total=self.user_count * weight_count * max_iterations,
                 desc="Stationary finite oracle",
                 unit="iter",
                 leave=False,
@@ -3456,18 +3638,81 @@ class FSRS6BatchedStationaryFiniteOracle:
             dim=0,
         ).to(device=self.device)
 
-    def _solve_policies_uncached(
+    def solve_policies_for_user_weights(
         self,
-        cost_weights: Sequence[float],
+        cost_weights_by_user: Sequence[float],
         *,
         progress: bool = False,
     ) -> torch.Tensor:
-        if not cost_weights:
-            raise ValueError("cost_weights must contain at least one value.")
-        weight_tensor = torch.tensor(
-            list(cost_weights), device=self.device, dtype=self.dtype
+        weight_list = self._user_cost_weight_list(cost_weights_by_user)
+        policies: list[torch.Tensor | None] = [None for _ in range(self.user_count)]
+        missing_user_indices: list[int] = []
+        for user_idx, weight in enumerate(weight_list):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="stationary_finite",
+                    method="solve_policies",
+                    user_idx=user_idx,
+                    cost_weight=weight,
+                    extra=self._stationary_cache_extra(),
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing_user_indices.append(user_idx)
+                continue
+            policies[user_idx] = entry["policy"].to(device=self.device)
+
+        if missing_user_indices:
+            suboracle = self._suboracle(missing_user_indices)
+            group_weights = [weight_list[idx] for idx in missing_user_indices]
+            computed = suboracle._solve_policies_uncached(
+                torch.tensor(
+                    group_weights,
+                    device=self.device,
+                    dtype=self.dtype,
+                ).view(len(group_weights), 1),
+                progress=progress,
+            )
+            for local_user_idx, user_idx in enumerate(missing_user_indices):
+                policy = computed[local_user_idx, 0].to(device=self.device)
+                policies[user_idx] = policy
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="stationary_finite",
+                        method="solve_policies",
+                        user_idx=user_idx,
+                        cost_weight=weight_list[user_idx],
+                        extra=self._stationary_cache_extra(),
+                    ),
+                    data={"policy": policy},
+                )
+
+        return (
+            torch.stack(
+                [policy for policy in policies if policy is not None],
+                dim=0,
+            )
+            .to(device=self.device)
+            .reshape(
+                self.user_count,
+                1,
+                self.horizon + 1,
+                self.state_count,
+            )
         )
-        weight_count = int(weight_tensor.numel())
+
+    def _solve_policies_uncached(
+        self,
+        cost_weights: Sequence[float] | torch.Tensor,
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        weight_tensor = self._cost_weight_tensor(cost_weights)
+        weight_grid = self._cost_weight_grid(weight_tensor)
+        weight_count = int(weight_grid.shape[1])
         value = torch.zeros(
             (
                 self.user_count,
@@ -3488,7 +3733,6 @@ class FSRS6BatchedStationaryFiniteOracle:
             device=self.device,
             dtype=torch.uint8,
         )
-        weight_penalty = weight_tensor.view(1, weight_count, 1)
 
         progress_bar = None
         if progress:
@@ -3525,7 +3769,7 @@ class FSRS6BatchedStationaryFiniteOracle:
                     candidate = self._candidate_value_batch(
                         action_idx=action_idx,
                         rem=rem,
-                        cost_weights=weight_penalty,
+                        cost_weights=weight_grid,
                         value=value,
                     )
                     better = candidate > best_value
@@ -3627,6 +3871,7 @@ class FSRS6BatchedStationaryFiniteOracle:
         list[list[float]],
         torch.Tensor,
     ]:
+        weight_count = int(finite_policies.shape[1])
         policy = self._project_stationary_policies(finite_policies)
         value = self._evaluate_stationary_policy_value_batch(
             policy=policy,
@@ -3637,7 +3882,7 @@ class FSRS6BatchedStationaryFiniteOracle:
             cost_weights=cost_weights,
         )
         iterations = torch.zeros(
-            (self.user_count, int(cost_weights.numel())),
+            (self.user_count, weight_count),
             device=self.device,
             dtype=torch.int64,
         )
@@ -3707,7 +3952,7 @@ class FSRS6BatchedStationaryFiniteOracle:
         return (
             policy.reshape(
                 self.user_count,
-                int(cost_weights.numel()),
+                weight_count,
                 self.s_count,
                 self.d_count,
             ),
@@ -3726,6 +3971,8 @@ class FSRS6BatchedStationaryFiniteOracle:
         cost_weights: torch.Tensor,
         value: torch.Tensor,
     ) -> torch.Tensor:
+        weight_count = int(value.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         tables = self._action_tables
         interval = tables.interval
         prob = tables.prob
@@ -3740,7 +3987,7 @@ class FSRS6BatchedStationaryFiniteOracle:
             .unsqueeze(1)
             .expand(
                 -1,
-                int(cost_weights.numel()),
+                weight_count,
                 -1,
             )
             .clone()
@@ -3751,12 +3998,11 @@ class FSRS6BatchedStationaryFiniteOracle:
 
         user_idx = self._user_index_view(3).expand(
             self.user_count,
-            int(cost_weights.numel()),
+            weight_count,
             self.state_count,
         )
-        weight_idx = self._weight_index_view(3, int(cost_weights.numel())).expand_as(
-            candidate_value
-        )
+        weight_idx = self._weight_index_view(3, weight_count).expand_as(candidate_value)
+        weight_penalty = cost_weight_grid[:, :, None]
         future_rem_exp = future_rem[:, None, :].expand_as(candidate_value)
         next_idx_u = next_idx[:, action_idx, :, :, :]
         next_weight_u = next_weight[:, action_idx, :, :, :]
@@ -3791,7 +4037,9 @@ class FSRS6BatchedStationaryFiniteOracle:
                 1,
                 1,
             )
-            candidate_value += weighted * (future_value - cost_weights * review_minutes)
+            candidate_value += weighted * (
+                future_value - weight_penalty * review_minutes
+            )
         return candidate_value
 
     def _project_stationary_policies(
@@ -4013,15 +4261,17 @@ class FSRS6BatchedStationaryFiniteOracle:
         policy: torch.Tensor,
         cost_weights: torch.Tensor,
     ) -> torch.Tensor:
+        weight_count = int(policy.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         policy_flat = policy.reshape(
             self.user_count,
-            int(cost_weights.numel()),
+            weight_count,
             self.state_count,
         )
         value = torch.zeros(
             (
                 self.user_count,
-                int(cost_weights.numel()),
+                weight_count,
                 self.horizon + 1,
                 self.state_count,
             ),
@@ -4032,10 +4282,10 @@ class FSRS6BatchedStationaryFiniteOracle:
             self._select_stationary_policy_tables_batch(policy_flat)
         )
         user_idx = self._user_index_view(3).expand_as(selected_interval)
-        weight_idx = self._weight_index_view(3, int(cost_weights.numel())).expand_as(
+        weight_idx = self._weight_index_view(3, weight_count).expand_as(
             selected_interval
         )
-        weight_penalty = cost_weights.view(1, int(cost_weights.numel()), 1)
+        weight_penalty = cost_weight_grid[:, :, None]
         for rem in range(1, self.horizon + 1):
             cont_mask = selected_interval <= rem
             future_rem = torch.clamp(rem - selected_interval, min=0).to(torch.int64)
@@ -4085,7 +4335,8 @@ class FSRS6BatchedStationaryFiniteOracle:
         value: torch.Tensor,
         cost_weights: torch.Tensor,
     ) -> torch.Tensor:
-        weight_count = int(cost_weights.numel())
+        weight_count = int(value.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         total_value = torch.zeros(
             (self.user_count, weight_count),
             device=self.device,
@@ -4118,8 +4369,7 @@ class FSRS6BatchedStationaryFiniteOracle:
                     ]
                 )
         return (
-            total_value
-            - cost_weights.view(1, weight_count) * total_learning_minutes[:, None]
+            total_value - cost_weight_grid * total_learning_minutes[:, None]
         ) / float(self.days)
 
     def _improve_stationary_policy_batch(
@@ -4131,6 +4381,7 @@ class FSRS6BatchedStationaryFiniteOracle:
         cost_weights: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         weight_count = int(policy.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         action_scores = torch.zeros(
             (
                 self.user_count,
@@ -4149,7 +4400,7 @@ class FSRS6BatchedStationaryFiniteOracle:
             self.state_count,
         )
         weight_idx = self._weight_index_view(4, weight_count).expand_as(user_idx)
-        weight_penalty = cost_weights.view(1, weight_count, 1, 1)
+        weight_penalty = cost_weight_grid[:, :, None, None]
         tables = self._action_tables
         interval = tables.interval
         prob = tables.prob
@@ -4265,18 +4516,20 @@ class FSRS6BatchedStationaryFiniteOracle:
         policy: torch.Tensor,
         cost_weights: torch.Tensor,
     ) -> list[list[OracleMetrics]]:
+        weight_count = int(policy.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         occupancy = self._rollout_occupancy_batch(policy=policy, stationary=True)
         selected_interval, selected_prob, _, _ = (
             self._select_stationary_policy_tables_batch(
                 policy.reshape(
                     self.user_count,
-                    int(cost_weights.numel()),
+                    weight_count,
                     self.state_count,
                 )
             )
         )
         total_mem = torch.zeros(
-            (self.user_count, int(cost_weights.numel())),
+            (self.user_count, weight_count),
             device=self.device,
             dtype=self.dtype,
         )
@@ -4309,13 +4562,13 @@ class FSRS6BatchedStationaryFiniteOracle:
             total_lapses += (source * selected_prob[:, :, 0, :]).sum(dim=2)
 
         day_count = float(self.days)
-        objectives = total_mem / day_count - cost_weights.view(1, -1) * (
+        objectives = total_mem / day_count - cost_weight_grid * (
             total_minutes / day_count
         )
         metrics: list[list[OracleMetrics]] = []
         for user_idx in range(self.user_count):
             row: list[OracleMetrics] = []
-            for weight_idx in range(int(cost_weights.numel())):
+            for weight_idx in range(weight_count):
                 reviews_float = float(total_reviews[user_idx, weight_idx].item())
                 lapses_float = float(total_lapses[user_idx, weight_idx].item())
                 observed_retention = (
@@ -4869,6 +5122,100 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             dim=0,
         ).to(device=self.device, dtype=self.dtype)
 
+    def solve_policies_for_user_weights(
+        self,
+        cost_weights_by_user: Sequence[float],
+        *,
+        progress: bool = False,
+    ) -> torch.Tensor:
+        weight_list = self._user_cost_weight_list(cost_weights_by_user)
+        policies: list[torch.Tensor | None] = [None for _ in range(self.user_count)]
+        missing_user_indices: list[int] = []
+        for user_idx, weight in enumerate(weight_list):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="continuous_retention",
+                    method="solve_policies",
+                    user_idx=user_idx,
+                    cost_weight=weight,
+                    extra=self._continuous_cache_extra(),
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing_user_indices.append(user_idx)
+                continue
+            policies[user_idx] = entry["policy"].to(
+                device=self.device,
+                dtype=self.dtype,
+            )
+
+        missing_pairs = len(missing_user_indices)
+        self._progress_log(
+            "finite jagged cache scan "
+            f"users={self.user_count} pairs={self.user_count} "
+            f"hits={self.user_count - missing_pairs} missing={missing_pairs}"
+        )
+        if missing_user_indices:
+            suboracle = self._suboracle(missing_user_indices)
+            group_weights = [weight_list[idx] for idx in missing_user_indices]
+            self._progress_log(
+                "finite jagged uncached start "
+                f"users={list(missing_user_indices)} weights={group_weights}"
+            )
+            group_start_s = time.perf_counter()
+            computed = suboracle._solve_continuous_policies_uncached(
+                torch.tensor(
+                    group_weights,
+                    device=self.device,
+                    dtype=self.dtype,
+                ).view(len(group_weights), 1),
+                progress=progress,
+            )
+            self._progress_log(
+                "finite jagged uncached solved "
+                f"users={list(missing_user_indices)} weights={group_weights} "
+                f"runtime_s={time.perf_counter() - group_start_s:.1f}"
+            )
+            for local_user_idx, user_idx in enumerate(missing_user_indices):
+                policy = computed[local_user_idx, 0].to(
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                policies[user_idx] = policy
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="continuous_retention",
+                        method="solve_policies",
+                        user_idx=user_idx,
+                        cost_weight=weight_list[user_idx],
+                        extra=self._continuous_cache_extra(),
+                    ),
+                    data={"policy": policy},
+                )
+            self._progress_log(
+                "finite jagged cache write done "
+                f"entries={len(missing_user_indices)} "
+                f"cache_enabled={self.cache_config.enabled}"
+            )
+
+        return (
+            torch.stack(
+                [policy for policy in policies if policy is not None],
+                dim=0,
+            )
+            .to(device=self.device, dtype=self.dtype)
+            .reshape(
+                self.user_count,
+                1,
+                self.horizon + 1,
+                self.s_count,
+                self.d_count,
+            )
+        )
+
     def solve_stationary_finite_policies(
         self,
         cost_weights: Sequence[float],
@@ -5057,16 +5404,157 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             runtime_s=time.perf_counter() - start,
         )
 
+    def solve_stationary_finite_policies_for_user_weights(
+        self,
+        cost_weights_by_user: Sequence[float],
+        *,
+        max_iterations: int = 128,
+        tolerance: float = 1e-10,
+        progress: bool = False,
+    ) -> BatchedStationaryFiniteOracleSolution:
+        weight_list = self._user_cost_weight_list(cost_weights_by_user)
+        if max_iterations <= 0:
+            raise ValueError("max_iterations must be > 0.")
+        if tolerance <= 0.0:
+            raise ValueError("tolerance must be > 0.")
+
+        start = time.perf_counter()
+        policies: list[torch.Tensor | None] = [None for _ in range(self.user_count)]
+        metrics: list[OracleMetrics | None] = [None for _ in range(self.user_count)]
+        objectives = torch.zeros(
+            (self.user_count, 1),
+            device=self.device,
+            dtype=self.dtype,
+        )
+        iterations: list[int | None] = [None for _ in range(self.user_count)]
+        converged: list[bool | None] = [None for _ in range(self.user_count)]
+        residuals: list[float | None] = [None for _ in range(self.user_count)]
+        missing_user_indices: list[int] = []
+        extra = self._stationary_cache_extra(
+            max_iterations=max_iterations,
+            tolerance=tolerance,
+        )
+        for user_idx, weight in enumerate(weight_list):
+            entry = load_cache_entry(
+                self.cache_config,
+                key_parts=self._cache_key_parts(
+                    oracle_kind="continuous_stationary_finite",
+                    method="solve_stationary_finite_policies",
+                    user_idx=user_idx,
+                    cost_weight=weight,
+                    extra=extra,
+                ),
+                map_location=self.device,
+            )
+            if entry is None or not isinstance(entry.get("policy"), torch.Tensor):
+                missing_user_indices.append(user_idx)
+                continue
+            policies[user_idx] = entry["policy"].to(
+                device=self.device,
+                dtype=self.dtype,
+            )
+            metrics[user_idx] = _metrics_from_payload(
+                entry["metrics"],
+                runtime_s=0.0,
+            )
+            objectives[user_idx, 0] = float(entry["objective"])
+            iterations[user_idx] = int(entry["iterations"])
+            converged[user_idx] = bool(entry["converged"])
+            residuals[user_idx] = float(entry["residual"])
+
+        missing_pairs = len(missing_user_indices)
+        self._progress_log(
+            "stationary jagged cache scan "
+            f"users={self.user_count} pairs={self.user_count} "
+            f"hits={self.user_count - missing_pairs} missing={missing_pairs}"
+        )
+        if missing_user_indices:
+            suboracle = self._suboracle(
+                missing_user_indices,
+                cache_config=self.cache_config,
+            )
+            group_weights = [weight_list[idx] for idx in missing_user_indices]
+            self._progress_log(
+                "stationary jagged uncached start "
+                f"users={list(missing_user_indices)} weights={group_weights}"
+            )
+            group_start_s = time.perf_counter()
+            solution = suboracle._solve_stationary_finite_policies_uncached(
+                torch.tensor(
+                    group_weights,
+                    device=self.device,
+                    dtype=self.dtype,
+                ).view(len(group_weights), 1),
+                max_iterations=max_iterations,
+                tolerance=tolerance,
+                progress=progress,
+            )
+            self._progress_log(
+                "stationary jagged uncached solved "
+                f"users={list(missing_user_indices)} weights={group_weights} "
+                f"runtime_s={time.perf_counter() - group_start_s:.1f}"
+            )
+            for local_user_idx, user_idx in enumerate(missing_user_indices):
+                policy = solution.policy[local_user_idx, 0].to(
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                metric = solution.metrics[local_user_idx][0]
+                objective = float(solution.objectives[local_user_idx, 0].item())
+                iteration = solution.iterations[local_user_idx][0]
+                did_converge = solution.converged[local_user_idx][0]
+                residual = solution.residuals[local_user_idx][0]
+                policies[user_idx] = policy
+                metrics[user_idx] = metric
+                objectives[user_idx, 0] = objective
+                iterations[user_idx] = iteration
+                converged[user_idx] = did_converge
+                residuals[user_idx] = residual
+                write_cache_entry(
+                    self.cache_config,
+                    key_parts=self._cache_key_parts(
+                        oracle_kind="continuous_stationary_finite",
+                        method="solve_stationary_finite_policies",
+                        user_idx=user_idx,
+                        cost_weight=weight_list[user_idx],
+                        extra=extra,
+                    ),
+                    data={
+                        "policy": policy,
+                        "metrics": _metrics_payload(metric),
+                        "objective": objective,
+                        "iterations": iteration,
+                        "converged": did_converge,
+                        "residual": residual,
+                    },
+                )
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
+
+        return BatchedStationaryFiniteOracleSolution(
+            policy=torch.stack(
+                [policy for policy in policies if policy is not None],
+                dim=0,
+            )
+            .to(device=self.device, dtype=self.dtype)
+            .reshape(self.user_count, 1, self.s_count, self.d_count),
+            metrics=[[metric] for metric in metrics if metric is not None],
+            objectives=objectives,
+            iterations=[[int(value)] for value in iterations if value is not None],
+            converged=[[bool(value)] for value in converged if value is not None],
+            residuals=[[float(value)] for value in residuals if value is not None],
+            runtime_s=time.perf_counter() - start,
+        )
+
     def _solve_continuous_policies_uncached(
         self,
-        cost_weights: Sequence[float],
+        cost_weights: Sequence[float] | torch.Tensor,
         *,
         progress: bool = False,
     ) -> torch.Tensor:
-        weight_tensor = torch.tensor(
-            list(cost_weights), device=self.device, dtype=self.dtype
-        )
-        weight_count = int(weight_tensor.numel())
+        weight_tensor = self._cost_weight_tensor(cost_weights)
+        weight_grid = self._cost_weight_grid(weight_tensor)
+        weight_count = int(weight_grid.shape[1])
         value = torch.zeros(
             (self.user_count, weight_count, self.horizon + 1, self.state_count),
             device=self.device,
@@ -5078,7 +5566,6 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             device=self.device,
             dtype=self.dtype,
         )
-        weight_penalty = weight_tensor.view(1, weight_count, 1, 1, 1)
 
         progress_bar = None
         if progress:
@@ -5121,7 +5608,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                     candidate = self._candidate_interval_value_batch(
                         intervals=intervals,
                         rem=rem,
-                        cost_weights=weight_penalty,
+                        cost_weights=weight_grid,
                         value=value,
                     )
                     mask = self._attainable_interval_mask(intervals, rem + 1)
@@ -5185,24 +5672,37 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
 
     def _solve_stationary_finite_policies_uncached(
         self,
-        cost_weights: Sequence[float],
+        cost_weights: Sequence[float] | torch.Tensor,
         *,
         max_iterations: int = 128,
         tolerance: float = 1e-10,
         progress: bool = False,
     ) -> BatchedStationaryFiniteOracleSolution:
         start = time.perf_counter()
-        weight_tensor = torch.tensor(
-            list(cost_weights), device=self.device, dtype=self.dtype
-        )
+        weight_tensor = self._cost_weight_tensor(cost_weights)
+        weight_count = self._cost_weight_count(weight_tensor)
         self._progress_log(
             "stationary solve start "
-            f"users={self.user_count} weights={int(weight_tensor.numel())} "
+            f"users={self.user_count} weights={weight_count} "
             f"horizon={self.horizon} states={self.state_count} "
             f"max_iterations={max_iterations} tolerance={tolerance:g}"
         )
         finite_start_s = time.perf_counter()
-        finite_policies = self.solve_policies(cost_weights, progress=progress)
+        if weight_tensor.ndim == 1:
+            finite_policies = self.solve_policies(
+                _tensor_float_list(weight_tensor),
+                progress=progress,
+            )
+        elif weight_count == 1:
+            finite_policies = self.solve_policies_for_user_weights(
+                _tensor_float_list(weight_tensor[:, 0]),
+                progress=progress,
+            )
+        else:
+            finite_policies = self._solve_continuous_policies_uncached(
+                weight_tensor,
+                progress=progress,
+            )
         self._progress_log(
             "stationary finite initialization done "
             f"runtime_s={time.perf_counter() - finite_start_s:.1f}"
@@ -5229,7 +5729,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                 f"objective_max={float(objective.max().item()):.6g}"
             )
         iterations = torch.zeros(
-            (self.user_count, int(weight_tensor.numel())),
+            (self.user_count, weight_count),
             device=self.device,
             dtype=torch.int64,
         )
@@ -5247,7 +5747,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             from tqdm import tqdm
 
             progress_bar = tqdm(
-                total=self.user_count * int(weight_tensor.numel()) * max_iterations,
+                total=self.user_count * weight_count * max_iterations,
                 desc="Continuous stationary finite oracle",
                 unit="iter",
                 leave=False,
@@ -5275,7 +5775,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                 changed = (torch.abs(new_policy - policy) > 1e-12) & visited
                 policy_changed = changed.reshape(
                     self.user_count,
-                    int(weight_tensor.numel()),
+                    weight_count,
                     self.state_count,
                 ).any(dim=2)
                 iterations[active] = iteration
@@ -5416,6 +5916,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
     ) -> torch.Tensor:
         interval_count = int(intervals.numel())
         weight_count = int(value.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         active_days = torch.minimum(intervals, torch.full_like(intervals, rem))
         immediate_mem = self._memorized_sum_interval_candidates(active_days)
         candidate_flat = (
@@ -5451,7 +5952,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         weight_idx = self._weight_index_view(4, weight_count).expand_as(user_idx)
         future_rem_exp = future_rem[:, None, :, :].expand_as(user_idx)
         cont_weight = cont_mask.to(dtype=self.dtype)[:, None, :, :]
-        cost_weight = cost_weights.reshape(1, weight_count, 1, 1)
+        cost_weight = cost_weight_grid[:, :, None, None]
         for rating_idx, rating in enumerate(range(1, 5)):
             weighted = prob[:, None, :, rating_idx, :] * cont_weight
             future_value = torch.zeros_like(candidate_flat)
@@ -5876,7 +6377,8 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         policy: torch.Tensor,
         cost_weights: torch.Tensor,
     ) -> torch.Tensor:
-        weight_count = int(cost_weights.numel())
+        weight_count = int(policy.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         value = torch.zeros(
             (self.user_count, weight_count, self.horizon + 1, self.state_count),
             device=self.device,
@@ -5889,7 +6391,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         weight_idx = self._weight_index_view(3, weight_count).expand_as(
             selected_interval
         )
-        weight_penalty = cost_weights.view(1, weight_count, 1)
+        weight_penalty = cost_weight_grid[:, :, None]
         for rem in range(1, self.horizon + 1):
             cont_mask = selected_interval <= rem
             future_rem = torch.clamp(rem - selected_interval, min=0).to(torch.int64)
@@ -5939,7 +6441,8 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         value: torch.Tensor,
         cost_weights: torch.Tensor,
     ) -> torch.Tensor:
-        weight_count = int(cost_weights.numel())
+        weight_count = int(value.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         total_value = torch.zeros(
             (self.user_count, weight_count),
             device=self.device,
@@ -5972,8 +6475,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                     ]
                 )
         return (
-            total_value
-            - cost_weights.view(1, weight_count) * total_learning_minutes[:, None]
+            total_value - cost_weight_grid * total_learning_minutes[:, None]
         ) / float(self.days)
 
     def _active_cell_attainable_interval_mask(
@@ -6217,7 +6719,8 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         active_rems: Sequence[int],
     ) -> torch.Tensor:
         block_size = int(user_idx.numel())
-        weight_count = int(cost_weights.numel())
+        weight_count = int(block_occupancy.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         interval_count = int(intervals.numel())
         score = torch.zeros(
             (block_size, weight_count, interval_count),
@@ -6237,7 +6740,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             dtype=torch.int64,
         ).view(1, weight_count, 1)
         weight_exp = weight_idx.expand(block_size, weight_count, interval_count)
-        cost_weight = cost_weights.view(1, weight_count, 1)
+        cost_weight = cost_weight_grid.index_select(0, user_idx)[:, :, None]
         review_minutes = self.review_cost_minutes.index_select(0, user_idx)
         interval_row = intervals.view(1, interval_count)
         valid_float = valid.to(dtype=self.dtype)
@@ -6805,6 +7308,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         iteration: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         weight_count = int(policy.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         best_score = torch.full(
             (self.user_count, weight_count, self.s_count, self.d_count),
             -math.inf,
@@ -6818,7 +7322,6 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         )
         current_interval = self._intervals_for_retention_policy(policy)
         current_score = torch.zeros_like(best_score)
-        weight_penalty = cost_weights.view(1, weight_count, 1, 1, 1)
         improve_start_s = time.perf_counter()
         next_log_s = self._next_progress_log_deadline()
         total_chunks = math.ceil((self.horizon + 1) / self.interval_chunk_size)
@@ -6862,7 +7365,7 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
                 candidate = self._candidate_interval_value_from_tables(
                     intervals=intervals,
                     rem=rem,
-                    cost_weights=weight_penalty,
+                    cost_weights=cost_weight_grid,
                     value=value,
                     interval=interval,
                     prob=prob,
@@ -6967,10 +7470,12 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
         policy: torch.Tensor,
         cost_weights: torch.Tensor,
     ) -> list[list[OracleMetrics]]:
+        weight_count = int(policy.shape[1])
+        cost_weight_grid = self._cost_weight_grid(cost_weights)
         occupancy = self._rollout_occupancy_batch(policy=policy)
         selected_interval, selected_prob, _, _ = self._policy_tables_batch(policy)
         total_mem = torch.zeros(
-            (self.user_count, int(cost_weights.numel())),
+            (self.user_count, weight_count),
             device=self.device,
             dtype=self.dtype,
         )
@@ -7003,13 +7508,13 @@ class FSRS6BatchedContinuousStationaryFiniteOracle(FSRS6BatchedStationaryFiniteO
             total_lapses += (source * selected_prob[:, :, 0, :]).sum(dim=2)
 
         day_count = float(self.days)
-        objectives = total_mem / day_count - cost_weights.view(1, -1) * (
+        objectives = total_mem / day_count - cost_weight_grid * (
             total_minutes / day_count
         )
         metrics: list[list[OracleMetrics]] = []
         for user_idx in range(self.user_count):
             row: list[OracleMetrics] = []
-            for weight_idx in range(int(cost_weights.numel())):
+            for weight_idx in range(weight_count):
                 reviews_float = float(total_reviews[user_idx, weight_idx].item())
                 lapses_float = float(total_lapses[user_idx, weight_idx].item())
                 observed_retention = (

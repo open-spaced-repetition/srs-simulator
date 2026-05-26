@@ -8,10 +8,11 @@ import json
 import math
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 import time
-from typing import Any
+from typing import Any, TypeVar
 
 import torch
 
@@ -99,6 +100,13 @@ DEFAULT_EXPLORE_PARTICLES = 1024
 DEFAULT_CONFIRM_PARTICLES = 10_000
 DEFAULT_CERTIFICATE_TOLERANCE = 1e-9
 DEFAULT_ORACLE_CONTINUOUS_INTERVAL_CHUNK_SIZE = 64
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True)
+class _OraclePointRequest:
+    user_id: int
+    cost_weight: float
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -171,11 +179,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--oracle-refinement-scope",
         choices=("global", "user"),
-        default="global",
+        default="user",
         help=(
-            "For exact oracle refinement, evaluate lambda_AB candidates for all "
-            "users (global) or only for the user whose target-relevant segment "
-            "generated the candidate (user)."
+            "Exact oracle refinement is always target-local. This controls "
+            "whether lambda_AB candidates from target-relevant segments are "
+            "evaluated for all users (global) or only for the user whose "
+            "target-relevant segment generated the candidate (user)."
         ),
     )
     parser.add_argument("--memory-margin", type=float, default=0.0)
@@ -408,7 +417,7 @@ def _load_user_configs(
     return configs
 
 
-def _group_chunks(values: Sequence[float], group_batch_size: int) -> list[list[float]]:
+def _group_chunks(values: Sequence[_T], group_batch_size: int) -> list[list[_T]]:
     if not values:
         return []
     chunk_size = len(values) if group_batch_size <= 0 else group_batch_size
@@ -721,6 +730,37 @@ def _oracle_solution_points(
     return points
 
 
+def _oracle_user_weight_solution_points(
+    *,
+    family: str,
+    requests: Sequence[_OraclePointRequest],
+    solution: BatchedStationaryFiniteOracleSolution,
+) -> list[EvaluatedPoint]:
+    runtime_s = solution.runtime_s / float(max(1, len(requests)))
+    points: list[EvaluatedPoint] = []
+    for slot_idx, request in enumerate(requests):
+        did_converge = bool(solution.converged[slot_idx][0])
+        policy_ref = (
+            f"{family}:user={request.user_id}:"
+            f"lambda={format_float(request.cost_weight)}"
+        )
+        points.append(
+            _metrics_to_point(
+                user_id=request.user_id,
+                family=family,
+                theta=request.cost_weight,
+                metrics=solution.metrics[slot_idx][0],
+                eval_stage="exact" if did_converge else "oracle_unconverged",
+                particles=None,
+                seed=None,
+                runtime_s=runtime_s,
+                exact=did_converge,
+                policy_ref=policy_ref,
+            )
+        )
+    return points
+
+
 @torch.inference_mode()
 def evaluate_oracle_points(
     *,
@@ -770,6 +810,54 @@ def evaluate_oracle_points(
     return points
 
 
+@torch.inference_mode()
+def evaluate_oracle_point_requests(
+    *,
+    family: str,
+    requests: Sequence[_OraclePointRequest],
+    configs_by_user: Mapping[int, SingleCardFSRS6Config],
+    args: argparse.Namespace,
+    device: torch.device,
+    progress: bool,
+) -> list[EvaluatedPoint]:
+    if not requests:
+        return []
+    configs = [configs_by_user[request.user_id] for request in requests]
+    cost_weights = [request.cost_weight for request in requests]
+    oracle = _build_oracle(
+        args=args,
+        family=family,
+        configs=configs,
+        device=device,
+    )
+    solution = oracle.solve_stationary_finite_policies_for_user_weights(
+        cost_weights,
+        max_iterations=int(args.oracle_stationary_finite_max_iterations),
+        tolerance=float(args.oracle_stationary_finite_tolerance),
+        progress=progress,
+    )
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    points = _oracle_user_weight_solution_points(
+        family=family,
+        requests=requests,
+        solution=solution,
+    )
+    if progress:
+        converged = sum(
+            1 for row in solution.converged for did_converge in row if did_converge
+        )
+        unique_users = len({request.user_id for request in requests})
+        print(
+            f"exact-jagged: solved {family} pairs={len(requests)} "
+            f"unique_users={unique_users} lambda "
+            f"{format_float(min(cost_weights))}..{format_float(max(cost_weights))} "
+            f"converged={converged}/{len(requests)}",
+            flush=True,
+        )
+    return points
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames: list[str] = []
@@ -781,6 +869,22 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_partial_points_checkpoint(
+    *,
+    args: argparse.Namespace,
+    points: Sequence[EvaluatedPoint],
+    round_index: int,
+) -> None:
+    _write_csv(
+        Path(args.out_dir) / "points.partial.csv",
+        [point_row(point) for point in sorted(points, key=_point_key)],
+    )
+    (Path(args.out_dir) / "points.partial.round").write_text(
+        f"{round_index}\n",
+        encoding="utf-8",
+    )
 
 
 def _write_plot(
@@ -897,6 +1001,35 @@ def _oracle_refinement_candidates_by_user(
     return candidates_by_user
 
 
+def _missing_oracle_point_requests(
+    candidates_by_user: Mapping[int, Sequence[float]],
+    points: Sequence[EvaluatedPoint],
+    *,
+    family: str,
+) -> list[_OraclePointRequest]:
+    requests: list[_OraclePointRequest] = []
+    for user_id, candidates in sorted(candidates_by_user.items()):
+        missing_candidates = _missing_thetas_for_all_users(
+            candidates,
+            points,
+            user_ids=[user_id],
+            family=family,
+            require_exact=True,
+        )
+        requests.extend(
+            _OraclePointRequest(user_id=user_id, cost_weight=cost_weight)
+            for cost_weight in missing_candidates
+        )
+    return requests
+
+
+def _oracle_point_request_chunks(
+    requests: Sequence[_OraclePointRequest],
+    args: argparse.Namespace,
+) -> list[list[_OraclePointRequest]]:
+    return _group_chunks(requests, int(args.eval_group_batch_size))
+
+
 def _format_user_scoped_candidates(
     candidates_by_user: Mapping[int, Sequence[float]],
 ) -> str:
@@ -969,27 +1102,34 @@ def _run_oracle_target_search(
                     f"{_format_user_scoped_candidates(candidates_by_user)}",
                     flush=True,
                 )
-            for user_id, candidates in sorted(candidates_by_user.items()):
-                missing_candidates = _missing_thetas_for_all_users(
-                    candidates,
-                    all_points,
-                    user_ids=[user_id],
-                    family=args.family,
-                    require_exact=True,
-                )
-                if missing_candidates:
-                    all_points.extend(
-                        evaluate_oracle_points(
-                            family=args.family,
-                            theta_values=missing_candidates,
-                            user_ids=[user_id],
-                            configs=[configs_by_user[user_id]],
-                            args=args,
-                            device=device,
-                            progress=not args.no_progress,
-                        )
+            requests = _missing_oracle_point_requests(
+                candidates_by_user,
+                all_points,
+                family=args.family,
+            )
+            for request_chunk in _oracle_point_request_chunks(requests, args):
+                all_points.extend(
+                    evaluate_oracle_point_requests(
+                        family=args.family,
+                        requests=request_chunk,
+                        configs_by_user=configs_by_user,
+                        args=args,
+                        device=device,
+                        progress=not args.no_progress,
                     )
+                )
+                all_points = _merge_points_by_key(all_points)
+                _write_partial_points_checkpoint(
+                    args=args,
+                    points=all_points,
+                    round_index=round_index,
+                )
             all_points = _merge_points_by_key(all_points)
+            _write_partial_points_checkpoint(
+                args=args,
+                points=all_points,
+                round_index=round_index,
+            )
             continue
 
         candidates = oracle_refinement_candidates(
@@ -1030,6 +1170,11 @@ def _run_oracle_target_search(
                 )
             )
         all_points = _merge_points_by_key(all_points)
+        _write_partial_points_checkpoint(
+            args=args,
+            points=all_points,
+            round_index=round_index,
+        )
 
     frontier = empirical_frontier([point for point in all_points if point.exact])
     segments = certify_oracle_segments(
@@ -1051,6 +1196,7 @@ def _run_oracle_target_search(
         target_certification_map(segments, targets, family=args.family),
     )
     selected = [answer.point for answer in answers if answer.point is not None]
+    certified_segment_count = sum(1 for segment in segments if segment.certified)
 
     return _write_outputs(
         args=args,
@@ -1076,8 +1222,10 @@ def _run_oracle_target_search(
                 args.oracle_stationary_finite_tolerance
             ),
             "certificate_tolerance": args.certificate_tolerance,
-            "certified_segments": sum(1 for segment in segments if segment.certified),
+            "certified_segments": certified_segment_count,
             "segment_count": len(segments),
+            "certified_targets": sum(1 for answer in answers if answer.certified),
+            "certification_scope": "oracle_target_local",
             "oracle_refinement_scope": args.oracle_refinement_scope,
             "theta_values_confirmed_by_user": {
                 str(user_id): _existing_oracle_thetas_for_user(

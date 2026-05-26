@@ -45,18 +45,29 @@ uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --out-dir artifacts/single_card_tradeoff/target_search/fsrs6_first8_memory
 ```
 
-Exact stationary finite oracle target search uses cost weights as `theta` and
-refines target-local frontier segments with `lambda_AB` certificates:
+Exact stationary finite oracle target search uses cost weights as `theta` and,
+by default, refines target-local frontier segments with `lambda_AB`
+certificates. Use a large refinement budget for report artifacts so every
+target answer is certified rather than merely sampled from a sparse cost-weight
+grid:
 
 ```bash
 uv run python -m experiments.single_card_tradeoff.cli.target_search \
   --env fsrs6 --user-ids 1,2,3,4,5,6,7,8 \
   --family fsrs6_oracle_stationary_finite \
   --target-memories 0.7,0.75,0.8,0.85,0.9,0.93,0.96 \
-  --theta-grid 0,16,64,256,1024 \
-  --max-refinement-rounds 4 --candidates-per-round 4 \
+  --theta-grid 0,16,64,256,1024,4096,16384 \
+  --theta-max 16384 \
+  --max-refinement-rounds 200 --candidates-per-round 100000 \
+  --eval-group-batch-size 32 \
   --out-dir artifacts/single_card_tradeoff/target_search/oracle_stationary_first8_memory
 ```
+
+Use the same target-local certified refinement defaults for
+`--family fsrs6_oracle_continuous_stationary_finite`. Sparse continuous oracle
+cost-weight grids are useful diagnostics, but they should not be used as fixed
+target-memory comparison artifacts unless `metadata.json` reports
+`certified_targets == target_count`.
 
 Reuse a previous search's `points.csv` as a warm start with `--init-points`.
 Exact oracle points are reused directly; rollout families use loaded points for
