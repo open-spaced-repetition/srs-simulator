@@ -2212,6 +2212,76 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             [[1, 2, 3, 4, 5, 6, 7, 8]],
         )
 
+    def test_adr_pop16_users_1_128_config_groups_all_users(self) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_adr_portfolio_users_1_128_pop16_v1.toml"
+        )
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+        lanes_per_job = estimate_lanes_per_job(trainer=trainer, config=config)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = [_train_job(root, user_id, "0") for user_id in range(1, 129)]
+            batches = _build_train_user_batches(
+                jobs=jobs,
+                batch_size=config.training_batch.batch_size,
+                max_lanes_per_batch=config.training_batch.max_lanes_per_batch,
+                lanes_per_job=lanes_per_job,
+            )
+
+        self.assertEqual(trainer, "fsrs6_adr_portfolio")
+        self.assertEqual(lanes_per_job, 16)
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(len(batches[0]), 128)
+        self.assertEqual([job.user_id for job in batches[0]][:3], [1, 2, 3])
+        self.assertEqual([job.user_id for job in batches[0]][-3:], [126, 127, 128])
+
+    def test_cost_adr_users_1_128_config_groups_by_lane_cap(self) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml"
+        )
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+        lanes_per_job = estimate_lanes_per_job(trainer=trainer, config=config)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = [_train_job(root, user_id, "0") for user_id in range(1, 129)]
+            batches = _build_train_user_batches(
+                jobs=jobs,
+                batch_size=config.training_batch.batch_size,
+                max_lanes_per_batch=config.training_batch.max_lanes_per_batch,
+                lanes_per_job=lanes_per_job,
+            )
+
+        self.assertEqual(trainer, "fsrs6_cost_adr_cmaes")
+        self.assertEqual(lanes_per_job, 256)
+        self.assertEqual(
+            [len(batch) for batch in batches],
+            [25, 25, 25, 25, 25, 3],
+        )
+        self.assertEqual([job.user_id for job in batches[0]][:3], [1, 2, 3])
+        self.assertEqual([job.user_id for job in batches[-1]], [126, 127, 128])
+
     def test_train_overfit_rejects_missing_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
