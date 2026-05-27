@@ -138,7 +138,10 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         )
         return max(1, optimizer.population_size)
     if trainer == "fsrs6_cost_adr_cmaes":
-        optimizer = cost_adr_optimizer_settings_from_mapping(config.training_optimizer)
+        optimizer = cost_adr_optimizer_settings_from_mapping(
+            config.training_optimizer,
+            settings=settings,
+        )
         cost_weights = cost_adr_cost_weights_from_mapping(raw_training_policy_search)
         return max(1, optimizer.population_size * len(cost_weights))
     baseline_dr_values = _baseline_dr_values(raw_training_policy_search, settings)

@@ -21,11 +21,22 @@ from experiments.single_card_tradeoff.cli.fsrs6_cost_adr_train import (  # noqa:
 from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (  # noqa: E402
     CostADRTrainJob,
     CoverageObjectiveSettings,
+    FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS,
+    HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE,
+    HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
+    INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
+    InitialPolicySettings,
+    hypervolume_delta_mode_from_mapping,
+    optimizer_settings_from_mapping,
     run_training_jobs,
     _score_candidate,
 )
-from experiments.rl_scheduler.policy_search_common import CandidateMetrics  # noqa: E402
+from experiments.rl_scheduler.policy_search_common import (  # noqa: E402
+    CandidateMetrics,
+    PolicySearchSettings,
+)
 from experiments.rl_scheduler.portfolio_selection import (  # noqa: E402
+    objective_hypervolume_2d,
     point_from_metrics,
     reference_point,
 )
@@ -42,6 +53,106 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
 
 
 class FSRS6CostADRTrainTests(unittest.TestCase):
+    def test_builtin_mean_source_is_exclusive_with_policy_sources(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Only one Cost-ADR initial policy"):
+            InitialPolicySettings.from_mapping(
+                {
+                    "initial_mean_source": INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
+                    "initial_policy": "policy.json",
+                }
+            )
+
+    def test_optimizer_bounds_use_policy_search_coefficient_bounds(self) -> None:
+        settings = PolicySearchSettings.from_mapping(
+            {
+                "coefficient_min": -64.0,
+                "coefficient_max": 64.0,
+                "retention_min": 0.5,
+                "retention_max": 0.98,
+                "baseline_desired_retention": 0.9,
+            }
+        )
+
+        optimizer = optimizer_settings_from_mapping(
+            {"name": "cma_es", "population_size": 2, "generations": 1},
+            settings=settings,
+        )
+
+        self.assertEqual(optimizer.bounds[0], (-64.0,) * 24)
+        self.assertEqual(optimizer.bounds[1], (64.0,) * 24)
+
+    def test_hypervolume_delta_mode_defaults_to_union_contribution(self) -> None:
+        self.assertEqual(
+            hypervolume_delta_mode_from_mapping({}),
+            HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
+        )
+        self.assertEqual(
+            hypervolume_delta_mode_from_mapping(
+                {"hypervolume_delta_mode": HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE}
+            ),
+            HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE,
+        )
+        with self.assertRaisesRegex(ValueError, "hypervolume_delta_mode"):
+            hypervolume_delta_mode_from_mapping({"hypervolume_delta_mode": "bad"})
+
+    def test_default_union_contribution_scores_external_hypervolume_gain(self) -> None:
+        baseline = [
+            CandidateMetrics(
+                memorized_average=100.0,
+                time_average=10.0,
+                memorized_per_minute=10.0,
+                total_reviews=1,
+                total_lapses=0,
+                total_cost=600.0,
+            ),
+            CandidateMetrics(
+                memorized_average=200.0,
+                time_average=20.0,
+                memorized_per_minute=10.0,
+                total_reviews=2,
+                total_lapses=0,
+                total_cost=1200.0,
+            ),
+        ]
+        candidate = [
+            CandidateMetrics(
+                memorized_average=210.0,
+                time_average=19.0,
+                memorized_per_minute=11.0,
+                total_reviews=2,
+                total_lapses=0,
+                total_cost=1140.0,
+            )
+        ]
+        baseline_points = [point_from_metrics(metric) for metric in baseline]
+        reference = reference_point(baseline_points)
+        baseline_hypervolume = objective_hypervolume_2d(
+            baseline_points,
+            reference=reference,
+        )
+
+        score = _score_candidate(
+            baseline_metrics=baseline,
+            baseline_points=baseline_points,
+            baseline_hypervolume=baseline_hypervolume,
+            reference=reference,
+            candidate_metrics=candidate,
+            coverage_settings=CoverageObjectiveSettings(),
+        )
+
+        self.assertAlmostEqual(
+            score.hypervolume_delta,
+            objective_hypervolume_2d(
+                [
+                    *baseline_points,
+                    *[point_from_metrics(metric) for metric in candidate],
+                ],
+                reference=reference,
+            )
+            - baseline_hypervolume,
+        )
+        self.assertGreater(score.hypervolume_delta, 0.0)
+
     def test_coverage_objective_penalizes_narrow_frontier_overlap(self) -> None:
         baseline = [
             CandidateMetrics(
@@ -86,9 +197,18 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
                 min_target_span_coverage=0.9,
                 penalty_weight=0.1,
             ),
+            hypervolume_delta_mode=HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE,
         )
 
         self.assertGreater(score.coverage_penalty, 0.0)
+        self.assertAlmostEqual(
+            score.hypervolume_delta,
+            objective_hypervolume_2d(
+                [point_from_metrics(metric) for metric in candidate],
+                reference=reference,
+            )
+            - 1000.0,
+        )
         self.assertLess(score.objective_score, score.hypervolume_delta)
         self.assertEqual(score.coverage_diagnostics.covered_budget_count, 0)
 
@@ -221,6 +341,194 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
         self.assertEqual(policy.parameter_count, 24)
         self.assertEqual(policy.action_head, ACTION_HEAD_INTERVAL)
         self.assertTrue(stats["final_loss"] >= 0.0)
+
+    def test_builtin_mean_initializer_uses_64_bounds_and_generation_zero(self) -> None:
+        bundle_lane_user_ids = []
+        training_coefficients = []
+
+        def fake_build_bundle(**kwargs):
+            lane_user_ids = kwargs.get("lane_user_ids")
+            if not isinstance(lane_user_ids, list):
+                raise AssertionError("trainer smoke test expects lane_user_ids.")
+            bundle_lane_user_ids.append(list(lane_user_ids))
+            lanes = len(lane_user_ids)
+            device = kwargs["device"]
+            return SimpleNamespace(
+                env_ops=SimpleNamespace(device=device),
+                scheduler_weights=torch.tensor(
+                    [DEFAULT_FSRS6_WEIGHTS for _ in range(lanes)],
+                    device=device,
+                    dtype=torch.float32,
+                ),
+                behavior=object(),
+                cost_model=object(),
+                device=device,
+                short_term_source=None,
+                learning_steps=[],
+                relearning_steps=[],
+            )
+
+        def fake_simulate_multiuser(**kwargs):
+            sched_ops = kwargs["sched_ops"]
+            lane_count = int(sched_ops._weights.shape[0])
+            is_cost_adr = hasattr(sched_ops, "_goal_cost_weight")
+            if is_cost_adr:
+                training_coefficients.append(sched_ops._coefficients.detach().cpu())
+            stats = []
+            for index in range(lane_count):
+                if is_cost_adr:
+                    memorized = 8.0 + index * 0.01
+                    minutes = 1.0
+                else:
+                    memorized = 5.0 + index * 0.01
+                    minutes = 2.0
+                stats.append(
+                    SimpleNamespace(
+                        daily_cost=[minutes * 60.0],
+                        daily_memorized=[memorized],
+                        total_reviews=1,
+                        total_lapses=0,
+                        total_cost=minutes * 60.0,
+                    )
+                )
+            return stats
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "cost_adr_meaninit.toml"
+            output_dir = root / "user_1"
+            config_path.write_text(
+                f"""
+schema_version = 1
+name = "cost-adr-meaninit-smoke"
+family = "rl_scheduler"
+seed = 42
+output_root = "artifacts/cost-adr-meaninit-smoke"
+stages = ["train-overfit"]
+
+[users]
+train = [1]
+validation = []
+reserved_test = []
+
+[baseline]
+scheduler = "fsrs6"
+log_root = "logs/retention_sweep"
+expected_engine = "batched"
+stage_mode = "copy"
+desired_retention_values = [0.90]
+
+[simulation]
+engine = "batched"
+environment = "fsrs6"
+days = 2
+deck = 10
+learn_limit = 1
+review_limit = 10
+cost_limit_minutes = 60.0
+priority = "new-first"
+scheduler_priority = "low_retrievability"
+fuzz = false
+
+[training]
+artifact_metadata_glob = "metadata.json"
+command_template = [
+  "uv",
+  "run",
+  "python",
+  "experiments/rl_scheduler/train_cmaes_fsrs6_cost_adr.py",
+]
+
+[training.policy_search]
+coefficient_min = -64.0
+coefficient_max = 64.0
+retention_min = 0.50
+retention_max = 0.98
+baseline_desired_retention = 0.90
+torch_device = "cpu"
+short_term_threshold = 0.5
+short_term_loops_limit = 1
+initial_mean_source = "{INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1}"
+initial_policy_expand_bounds = false
+initial_policy_evaluate_in_generation_zero = true
+
+[training.optimizer]
+name = "cma_es"
+population_size = 2
+generations = 1
+sigma0 = 1.0
+seed = 7
+""".lstrip(),
+                encoding="utf-8",
+            )
+            config = ExperimentConfig.from_toml(config_path)
+
+            with (
+                patch(
+                    "experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr._build_bundle",
+                    side_effect=fake_build_bundle,
+                ),
+                patch(
+                    "experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr.simulate_multiuser",
+                    side_effect=fake_simulate_multiuser,
+                ),
+            ):
+                results = run_training_jobs(
+                    jobs=[CostADRTrainJob(user_id=1, output_dir=output_dir)],
+                    config=config,
+                    config_path=config_path,
+                    repo_root=REPO_ROOT,
+                    button_usage=None,
+                )
+
+            progress_records = [
+                json.loads(line)
+                for line in (output_dir / "training_progress.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            metrics = json.loads(
+                (output_dir / "metrics.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual([result.passed for result in results], [True])
+        self.assertEqual(bundle_lane_user_ids[0], [1])
+        self.assertEqual(bundle_lane_user_ids[1], [1] * 32)
+        self.assertEqual(len(training_coefficients), 1)
+        expected = torch.tensor(
+            FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS,
+            dtype=torch.float32,
+        )
+        self.assertTrue(
+            torch.allclose(training_coefficients[0][0:16], expected.expand(16, -1))
+        )
+        config_loaded = next(
+            record for record in progress_records if record["event"] == "config_loaded"
+        )
+        self.assertEqual(
+            config_loaded["initial_policy"]["source"],
+            INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
+        )
+        self.assertEqual(
+            config_loaded["hypervolume_delta_mode"],
+            HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
+        )
+        self.assertIsNone(config_loaded["initial_policy"]["path"])
+        self.assertEqual(config_loaded["optimizer"]["bounds"][0], [-64.0] * 24)
+        self.assertEqual(config_loaded["optimizer"]["bounds"][1], [64.0] * 24)
+        generation = next(
+            record
+            for record in progress_records
+            if record["event"] == "cmaes_generation"
+        )
+        self.assertEqual(generation["effective_lanes"], 32)
+        self.assertEqual(
+            metrics["initial_policy"]["source"],
+            INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
+        )
+        self.assertEqual(metrics["optimizer"]["bounds"][0], [-64.0] * 24)
+        self.assertEqual(metrics["optimizer"]["bounds"][1], [64.0] * 24)
+        self.assertEqual(len(metrics["selected_cost_weight_rollout_points"]), 16)
 
     def test_cmaes_trainer_batches_users_and_writes_artifacts(self) -> None:
         bundle_lane_user_ids = []
@@ -435,6 +743,10 @@ seed = 7
             self.assertIsNone(metadata["baseline_desired_retention"])
             self.assertGreater(metrics["best_hypervolume_delta"], 0.0)
             self.assertEqual(metrics["training_objective"], "hypervolume_delta")
+            self.assertEqual(
+                metrics["hypervolume_delta_mode"],
+                HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
+            )
             self.assertFalse(metrics["coverage_objective"]["enabled"])
             self.assertIn("best_coverage", metrics)
             self.assertIsNotNone(metrics["initial_policy"])

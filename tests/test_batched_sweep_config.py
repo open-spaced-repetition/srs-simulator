@@ -274,6 +274,32 @@ class BatchedSweepConfigTests(unittest.TestCase):
             / "fsrs6_cost_adr_cmaes_users_1_8_pop16_gen20_v1_markov_off",
         )
 
+    def test_loads_cost_adr_meaninit16w_experiment_config(self) -> None:
+        config = load_batched_sweep_config(
+            REPO_ROOT
+            / "experiments"
+            / "rl_scheduler"
+            / "configs"
+            / "fsrs6_cost_adr_meaninit16w_users_1_8_pop16_gen20_v1.toml",
+            repo_root=REPO_ROOT,
+        )
+
+        self.assertEqual(config.args.user_ids, list(range(1, 9)))
+        self.assertEqual(config.envs, ("fsrs6", "lstm"))
+        self.assertEqual(config.schedulers, ("fsrs6_cost_adr",))
+        self.assertEqual(
+            config.args.fsrs6_cost_adr_cost_weights,
+            DEFAULT_COST_ADR_COST_WEIGHTS,
+        )
+        self.assertEqual(
+            config.args.fsrs6_cost_adr_train_run_root,
+            REPO_ROOT
+            / "artifacts"
+            / "rl_scheduler"
+            / "fsrs6_cost_adr_meaninit16w_users_1_8"
+            / "fsrs6_cost_adr_meaninit16w_users_1_8_pop16_gen20_v1_markov_off",
+        )
+
     def test_dry_run_accepts_rl_scheduler_experiment_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

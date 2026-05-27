@@ -60,6 +60,44 @@ from simulator.short_term_config import resolve_short_term_config
 PARAMETER_COUNT = 24
 MAX_INTERVAL_DAYS = 36500.0
 REFERENCE_MARGIN_FRACTION = 0.05
+HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION = "union_contribution"
+HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE = "scheduler_vs_baseline"
+SUPPORTED_HYPERVOLUME_DELTA_MODES = frozenset(
+    {
+        HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
+        HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE,
+    }
+)
+INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1 = "first8_distill24_mean_v1"
+SUPPORTED_INITIAL_MEAN_SOURCES = frozenset(
+    {INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1}
+)
+FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS = (
+    0.00812541801376,
+    -0.20082676596,
+    -0.3526779501,
+    0.173066326435,
+    7.15815268972,
+    0.146136612706,
+    -5.87601533206,
+    6.87199212214,
+    -0.640635395638,
+    -1.73525428091,
+    -7.05468459538,
+    -0.593849847649,
+    -7.02425749479,
+    20.8058840713,
+    2.09084002135,
+    -3.48101100781,
+    -18.7692899902,
+    0.440663756256,
+    -7.29791357225,
+    22.6746907186,
+    1.55593044161,
+    -0.90047226616,
+    -8.21368244117,
+    -0.638482992454,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +191,7 @@ class CostADRCandidateScore:
 
 @dataclass(frozen=True, slots=True)
 class InitialPolicySettings:
+    mean_source: str | None = None
     policy: Path | None = None
     policy_root: Path | None = None
     train_run_root: Path | None = None
@@ -166,6 +205,10 @@ class InitialPolicySettings:
     def from_mapping(cls, raw: Mapping[str, Any]) -> InitialPolicySettings:
         defaults = cls()
         return cls(
+            mean_source=_optional_initial_mean_source_setting(
+                raw.get("initial_mean_source"),
+                "training.policy_search.initial_mean_source",
+            ),
             policy=_optional_path_setting(
                 raw.get("initial_policy"),
                 "training.policy_search.initial_policy",
@@ -205,6 +248,7 @@ class InitialPolicySettings:
 
     def __post_init__(self) -> None:
         configured_sources = [
+            self.mean_source is not None,
             self.policy is not None,
             self.policy_root is not None,
             self.train_run_root is not None,
@@ -218,7 +262,8 @@ class InitialPolicySettings:
     @property
     def configured(self) -> bool:
         return (
-            self.policy is not None
+            self.mean_source is not None
+            or self.policy is not None
             or self.policy_root is not None
             or self.train_run_root is not None
             or self.policy_template is not None
@@ -226,6 +271,7 @@ class InitialPolicySettings:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "initial_mean_source": self.mean_source,
             "policy": str(self.policy) if self.policy is not None else None,
             "policy_root": str(self.policy_root)
             if self.policy_root is not None
@@ -243,7 +289,8 @@ class InitialPolicySettings:
 
 @dataclass(frozen=True, slots=True)
 class InitialPolicyInfo:
-    path: Path
+    path: Path | None
+    source: str | None
     coefficients: tuple[float, ...]
     title: str
     cost_weight_min: float
@@ -253,13 +300,17 @@ class InitialPolicyInfo:
     max_interval_days: float | None
 
     def to_dict(self, *, base: Path | None = None) -> dict[str, Any]:
-        path = (
-            _relative_path_string(self.path, base=base)
-            if base is not None
-            else self.path.as_posix()
-        )
+        if self.path is None:
+            path = None
+        else:
+            path = (
+                _relative_path_string(self.path, base=base)
+                if base is not None
+                else self.path.as_posix()
+            )
         return {
             "path": path,
+            "source": self.source,
             "title": self.title,
             "parameter_count": len(self.coefficients),
             "coefficient_min": min(self.coefficients),
@@ -379,12 +430,18 @@ def main() -> int:
     return 0 if results and results[0].passed else 1
 
 
-def optimizer_settings_from_mapping(raw: Mapping[str, Any]) -> CMAESSettings:
+def optimizer_settings_from_mapping(
+    raw: Mapping[str, Any],
+    *,
+    settings: PolicySearchSettings | None = None,
+) -> CMAESSettings:
+    coefficient_min = -12.0 if settings is None else settings.coefficient_min
+    coefficient_max = 12.0 if settings is None else settings.coefficient_max
     return CMAESSettings.from_mapping(
         raw,
         coefficient_count=PARAMETER_COUNT,
-        coefficient_min=-12.0,
-        coefficient_max=12.0,
+        coefficient_min=coefficient_min,
+        coefficient_max=coefficient_max,
     )
 
 
@@ -408,6 +465,24 @@ def cost_weights_from_mapping(raw: Mapping[str, Any]) -> tuple[float, ...]:
             "training.policy_search.cost_weights must not contain duplicates."
         )
     return weights
+
+
+def hypervolume_delta_mode_from_mapping(raw: Mapping[str, Any]) -> str:
+    value = raw.get(
+        "hypervolume_delta_mode",
+        HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
+    )
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            "training.policy_search.hypervolume_delta_mode must be a non-empty string."
+        )
+    mode = value.strip()
+    if mode not in SUPPORTED_HYPERVOLUME_DELTA_MODES:
+        allowed = ", ".join(sorted(SUPPORTED_HYPERVOLUME_DELTA_MODES))
+        raise ValueError(
+            f"training.policy_search.hypervolume_delta_mode must be one of: {allowed}."
+        )
+    return mode
 
 
 def run_training_batch_jobs(
@@ -449,8 +524,14 @@ def run_training_jobs(
 
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(config_path))
-    optimizer_settings = optimizer_settings_from_mapping(config.training_optimizer)
+    optimizer_settings = optimizer_settings_from_mapping(
+        config.training_optimizer,
+        settings=settings,
+    )
     cost_weights = cost_weights_from_mapping(raw_training_policy_search)
+    hypervolume_delta_mode = hypervolume_delta_mode_from_mapping(
+        raw_training_policy_search
+    )
     coverage_settings = CoverageObjectiveSettings.from_mapping(
         raw_training_policy_search
     )
@@ -514,6 +595,7 @@ def run_training_jobs(
                 action_head=ACTION_HEAD_INTERVAL,
                 parameter_count=PARAMETER_COUNT,
                 cost_weights=list(cost_weights),
+                hypervolume_delta_mode=hypervolume_delta_mode,
                 coverage_objective=coverage_settings.to_dict(),
                 initial_policy_settings=initial_policy_settings.to_dict(),
                 initial_policy=initial_policy.to_dict(base=job.output_dir)
@@ -643,6 +725,7 @@ def run_training_jobs(
             settings=settings,
             optimizer_settings=optimizer_settings,
             coverage_settings=coverage_settings,
+            hypervolume_delta_mode=hypervolume_delta_mode,
             bundle=train_bundle,
             prepared_jobs=states,
             cost_weights=cost_weights,
@@ -696,6 +779,7 @@ def run_training_jobs(
                 initial_policy_settings=initial_policy_settings,
                 initial_policy=state.initial_policy,
                 coverage_settings=coverage_settings,
+                hypervolume_delta_mode=hypervolume_delta_mode,
                 cost_weights=cost_weights,
                 result=result,
             )
@@ -770,6 +854,12 @@ def _load_initial_policy_for_user(
     cost_weights: Sequence[float],
     policy_search_settings: PolicySearchSettings,
 ) -> InitialPolicyInfo | None:
+    if settings.mean_source is not None:
+        return _built_in_initial_mean(
+            source=settings.mean_source,
+            cost_weights=cost_weights,
+            policy_search_settings=policy_search_settings,
+        )
     policy_path = _resolve_initial_policy_path(
         settings=settings,
         user_id=user_id,
@@ -822,6 +912,7 @@ def _load_initial_policy_for_user(
         )
     return InitialPolicyInfo(
         path=policy_path,
+        source="policy_json",
         coefficients=policy.coefficients,
         title=policy.title,
         cost_weight_min=policy.cost_weight_min,
@@ -829,6 +920,44 @@ def _load_initial_policy_for_user(
         retention_min=policy.retention_min,
         retention_max=policy.retention_max,
         max_interval_days=policy.max_interval_days,
+    )
+
+
+def _built_in_initial_mean(
+    *,
+    source: str,
+    cost_weights: Sequence[float],
+    policy_search_settings: PolicySearchSettings,
+) -> InitialPolicyInfo:
+    if source == INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1:
+        coefficients = FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS
+        title = "FSRS6 Cost-ADR first8 distill24 mean initializer v1"
+    else:
+        allowed = ", ".join(sorted(SUPPORTED_INITIAL_MEAN_SOURCES))
+        raise ValueError(
+            f"training.policy_search.initial_mean_source must be one of: {allowed}."
+        )
+    if len(coefficients) != PARAMETER_COUNT:
+        raise ValueError(
+            f"Built-in Cost-ADR initial mean {source!r} must have "
+            f"{PARAMETER_COUNT} coefficients."
+        )
+    for index, coefficient in enumerate(coefficients):
+        if not math.isfinite(coefficient):
+            raise ValueError(
+                f"Built-in Cost-ADR initial mean {source!r} coefficient "
+                f"{index} is not finite: {coefficient!r}."
+            )
+    return InitialPolicyInfo(
+        path=None,
+        source=source,
+        coefficients=coefficients,
+        title=title,
+        cost_weight_min=min(cost_weights),
+        cost_weight_max=max(cost_weights),
+        retention_min=policy_search_settings.retention_min,
+        retention_max=policy_search_settings.retention_max,
+        max_interval_days=MAX_INTERVAL_DAYS,
     )
 
 
@@ -1003,6 +1132,7 @@ def _run_cmaes_multiuser(
     settings: PolicySearchSettings,
     optimizer_settings: CMAESSettings,
     coverage_settings: CoverageObjectiveSettings,
+    hypervolume_delta_mode: str,
     bundle: Any,
     prepared_jobs: Sequence[_PreparedCostADRJob],
     cost_weights: tuple[float, ...],
@@ -1054,6 +1184,7 @@ def _run_cmaes_multiuser(
                     reference=reference,
                     candidate_metrics=candidate_metrics,
                     coverage_settings=coverage_settings,
+                    hypervolume_delta_mode=hypervolume_delta_mode,
                 )
                 for candidate_metrics in metrics_by_candidate
             ]
@@ -1167,12 +1298,19 @@ def _score_candidate(
     reference: ObjectivePoint,
     candidate_metrics: Sequence[CandidateMetrics],
     coverage_settings: CoverageObjectiveSettings,
+    hypervolume_delta_mode: str = HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
 ) -> CostADRCandidateScore:
     candidate_points = [point_from_metrics(metric) for metric in candidate_metrics]
-    hypervolume = objective_hypervolume_2d(
-        [*baseline_points, *candidate_points],
-        reference=reference,
-    )
+    if hypervolume_delta_mode == HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION:
+        hypervolume = objective_hypervolume_2d(
+            [*baseline_points, *candidate_points],
+            reference=reference,
+        )
+    elif hypervolume_delta_mode == HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE:
+        hypervolume = objective_hypervolume_2d(candidate_points, reference=reference)
+    else:
+        allowed = ", ".join(sorted(SUPPORTED_HYPERVOLUME_DELTA_MODES))
+        raise ValueError(f"hypervolume_delta_mode must be one of: {allowed}.")
     hypervolume_delta = hypervolume - baseline_hypervolume
     coverage = _coverage_diagnostics(
         baseline_metrics=baseline_metrics,
@@ -1472,6 +1610,7 @@ def write_artifact(
     initial_policy_settings: InitialPolicySettings,
     initial_policy: InitialPolicyInfo | None,
     coverage_settings: CoverageObjectiveSettings,
+    hypervolume_delta_mode: str,
     cost_weights: tuple[float, ...],
     result: CostADRTrainingResult,
 ) -> tuple[Path, Path, Path]:
@@ -1512,6 +1651,7 @@ def write_artifact(
         {
             "passed_overfit_gate": result.passed,
             "training_objective": training_objective,
+            "hypervolume_delta_mode": hypervolume_delta_mode,
             "coverage_objective": coverage_settings.to_dict(),
             "baseline_hypervolume": result.baseline_hypervolume,
             "best_hypervolume": result.best_hypervolume,
@@ -1579,6 +1719,7 @@ def write_artifact(
             "lambda_value": None,
             "baseline_desired_retention": None,
             "training_objective": training_objective,
+            "hypervolume_delta_mode": hypervolume_delta_mode,
             "config_snapshot_path": _relative_path_string(
                 config_path,
                 base=metadata_dir,
@@ -1670,6 +1811,21 @@ def _optional_template_setting(value: Any, field_name: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string when provided.")
     return value
+
+
+def _optional_initial_mean_source_setting(
+    value: Any,
+    field_name: str,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string when provided.")
+    source = value.strip()
+    if source not in SUPPORTED_INITIAL_MEAN_SOURCES:
+        allowed = ", ".join(sorted(SUPPORTED_INITIAL_MEAN_SOURCES))
+        raise ValueError(f"{field_name} must be one of: {allowed}.")
+    return source
 
 
 if __name__ == "__main__":
