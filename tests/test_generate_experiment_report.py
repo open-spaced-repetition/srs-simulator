@@ -277,7 +277,7 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertIn(f"Machine summary: `{summary_path}`", markdown)
         self.assertIn("## Provenance", markdown)
         self.assertIn("## Conclusion", markdown)
-        self.assertIn("Promote `candidate_sched`.", markdown)
+        self.assertIn("Promote Candidate.", markdown)
         self.assertIn("## Diagnostics", markdown)
         self.assertIn("policy-point avg memorized", markdown)
         self.assertIn("same-budget memory lift / baseline", markdown)
@@ -441,7 +441,7 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertIn("No automatic GPU monitor artifacts", markdown)
         self.assertIn("shared-memory spill cannot be judged", markdown)
         self.assertIn("256.0", markdown)
-        self.assertIn("Do not promote `candidate_sched`.", markdown)
+        self.assertIn("Do not promote Candidate.", markdown)
 
     def test_legacy_auc_metric_names_are_converted_to_time_saved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1073,7 +1073,6 @@ def _legacy_gpu_rows(summary: dict[str, Any], side: str) -> list[list[str]]:
 def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
     candidate_label = summary["labels"]["candidate"]
     comparison_label = summary["labels"]["comparison"]
-    candidate_scheduler = summary["external_pareto"]["candidate_scheduler"]
     environments = summary["external_pareto"]["environments"]
     deltas = [env["delta"] for env in environments]
     all_hv_negative = bool(deltas) and all(
@@ -1089,7 +1088,7 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
         )
     )
     if all_hv_negative:
-        decision = f"Do not promote `{candidate_scheduler}`."
+        decision = f"Do not promote {candidate_label}."
         interpretation = (
             f"With the matched training budget, {candidate_label} remains behind "
             f"{comparison_label} on HV; same-budget memory lift and same-target "
@@ -1100,7 +1099,7 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
             "external Pareto evaluation."
         )
     elif all_primary_metrics_positive:
-        decision = f"Promote `{candidate_scheduler}`."
+        decision = f"Promote {candidate_label}."
         interpretation = (
             f"With the matched training budget, {candidate_label} exceeds "
             f"{comparison_label} on every reported external Pareto environment for "
@@ -1112,7 +1111,7 @@ def _conclusion_lines(summary: dict[str, Any]) -> list[str]:
             "the promotion decision is based on external Pareto metrics."
         )
     else:
-        decision = f"Promotion decision for `{candidate_scheduler}` is inconclusive."
+        decision = f"Promotion decision for {candidate_label} is inconclusive."
         interpretation = (
             "Candidate-minus-comparison deltas on the primary external Pareto "
             "metrics are:"
