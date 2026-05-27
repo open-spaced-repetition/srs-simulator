@@ -25,12 +25,15 @@ from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (  # noqa: E402
     CoverageObjectiveSettings,
     FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS,
     FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS,
+    FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS,
     HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE,
     HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
     INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
+    INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1,
     INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1,
     CostADRActionSettings,
     InitialPolicySettings,
+    _built_in_initial_mean,
     hypervolume_delta_mode_from_mapping,
     optimizer_settings_from_mapping,
     run_training_jobs,
@@ -87,6 +90,62 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
                     "initial_mean_source": INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
                     "initial_policy": "policy.json",
                 }
+            )
+
+    def test_interval_implied_r_mean_source_uses_unified_first8_mean(self) -> None:
+        settings = PolicySearchSettings.from_mapping(
+            {
+                "coefficient_min": -64.0,
+                "coefficient_max": 64.0,
+                "retention_min": 0.30,
+                "retention_max": 0.995,
+                "baseline_desired_retention": 0.9,
+            }
+        )
+        action_settings = CostADRActionSettings.from_mapping(
+            {"action_head": ACTION_HEAD_RETENTION}
+        )
+
+        initial_policy = _built_in_initial_mean(
+            source=INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1,
+            cost_weights=(0.0, 1024.0),
+            policy_search_settings=settings,
+            action_settings=action_settings,
+        )
+
+        self.assertIsNone(initial_policy.path)
+        self.assertEqual(
+            initial_policy.source,
+            INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1,
+        )
+        self.assertEqual(
+            initial_policy.coefficients,
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS,
+        )
+        self.assertEqual(initial_policy.action_head, ACTION_HEAD_RETENTION)
+        self.assertEqual(initial_policy.retention_min, 0.30)
+        self.assertEqual(initial_policy.retention_max, 0.995)
+
+    def test_interval_implied_r_mean_source_rejects_mismatched_bounds(self) -> None:
+        settings = PolicySearchSettings.from_mapping(
+            {
+                "coefficient_min": -64.0,
+                "coefficient_max": 64.0,
+                "retention_min": 0.50,
+                "retention_max": 0.98,
+                "baseline_desired_retention": 0.9,
+            }
+        )
+        action_settings = CostADRActionSettings.from_mapping(
+            {"action_head": ACTION_HEAD_RETENTION}
+        )
+
+        with self.assertRaisesRegex(ValueError, "requires retention_min=0.3"):
+            _built_in_initial_mean(
+                source=INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1,
+                cost_weights=(0.0, 1024.0),
+                policy_search_settings=settings,
+                action_settings=action_settings,
             )
 
     def test_optimizer_bounds_use_policy_search_coefficient_bounds(self) -> None:

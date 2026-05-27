@@ -93,9 +93,10 @@ baseline_desired_retention = 0.90
 torch_device = "cuda"
 short_term_threshold = 0.5
 short_term_loops_limit = 10
-# Generate this initializer with:
+# The built-in initial mean is the coefficient average of the per-user policies
+# generated with:
 # uv run python experiments/rl_scheduler/fit_fsrs6_cost_adr_retention_init_from_interval.py --interval-train-run-root artifacts/rl_scheduler/fsrs6_cost_adr_schedhv_stdpre_users_1_8/fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off --users 1,2,3,4,5,6,7,8 --retention-min 0.30 --retention-max 0.995 --s-points 64 --d-points 32 --epochs 4096 --learning-rate 0.03 --torch-device cpu --out-dir artifacts/rl_scheduler/fsrs6_cost_adr_retention_init_from_interval_first8_stdpre_r030_0995
-initial_policy_root = "artifacts/rl_scheduler/fsrs6_cost_adr_retention_init_from_interval_first8_stdpre_r030_0995"
+initial_mean_source = "first8_interval_implied_r_mean_v1"
 initial_policy_expand_bounds = false
 initial_policy_evaluate_in_generation_zero = true
 hypervolume_delta_mode = "scheduler_vs_baseline"

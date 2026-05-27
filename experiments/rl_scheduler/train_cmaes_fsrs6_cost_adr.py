@@ -75,10 +75,14 @@ INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1 = "first8_distill24_mean_v1"
 INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1 = (
     "retention_baseline_cost_decay_v1"
 )
+INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1 = (
+    "first8_interval_implied_r_mean_v1"
+)
 SUPPORTED_INITIAL_MEAN_SOURCES = frozenset(
     {
         INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
         INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1,
+        INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1,
     }
 )
 COEFFICIENT_PRECONDITIONING_NONE = "none"
@@ -140,6 +144,34 @@ FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS = (
     5.3112,
     12.1597,
     1.7031,
+)
+FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_RETENTION_MIN = 0.30
+FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_RETENTION_MAX = 0.995
+FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS = (
+    -0.2018286386219612,
+    9.141004157901678,
+    -0.09781989653037373,
+    0.2259790550144062,
+    -5.309188712597444,
+    0.3708292226361311,
+    -5.675219566401726,
+    7.709111876653055,
+    -0.858885318249656,
+    -5.041320394599799,
+    -11.77390759979831,
+    -0.1030684962724836,
+    -7.439977944316415,
+    24.12056323707747,
+    -0.3753527524951004,
+    1.811049162506152,
+    -22.90515100194587,
+    0.08745097470853692,
+    -5.817808763966815,
+    22.25860575189304,
+    1.717326305363415,
+    -1.989763856381318,
+    -19.44268682737919,
+    -0.1742723255136314,
 )
 SUPPORTED_ACTION_HEADS = frozenset({ACTION_HEAD_INTERVAL, ACTION_HEAD_RETENTION})
 ACTION_HEAD_FEATURE_VERSIONS = {
@@ -1166,6 +1198,18 @@ def _built_in_initial_mean(
             policy_search_settings
         )
         title = "FSRS6 Cost-ADR baseline cost-decay initializer v1"
+    elif source == INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1:
+        if action_settings.action_head != ACTION_HEAD_RETENTION:
+            raise ValueError(
+                f"Built-in initial mean {source!r} is only valid for "
+                "action_head='desired_retention'."
+            )
+        _require_interval_implied_r_bounds(
+            source=source,
+            policy_search_settings=policy_search_settings,
+        )
+        coefficients = FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS
+        title = "FSRS6 Cost-ADR first8 interval-implied R mean initializer v1"
     else:
         allowed = ", ".join(sorted(SUPPORTED_INITIAL_MEAN_SOURCES))
         raise ValueError(
@@ -1195,6 +1239,33 @@ def _built_in_initial_mean(
         retention_max=policy_search_settings.retention_max,
         max_interval_days=action_settings.max_interval_days,
     )
+
+
+def _require_interval_implied_r_bounds(
+    *,
+    source: str,
+    policy_search_settings: PolicySearchSettings,
+) -> None:
+    if not math.isclose(
+        policy_search_settings.retention_min,
+        FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_RETENTION_MIN,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"Built-in initial mean {source!r} requires retention_min="
+            f"{FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_RETENTION_MIN:g}."
+        )
+    if not math.isclose(
+        policy_search_settings.retention_max,
+        FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_RETENTION_MAX,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"Built-in initial mean {source!r} requires retention_max="
+            f"{FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_RETENTION_MAX:g}."
+        )
 
 
 def _retention_baseline_cost_decay_coefficients(
