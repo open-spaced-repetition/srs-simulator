@@ -27,7 +27,8 @@ FSRS-6 state update to obtain `S` and `D`.
   `fsrs6_cost_adr` policy per user. The policy emits intervals from
   scheduler-side `S,D` and a requested scalar cost weight. It can optionally
   initialize CMA-ES from an existing per-user Cost-ADR policy or a built-in
-  first-eight-user single-card distill mean.
+  first-eight-user single-card distill mean, and can run CMA-ES in a diagonal
+  z-space scaled by the first-eight sample std.
 - `train_cmaes_fsrs6_ap.py`: CMA-ES FSRS-6 trainer that searches adaptive
   scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
 - `train_fsrs6_ap_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
@@ -260,6 +261,14 @@ Representative profiles:
   trains/evaluates exactly the matched 16 cost weights. Training uses the
   original Cost-ADR union-contribution HV objective; promotion still depends on
   external scheduler-only Pareto metrics.
+- `configs/fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml`: the
+  scheduler-HV Cost-ADR repair profile. It keeps the fair matched 16 cost
+  weights and fixed `[-64, 64]` coefficient bounds, initializes every user from
+  the built-in first-eight mean, and runs CMA-ES in a diagonal z-space scaled by
+  the first-eight sample std with floor `0.5`. Training and the overfit gate use
+  scheduler-only HV versus the FSRS-6 baseline frontier; coverage remains a
+  diagnostic. Interpret this profile against ADR only on the matched 16-point
+  sweep, not on the dense-weight diagnostic sweep.
 - `configs/fsrs6_cost_adr_distill24_densew_users_1_8_pop16_gen20_v1.toml`: a
   dense-grid diagnostic profile. It initializes each user's 24-parameter
   interval policy from the single-card continuous-distill Cost-ADR artifacts,
@@ -396,6 +405,14 @@ Mean-initialized fair Cost-ADR run:
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --config experiments/rl_scheduler/configs/fsrs6_cost_adr_meaninit16w_users_1_8_pop16_gen20_v1.toml \
   --run-id fsrs6_cost_adr_meaninit16w_users_1_8_pop16_gen20_v1_markov_off
+```
+
+Scheduler-HV std-preconditioned Cost-ADR run:
+
+```bash
+uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml \
+  --run-id fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off
 ```
 
 Distill-initialized dense-weight Cost-ADR run:

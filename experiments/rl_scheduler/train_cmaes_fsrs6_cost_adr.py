@@ -72,6 +72,14 @@ INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1 = "first8_distill24_mean_v1"
 SUPPORTED_INITIAL_MEAN_SOURCES = frozenset(
     {INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1}
 )
+COEFFICIENT_PRECONDITIONING_NONE = "none"
+COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1 = "first8_distill24_std_v1"
+SUPPORTED_COEFFICIENT_PRECONDITIONING = frozenset(
+    {
+        COEFFICIENT_PRECONDITIONING_NONE,
+        COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1,
+    }
+)
 FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS = (
     0.00812541801376,
     -0.20082676596,
@@ -97,6 +105,32 @@ FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS = (
     -0.90047226616,
     -8.21368244117,
     -0.638482992454,
+)
+FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS = (
+    0.1167,
+    1.2844,
+    0.3924,
+    0.2803,
+    1.3878,
+    0.2697,
+    1.3609,
+    12.7940,
+    1.2860,
+    1.0680,
+    12.3390,
+    0.8912,
+    2.1146,
+    15.4080,
+    3.6358,
+    6.0177,
+    14.5293,
+    2.5499,
+    2.9754,
+    12.6082,
+    4.4601,
+    5.3112,
+    12.1597,
+    1.7031,
 )
 
 
@@ -324,6 +358,104 @@ class InitialPolicyInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class CoefficientPreconditioningSettings:
+    mode: str = COEFFICIENT_PRECONDITIONING_NONE
+    scale_floor: float = 0.5
+    scale_multiplier: float = 1.0
+
+    @classmethod
+    def from_mapping(
+        cls,
+        raw: Mapping[str, Any],
+    ) -> CoefficientPreconditioningSettings:
+        defaults = cls()
+        mode = _coefficient_preconditioning_setting(
+            raw.get("coefficient_preconditioning", defaults.mode),
+            "training.policy_search.coefficient_preconditioning",
+        )
+        return cls(
+            mode=mode,
+            scale_floor=_positive_float_setting(
+                raw.get("coefficient_scale_floor", defaults.scale_floor),
+                "training.policy_search.coefficient_scale_floor",
+            ),
+            scale_multiplier=_positive_float_setting(
+                raw.get("coefficient_scale_multiplier", defaults.scale_multiplier),
+                "training.policy_search.coefficient_scale_multiplier",
+            ),
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != COEFFICIENT_PRECONDITIONING_NONE
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "enabled": self.enabled,
+            "scale_floor": self.scale_floor,
+            "scale_multiplier": self.scale_multiplier,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CoefficientSearchTransform:
+    mode: str
+    origin: tuple[float, ...]
+    scale: tuple[float, ...]
+    actual_bounds: tuple[tuple[float, ...], tuple[float, ...]]
+    search_initial_mean: tuple[float, ...]
+    search_bounds: tuple[tuple[float, ...], tuple[float, ...]]
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != COEFFICIENT_PRECONDITIONING_NONE
+
+    def coefficients_from_search(
+        self,
+        values: Sequence[float],
+    ) -> tuple[float, ...]:
+        if len(values) != PARAMETER_COUNT:
+            raise ValueError(
+                f"Cost-ADR search vector must have {PARAMETER_COUNT} values, "
+                f"got {len(values)}."
+            )
+        lower, upper = self.actual_bounds
+        if not self.enabled:
+            return tuple(
+                min(upper[index], max(lower[index], float(value)))
+                for index, value in enumerate(values)
+            )
+        return tuple(
+            min(
+                upper[index],
+                max(
+                    lower[index],
+                    self.origin[index] + self.scale[index] * float(value),
+                ),
+            )
+            for index, value in enumerate(values)
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "enabled": self.enabled,
+            "origin": list(self.origin),
+            "scale": list(self.scale),
+            "actual_bounds": [
+                list(self.actual_bounds[0]),
+                list(self.actual_bounds[1]),
+            ],
+            "search_initial_mean": list(self.search_initial_mean),
+            "search_bounds": [
+                list(self.search_bounds[0]),
+                list(self.search_bounds[1]),
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _RangeCoverage:
     total_count: int
     covered_count: int
@@ -371,6 +503,8 @@ class _PreparedCostADRJob:
     baseline_drs: tuple[float, ...]
     optimizer_seed: int
     optimizer_settings: CMAESSettings
+    search_optimizer_settings: CMAESSettings
+    coefficient_transform: CoefficientSearchTransform
     optimizer: Any
     initial_policy: InitialPolicyInfo | None = None
     evaluate_initial_policy_in_generation_zero: bool = False
@@ -535,6 +669,9 @@ def run_training_jobs(
     coverage_settings = CoverageObjectiveSettings.from_mapping(
         raw_training_policy_search
     )
+    preconditioning_settings = CoefficientPreconditioningSettings.from_mapping(
+        raw_training_policy_search
+    )
     initial_policy_settings = InitialPolicySettings.from_mapping(
         raw_training_policy_search
     )
@@ -586,11 +723,21 @@ def run_training_jobs(
                 initial_policy=initial_policy,
                 initial_policy_settings=initial_policy_settings,
             )
+            coefficient_transform = _coefficient_search_transform(
+                optimizer_settings=job_optimizer_settings,
+                preconditioning_settings=preconditioning_settings,
+            )
+            search_optimizer_settings = _optimizer_settings_for_search_transform(
+                optimizer_settings=job_optimizer_settings,
+                transform=coefficient_transform,
+            )
             progress.write(
                 "config_loaded",
                 settings=asdict(settings),
                 optimizer=job_optimizer_settings.to_dict(),
+                search_optimizer=search_optimizer_settings.to_dict(),
                 optimizer_seed=optimizer_seed,
+                coefficient_preconditioning=coefficient_transform.to_dict(),
                 feature_version=FEATURE_VERSION_INTERVAL_MONO,
                 action_head=ACTION_HEAD_INTERVAL,
                 parameter_count=PARAMETER_COUNT,
@@ -619,8 +766,10 @@ def run_training_jobs(
                     baseline_drs=baseline_drs,
                     optimizer_seed=optimizer_seed,
                     optimizer_settings=job_optimizer_settings,
+                    search_optimizer_settings=search_optimizer_settings,
+                    coefficient_transform=coefficient_transform,
                     optimizer=_make_strategy(
-                        optimizer_settings=job_optimizer_settings,
+                        optimizer_settings=search_optimizer_settings,
                         optimizer_seed=optimizer_seed,
                     ),
                     initial_policy=initial_policy,
@@ -775,7 +924,9 @@ def run_training_jobs(
                 user_id=job.user_id,
                 training_command_path=job.command_record_path,
                 optimizer_settings=state.optimizer_settings,
+                search_optimizer_settings=state.search_optimizer_settings,
                 optimizer_seed=state.optimizer_seed,
+                coefficient_transform=state.coefficient_transform,
                 initial_policy_settings=initial_policy_settings,
                 initial_policy=state.initial_policy,
                 coverage_settings=coverage_settings,
@@ -1040,6 +1191,77 @@ def _optimizer_settings_for_initial_policy(
     )
 
 
+def _coefficient_search_transform(
+    *,
+    optimizer_settings: CMAESSettings,
+    preconditioning_settings: CoefficientPreconditioningSettings,
+) -> CoefficientSearchTransform:
+    actual_bounds = optimizer_settings.bounds
+    if not preconditioning_settings.enabled:
+        return CoefficientSearchTransform(
+            mode=COEFFICIENT_PRECONDITIONING_NONE,
+            origin=(0.0,) * PARAMETER_COUNT,
+            scale=(1.0,) * PARAMETER_COUNT,
+            actual_bounds=actual_bounds,
+            search_initial_mean=optimizer_settings.initial_mean,
+            search_bounds=actual_bounds,
+        )
+
+    if (
+        preconditioning_settings.mode
+        != COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1
+    ):
+        allowed = ", ".join(sorted(SUPPORTED_COEFFICIENT_PRECONDITIONING))
+        raise ValueError(f"coefficient_preconditioning must be one of: {allowed}.")
+    if len(FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS) != PARAMETER_COUNT:
+        raise ValueError(
+            "Built-in Cost-ADR coefficient preconditioning scale must have "
+            f"{PARAMETER_COUNT} values."
+        )
+
+    origin = optimizer_settings.initial_mean
+    scale = tuple(
+        max(
+            preconditioning_settings.scale_floor,
+            value * preconditioning_settings.scale_multiplier,
+        )
+        for value in FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS
+    )
+    lower, upper = actual_bounds
+    search_lower = tuple(
+        (lower[index] - origin[index]) / scale[index]
+        for index in range(PARAMETER_COUNT)
+    )
+    search_upper = tuple(
+        (upper[index] - origin[index]) / scale[index]
+        for index in range(PARAMETER_COUNT)
+    )
+    return CoefficientSearchTransform(
+        mode=preconditioning_settings.mode,
+        origin=origin,
+        scale=scale,
+        actual_bounds=actual_bounds,
+        search_initial_mean=(0.0,) * PARAMETER_COUNT,
+        search_bounds=(search_lower, search_upper),
+    )
+
+
+def _optimizer_settings_for_search_transform(
+    *,
+    optimizer_settings: CMAESSettings,
+    transform: CoefficientSearchTransform,
+) -> CMAESSettings:
+    return CMAESSettings(
+        name=optimizer_settings.name,
+        population_size=optimizer_settings.population_size,
+        generations=optimizer_settings.generations,
+        sigma0=optimizer_settings.sigma0,
+        initial_mean=transform.search_initial_mean,
+        bounds=transform.search_bounds,
+        seed=optimizer_settings.seed,
+    )
+
+
 def _resolve_repo_path(path: Path, *, repo_root: Path) -> Path:
     expanded = path.expanduser()
     if expanded.is_absolute():
@@ -1154,11 +1376,17 @@ def _run_cmaes_multiuser(
                     f"{len(solutions)} != {optimizer_settings.population_size}."
                 )
             if generation == 0 and state.evaluate_initial_policy_in_generation_zero:
-                solutions[0] = list(state.optimizer_settings.initial_mean)
+                solutions[0] = list(state.coefficient_transform.search_initial_mean)
             solutions_by_job.append(solutions)
 
         coefficients_by_job = torch.tensor(
-            solutions_by_job,
+            [
+                [
+                    list(state.coefficient_transform.coefficients_from_search(solution))
+                    for solution in solutions_by_job[job_index]
+                ]
+                for job_index, state in enumerate(prepared_jobs)
+            ],
             device=bundle.device,
             dtype=torch.float32,
         )
@@ -1606,7 +1834,9 @@ def write_artifact(
     user_id: int,
     training_command_path: Path | None,
     optimizer_settings: CMAESSettings,
+    search_optimizer_settings: CMAESSettings,
     optimizer_seed: int,
+    coefficient_transform: CoefficientSearchTransform,
     initial_policy_settings: InitialPolicySettings,
     initial_policy: InitialPolicyInfo | None,
     coverage_settings: CoverageObjectiveSettings,
@@ -1633,6 +1863,11 @@ def write_artifact(
         **optimizer_settings.to_dict(),
         "seed_resolved": optimizer_seed,
     }
+    search_optimizer = {
+        **search_optimizer_settings.to_dict(),
+        "seed_resolved": optimizer_seed,
+    }
+    coefficient_preconditioning = coefficient_transform.to_dict()
     initial_policy_record = (
         initial_policy.to_dict(base=output_dir) if initial_policy is not None else None
     )
@@ -1686,6 +1921,8 @@ def write_artifact(
             "action_head": ACTION_HEAD_INTERVAL,
             "parameter_count": PARAMETER_COUNT,
             "optimizer": optimizer,
+            "search_optimizer": search_optimizer,
+            "coefficient_preconditioning": coefficient_preconditioning,
             "initial_policy_settings": initial_policy_settings.to_dict(),
             "initial_policy": initial_policy_record,
             "settings": asdict(settings),
@@ -1733,6 +1970,8 @@ def write_artifact(
             "metrics_path": "metrics.json",
             "optimizer": "cma_es",
             "optimizer_settings": optimizer,
+            "search_optimizer_settings": search_optimizer,
+            "coefficient_preconditioning": coefficient_preconditioning,
             "initial_policy_settings": initial_policy_settings.to_dict(),
             "initial_policy": initial_policy_record,
             "cost_weights": list(cost_weights),
@@ -1790,6 +2029,13 @@ def _nonnegative_float_setting(value: Any, field_name: str) -> float:
     return result
 
 
+def _positive_float_setting(value: Any, field_name: str) -> float:
+    result = _nonnegative_float_setting(value, field_name)
+    if result <= 0.0:
+        raise ValueError(f"{field_name} must be > 0.")
+    return result
+
+
 def _fraction_setting(value: Any, field_name: str) -> float:
     result = _nonnegative_float_setting(value, field_name)
     if result > 1.0:
@@ -1826,6 +2072,16 @@ def _optional_initial_mean_source_setting(
         allowed = ", ".join(sorted(SUPPORTED_INITIAL_MEAN_SOURCES))
         raise ValueError(f"{field_name} must be one of: {allowed}.")
     return source
+
+
+def _coefficient_preconditioning_setting(value: Any, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string.")
+    mode = value.strip()
+    if mode not in SUPPORTED_COEFFICIENT_PRECONDITIONING:
+        allowed = ", ".join(sorted(SUPPORTED_COEFFICIENT_PRECONDITIONING))
+        raise ValueError(f"{field_name} must be one of: {allowed}.")
+    return mode
 
 
 if __name__ == "__main__":
