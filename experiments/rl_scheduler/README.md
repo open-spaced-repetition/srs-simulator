@@ -24,11 +24,12 @@ FSRS-6 state update to obtain `S` and `D`.
 - `train_cmaes_fsrs6_adr.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr`
   policies over `S,D`.
 - `train_cmaes_fsrs6_cost_adr.py`: CMA-ES trainer for one 24-parameter
-  `fsrs6_cost_adr` policy per user. The policy emits intervals from
-  scheduler-side `S,D` and a requested scalar cost weight. It can optionally
-  initialize CMA-ES from an existing per-user Cost-ADR policy or a built-in
-  first-eight-user single-card distill mean, and can run CMA-ES in a diagonal
-  z-space scaled by the first-eight sample std.
+  `fsrs6_cost_adr` policy per user. The policy emits intervals, or as an
+  ablation emits desired retention values that FSRS-6 converts to intervals,
+  from scheduler-side `S,D` and a requested scalar cost weight. It can
+  optionally initialize CMA-ES from an existing per-user Cost-ADR policy or a
+  built-in action-head-specific mean, and can run CMA-ES in a diagonal z-space
+  scaled by the first-eight sample std.
 - `train_cmaes_fsrs6_ap.py`: CMA-ES FSRS-6 trainer that searches adaptive
   scheduler parameters as bounded deltas from each user's fitted FSRS-6 weights.
 - `train_fsrs6_ap_portfolio.py`: SMS-EMOA trainer that exports a portfolio of
@@ -274,6 +275,13 @@ Representative profiles:
   scheduler-only HV versus the FSRS-6 baseline frontier; coverage remains a
   diagnostic. Interpret this profile against ADR only on the matched 16-point
   sweep, not on the dense-weight diagnostic sweep.
+- `configs/fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml`:
+  the matched retention-head ablation for deciding whether Cost-ADR should emit
+  desired retention instead of interval. It keeps the same first-eight users,
+  pop16/gen20 budget, 16 cost weights, scheduler-HV objective, and diagonal
+  search scale as the interval-head repair profile, but uses
+  `action_head = "desired_retention"` and a retention-head baseline cost-decay
+  initializer instead of the interval distill mean.
 - `configs/fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml`: the
   first-128-user scale-up of the scheduler-HV std-preconditioned Cost-ADR
   profile. It keeps pop16/gen20 CMA-ES, the matched 16 cost weights, and
@@ -430,6 +438,14 @@ Scheduler-HV std-preconditioned Cost-ADR run:
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --config experiments/rl_scheduler/configs/fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml \
   --run-id fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off
+```
+
+Retention-head Cost-ADR ablation for users 1-8:
+
+```bash
+uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml \
+  --run-id fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off
 ```
 
 Scheduler-HV std-preconditioned Cost-ADR run for users 1-128:

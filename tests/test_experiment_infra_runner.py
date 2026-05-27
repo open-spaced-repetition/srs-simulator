@@ -2212,6 +2212,42 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             [[1, 2, 3, 4, 5, 6, 7, 8]],
         )
 
+    def test_cost_adr_retention_head_config_estimates_256_lanes_per_user(
+        self,
+    ) -> None:
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml"
+        )
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+        lanes_per_job = estimate_lanes_per_job(trainer=trainer, config=config)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = [_train_job(root, user_id, "0") for user_id in range(1, 9)]
+            batches = _build_train_user_batches(
+                jobs=jobs,
+                batch_size=config.training_batch.batch_size,
+                max_lanes_per_batch=config.training_batch.max_lanes_per_batch,
+                lanes_per_job=lanes_per_job,
+            )
+
+        self.assertEqual(trainer, "fsrs6_cost_adr_cmaes")
+        self.assertEqual(lanes_per_job, 256)
+        self.assertEqual(
+            [[job.user_id for job in batch] for batch in batches],
+            [[1, 2, 3, 4, 5, 6, 7, 8]],
+        )
+
     def test_adr_pop16_users_1_128_config_groups_all_users(self) -> None:
         from simulator.experiment_infra.training_batch import (
             estimate_lanes_per_job,

@@ -101,28 +101,33 @@ class ExperimentInfraArtifactTests(unittest.TestCase):
         self.assertFalse(capability.supports(engine="batched", environment="fsrs6"))
 
     def test_accepts_lambda_less_cost_adr_metadata(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "policy.json").write_text("{}", encoding="utf-8")
-            metadata_path = root / "metadata.json"
-            raw = _metadata(policy_path="policy.json")
-            raw.update(
-                {
-                    "artifact_id": "cost-adr-user-1",
-                    "scheduler_name": "fsrs6_cost_adr",
-                    "environment": "fsrs6",
-                    "feature_version": "fsrs6_cost_adr_interval_mono_v1",
-                    "action_space": "sd_cost_interval_function",
-                    "lambda_value": None,
-                    "baseline_desired_retention": None,
-                    "validation_user_ids": [],
-                    "capabilities": ["event", "batched"],
-                }
-            )
-            metadata_path.write_text(json.dumps(raw), encoding="utf-8")
-            config_path = root / "experiment.toml"
-            config_path.write_text(
-                """
+        for feature_version, action_space in (
+            ("fsrs6_cost_adr_interval_mono_v1", "sd_cost_interval_function"),
+            ("fsrs6_cost_adr_retention_mono_v1", "sd_cost_retention_function"),
+        ):
+            with self.subTest(feature_version=feature_version):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "policy.json").write_text("{}", encoding="utf-8")
+                    metadata_path = root / "metadata.json"
+                    raw = _metadata(policy_path="policy.json")
+                    raw.update(
+                        {
+                            "artifact_id": "cost-adr-user-1",
+                            "scheduler_name": "fsrs6_cost_adr",
+                            "environment": "fsrs6",
+                            "feature_version": feature_version,
+                            "action_space": action_space,
+                            "lambda_value": None,
+                            "baseline_desired_retention": None,
+                            "validation_user_ids": [],
+                            "capabilities": ["event", "batched"],
+                        }
+                    )
+                    metadata_path.write_text(json.dumps(raw), encoding="utf-8")
+                    config_path = root / "experiment.toml"
+                    config_path.write_text(
+                        """
 schema_version = 1
 name = "cost-adr-artifact"
 family = "rl_scheduler"
@@ -160,26 +165,29 @@ lambda_grid = [0.5]
 [training.policy_search]
 baseline_desired_retention = 0.90
 """.lstrip(),
-                encoding="utf-8",
-            )
-            config = ExperimentConfig.from_toml(config_path)
+                        encoding="utf-8",
+                    )
+                    config = ExperimentConfig.from_toml(config_path)
 
-            metadata = validate_scheduler_artifact(metadata_path, require_files=True)
-            train_note = _validate_train_artifacts(
-                artifact_paths=[metadata_path],
-                config=config,
-                user_id=1,
-                lambda_value=None,
-                baseline_desired_retention=0.90,
-            )
-            sweep_note = _validate_sweep_artifact_metadata(
-                metadata_path=metadata_path,
-                metadata=metadata,
-                config=config,
-            )
+                    metadata = validate_scheduler_artifact(
+                        metadata_path,
+                        require_files=True,
+                    )
+                    train_note = _validate_train_artifacts(
+                        artifact_paths=[metadata_path],
+                        config=config,
+                        user_id=1,
+                        lambda_value=None,
+                        baseline_desired_retention=0.90,
+                    )
+                    sweep_note = _validate_sweep_artifact_metadata(
+                        metadata_path=metadata_path,
+                        metadata=metadata,
+                        config=config,
+                    )
 
-        self.assertIsNone(train_note)
-        self.assertIsNone(sweep_note)
+                self.assertIsNone(train_note)
+                self.assertIsNone(sweep_note)
 
 
 if __name__ == "__main__":

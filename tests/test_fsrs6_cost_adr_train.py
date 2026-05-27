@@ -28,6 +28,8 @@ from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (  # noqa: E402
     HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE,
     HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
     INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
+    INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1,
+    CostADRActionSettings,
     InitialPolicySettings,
     hypervolume_delta_mode_from_mapping,
     optimizer_settings_from_mapping,
@@ -52,12 +54,25 @@ from simulator.experiment_infra.schemas import ExperimentConfig  # noqa: E402
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS, resolve_fsrs6_weights  # noqa: E402
 from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     ACTION_HEAD_INTERVAL,
+    ACTION_HEAD_RETENTION,
     FSRS6CostConditionedADRPolicy,
     STATE_FEATURE_COUNT_COMPACT,
 )
 
 
 class FSRS6CostADRTrainTests(unittest.TestCase):
+    def test_action_head_setting_accepts_retention_alias(self) -> None:
+        interval = CostADRActionSettings.from_mapping({})
+        retention = CostADRActionSettings.from_mapping({"action_head": "retention"})
+
+        self.assertEqual(interval.action_head, ACTION_HEAD_INTERVAL)
+        self.assertEqual(interval.feature_version, "fsrs6_cost_adr_interval_mono_v1")
+        self.assertEqual(retention.action_head, ACTION_HEAD_RETENTION)
+        self.assertEqual(
+            retention.feature_version,
+            "fsrs6_cost_adr_retention_mono_v1",
+        )
+
     def test_builtin_mean_source_is_exclusive_with_policy_sources(self) -> None:
         with self.assertRaisesRegex(ValueError, "Only one Cost-ADR initial policy"):
             InitialPolicySettings.from_mapping(
@@ -806,6 +821,183 @@ seed = 7
         self.assertEqual(
             metadata["search_optimizer_settings"]["initial_mean"],
             [0.0] * 24,
+        )
+
+    def test_retention_head_trainer_writes_retention_artifacts(self) -> None:
+        bundle_lane_user_ids = []
+        training_action_heads = []
+
+        def fake_build_bundle(**kwargs):
+            lane_user_ids = kwargs.get("lane_user_ids")
+            if not isinstance(lane_user_ids, list):
+                raise AssertionError("trainer smoke test expects lane_user_ids.")
+            bundle_lane_user_ids.append(list(lane_user_ids))
+            lanes = len(lane_user_ids)
+            device = kwargs["device"]
+            return SimpleNamespace(
+                env_ops=SimpleNamespace(device=device),
+                scheduler_weights=torch.tensor(
+                    [DEFAULT_FSRS6_WEIGHTS for _ in range(lanes)],
+                    device=device,
+                    dtype=torch.float32,
+                ),
+                behavior=object(),
+                cost_model=object(),
+                device=device,
+                short_term_source=None,
+                learning_steps=[],
+                relearning_steps=[],
+            )
+
+        def fake_simulate_multiuser(**kwargs):
+            sched_ops = kwargs["sched_ops"]
+            lane_count = int(sched_ops._weights.shape[0])
+            is_cost_adr = hasattr(sched_ops, "_goal_cost_weight")
+            if is_cost_adr:
+                training_action_heads.append(sched_ops._action_head)
+            stats = []
+            for index in range(lane_count):
+                if is_cost_adr:
+                    memorized = 8.0 + index * 0.01
+                    minutes = 1.0
+                else:
+                    memorized = 5.0 + index * 0.01
+                    minutes = 2.0
+                stats.append(
+                    SimpleNamespace(
+                        daily_cost=[minutes * 60.0],
+                        daily_memorized=[memorized],
+                        total_reviews=1,
+                        total_lapses=0,
+                        total_cost=minutes * 60.0,
+                    )
+                )
+            return stats
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "cost_adr_retention.toml"
+            output_dir = root / "user_1"
+            config_path.write_text(
+                f"""
+schema_version = 1
+name = "cost-adr-retention-smoke"
+family = "rl_scheduler"
+seed = 42
+output_root = "artifacts/cost-adr-retention-smoke"
+stages = ["train-overfit"]
+
+[users]
+train = [1]
+validation = []
+reserved_test = []
+
+[baseline]
+scheduler = "fsrs6"
+log_root = "logs/retention_sweep"
+expected_engine = "batched"
+stage_mode = "copy"
+desired_retention_values = [0.90]
+
+[simulation]
+engine = "batched"
+environment = "fsrs6"
+days = 2
+deck = 10
+learn_limit = 1
+review_limit = 10
+cost_limit_minutes = 60.0
+priority = "new-first"
+scheduler_priority = "low_retrievability"
+fuzz = false
+
+[training]
+artifact_metadata_glob = "metadata.json"
+command_template = [
+  "uv",
+  "run",
+  "python",
+  "experiments/rl_scheduler/train_cmaes_fsrs6_cost_adr.py",
+]
+
+[training.policy_search]
+action_head = "desired_retention"
+coefficient_min = -64.0
+coefficient_max = 64.0
+retention_min = 0.50
+retention_max = 0.98
+baseline_desired_retention = 0.90
+torch_device = "cpu"
+short_term_threshold = 0.5
+short_term_loops_limit = 1
+initial_mean_source = "{INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1}"
+initial_policy_expand_bounds = false
+initial_policy_evaluate_in_generation_zero = true
+
+[training.optimizer]
+name = "cma_es"
+population_size = 2
+generations = 1
+sigma0 = 1.0
+seed = 7
+""".lstrip(),
+                encoding="utf-8",
+            )
+            config = ExperimentConfig.from_toml(config_path)
+
+            with (
+                patch(
+                    "experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr._build_bundle",
+                    side_effect=fake_build_bundle,
+                ),
+                patch(
+                    "experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr.simulate_multiuser",
+                    side_effect=fake_simulate_multiuser,
+                ),
+            ):
+                results = run_training_jobs(
+                    jobs=[CostADRTrainJob(user_id=1, output_dir=output_dir)],
+                    config=config,
+                    config_path=config_path,
+                    repo_root=REPO_ROOT,
+                    button_usage=None,
+                )
+
+            policy = FSRS6CostConditionedADRPolicy.from_json(output_dir / "policy.json")
+            metadata = json.loads(
+                (output_dir / "metadata.json").read_text(encoding="utf-8")
+            )
+            metrics = json.loads(
+                (output_dir / "metrics.json").read_text(encoding="utf-8")
+            )
+            progress_records = [
+                json.loads(line)
+                for line in (output_dir / "training_progress.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+
+        self.assertEqual([result.passed for result in results], [True])
+        self.assertEqual(bundle_lane_user_ids[0], [1])
+        self.assertEqual(bundle_lane_user_ids[1], [1] * 32)
+        self.assertEqual(training_action_heads, [ACTION_HEAD_RETENTION])
+        self.assertEqual(policy.action_head, ACTION_HEAD_RETENTION)
+        self.assertEqual(policy.feature_version, "fsrs6_cost_adr_retention_mono_v1")
+        self.assertIsNone(policy.max_interval_days)
+        self.assertEqual(metadata["action_space"], "sd_cost_retention_function")
+        self.assertEqual(metadata["action_head"], ACTION_HEAD_RETENTION)
+        self.assertEqual(metrics["action_head"], ACTION_HEAD_RETENTION)
+        self.assertEqual(
+            metrics["initial_policy"]["source"],
+            INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1,
+        )
+        config_loaded = next(
+            record for record in progress_records if record["event"] == "config_loaded"
+        )
+        self.assertEqual(config_loaded["action_head"], ACTION_HEAD_RETENTION)
+        self.assertEqual(
+            config_loaded["feature_version"],
+            "fsrs6_cost_adr_retention_mono_v1",
         )
 
     def test_cmaes_trainer_batches_users_and_writes_artifacts(self) -> None:

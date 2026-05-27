@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 import sys
 
 import cma
@@ -45,7 +45,10 @@ from simulator.experiment_infra.baseline_dr_selection import load_baseline_dr_ma
 from simulator.experiment_infra.schemas import ExperimentConfig, SCHEMA_VERSION
 from simulator.fsrs6_cost_conditioned_adr_policy import (
     ACTION_HEAD_INTERVAL,
+    ACTION_HEAD_RETENTION,
+    ActionHead,
     FEATURE_VERSION_INTERVAL_MONO,
+    FEATURE_VERSION_RETENTION_MONO,
     FSRS6CostConditionedADRPolicy,
 )
 from simulator.math.fsrs import Bounds
@@ -69,8 +72,14 @@ SUPPORTED_HYPERVOLUME_DELTA_MODES = frozenset(
     }
 )
 INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1 = "first8_distill24_mean_v1"
+INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1 = (
+    "retention_baseline_cost_decay_v1"
+)
 SUPPORTED_INITIAL_MEAN_SOURCES = frozenset(
-    {INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1}
+    {
+        INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
+        INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1,
+    }
 )
 COEFFICIENT_PRECONDITIONING_NONE = "none"
 COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1 = "first8_distill24_std_v1"
@@ -132,6 +141,48 @@ FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS = (
     12.1597,
     1.7031,
 )
+SUPPORTED_ACTION_HEADS = frozenset({ACTION_HEAD_INTERVAL, ACTION_HEAD_RETENTION})
+ACTION_HEAD_FEATURE_VERSIONS = {
+    ACTION_HEAD_INTERVAL: FEATURE_VERSION_INTERVAL_MONO,
+    ACTION_HEAD_RETENTION: FEATURE_VERSION_RETENTION_MONO,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class CostADRActionSettings:
+    action_head: ActionHead = ACTION_HEAD_INTERVAL
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any]) -> CostADRActionSettings:
+        raw_value = raw.get("action_head", ACTION_HEAD_INTERVAL)
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            raise ValueError(
+                "training.policy_search.action_head must be a non-empty string."
+            )
+        value = raw_value.strip()
+        if value == "retention":
+            value = ACTION_HEAD_RETENTION
+        if value not in SUPPORTED_ACTION_HEADS:
+            allowed = ", ".join(sorted(SUPPORTED_ACTION_HEADS | {"retention"}))
+            raise ValueError(
+                f"training.policy_search.action_head must be one of: {allowed}."
+            )
+        return cls(action_head=cast(ActionHead, value))
+
+    @property
+    def feature_version(self) -> str:
+        return ACTION_HEAD_FEATURE_VERSIONS[self.action_head]
+
+    @property
+    def max_interval_days(self) -> float | None:
+        return MAX_INTERVAL_DAYS if self.action_head == ACTION_HEAD_INTERVAL else None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action_head": self.action_head,
+            "feature_version": self.feature_version,
+            "max_interval_days": self.max_interval_days,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +378,8 @@ class InitialPolicyInfo:
     source: str | None
     coefficients: tuple[float, ...]
     title: str
+    action_head: str
+    feature_version: str
     cost_weight_min: float
     cost_weight_max: float
     retention_min: float
@@ -346,6 +399,8 @@ class InitialPolicyInfo:
             "path": path,
             "source": self.source,
             "title": self.title,
+            "action_head": self.action_head,
+            "feature_version": self.feature_version,
             "parameter_count": len(self.coefficients),
             "coefficient_min": min(self.coefficients),
             "coefficient_max": max(self.coefficients),
@@ -663,6 +718,7 @@ def run_training_jobs(
         settings=settings,
     )
     cost_weights = cost_weights_from_mapping(raw_training_policy_search)
+    action_settings = CostADRActionSettings.from_mapping(raw_training_policy_search)
     hypervolume_delta_mode = hypervolume_delta_mode_from_mapping(
         raw_training_policy_search
     )
@@ -717,6 +773,7 @@ def run_training_jobs(
                 repo_root=repo_root,
                 cost_weights=cost_weights,
                 policy_search_settings=settings,
+                action_settings=action_settings,
             )
             job_optimizer_settings = _optimizer_settings_for_initial_policy(
                 optimizer_settings=optimizer_settings,
@@ -738,8 +795,9 @@ def run_training_jobs(
                 search_optimizer=search_optimizer_settings.to_dict(),
                 optimizer_seed=optimizer_seed,
                 coefficient_preconditioning=coefficient_transform.to_dict(),
-                feature_version=FEATURE_VERSION_INTERVAL_MONO,
-                action_head=ACTION_HEAD_INTERVAL,
+                action_settings=action_settings.to_dict(),
+                feature_version=action_settings.feature_version,
+                action_head=action_settings.action_head,
                 parameter_count=PARAMETER_COUNT,
                 cost_weights=list(cost_weights),
                 hypervolume_delta_mode=hypervolume_delta_mode,
@@ -872,6 +930,7 @@ def run_training_jobs(
         results_by_job = _run_cmaes_multiuser(
             config=config,
             settings=settings,
+            action_settings=action_settings,
             optimizer_settings=optimizer_settings,
             coverage_settings=coverage_settings,
             hypervolume_delta_mode=hypervolume_delta_mode,
@@ -929,6 +988,7 @@ def run_training_jobs(
                 coefficient_transform=state.coefficient_transform,
                 initial_policy_settings=initial_policy_settings,
                 initial_policy=state.initial_policy,
+                action_settings=action_settings,
                 coverage_settings=coverage_settings,
                 hypervolume_delta_mode=hypervolume_delta_mode,
                 cost_weights=cost_weights,
@@ -1004,12 +1064,14 @@ def _load_initial_policy_for_user(
     repo_root: Path,
     cost_weights: Sequence[float],
     policy_search_settings: PolicySearchSettings,
+    action_settings: CostADRActionSettings,
 ) -> InitialPolicyInfo | None:
     if settings.mean_source is not None:
         return _built_in_initial_mean(
             source=settings.mean_source,
             cost_weights=cost_weights,
             policy_search_settings=policy_search_settings,
+            action_settings=action_settings,
         )
     policy_path = _resolve_initial_policy_path(
         settings=settings,
@@ -1021,12 +1083,15 @@ def _load_initial_policy_for_user(
     if not policy_path.exists():
         raise FileNotFoundError(f"Cost-ADR initial policy not found: {policy_path}")
     policy = FSRS6CostConditionedADRPolicy.from_json(policy_path)
-    if policy.action_head != ACTION_HEAD_INTERVAL:
-        raise ValueError("Cost-ADR initial policy must use action_head='interval'.")
-    if policy.feature_version != FEATURE_VERSION_INTERVAL_MONO:
+    if policy.action_head != action_settings.action_head:
+        raise ValueError(
+            "Cost-ADR initial policy action_head must match "
+            f"training.policy_search.action_head={action_settings.action_head!r}."
+        )
+    if policy.feature_version != action_settings.feature_version:
         raise ValueError(
             "Cost-ADR initial policy feature_version must be "
-            f"{FEATURE_VERSION_INTERVAL_MONO!r}."
+            f"{action_settings.feature_version!r}."
         )
     if policy.parameter_count != PARAMETER_COUNT:
         raise ValueError(
@@ -1066,6 +1131,8 @@ def _load_initial_policy_for_user(
         source="policy_json",
         coefficients=policy.coefficients,
         title=policy.title,
+        action_head=policy.action_head,
+        feature_version=policy.feature_version,
         cost_weight_min=policy.cost_weight_min,
         cost_weight_max=policy.cost_weight_max,
         retention_min=policy.retention_min,
@@ -1079,10 +1146,26 @@ def _built_in_initial_mean(
     source: str,
     cost_weights: Sequence[float],
     policy_search_settings: PolicySearchSettings,
+    action_settings: CostADRActionSettings,
 ) -> InitialPolicyInfo:
     if source == INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1:
+        if action_settings.action_head != ACTION_HEAD_INTERVAL:
+            raise ValueError(
+                f"Built-in initial mean {source!r} is only valid for "
+                "action_head='interval'."
+            )
         coefficients = FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS
         title = "FSRS6 Cost-ADR first8 distill24 mean initializer v1"
+    elif source == INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1:
+        if action_settings.action_head != ACTION_HEAD_RETENTION:
+            raise ValueError(
+                f"Built-in initial mean {source!r} is only valid for "
+                "action_head='desired_retention'."
+            )
+        coefficients = _retention_baseline_cost_decay_coefficients(
+            policy_search_settings
+        )
+        title = "FSRS6 Cost-ADR retention-head baseline cost-decay initializer v1"
     else:
         allowed = ", ".join(sorted(SUPPORTED_INITIAL_MEAN_SOURCES))
         raise ValueError(
@@ -1104,12 +1187,27 @@ def _built_in_initial_mean(
         source=source,
         coefficients=coefficients,
         title=title,
+        action_head=action_settings.action_head,
+        feature_version=action_settings.feature_version,
         cost_weight_min=min(cost_weights),
         cost_weight_max=max(cost_weights),
         retention_min=policy_search_settings.retention_min,
         retention_max=policy_search_settings.retention_max,
-        max_interval_days=MAX_INTERVAL_DAYS,
+        max_interval_days=action_settings.max_interval_days,
     )
+
+
+def _retention_baseline_cost_decay_coefficients(
+    policy_search_settings: PolicySearchSettings,
+) -> tuple[float, ...]:
+    ratio = (
+        policy_search_settings.baseline_desired_retention
+        - policy_search_settings.retention_min
+    ) / (policy_search_settings.retention_max - policy_search_settings.retention_min)
+    ratio = min(1.0 - 1e-9, max(1e-9, ratio))
+    coefficients = [0.0 for _ in range(PARAMETER_COUNT)]
+    coefficients[0] = math.log(ratio / (1.0 - ratio))
+    return tuple(coefficients)
 
 
 def _resolve_initial_policy_path(
@@ -1352,6 +1450,7 @@ def _run_cmaes_multiuser(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
+    action_settings: CostADRActionSettings,
     optimizer_settings: CMAESSettings,
     coverage_settings: CoverageObjectiveSettings,
     hypervolume_delta_mode: str,
@@ -1393,6 +1492,7 @@ def _run_cmaes_multiuser(
         metrics_by_job = _evaluate_cost_adr_candidates_multiuser(
             config=config,
             settings=settings,
+            action_settings=action_settings,
             bundle=bundle,
             jobs=jobs,
             coefficients_by_job=coefficients_by_job,
@@ -1727,6 +1827,7 @@ def _evaluate_cost_adr_candidates_multiuser(
     *,
     config: ExperimentConfig,
     settings: PolicySearchSettings,
+    action_settings: CostADRActionSettings,
     bundle: Any,
     jobs: Sequence[CostADRTrainJob],
     coefficients_by_job: torch.Tensor,
@@ -1750,7 +1851,11 @@ def _evaluate_cost_adr_candidates_multiuser(
             coefficients_by_job.shape[2],
         )
     )
-    policy = _policy_template(settings=settings, cost_weights=cost_weights)
+    policy = _policy_template(
+        settings=settings,
+        action_settings=action_settings,
+        cost_weights=cost_weights,
+    )
     sched_ops = FSRS6CostConditionedADRBatchSchedulerOps(
         weights=bundle.scheduler_weights,
         policy=policy,
@@ -1809,17 +1914,20 @@ def _evaluate_cost_adr_candidates_multiuser(
 
 
 def _policy_template(
-    *, settings: PolicySearchSettings, cost_weights: Sequence[float]
+    *,
+    settings: PolicySearchSettings,
+    action_settings: CostADRActionSettings,
+    cost_weights: Sequence[float],
 ) -> FSRS6CostConditionedADRPolicy:
     return FSRS6CostConditionedADRPolicy(
         coefficients=(0.0,) * PARAMETER_COUNT,
-        action_head=ACTION_HEAD_INTERVAL,
-        feature_version=FEATURE_VERSION_INTERVAL_MONO,
+        action_head=action_settings.action_head,
+        feature_version=action_settings.feature_version,
         cost_weight_min=min(cost_weights),
         cost_weight_max=max(cost_weights),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
-        max_interval_days=MAX_INTERVAL_DAYS,
+        max_interval_days=action_settings.max_interval_days,
         bounds=Bounds(),
         title="FSRS6 cost-conditioned ADR CMA-ES template",
     )
@@ -1839,6 +1947,7 @@ def write_artifact(
     coefficient_transform: CoefficientSearchTransform,
     initial_policy_settings: InitialPolicySettings,
     initial_policy: InitialPolicyInfo | None,
+    action_settings: CostADRActionSettings,
     coverage_settings: CoverageObjectiveSettings,
     hypervolume_delta_mode: str,
     cost_weights: tuple[float, ...],
@@ -1847,13 +1956,13 @@ def write_artifact(
     output_dir.mkdir(parents=True, exist_ok=True)
     policy = FSRS6CostConditionedADRPolicy(
         coefficients=tuple(float(v) for v in result.best_coefficients.tolist()),
-        action_head=ACTION_HEAD_INTERVAL,
-        feature_version=FEATURE_VERSION_INTERVAL_MONO,
+        action_head=action_settings.action_head,
+        feature_version=action_settings.feature_version,
         cost_weight_min=min(cost_weights),
         cost_weight_max=max(cost_weights),
         retention_min=settings.retention_min,
         retention_max=settings.retention_max,
-        max_interval_days=MAX_INTERVAL_DAYS,
+        max_interval_days=action_settings.max_interval_days,
         bounds=Bounds(),
         title=f"fsrs6_cost_adr_cmaes_u{user_id}",
     )
@@ -1917,9 +2026,10 @@ def write_artifact(
                     strict=True,
                 )
             ],
-            "feature_version": FEATURE_VERSION_INTERVAL_MONO,
-            "action_head": ACTION_HEAD_INTERVAL,
+            "feature_version": action_settings.feature_version,
+            "action_head": action_settings.action_head,
             "parameter_count": PARAMETER_COUNT,
+            "action_settings": action_settings.to_dict(),
             "optimizer": optimizer,
             "search_optimizer": search_optimizer,
             "coefficient_preconditioning": coefficient_preconditioning,
@@ -1932,7 +2042,7 @@ def write_artifact(
     metadata_path = output_dir / "metadata.json"
     metadata_dir = metadata_path.parent
     action_space = fsrs6_cost_adr_action_space_for_feature_version(
-        FEATURE_VERSION_INTERVAL_MONO
+        action_settings.feature_version
     )
     _write_json(
         metadata_path,
@@ -1949,7 +2059,7 @@ def write_artifact(
             "validation_user_ids": list(config.users.validation),
             "seed": config.seed,
             "policy_path": "policy.json",
-            "feature_version": FEATURE_VERSION_INTERVAL_MONO,
+            "feature_version": action_settings.feature_version,
             "action_space": action_space,
             "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "code_commit": _git_commit(),
@@ -1975,6 +2085,8 @@ def write_artifact(
             "initial_policy_settings": initial_policy_settings.to_dict(),
             "initial_policy": initial_policy_record,
             "cost_weights": list(cost_weights),
+            "action_head": action_settings.action_head,
+            "action_settings": action_settings.to_dict(),
             "coverage_objective": coverage_settings.to_dict(),
             "best_hypervolume_delta": result.best_hypervolume_delta,
             "best_objective_score": result.best_objective_score,
