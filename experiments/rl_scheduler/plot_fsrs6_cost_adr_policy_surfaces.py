@@ -271,7 +271,7 @@ def _z_axis_title(z_mode: ZMode) -> str:
 
 def _z_hover_line(z_mode: ZMode) -> str:
     if z_mode == "retention":
-        return "retention_z=%{z:.4f}<extra></extra>"
+        return "retention=%{z:.4f}<extra></extra>"
     if z_mode == "log_interval":
         return "log10_interval=%{z:.3f}<extra></extra>"
     return "interval_z=%{z:.3g}<extra></extra>"
@@ -402,7 +402,7 @@ def _build_surface_arrays(
     z_mode: ZMode,
 ) -> tuple[list[list[float]], list[list[list[float]]]]:
     z_rows: list[list[float]] = []
-    customdata_rows: list[list[list[float]]] = []
+    customdata_d_major: list[list[list[float]]] = []
     normalized_weight = normalized_cost_weight(
         cost_weight,
         cost_weight_min=policy.cost_weight_min,
@@ -424,8 +424,14 @@ def _build_surface_arrays(
                 [cost_weight, normalized_weight, interval_days, retention]
             )
         z_rows.append(z_row)
-        customdata_rows.append(customdata_row)
-    return z_rows, customdata_rows
+        customdata_d_major.append(customdata_row)
+    # Plotly Surface uses d-major z rows with 1-D x/y grids, but hover customdata is
+    # indexed x-major. Transpose customdata so hover values match the displayed point.
+    customdata_x_major = [
+        [customdata_d_major[d_index][s_index] for d_index in range(len(d_grid))]
+        for s_index in range(len(s_grid))
+    ]
+    return z_rows, customdata_x_major
 
 
 def _write_user_plot(
@@ -479,7 +485,7 @@ def _write_user_plot(
     show_interval_hover = (
         entry.policy.action_head == ACTION_HEAD_INTERVAL or fsrs6_params is not None
     )
-    show_retention_hover = (
+    show_retention_hover = z_mode != "retention" and (
         entry.policy.action_head == ACTION_HEAD_RETENTION or fsrs6_params is not None
     )
     for index, (cost_weight, color_value) in enumerate(

@@ -106,16 +106,19 @@ class PlotFSRS6CostADRPolicySurfacesTests(unittest.TestCase):
             policy=policy,
             fsrs6_params=params,
             cost_weight=0.0,
-            s_grid=(1.0, 10.0),
+            s_grid=(1.0, 10.0, 100.0),
             d_grid=(1.0, 5.0),
             z_mode="retention",
         )
 
         self.assertEqual(len(z_values), 2)
-        self.assertEqual(len(z_values[0]), 2)
+        self.assertEqual(len(z_values[0]), 3)
+        self.assertEqual(len(customdata), 3)
+        self.assertEqual(len(customdata[0]), 2)
         self.assertAlmostEqual(z_values[0][0], 0.9)
         self.assertAlmostEqual(customdata[0][0][2], 1.0)
         self.assertAlmostEqual(customdata[0][0][3], z_values[0][0])
+        self.assertAlmostEqual(customdata[2][1][3], z_values[1][2])
 
 
 if __name__ == "__main__":
