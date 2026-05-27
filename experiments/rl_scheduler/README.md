@@ -24,9 +24,9 @@ FSRS-6 state update to obtain `S` and `D`.
 - `train_cmaes_fsrs6_adr.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr`
   policies over `S,D`.
 - `train_cmaes_fsrs6_cost_adr.py`: CMA-ES trainer for one 24-parameter
-  `fsrs6_cost_adr` policy per user. The policy emits intervals, or as an
-  ablation emits desired retention values that FSRS-6 converts to intervals,
-  from scheduler-side `S,D` and a requested scalar cost weight. It can
+  `fsrs6_cost_adr` policy per user. The policy emits desired retention values
+  by default, or can be configured as an interval-head ablation, from
+  scheduler-side `S,D` and a requested scalar cost weight. It can
   optionally initialize CMA-ES from an existing per-user Cost-ADR policy or a
   built-in action-head-specific mean, and can run CMA-ES in a diagonal z-space
   scaled by the first-eight sample std.
@@ -276,11 +276,11 @@ Representative profiles:
   diagnostic. Interpret this profile against ADR only on the matched 16-point
   sweep, not on the dense-weight diagnostic sweep.
 - `configs/fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml`:
-  the matched retention-head ablation for deciding whether Cost-ADR should emit
-  desired retention instead of interval. It keeps the same first-eight users,
-  pop16/gen20 budget, 16 cost weights, scheduler-HV objective, and diagonal
-  search scale as the interval-head repair profile, but uses
-  `action_head = "desired_retention"` and a retention-head baseline cost-decay
+  the matched Cost-ADR default-action profile for deciding whether the scheduler
+  should emit desired retention instead of interval. It keeps the same
+  first-eight users, pop16/gen20 budget, 16 cost weights, scheduler-HV
+  objective, and diagonal search scale as the interval-head repair profile, but
+  uses `action_head = "desired_retention"` and a baseline cost-decay
   initializer instead of the interval distill mean.
 - `configs/fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml`: the
   first-128-user scale-up of the scheduler-HV std-preconditioned Cost-ADR
@@ -440,7 +440,7 @@ uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --run-id fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off
 ```
 
-Retention-head Cost-ADR ablation for users 1-8:
+Cost-ADR default-action profile for users 1-8:
 
 ```bash
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \

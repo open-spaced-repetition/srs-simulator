@@ -16,6 +16,10 @@ if str(REPO_ROOT) not in sys.path:
 
 
 USER_RE = re.compile(r"user_(\d+)")
+_COST_ADR_RETENTION_LABEL_RE = re.compile(
+    r"\b((?:FSRS6\s+)?Cost[- ]ADR)\s+retention[- ]head\b",
+    flags=re.IGNORECASE,
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -118,6 +122,8 @@ def build_report_summary(
     comparison_analysis = _read_json(comparison_analysis_path)
     candidate_scheduler = _primary_scheduler(candidate_analysis)
     comparison_scheduler = _primary_scheduler(comparison_analysis)
+    candidate_label = _normalize_strategy_label(candidate_label)
+    comparison_label = _normalize_strategy_label(comparison_label)
     if title is None:
         title = f"{candidate_label} vs {comparison_label} experiment report"
 
@@ -203,6 +209,10 @@ def build_report_summary(
             )
         },
     }
+
+
+def _normalize_strategy_label(label: str) -> str:
+    return _COST_ADR_RETENTION_LABEL_RE.sub(r"\1", label)
 
 
 def render_report_from_summary(

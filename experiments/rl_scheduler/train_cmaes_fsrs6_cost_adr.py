@@ -150,11 +150,11 @@ ACTION_HEAD_FEATURE_VERSIONS = {
 
 @dataclass(frozen=True, slots=True)
 class CostADRActionSettings:
-    action_head: ActionHead = ACTION_HEAD_INTERVAL
+    action_head: ActionHead = ACTION_HEAD_RETENTION
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> CostADRActionSettings:
-        raw_value = raw.get("action_head", ACTION_HEAD_INTERVAL)
+        raw_value = raw.get("action_head", ACTION_HEAD_RETENTION)
         if not isinstance(raw_value, str) or not raw_value.strip():
             raise ValueError(
                 "training.policy_search.action_head must be a non-empty string."
@@ -1165,7 +1165,7 @@ def _built_in_initial_mean(
         coefficients = _retention_baseline_cost_decay_coefficients(
             policy_search_settings
         )
-        title = "FSRS6 Cost-ADR retention-head baseline cost-decay initializer v1"
+        title = "FSRS6 Cost-ADR baseline cost-decay initializer v1"
     else:
         allowed = ", ".join(sorted(SUPPORTED_INITIAL_MEAN_SOURCES))
         raise ValueError(

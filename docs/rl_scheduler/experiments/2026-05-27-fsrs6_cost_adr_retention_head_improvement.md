@@ -175,6 +175,6 @@ The result does not prove a standalone retention head is superior in a clean-sla
 
 ## Recommendation
 
-Use interval-implied-retention fitting as the default way to initialize any future Cost-ADR retention-head ablation. Keep `[0.30, 0.995]` bounds for this family unless a broader distribution analysis contradicts it.
+Use interval-implied-retention fitting as the default way to initialize any future Cost-ADR default-action ablation. Keep `[0.30, 0.995]` bounds for this family unless a broader distribution analysis contradicts it.
 
 For a stricter retention-head study, the next ablation should remove the interval-derived preconditioning or add a retention-specific diagonal preconditioner, because this run still uses `first8_distill24_std_v1`.

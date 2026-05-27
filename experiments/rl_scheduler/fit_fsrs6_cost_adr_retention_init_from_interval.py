@@ -48,7 +48,7 @@ DEFAULT_OUT_DIR = Path(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Fit per-user FSRS6 Cost-ADR retention-head initial policies from "
+            "Fit per-user FSRS6 Cost-ADR initial policies from "
             "the implied retention distribution of interval-head policies."
         ),
         allow_abbrev=False,

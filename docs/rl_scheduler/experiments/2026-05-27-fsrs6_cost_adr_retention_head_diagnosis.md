@@ -6,7 +6,7 @@ This note diagnoses why the Cost-ADR `desired_retention` action head underperfor
 
 ## Runs Compared
 
-Candidate: Cost ADR retention-head schedHV stdpre
+Candidate: Cost ADR schedHV stdpre
 
 - Run root: `artifacts/rl_scheduler/fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8/fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off`
 - Config: `experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml`

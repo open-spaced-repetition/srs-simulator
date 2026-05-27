@@ -146,7 +146,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--action-head",
         choices=(ACTION_HEAD_INTERVAL, ACTION_HEAD_RETENTION),
-        default=ACTION_HEAD_INTERVAL,
+        default=ACTION_HEAD_RETENTION,
     )
     parser.add_argument(
         "--state-feature-count",

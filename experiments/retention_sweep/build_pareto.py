@@ -36,6 +36,14 @@ RUN_ID_SCOPED_SCHEDULERS = run_id_scoped_sweep_schedulers()
 ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_ADR)
 COST_ADR_POLICY_SCHEDULERS = schedulers_for_policy_source(PolicySource.FSRS6_COST_ADR)
 ORACLE_DISTILL_SCHEDULER = "fsrs6_oracle_stationary_finite_distill"
+_COST_ADR_RETENTION_LABEL_RE = re.compile(
+    r"\b((?:FSRS6\s+)?Cost[- ]ADR)\s+retention[- ]head\b",
+    flags=re.IGNORECASE,
+)
+_COST_CONDITIONED_ADR_RETENTION_BASELINE_RE = re.compile(
+    r"\b((?:FSRS6\s+)?cost-conditioned\s+ADR)\s+retention\s+baseline\b",
+    flags=re.IGNORECASE,
+)
 SA_FSRS6_DR_TOKEN_RE = re.compile(
     r"(?:^|[_\W])dr[_=-]([01](?:[.p]\d+)?|[.p]\d+)",
     re.IGNORECASE,
@@ -390,10 +398,15 @@ def _resolve_fsrs6_cost_adr_label(
                 payload = json.load(fh)
             raw_title = payload.get("title")
             if isinstance(raw_title, str) and raw_title.strip():
-                return raw_title.strip()
+                return _normalize_cost_adr_display_label(raw_title.strip())
         except (OSError, json.JSONDecodeError):
             pass
-    return f"Cost ADR {path.parent.name}"
+    return _normalize_cost_adr_display_label(f"Cost ADR {path.parent.name}")
+
+
+def _normalize_cost_adr_display_label(label: str) -> str:
+    label = _COST_ADR_RETENTION_LABEL_RE.sub(r"\1", label)
+    return _COST_CONDITIONED_ADR_RETENTION_BASELINE_RE.sub(r"\1 baseline", label)
 
 
 def _load_policy_sibling_metadata(

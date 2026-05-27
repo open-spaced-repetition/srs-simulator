@@ -39,6 +39,7 @@ from simulator.anki_sm2_ap_policy import AnkiSM2APPolicy
 from experiments.retention_sweep.build_pareto import (
     _build_results,
     _plot_ordered_entries,
+    _resolve_fsrs6_cost_adr_label,
     _split_results_by_series,
 )
 from experiments.retention_sweep.aggregate_users import (
@@ -148,6 +149,28 @@ class FakeEnvOps:
 
 
 class RetentionSweepCsvLoggingTests(unittest.TestCase):
+    def test_cost_adr_policy_label_omits_redundant_retention_head(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            policy_dir = root / "user_1"
+            policy_dir.mkdir(parents=True)
+            policy_path = policy_dir / "policy.json"
+            policy_path.write_text(
+                json.dumps(
+                    {
+                        "title": "Cost ADR retention-head interval-init wide",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            label = _resolve_fsrs6_cost_adr_label(
+                {"fsrs6_cost_adr_policy": str(policy_path)},
+                base_dirs=(),
+            )
+
+        self.assertEqual(label, "Cost ADR interval-init wide")
+
     def test_write_log_can_skip_daily_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

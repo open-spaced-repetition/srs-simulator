@@ -14,6 +14,8 @@ FEATURE_VERSION_INTERVAL_MONO = "fsrs6_cost_adr_interval_mono_v1"
 FEATURE_VERSION_RETENTION_MONO = "fsrs6_cost_adr_retention_mono_v1"
 ACTION_HEAD_INTERVAL = "interval"
 ACTION_HEAD_RETENTION = "desired_retention"
+DEFAULT_ACTION_HEAD = ACTION_HEAD_RETENTION
+DEFAULT_FEATURE_VERSION = FEATURE_VERSION_RETENTION_MONO
 STATE_FEATURE_COUNT_COMPACT = 6
 STATE_FEATURE_COUNT_HINGE = 8
 COEFFICIENT_GROUP_COUNT = 4
@@ -35,8 +37,8 @@ ActionHead = Literal["interval", "desired_retention"]
 @dataclass(frozen=True, slots=True)
 class FSRS6CostConditionedADRPolicy:
     coefficients: tuple[float, ...]
-    action_head: ActionHead = ACTION_HEAD_INTERVAL
-    feature_version: str = FEATURE_VERSION_INTERVAL_MONO
+    action_head: ActionHead = DEFAULT_ACTION_HEAD
+    feature_version: str = DEFAULT_FEATURE_VERSION
     cost_weight_min: float = 0.0
     cost_weight_max: float = 1024.0
     retention_min: float = 0.5
@@ -63,13 +65,19 @@ class FSRS6CostConditionedADRPolicy:
             bounds_raw = {}
         if not isinstance(bounds_raw, dict):
             raise ValueError("bounds must be an object when provided.")
+        feature_version = _require_str(
+            raw.get("feature_version", DEFAULT_FEATURE_VERSION),
+            "feature_version",
+        )
+        action_head = (
+            _action_head(raw["action_head"])
+            if "action_head" in raw
+            else _action_head_for_feature_version(feature_version)
+        )
         return cls(
             coefficients=_float_tuple(raw.get("coefficients"), "coefficients"),
-            action_head=_action_head(raw.get("action_head", ACTION_HEAD_INTERVAL)),
-            feature_version=_require_str(
-                raw.get("feature_version", FEATURE_VERSION_INTERVAL_MONO),
-                "feature_version",
-            ),
+            action_head=action_head,
+            feature_version=feature_version,
             cost_weight_min=_float(raw.get("cost_weight_min", 0.0), "cost_weight_min"),
             cost_weight_max=_float(
                 raw.get("cost_weight_max", 1024.0), "cost_weight_max"
@@ -119,7 +127,7 @@ class FSRS6CostConditionedADRPolicy:
             retention_min=retention_min,
             retention_max=retention_max,
             bounds=bounds,
-            title="FSRS6 cost-conditioned ADR retention baseline",
+            title="FSRS6 cost-conditioned ADR baseline",
         )
 
     def __post_init__(self) -> None:
@@ -369,6 +377,12 @@ def _action_head(value: Any) -> ActionHead:
     raise ValueError(
         f"action_head must be {ACTION_HEAD_INTERVAL!r} or {ACTION_HEAD_RETENTION!r}."
     )
+
+
+def _action_head_for_feature_version(feature_version: str) -> ActionHead:
+    if feature_version == FEATURE_VERSION_INTERVAL_MONO:
+        return ACTION_HEAD_INTERVAL
+    return DEFAULT_ACTION_HEAD
 
 
 def _require_str(value: Any, field_name: str) -> str:

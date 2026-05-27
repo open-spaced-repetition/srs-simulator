@@ -18,7 +18,9 @@ from experiments.single_card_tradeoff.cli.fsrs6_cost_adr_train import (  # noqa:
 )
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS  # noqa: E402
 from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
+    ACTION_HEAD_INTERVAL,
     ACTION_HEAD_RETENTION,
+    FEATURE_VERSION_INTERVAL_MONO,
     FSRS6CostConditionedADRPolicy,
 )
 from simulator.math.fsrs import FSRS6Params  # noqa: E402
@@ -42,7 +44,11 @@ class FitFSRS6CostADRRetentionInitFromIntervalTests(unittest.TestCase):
         self.assertAlmostEqual(stats["above_0_98_fraction"], 0.25)
 
     def test_implied_retention_table_can_seed_retention_policy_fit(self) -> None:
-        interval_policy = FSRS6CostConditionedADRPolicy(coefficients=(0.0,) * 24)
+        interval_policy = FSRS6CostConditionedADRPolicy(
+            coefficients=(0.0,) * 24,
+            action_head=ACTION_HEAD_INTERVAL,
+            feature_version=FEATURE_VERSION_INTERVAL_MONO,
+        )
         table, stats = fit_init._implied_retention_table(
             interval_policy=interval_policy,
             fsrs_params=FSRS6Params(DEFAULT_FSRS6_WEIGHTS),

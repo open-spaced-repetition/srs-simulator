@@ -84,6 +84,7 @@ trainer = "auto"
 max_lanes_per_batch = 6400
 
 [training.policy_search]
+action_head = "interval"
 coefficient_min = -12.0
 coefficient_max = 12.0
 retention_min = 0.50

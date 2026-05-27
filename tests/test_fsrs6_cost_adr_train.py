@@ -55,6 +55,7 @@ from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS, resolve_fsrs6_weights
 from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     ACTION_HEAD_INTERVAL,
     ACTION_HEAD_RETENTION,
+    FEATURE_VERSION_INTERVAL_MONO,
     FSRS6CostConditionedADRPolicy,
     STATE_FEATURE_COUNT_COMPACT,
 )
@@ -62,9 +63,15 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
 
 class FSRS6CostADRTrainTests(unittest.TestCase):
     def test_action_head_setting_accepts_retention_alias(self) -> None:
-        interval = CostADRActionSettings.from_mapping({})
+        default = CostADRActionSettings.from_mapping({})
+        interval = CostADRActionSettings.from_mapping({"action_head": "interval"})
         retention = CostADRActionSettings.from_mapping({"action_head": "retention"})
 
+        self.assertEqual(default.action_head, ACTION_HEAD_RETENTION)
+        self.assertEqual(
+            default.feature_version,
+            "fsrs6_cost_adr_retention_mono_v1",
+        )
         self.assertEqual(interval.action_head, ACTION_HEAD_INTERVAL)
         self.assertEqual(interval.feature_version, "fsrs6_cost_adr_interval_mono_v1")
         self.assertEqual(retention.action_head, ACTION_HEAD_RETENTION)
@@ -530,6 +537,7 @@ command_template = [
 ]
 
 [training.policy_search]
+action_head = "interval"
 coefficient_min = -64.0
 coefficient_max = 64.0
 retention_min = 0.50
@@ -718,6 +726,7 @@ command_template = [
 ]
 
 [training.policy_search]
+action_head = "interval"
 coefficient_min = -64.0
 coefficient_max = 64.0
 retention_min = 0.50
@@ -1067,6 +1076,7 @@ seed = 7
                 FSRS6CostConditionedADRPolicy(
                     coefficients=(coefficient,) + (0.0,) * 23,
                     action_head=ACTION_HEAD_INTERVAL,
+                    feature_version=FEATURE_VERSION_INTERVAL_MONO,
                     cost_weight_min=0.0,
                     cost_weight_max=1024.0,
                     retention_min=0.50,
@@ -1116,6 +1126,7 @@ command_template = [
 ]
 
 [training.policy_search]
+action_head = "interval"
 coefficient_min = -12.0
 coefficient_max = 12.0
 retention_min = 0.50

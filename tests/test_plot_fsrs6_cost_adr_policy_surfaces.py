@@ -12,6 +12,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.rl_scheduler import plot_fsrs6_cost_adr_policy_surfaces as plot  # noqa: E402
 from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
+    ACTION_HEAD_INTERVAL,
+    FEATURE_VERSION_INTERVAL_MONO,
     FSRS6CostConditionedADRPolicy,
 )
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS  # noqa: E402
@@ -30,7 +32,11 @@ def _write_policy(
     policy_dir = root / f"user_{user_id}"
     policy_dir.mkdir(parents=True, exist_ok=True)
     policy_path = policy_dir / "policy.json"
-    FSRS6CostConditionedADRPolicy(coefficients=COEFFICIENTS).write_json(policy_path)
+    FSRS6CostConditionedADRPolicy(
+        coefficients=COEFFICIENTS,
+        action_head=ACTION_HEAD_INTERVAL,
+        feature_version=FEATURE_VERSION_INTERVAL_MONO,
+    ).write_json(policy_path)
     metadata: dict[str, object] = {"training_user_ids": [user_id]}
     if metadata_cost_weights is not None:
         metadata["cost_weights"] = metadata_cost_weights
@@ -80,7 +86,11 @@ class PlotFSRS6CostADRPolicySurfacesTests(unittest.TestCase):
         self.assertEqual(entries[0].cost_weights, (1.0, 2.0))
 
     def test_builds_log_interval_surface_arrays(self) -> None:
-        policy = FSRS6CostConditionedADRPolicy(coefficients=COEFFICIENTS)
+        policy = FSRS6CostConditionedADRPolicy(
+            coefficients=COEFFICIENTS,
+            action_head=ACTION_HEAD_INTERVAL,
+            feature_version=FEATURE_VERSION_INTERVAL_MONO,
+        )
 
         z_values, customdata = plot._build_surface_arrays(
             policy=policy,
@@ -99,7 +109,11 @@ class PlotFSRS6CostADRPolicySurfacesTests(unittest.TestCase):
         self.assertAlmostEqual(z_values[0][0], 0.0)
 
     def test_builds_retention_surface_arrays_from_interval_policy(self) -> None:
-        policy = FSRS6CostConditionedADRPolicy(coefficients=COEFFICIENTS)
+        policy = FSRS6CostConditionedADRPolicy(
+            coefficients=COEFFICIENTS,
+            action_head=ACTION_HEAD_INTERVAL,
+            feature_version=FEATURE_VERSION_INTERVAL_MONO,
+        )
         params = FSRS6Params(DEFAULT_FSRS6_WEIGHTS)
 
         z_values, customdata = plot._build_surface_arrays(

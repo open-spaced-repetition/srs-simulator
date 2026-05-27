@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from experiments.rl_scheduler.generate_experiment_report import (
     _display_path,
+    _normalize_strategy_label,
     generate_report,
 )
 
@@ -248,6 +249,12 @@ def _write_run(
 
 
 class GenerateExperimentReportTests(unittest.TestCase):
+    def test_strategy_label_omits_redundant_cost_adr_retention_head(self) -> None:
+        self.assertEqual(
+            _normalize_strategy_label("Cost ADR retention-head interval-init wide"),
+            "Cost ADR interval-init wide",
+        )
+
     def test_generates_summary_and_markdown_from_machine_summaries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
