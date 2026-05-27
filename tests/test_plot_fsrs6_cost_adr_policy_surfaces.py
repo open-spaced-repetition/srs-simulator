@@ -14,6 +14,8 @@ from experiments.rl_scheduler import plot_fsrs6_cost_adr_policy_surfaces as plot
 from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     FSRS6CostConditionedADRPolicy,
 )
+from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS  # noqa: E402
+from simulator.math.fsrs import FSRS6Params  # noqa: E402
 
 
 COEFFICIENTS = (0.0,) * 24
@@ -95,6 +97,25 @@ class PlotFSRS6CostADRPolicySurfacesTests(unittest.TestCase):
         self.assertEqual(customdata[0][0][0], 0.0)
         self.assertGreaterEqual(customdata[0][0][2], 1.0)
         self.assertAlmostEqual(z_values[0][0], 0.0)
+
+    def test_builds_retention_surface_arrays_from_interval_policy(self) -> None:
+        policy = FSRS6CostConditionedADRPolicy(coefficients=COEFFICIENTS)
+        params = FSRS6Params(DEFAULT_FSRS6_WEIGHTS)
+
+        z_values, customdata = plot._build_surface_arrays(
+            policy=policy,
+            fsrs6_params=params,
+            cost_weight=0.0,
+            s_grid=(1.0, 10.0),
+            d_grid=(1.0, 5.0),
+            z_mode="retention",
+        )
+
+        self.assertEqual(len(z_values), 2)
+        self.assertEqual(len(z_values[0]), 2)
+        self.assertAlmostEqual(z_values[0][0], 0.9)
+        self.assertAlmostEqual(customdata[0][0][2], 1.0)
+        self.assertAlmostEqual(customdata[0][0][3], z_values[0][0])
 
 
 if __name__ == "__main__":

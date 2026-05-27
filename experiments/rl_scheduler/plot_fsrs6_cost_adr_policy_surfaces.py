@@ -17,13 +17,24 @@ if str(REPO_ROOT) not in sys.path:
 from simulator.batched_sweep.fsrs6_cost_adr_policy import (  # noqa: E402
     DEFAULT_COST_WEIGHTS,
 )
+from simulator.benchmark_loader import (  # noqa: E402
+    load_benchmark_weights,
+    parse_result_overrides,
+    resolve_benchmark_root,
+)
 from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     ACTION_HEAD_INTERVAL,
+    ACTION_HEAD_RETENTION,
     FSRS6CostConditionedADRPolicy,
     normalized_cost_weight,
 )
+from simulator.math.fsrs import (  # noqa: E402
+    FSRS6Params,
+    fsrs6_forgetting_curve,
+    fsrs6_next_interval,
+)
 
-ZMode = Literal["interval", "log_interval"]
+ZMode = Literal["interval", "log_interval", "retention"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,12 +256,146 @@ def _scale_visibility(trace_count: int, visible_index: int | None = None) -> lis
 def _interval_z(interval_days: float, z_mode: ZMode) -> float:
     if z_mode == "interval":
         return interval_days
+    if z_mode == "retention":
+        raise ValueError("retention z mode requires a retention value.")
     return math.log10(max(interval_days, 1e-12))
+
+
+def _z_axis_title(z_mode: ZMode) -> str:
+    if z_mode == "retention":
+        return "Retention"
+    if z_mode == "log_interval":
+        return "log10(interval days)"
+    return "Interval days"
+
+
+def _z_hover_line(z_mode: ZMode) -> str:
+    if z_mode == "retention":
+        return "retention_z=%{z:.4f}<extra></extra>"
+    if z_mode == "log_interval":
+        return "log10_interval=%{z:.3f}<extra></extra>"
+    return "interval_z=%{z:.3g}<extra></extra>"
+
+
+def _hovertemplate(
+    z_mode: ZMode,
+    *,
+    show_interval: bool,
+    show_retention: bool,
+) -> str:
+    lines = [
+        "cost_weight=%{customdata[0]:g}",
+        "normalized_w=%{customdata[1]:.3f}",
+        "S=%{x:.3g}",
+        "D=%{y:.3g}",
+    ]
+    if show_interval:
+        lines.append("interval_days=%{customdata[2]:.3g}")
+    if show_retention:
+        lines.append("retention=%{customdata[3]:.4f}")
+    lines.append(_z_hover_line(z_mode))
+    return "<br>".join(lines)
+
+
+def _entry_needs_fsrs6_params(entry: PolicyEntry, z_mode: ZMode) -> bool:
+    if z_mode == "retention":
+        return entry.policy.action_head == ACTION_HEAD_INTERVAL
+    return entry.policy.action_head == ACTION_HEAD_RETENTION
+
+
+def _load_fsrs6_params(
+    *,
+    user_id: int,
+    srs_benchmark_root: Path | None,
+    benchmark_result: str | None,
+    benchmark_partition: str | None,
+) -> FSRS6Params:
+    benchmark_root = resolve_benchmark_root(REPO_ROOT, srs_benchmark_root)
+    overrides = parse_result_overrides(benchmark_result)
+    try:
+        weights = load_benchmark_weights(
+            repo_root=REPO_ROOT,
+            benchmark_root=benchmark_root,
+            environment="fsrs6",
+            user_id=user_id,
+            partition_key=benchmark_partition or "0",
+            overrides=overrides,
+            short_term=False,
+        )
+        return FSRS6Params(tuple(weights))
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        raise SystemExit(
+            f"Could not load FSRS6 weights for user {user_id}: {exc}"
+        ) from exc
+
+
+def _load_needed_fsrs6_params(
+    entries: Sequence[PolicyEntry],
+    *,
+    z_mode: ZMode,
+    srs_benchmark_root: Path | None,
+    benchmark_result: str | None,
+    benchmark_partition: str | None,
+) -> dict[int, FSRS6Params]:
+    needed_user_ids = sorted(
+        {entry.user_id for entry in entries if _entry_needs_fsrs6_params(entry, z_mode)}
+    )
+    return {
+        user_id: _load_fsrs6_params(
+            user_id=user_id,
+            srs_benchmark_root=srs_benchmark_root,
+            benchmark_result=benchmark_result,
+            benchmark_partition=benchmark_partition,
+        )
+        for user_id in needed_user_ids
+    }
+
+
+def _evaluate_policy_point(
+    *,
+    policy: FSRS6CostConditionedADRPolicy,
+    fsrs6_params: FSRS6Params | None,
+    stability: float,
+    difficulty: float,
+    cost_weight: float,
+) -> tuple[float, float]:
+    if policy.action_head == ACTION_HEAD_INTERVAL:
+        interval_days = policy.evaluate_interval(
+            stability=stability,
+            difficulty=difficulty,
+            cost_weight=cost_weight,
+        )
+        retention = (
+            math.nan
+            if fsrs6_params is None
+            else fsrs6_forgetting_curve(fsrs6_params, interval_days, stability)
+        )
+        return interval_days, retention
+    if policy.action_head == ACTION_HEAD_RETENTION:
+        retention = policy.evaluate_retention(
+            stability=stability,
+            difficulty=difficulty,
+            cost_weight=cost_weight,
+        )
+        interval_days = (
+            math.nan
+            if fsrs6_params is None
+            else fsrs6_next_interval(fsrs6_params, stability, retention)
+        )
+        return interval_days, retention
+    raise AssertionError(f"Unexpected action_head={policy.action_head!r}.")
+
+
+def _surface_z(interval_days: float, retention: float, z_mode: ZMode) -> float:
+    if z_mode == "retention":
+        return retention
+    return _interval_z(interval_days, z_mode)
 
 
 def _build_surface_arrays(
     *,
     policy: FSRS6CostConditionedADRPolicy,
+    fsrs6_params: FSRS6Params | None = None,
     cost_weight: float,
     s_grid: Sequence[float],
     d_grid: Sequence[float],
@@ -267,13 +412,17 @@ def _build_surface_arrays(
         z_row: list[float] = []
         customdata_row: list[list[float]] = []
         for s_value in s_grid:
-            interval_days = policy.evaluate_interval(
+            interval_days, retention = _evaluate_policy_point(
+                policy=policy,
+                fsrs6_params=fsrs6_params,
                 stability=s_value,
                 difficulty=d_value,
                 cost_weight=cost_weight,
             )
-            z_row.append(_interval_z(interval_days, z_mode))
-            customdata_row.append([cost_weight, normalized_weight, interval_days])
+            z_row.append(_surface_z(interval_days, retention, z_mode))
+            customdata_row.append(
+                [cost_weight, normalized_weight, interval_days, retention]
+            )
         z_rows.append(z_row)
         customdata_rows.append(customdata_row)
     return z_rows, customdata_rows
@@ -291,6 +440,7 @@ def _write_user_plot(
     d_max: float | None,
     opacity: float,
     z_mode: ZMode,
+    fsrs6_params: FSRS6Params | None,
 ) -> Path:
     try:
         import plotly.graph_objects as go
@@ -299,10 +449,14 @@ def _write_user_plot(
             "plotly is required for this tool. Install dependencies with `uv sync`."
         ) from exc
 
-    if entry.policy.action_head != ACTION_HEAD_INTERVAL:
+    if entry.policy.action_head not in {ACTION_HEAD_INTERVAL, ACTION_HEAD_RETENTION}:
         raise SystemExit(
             f"{entry.path} uses action_head={entry.policy.action_head!r}; "
-            "this visualizer currently expects interval policies."
+            "this visualizer expects interval or desired_retention policies."
+        )
+    if _entry_needs_fsrs6_params(entry, z_mode) and fsrs6_params is None:
+        raise SystemExit(
+            f"{entry.path} needs FSRS6 user weights for --z-mode {z_mode!r}."
         )
 
     bounds = entry.policy.bounds
@@ -322,11 +476,18 @@ def _write_user_plot(
     z_min = math.inf
     z_max = -math.inf
     fig = go.Figure()
+    show_interval_hover = (
+        entry.policy.action_head == ACTION_HEAD_INTERVAL or fsrs6_params is not None
+    )
+    show_retention_hover = (
+        entry.policy.action_head == ACTION_HEAD_RETENTION or fsrs6_params is not None
+    )
     for index, (cost_weight, color_value) in enumerate(
         zip(cost_weights, color_values, strict=True)
     ):
         z_values, customdata = _build_surface_arrays(
             policy=entry.policy,
+            fsrs6_params=fsrs6_params,
             cost_weight=cost_weight,
             s_grid=s_grid,
             d_grid=d_grid,
@@ -360,17 +521,10 @@ def _write_user_plot(
                     "ticktext": [_cost_weight_label(weight) for weight in cost_weights],
                 },
                 name=f"w={_cost_weight_label(cost_weight)}",
-                hovertemplate=(
-                    "cost_weight=%{customdata[0]:g}<br>"
-                    "normalized_w=%{customdata[1]:.3f}<br>"
-                    "S=%{x:.3g}<br>"
-                    "D=%{y:.3g}<br>"
-                    "interval_days=%{customdata[2]:.3g}<br>"
-                    + (
-                        "log10_interval=%{z:.3f}<extra></extra>"
-                        if z_mode == "log_interval"
-                        else "interval_z=%{z:.3g}<extra></extra>"
-                    )
+                hovertemplate=_hovertemplate(
+                    z_mode,
+                    show_interval=show_interval_hover,
+                    show_retention=show_retention_hover,
                 ),
             )
         )
@@ -417,21 +571,15 @@ def _write_user_plot(
 
     if math.isfinite(z_min) and math.isfinite(z_max) and z_min < z_max:
         zaxis: dict[str, Any] = {
-            "title": "log10(interval days)"
-            if z_mode == "log_interval"
-            else "Interval days",
+            "title": _z_axis_title(z_mode),
             "range": [z_min, z_max],
         }
     else:
-        zaxis = {
-            "title": "log10(interval days)"
-            if z_mode == "log_interval"
-            else "Interval days"
-        }
+        zaxis = {"title": _z_axis_title(z_mode)}
     policy_text = "" if entry.policy_index is None else f", policy={entry.policy_index}"
     fig.update_layout(
         title=(
-            "FSRS6 Cost-ADR interval policy surfaces: "
+            f"FSRS6 Cost-ADR {z_mode} policy surfaces: "
             f"user {entry.user_id}{policy_text}"
         ),
         scene={
@@ -473,9 +621,7 @@ def _write_user_plot(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description=(
-            "Plot FSRS6 Cost-ADR interval policy surfaces by user and cost weight."
-        ),
+        description=("Plot FSRS6 Cost-ADR policy surfaces by user and cost weight."),
         allow_abbrev=False,
     )
     source = parser.add_mutually_exclusive_group(required=True)
@@ -512,9 +658,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--d-max", type=float, default=None)
     parser.add_argument(
         "--z-mode",
-        choices=("log_interval", "interval"),
-        default="log_interval",
-        help="Use log10(interval days) or raw interval days on the z axis.",
+        choices=("retention", "log_interval", "interval"),
+        default="retention",
+        help=(
+            "Use retention, log10(interval days), or raw interval days on the z axis. "
+            "Retention mode converts interval-head policies through the user's FSRS6 "
+            "forgetting curve."
+        ),
+    )
+    parser.add_argument(
+        "--srs-benchmark-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional srs-benchmark root for FSRS6 user weights. Required only when "
+            "the selected z mode needs interval/retention conversion."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-result",
+        default=None,
+        help="Optional benchmark result override, e.g. fsrs6=FSRS-6-recency.",
+    )
+    parser.add_argument(
+        "--benchmark-partition",
+        default=None,
+        help="Benchmark parameter partition key. Default: 0.",
     )
     parser.add_argument(
         "--opacity",
@@ -550,6 +719,13 @@ def main(argv: list[str] | None = None) -> int:
         end_user=args.end_user,
         cost_weights=_parse_csv_floats(args.cost_weights),
     )
+    fsrs6_params_by_user = _load_needed_fsrs6_params(
+        entries,
+        z_mode=args.z_mode,
+        srs_benchmark_root=args.srs_benchmark_root,
+        benchmark_result=args.benchmark_result,
+        benchmark_partition=args.benchmark_partition,
+    )
     output_paths = [
         _write_user_plot(
             entry=entry,
@@ -562,6 +738,7 @@ def main(argv: list[str] | None = None) -> int:
             d_max=args.d_max,
             opacity=args.opacity,
             z_mode=args.z_mode,
+            fsrs6_params=fsrs6_params_by_user.get(entry.user_id),
         )
         for entry in entries
     ]
