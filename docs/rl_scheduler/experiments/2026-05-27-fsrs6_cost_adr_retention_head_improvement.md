@@ -131,8 +131,8 @@ Stages passed: dry-run, preflight, stage-baseline, train-overfit, sweep, build-p
 
 GPU monitor:
 
-- train-overfit shared-memory spill: false, peak single-adapter shared memory 297.8 MiB
-- sweep shared-memory spill: false, peak single-adapter shared memory 209.5 MiB
+- train-overfit shared-memory spill: false, peak single-adapter shared memory 233.7 MiB
+- sweep shared-memory spill: false, peak single-adapter shared memory 215.5 MiB
 
 ## Results
 

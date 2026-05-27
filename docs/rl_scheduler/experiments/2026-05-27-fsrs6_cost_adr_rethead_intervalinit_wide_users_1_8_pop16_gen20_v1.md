@@ -39,8 +39,8 @@ Analysis summaries:
 
 | run | stage | device | elapsed seconds | user-days/s | candidate-days/s |
 | --- | --- | --- | --- | --- | --- |
-| Cost ADR retention-head interval-init wide schedHV stdpre | sweep | cuda | 52.1 | 280.3 | - |
-| Cost ADR retention-head interval-init wide schedHV stdpre | train-overfit | cuda | 777.4 | 18.8 | 300.5 |
+| Cost ADR retention-head interval-init wide schedHV stdpre | sweep | cuda | 46.3 | 315.7 | - |
+| Cost ADR retention-head interval-init wide schedHV stdpre | train-overfit | cuda | 800.6 | 18.2 | 291.8 |
 | Cost ADR interval-head schedHV stdpre | sweep | cuda | 50.9 | 286.7 | - |
 | Cost ADR interval-head schedHV stdpre | train-overfit | cuda | 764.4 | 19.1 | 305.6 |
 
@@ -48,15 +48,15 @@ Analysis summaries:
 
 | run | git commit | dirty | Python | PyTorch | CUDA | device |
 | --- | --- | --- | --- | --- | --- | --- |
-| Cost ADR retention-head interval-init wide schedHV stdpre | 01bac3badf019070099576717f0448ff470c722e | true | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
+| Cost ADR retention-head interval-init wide schedHV stdpre | b05b0b4e8c1f59e21600cfcd1347fe903ddeb49b | false | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
 | Cost ADR interval-head schedHV stdpre | 6211afb0d88c48e24ff273271fded4ad939ed887 | false | 3.13.11 | 2.9.1+cu126 | 12.6 | NVIDIA GeForce RTX 4090 D |
 
 ## GPU Monitor
 
 | run | stage | summary | shared peak MiB | summed peak MiB | spill | nvidia-smi peak MiB |
 | --- | --- | --- | --- | --- | --- | --- |
-| Cost ADR retention-head interval-init wide schedHV stdpre | sweep | `artifacts/rl_scheduler/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1_markov_off/sweep/gpu_monitor/summary.json` | 209.5 | 227.7 | False | 5,808.0 |
-| Cost ADR retention-head interval-init wide schedHV stdpre | train-overfit | `artifacts/rl_scheduler/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 297.8 | 316.0 | False | 5,855.0 |
+| Cost ADR retention-head interval-init wide schedHV stdpre | sweep | `artifacts/rl_scheduler/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1_markov_off/sweep/gpu_monitor/summary.json` | 215.5 | 233.7 | False | 5,756.0 |
+| Cost ADR retention-head interval-init wide schedHV stdpre | train-overfit | `artifacts/rl_scheduler/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 233.7 | 251.9 | False | 5,824.0 |
 | Cost ADR interval-head schedHV stdpre | sweep | `artifacts/rl_scheduler/fsrs6_cost_adr_schedhv_stdpre_users_1_8/fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off/sweep/gpu_monitor/summary.json` | 171.3 | 189.5 | False | 5,390.0 |
 | Cost ADR interval-head schedHV stdpre | train-overfit | `artifacts/rl_scheduler/fsrs6_cost_adr_schedhv_stdpre_users_1_8/fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off/train-overfit/gpu_monitor/summary.json` | 376.4 | 394.6 | False | 5,380.0 |
 
