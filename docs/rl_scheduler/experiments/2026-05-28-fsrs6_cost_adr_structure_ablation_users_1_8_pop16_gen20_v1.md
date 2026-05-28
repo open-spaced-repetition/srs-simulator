@@ -6,12 +6,14 @@ Date: 2026-05-28
 
 Train compressed Cost-ADR desired-retention policies on the first eight users in
 the FSRS6 environment and compare whether the 24-parameter structure can be
-reduced without losing Pareto quality.
+reduced without losing Pareto quality. A supplemental LSTM-environment sweep was
+then run from the same trained policy artifacts to check transfer.
 
-All runs use users 1-8, FSRS6 training and evaluation, pop16/gen20 CMA-ES,
+All training runs use users 1-8, the FSRS6 environment, pop16/gen20 CMA-ES,
 `sigma0 = 1.0`, no coefficient preconditioning, the first-eight
 interval-implied-R mean initializer projected into each compressed structure,
-and the matched 16 cost weights.
+and the matched 16 cost weights. The main evaluation is FSRS6; the supplemental
+section reruns the sweep in LSTM.
 
 ## Runs
 
@@ -23,8 +25,15 @@ and the matched 16 cost weights.
 | drop `sqrt_z + x_d^2` | `fsrs6_cost_adr_rethead_ablate_drop_sqrt_z_xd2_users_1_8_pop16_gen20_v1.toml` | 15 | both above |
 | `z2` only | `fsrs6_cost_adr_rethead_ablate_z2_only_users_1_8_pop16_gen20_v1.toml` | 12 | `sqrt(z)` and `z` cost bases |
 
-All four new ablation runs passed `dry-run`, `preflight`, `stage-baseline`,
-`train-overfit`, `sweep`, `build-pareto`, and `analyze-pareto`.
+All four new FSRS6 ablation runs passed `dry-run`, `preflight`,
+`stage-baseline`, `train-overfit`, `sweep`, `build-pareto`, and
+`analyze-pareto`.
+
+Supplemental LSTM eval runs were created under
+`artifacts/rl_scheduler/fsrs6_cost_adr_rethead_structure_ablation_lstm_eval_users_1_8`.
+They reuse the FSRS6-trained `train-overfit` artifacts and rerun only
+`stage-baseline`, `sweep`, `build-pareto`, and `analyze-pareto` with
+`envs = ["lstm"]`.
 
 ## Results
 
@@ -50,6 +59,30 @@ Per-user FSRS6 HV delta:
 | drop `sqrt_z + x_d^2` | 14,708 | 30,097 | 3,659 | 40,098 | 9,286 | 4,415 | 1,302 | 2,511 |
 | `z2` only | 15,084 | 25,948 | 3,951 | 38,071 | 9,419 | 3,308 | 1,291 | 2,424 |
 
+## LSTM Eval Supplement
+
+These rows evaluate the same FSRS6-trained policies in the LSTM environment
+against the FSRS6 baseline scheduler. The 24-parameter full reference is the
+existing no-preconditioning run with both FSRS6 and LSTM eval enabled.
+
+| variant | params | LSTM HV delta | HV / baseline | time-save AUC | relative time-save AUC | target span coverage | memory-lift AUC | relative memory-lift AUC | budget span coverage | frontier points |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| full reference | 24 | 26,097 | 0.810% | -0.724 | 2.891% | 99.054% | 41.32 | 0.641% | 91.286% | 121 |
+| drop `sqrt_z` | 18 | 47,522 | 1.476% | 1.102 | 5.293% | 98.588% | 42.61 | 0.644% | 90.224% | 125 |
+| drop `x_d^2` | 20 | 51,870 | 1.611% | 1.782 | 5.312% | 97.349% | 40.66 | 0.615% | 94.015% | 123 |
+| drop `sqrt_z + x_d^2` | 15 | 54,322 | 1.687% | 2.411 | 5.976% | 94.562% | 56.64 | 0.882% | 77.765% | 119 |
+| `z2` only | 12 | 39,437 | 1.225% | -0.012 | 3.457% | 96.105% | 38.92 | 0.595% | 81.336% | 124 |
+
+Per-user LSTM HV delta:
+
+| variant | u1 | u2 | u3 | u4 | u5 | u6 | u7 | u8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| full reference | 13,738 | -5,009 | 2,251 | 8,683 | 742 | 4,073 | 852 | 768 |
+| drop `sqrt_z` | 13,179 | 1,585 | 2,976 | 18,966 | 2,602 | 6,843 | 751 | 618 |
+| drop `x_d^2` | 17,186 | 7,928 | 2,833 | 14,748 | 3,603 | 4,385 | 569 | 618 |
+| drop `sqrt_z + x_d^2` | 10,932 | 15,333 | 2,847 | 16,905 | 2,847 | 3,914 | 702 | 842 |
+| `z2` only | 11,631 | 5,395 | 3,045 | 17,366 | 769 | -225 | 830 | 627 |
+
 ## Interpretation
 
 The clearest result is that `sqrt_z` is not needed at this budget. Dropping it
@@ -74,6 +107,14 @@ Recommended next default candidate: `drop_sqrt_z` at 18 parameters. The
 15-parameter `drop_sqrt_z + x_d^2` variant is worth a second-seed confirmation
 because it won primary HV here but with lower coverage.
 
+The LSTM supplement strengthens the compression result. Every compressed
+variant beats the 24-parameter reference on LSTM HV, and the biggest gains come
+from removing `sqrt_z`. The 15-parameter `drop_sqrt_z + x_d^2` variant again has
+the best HV and time-save AUC, but its budget coverage is also the weakest, so
+it remains the aggressive option. The 18-parameter `drop_sqrt_z` variant is the
+best conservative default: it nearly doubles LSTM HV delta versus the full
+reference while keeping target and budget coverage close to the full model.
+
 ## GPU Monitor
 
 | variant | stage | shared-memory spill | peak shared memory | peak `nvidia-smi` memory |
@@ -88,3 +129,12 @@ because it won primary HV here but with lower coverage.
 | `z2` only | sweep | false | 224,309,248 bytes | 12,439 MiB |
 
 No run exceeded the 1 GiB shared-memory spill threshold.
+
+Supplemental LSTM sweep GPU monitor:
+
+| variant | stage | shared-memory spill | peak shared memory | peak `nvidia-smi` memory |
+| --- | --- | --- | ---: | ---: |
+| drop `sqrt_z` | sweep | false | 255,275,008 bytes | 10,938 MiB |
+| drop `x_d^2` | sweep | false | 259,006,464 bytes | 10,935 MiB |
+| drop `sqrt_z + x_d^2` | sweep | false | 258,465,792 bytes | 10,754 MiB |
+| `z2` only | sweep | false | 259,215,360 bytes | 10,936 MiB |
