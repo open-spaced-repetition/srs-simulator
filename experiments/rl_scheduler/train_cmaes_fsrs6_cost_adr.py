@@ -87,10 +87,14 @@ SUPPORTED_INITIAL_MEAN_SOURCES = frozenset(
 )
 COEFFICIENT_PRECONDITIONING_NONE = "none"
 COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1 = "first8_distill24_std_v1"
+COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1 = (
+    "first8_interval_implied_r_std_v1"
+)
 SUPPORTED_COEFFICIENT_PRECONDITIONING = frozenset(
     {
         COEFFICIENT_PRECONDITIONING_NONE,
         COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1,
+        COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1,
     }
 )
 FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS = (
@@ -172,6 +176,32 @@ FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS = (
     -1.989763856381318,
     -19.44268682737919,
     -0.1742723255136314,
+)
+FIRST8_INTERVAL_IMPLIED_R_SAMPLE_STD_V1_COEFFICIENTS = (
+    0.794616027938149,
+    2.840829095759368,
+    0.7574331520568817,
+    1.303864493073628,
+    2.731777766355109,
+    0.9313203599241034,
+    6.33549967917559,
+    20.71844687217026,
+    4.940524971983666,
+    5.77153640556487,
+    6.542202107356353,
+    4.285613159537444,
+    5.095577955781181,
+    19.80575974185329,
+    4.036546177344559,
+    5.459472997195848,
+    13.01628741170776,
+    2.508090442650957,
+    3.390480772126621,
+    11.33997455233803,
+    3.0959266339869,
+    6.965102349252314,
+    7.231956212091587,
+    2.753934726879402,
 )
 SUPPORTED_ACTION_HEADS = frozenset({ACTION_HEAD_INTERVAL, ACTION_HEAD_RETENTION})
 ACTION_HEAD_FEATURE_VERSIONS = {
@@ -1376,13 +1406,14 @@ def _coefficient_search_transform(
             search_bounds=actual_bounds,
         )
 
-    if (
-        preconditioning_settings.mode
-        != COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1
-    ):
+    if preconditioning_settings.mode not in {
+        COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1,
+        COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1,
+    }:
         allowed = ", ".join(sorted(SUPPORTED_COEFFICIENT_PRECONDITIONING))
         raise ValueError(f"coefficient_preconditioning must be one of: {allowed}.")
-    if len(FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS) != PARAMETER_COUNT:
+    scale_source = _preconditioning_scale_source(preconditioning_settings.mode)
+    if len(scale_source) != PARAMETER_COUNT:
         raise ValueError(
             "Built-in Cost-ADR coefficient preconditioning scale must have "
             f"{PARAMETER_COUNT} values."
@@ -1394,7 +1425,7 @@ def _coefficient_search_transform(
             preconditioning_settings.scale_floor,
             value * preconditioning_settings.scale_multiplier,
         )
-        for value in FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS
+        for value in scale_source
     )
     lower, upper = actual_bounds
     search_lower = tuple(
@@ -1413,6 +1444,14 @@ def _coefficient_search_transform(
         search_initial_mean=(0.0,) * PARAMETER_COUNT,
         search_bounds=(search_lower, search_upper),
     )
+
+
+def _preconditioning_scale_source(mode: str) -> tuple[float, ...]:
+    if mode == COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1:
+        return FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS
+    if mode == COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1:
+        return FIRST8_INTERVAL_IMPLIED_R_SAMPLE_STD_V1_COEFFICIENTS
+    raise ValueError(f"Unsupported coefficient_preconditioning mode {mode!r}.")
 
 
 def _optimizer_settings_for_search_transform(

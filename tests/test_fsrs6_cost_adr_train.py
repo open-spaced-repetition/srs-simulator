@@ -20,12 +20,14 @@ from experiments.single_card_tradeoff.cli.fsrs6_cost_adr_train import (  # noqa:
 )
 from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (  # noqa: E402
     COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1,
+    COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1,
     CoefficientPreconditioningSettings,
     CostADRTrainJob,
     CoverageObjectiveSettings,
     FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS,
     FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS,
     FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS,
+    FIRST8_INTERVAL_IMPLIED_R_SAMPLE_STD_V1_COEFFICIENTS,
     HYPERVOLUME_DELTA_MODE_SCHEDULER_VS_BASELINE,
     HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION,
     INITIAL_MEAN_SOURCE_FIRST8_DISTILL24_MEAN_V1,
@@ -236,6 +238,64 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
         ):
             self.assertAlmostEqual(mapped[index], mean + scale)
         self.assertEqual(transform.coefficients_from_search([999.0] * 24), (64.0,) * 24)
+
+    def test_interval_implied_r_std_preconditioning_uses_retention_scale(
+        self,
+    ) -> None:
+        settings = PolicySearchSettings.from_mapping(
+            {
+                "coefficient_min": -64.0,
+                "coefficient_max": 64.0,
+                "retention_min": 0.30,
+                "retention_max": 0.995,
+                "baseline_desired_retention": 0.9,
+            }
+        )
+        optimizer = optimizer_settings_from_mapping(
+            {
+                "name": "cma_es",
+                "population_size": 2,
+                "generations": 1,
+                "sigma0": 1.0,
+                "initial_mean": list(FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS),
+            },
+            settings=settings,
+        )
+        preconditioning = CoefficientPreconditioningSettings.from_mapping(
+            {
+                "coefficient_preconditioning": (
+                    COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1
+                ),
+                "coefficient_scale_floor": 0.5,
+                "coefficient_scale_multiplier": 1.0,
+            }
+        )
+
+        transform = _coefficient_search_transform(
+            optimizer_settings=optimizer,
+            preconditioning_settings=preconditioning,
+        )
+
+        expected_scale = tuple(
+            max(0.5, value)
+            for value in FIRST8_INTERVAL_IMPLIED_R_SAMPLE_STD_V1_COEFFICIENTS
+        )
+        self.assertEqual(
+            transform.mode,
+            COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1,
+        )
+        self.assertEqual(
+            transform.origin,
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS,
+        )
+        self.assertEqual(transform.scale, expected_scale)
+        self.assertEqual(transform.search_initial_mean, (0.0,) * 24)
+        self.assertGreater(
+            transform.scale[7], FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS[7]
+        )
+        self.assertGreater(
+            transform.scale[8], FIRST8_DISTILL24_SAMPLE_STD_V1_COEFFICIENTS[8]
+        )
 
     def test_hypervolume_delta_mode_defaults_to_union_contribution(self) -> None:
         self.assertEqual(
