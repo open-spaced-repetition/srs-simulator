@@ -2364,6 +2364,52 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
         self.assertEqual([job.user_id for job in batches[0]][:3], [1, 2, 3])
         self.assertEqual([job.user_id for job in batches[-1]], [126, 127, 128])
 
+    def test_cost_adr_compressed_128_config_uses_power_of_two_user_batches(
+        self,
+    ) -> None:
+        from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (
+            CostADRActionSettings,
+        )
+        from simulator.experiment_infra.training_batch import (
+            estimate_lanes_per_job,
+            resolve_in_process_trainer,
+        )
+
+        config = ExperimentConfig.from_toml(
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_128_pop16_gen20_v1.toml"
+        )
+        trainer = resolve_in_process_trainer(
+            configured_trainer=config.training_batch.trainer,
+            command_template=config.train_command_template,
+        )
+        lanes_per_job = estimate_lanes_per_job(trainer=trainer, config=config)
+        action_settings = CostADRActionSettings.from_mapping(
+            config.training_policy_search
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jobs = [_train_job(root, user_id, "0") for user_id in range(1, 129)]
+            batches = _build_train_user_batches(
+                jobs=jobs,
+                batch_size=config.training_batch.batch_size,
+                max_lanes_per_batch=config.training_batch.max_lanes_per_batch,
+                lanes_per_job=lanes_per_job,
+            )
+
+        self.assertEqual(trainer, "fsrs6_cost_adr_cmaes")
+        self.assertEqual(action_settings.parameter_count, 15)
+        self.assertEqual(config.training_batch.batch_size, 32)
+        self.assertEqual(config.training_batch.max_lanes_per_batch, 8192)
+        self.assertEqual(lanes_per_job, 256)
+        self.assertEqual([len(batch) for batch in batches], [32, 32, 32, 32])
+        self.assertEqual(
+            [[job.user_id for job in batch][0] for batch in batches],
+            [1, 33, 65, 97],
+        )
+
     def test_train_overfit_rejects_missing_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

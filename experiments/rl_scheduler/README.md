@@ -307,6 +307,12 @@ Representative profiles:
   first-128-user scale-up of the scheduler-HV std-preconditioned Cost-ADR
   profile. It keeps pop16/gen20 CMA-ES, the matched 16 cost weights, and
   compares against `fsrs6_adr_portfolio_users_1_128_pop16_v1.toml`.
+- `configs/fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_128_pop16_gen20_v1.toml`:
+  the first-128-user scale-up of the default 15-parameter compressed
+  retention-head Cost-ADR profile. It keeps pop16/gen20, the matched 16 cost
+  weights, first-eight interval-implied R mean initialization, no coefficient
+  preconditioning, and groups training users into 32-user batches so each
+  training generation uses exactly 8192 lanes.
 - `configs/fsrs6_cost_adr_distill24_densew_users_1_8_pop16_gen20_v1.toml`: a
   dense-grid diagnostic profile. It initializes each user's 24-parameter
   interval policy from the single-card continuous-distill Cost-ADR artifacts,
@@ -502,6 +508,15 @@ Scheduler-HV std-preconditioned Cost-ADR run for users 1-128:
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --config experiments/rl_scheduler/configs/fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml \
   --run-id fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1_markov_off
+```
+
+Default compressed retention-head Cost-ADR run for users 1-128:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_128_pop16_gen20_v1.toml \
+  --stage all \
+  --run-id fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_128_pop16_gen20_v1_markov_off
 ```
 
 Distill-initialized dense-weight Cost-ADR run:
