@@ -62,6 +62,7 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     ACTION_HEAD_INTERVAL,
     ACTION_HEAD_RETENTION,
     FEATURE_VERSION_INTERVAL_MONO,
+    FEATURE_VERSION_RETENTION_MONO,
     FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z,
     FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
     FEATURE_VERSION_RETENTION_MONO_DROP_XD2,
@@ -80,15 +81,17 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
         self.assertEqual(default.action_head, ACTION_HEAD_RETENTION)
         self.assertEqual(
             default.feature_version,
-            "fsrs6_cost_adr_retention_mono_v1",
+            FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
         )
+        self.assertEqual(default.parameter_count, 15)
         self.assertEqual(interval.action_head, ACTION_HEAD_INTERVAL)
         self.assertEqual(interval.feature_version, "fsrs6_cost_adr_interval_mono_v1")
         self.assertEqual(retention.action_head, ACTION_HEAD_RETENTION)
         self.assertEqual(
             retention.feature_version,
-            "fsrs6_cost_adr_retention_mono_v1",
+            FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
         )
+        self.assertEqual(retention.parameter_count, 15)
 
     def test_action_head_setting_accepts_compressed_retention_variants(self) -> None:
         expected_counts = {
@@ -140,7 +143,10 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
             }
         )
         action_settings = CostADRActionSettings.from_mapping(
-            {"action_head": ACTION_HEAD_RETENTION}
+            {
+                "action_head": ACTION_HEAD_RETENTION,
+                "feature_version": FEATURE_VERSION_RETENTION_MONO,
+            }
         )
 
         initial_policy = _built_in_initial_mean(
@@ -250,8 +256,8 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
             settings=settings,
         )
 
-        self.assertEqual(optimizer.bounds[0], (-64.0,) * 24)
-        self.assertEqual(optimizer.bounds[1], (64.0,) * 24)
+        self.assertEqual(optimizer.bounds[0], (-64.0,) * 15)
+        self.assertEqual(optimizer.bounds[1], (64.0,) * 15)
 
     def test_first8_std_preconditioning_maps_z_space_to_coefficients(self) -> None:
         settings = PolicySearchSettings.from_mapping(
@@ -272,6 +278,7 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
                 "initial_mean": list(FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS),
             },
             settings=settings,
+            parameter_count=len(FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS),
         )
         preconditioning = CoefficientPreconditioningSettings.from_mapping(
             {
@@ -344,6 +351,7 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
                 "initial_mean": list(FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS),
             },
             settings=settings,
+            parameter_count=len(FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS),
         )
         preconditioning = CoefficientPreconditioningSettings.from_mapping(
             {
@@ -1194,7 +1202,11 @@ seed = 7
         self.assertEqual(bundle_lane_user_ids[1], [1] * 32)
         self.assertEqual(training_action_heads, [ACTION_HEAD_RETENTION])
         self.assertEqual(policy.action_head, ACTION_HEAD_RETENTION)
-        self.assertEqual(policy.feature_version, "fsrs6_cost_adr_retention_mono_v1")
+        self.assertEqual(
+            policy.feature_version,
+            FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
+        )
+        self.assertEqual(policy.parameter_count, 15)
         self.assertIsNone(policy.max_interval_days)
         self.assertEqual(metadata["action_space"], "sd_cost_retention_function")
         self.assertEqual(metadata["action_head"], ACTION_HEAD_RETENTION)
@@ -1209,7 +1221,7 @@ seed = 7
         self.assertEqual(config_loaded["action_head"], ACTION_HEAD_RETENTION)
         self.assertEqual(
             config_loaded["feature_version"],
-            "fsrs6_cost_adr_retention_mono_v1",
+            FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
         )
         self.assertEqual(
             config_loaded["coefficient_preconditioning"]["mode"],

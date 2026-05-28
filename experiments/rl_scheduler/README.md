@@ -9,8 +9,8 @@ pipeline.
 
 The current implemented research lines are `fsrs6_adr`, `fsrs6_cost_adr`,
 `fsrs6_ap` (Adaptive Parameters), and `anki_sm2_ap`: black-box optimizers learn
-scheduler-side FSRS-6 retention policies, learn a cost-conditioned interval
-policy, directly search the 21 FSRS-6 scheduler weights, or search the 7 Anki
+scheduler-side FSRS-6 retention policies, learn a cost-conditioned ADR policy,
+directly search the 21 FSRS-6 scheduler weights, or search the 7 Anki
 SM2 runtime parameters.
 A core rule is
 that training and evaluation must not read the environment's hidden memory
@@ -23,10 +23,11 @@ FSRS-6 state update to obtain `S` and `D`.
 - `run_experiment.py`: TOML-driven stage runner.
 - `train_cmaes_fsrs6_adr.py`: CMA-ES FSRS-6 trainer for ordinary `fsrs6_adr`
   policies over `S,D`.
-- `train_cmaes_fsrs6_cost_adr.py`: CMA-ES trainer for one 24-parameter
-  `fsrs6_cost_adr` policy per user. The policy emits desired retention values
-  by default, or can be configured as an interval-head ablation, from
-  scheduler-side `S,D` and a requested scalar cost weight. It can
+- `train_cmaes_fsrs6_cost_adr.py`: CMA-ES trainer for one `fsrs6_cost_adr`
+  policy per user. The policy emits desired retention values by default using
+  the 15-parameter `drop sqrt_z + x_d^2` formula, or can be configured as an
+  interval-head ablation, from scheduler-side `S,D` and a requested scalar cost
+  weight. It can
   optionally initialize CMA-ES from an existing per-user Cost-ADR policy or a
   built-in action-head-specific mean, and can run CMA-ES in a diagonal z-space
   scaled by the first-eight sample std.
@@ -276,29 +277,32 @@ Representative profiles:
   diagnostic. Interpret this profile against ADR only on the matched 16-point
   sweep, not on the dense-weight diagnostic sweep.
 - `configs/fsrs6_cost_adr_rethead_schedhv_stdpre_users_1_8_pop16_gen20_v1.toml`:
-  the matched Cost-ADR default-action profile for deciding whether the scheduler
-  should emit desired retention instead of interval. It keeps the same
-  first-eight users, pop16/gen20 budget, 16 cost weights, scheduler-HV
-  objective, and diagonal search scale as the interval-head repair profile, but
-  uses `action_head = "desired_retention"` and a baseline cost-decay
-  initializer instead of the interval distill mean.
+  the historical 24-parameter retention-head Cost-ADR std-preconditioned
+  diagnostic for deciding whether the scheduler should emit desired retention
+  instead of interval. It keeps the same first-eight users, pop16/gen20 budget,
+  16 cost weights, scheduler-HV objective, and diagonal search scale as the
+  interval-head repair profile, but uses `action_head = "desired_retention"` and
+  a baseline cost-decay initializer instead of the interval distill mean.
 - `configs/fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml`:
   the Cost-ADR default-action profile initialized from the built-in first-eight
-  interval-implied R coefficient mean. It uses wider `[0.30, 0.995]` R bounds,
-  the matched 16 cost weights, scheduler-HV training objective, and no
-  coefficient preconditioning. This is the default retention-head setup; the
-  older std-preconditioned retention-head configs are retained as historical
+  interval-implied R coefficient mean. It uses the default 15-parameter
+  `drop sqrt_z + x_d^2` retention formula, wider `[0.30, 0.995]` R bounds, the
+  matched 16 cost weights, scheduler-HV training objective, and no coefficient
+  preconditioning. This is the default retention-head setup; the older
+  std-preconditioned retention-head configs are retained as historical
   diagnostics.
 - `configs/fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml`:
   the same default retention-head Cost-ADR setup, but trained in the LSTM
-  environment. It keeps pop16/gen20, `sigma0 = 1.0`, no coefficient
-  preconditioning, and the matched 16 cost weights, while capping in-process
-  LSTM training batches at 1024 lanes.
+  environment. It keeps the default 15-parameter `drop sqrt_z + x_d^2`
+  retention formula, pop16/gen20, `sigma0 = 1.0`, no coefficient
+  preconditioning, and the matched 16 cost weights, while capping in-process LSTM
+  training batches at 1024 lanes.
 - `configs/fsrs6_cost_adr_rethead_ablate_*_users_1_8_pop16_gen20_v1.toml`:
-  structure ablations for the default retention-head Cost-ADR policy. These
-  keep the same FSRS6 users 1-8, pop16/gen20 budget, no preconditioning, and
-  matched 16 cost weights while training compressed variants that drop
-  `sqrt_z`, drop `x_d^2`, drop both, or keep only the `z2` cost basis.
+  structure ablations for the retention-head Cost-ADR policy. These keep the
+  same FSRS6 users 1-8, pop16/gen20 budget, no preconditioning, and matched 16
+  cost weights while training compressed variants that drop `sqrt_z`, drop
+  `x_d^2`, drop both, or keep only the `z2` cost basis. The variant that drops
+  both `sqrt_z` and `x_d^2` is now the default formula.
 - `configs/fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml`: the
   first-128-user scale-up of the scheduler-HV std-preconditioned Cost-ADR
   profile. It keeps pop16/gen20 CMA-ES, the matched 16 cost weights, and
@@ -457,7 +461,7 @@ uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
   --run-id fsrs6_cost_adr_schedhv_stdpre_users_1_8_pop16_gen20_v1_markov_off
 ```
 
-Cost-ADR default-action profile for users 1-8:
+Historical Cost-ADR 24p std-preconditioned retention-head profile:
 
 ```bash
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \

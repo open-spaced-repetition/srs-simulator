@@ -47,6 +47,7 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (
     ACTION_HEAD_INTERVAL,
     ACTION_HEAD_RETENTION,
     ActionHead,
+    DEFAULT_FEATURE_VERSION as DEFAULT_COST_ADR_FEATURE_VERSION,
     FEATURE_VERSION_INTERVAL_MONO,
     FEATURE_VERSION_RETENTION_MONO,
     FSRS6CostConditionedADRPolicy,
@@ -63,7 +64,12 @@ from simulator.schedulers.fsrs6_cost_conditioned_adr import (
 from simulator.short_term_config import resolve_short_term_config
 
 
-PARAMETER_COUNT = 24
+DEFAULT_PARAMETER_COUNT = parameter_count_for_feature_version(
+    DEFAULT_COST_ADR_FEATURE_VERSION
+)
+PRECONDITIONING_PARAMETER_COUNT = parameter_count_for_feature_version(
+    FEATURE_VERSION_RETENTION_MONO
+)
 MAX_INTERVAL_DAYS = 36500.0
 REFERENCE_MARGIN_FRACTION = 0.05
 HYPERVOLUME_DELTA_MODE_UNION_CONTRIBUTION = "union_contribution"
@@ -209,14 +215,14 @@ FIRST8_INTERVAL_IMPLIED_R_SAMPLE_STD_V1_COEFFICIENTS = (
 SUPPORTED_ACTION_HEADS = frozenset({ACTION_HEAD_INTERVAL, ACTION_HEAD_RETENTION})
 ACTION_HEAD_FEATURE_VERSIONS = {
     ACTION_HEAD_INTERVAL: FEATURE_VERSION_INTERVAL_MONO,
-    ACTION_HEAD_RETENTION: FEATURE_VERSION_RETENTION_MONO,
+    ACTION_HEAD_RETENTION: DEFAULT_COST_ADR_FEATURE_VERSION,
 }
 
 
 @dataclass(frozen=True, slots=True)
 class CostADRActionSettings:
     action_head: ActionHead = ACTION_HEAD_RETENTION
-    feature_version: str = FEATURE_VERSION_RETENTION_MONO
+    feature_version: str = DEFAULT_COST_ADR_FEATURE_VERSION
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> CostADRActionSettings:
@@ -711,7 +717,7 @@ def optimizer_settings_from_mapping(
     raw: Mapping[str, Any],
     *,
     settings: PolicySearchSettings | None = None,
-    parameter_count: int = PARAMETER_COUNT,
+    parameter_count: int = DEFAULT_PARAMETER_COUNT,
 ) -> CMAESSettings:
     coefficient_min = -12.0 if settings is None else settings.coefficient_min
     coefficient_max = 12.0 if settings is None else settings.coefficient_max
@@ -1339,7 +1345,7 @@ def _require_interval_implied_r_bounds(
 def _retention_baseline_cost_decay_coefficients(
     policy_search_settings: PolicySearchSettings,
     *,
-    parameter_count: int = PARAMETER_COUNT,
+    parameter_count: int = DEFAULT_PARAMETER_COUNT,
 ) -> tuple[float, ...]:
     ratio = (
         policy_search_settings.baseline_desired_retention
@@ -1447,10 +1453,11 @@ def _coefficient_search_transform(
             search_bounds=actual_bounds,
         )
 
-    if parameter_count != PARAMETER_COUNT:
+    if parameter_count != PRECONDITIONING_PARAMETER_COUNT:
         raise ValueError(
             "Built-in Cost-ADR coefficient preconditioning is only defined for "
-            f"{PARAMETER_COUNT}-parameter policies; got {parameter_count}."
+            f"{PRECONDITIONING_PARAMETER_COUNT}-parameter policies; "
+            f"got {parameter_count}."
         )
     if preconditioning_settings.mode not in {
         COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1,
@@ -1459,10 +1466,10 @@ def _coefficient_search_transform(
         allowed = ", ".join(sorted(SUPPORTED_COEFFICIENT_PRECONDITIONING))
         raise ValueError(f"coefficient_preconditioning must be one of: {allowed}.")
     scale_source = _preconditioning_scale_source(preconditioning_settings.mode)
-    if len(scale_source) != PARAMETER_COUNT:
+    if len(scale_source) != PRECONDITIONING_PARAMETER_COUNT:
         raise ValueError(
             "Built-in Cost-ADR coefficient preconditioning scale must have "
-            f"{PARAMETER_COUNT} values."
+            f"{PRECONDITIONING_PARAMETER_COUNT} values."
         )
 
     origin = optimizer_settings.initial_mean

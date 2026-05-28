@@ -85,6 +85,7 @@ max_lanes_per_batch = 6400
 
 [training.policy_search]
 action_head = "desired_retention"
+feature_version = "fsrs6_cost_adr_retention_mono_v1"
 coefficient_min = -64.0
 coefficient_max = 64.0
 retention_min = 0.30

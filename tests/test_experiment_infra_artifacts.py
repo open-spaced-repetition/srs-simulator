@@ -104,6 +104,10 @@ class ExperimentInfraArtifactTests(unittest.TestCase):
         for feature_version, action_space in (
             ("fsrs6_cost_adr_interval_mono_v1", "sd_cost_interval_function"),
             ("fsrs6_cost_adr_retention_mono_v1", "sd_cost_retention_function"),
+            (
+                "fsrs6_cost_adr_retention_mono_drop_sqrt_z_xd2_v1",
+                "sd_cost_retention_function",
+            ),
         ):
             with self.subTest(feature_version=feature_version):
                 with tempfile.TemporaryDirectory() as tmp:

@@ -25,6 +25,10 @@ from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.fsrs6_cost_conditioned_adr_policy import (
     ACTION_HEAD_INTERVAL,
     ACTION_HEAD_RETENTION,
+    COST_BASIS_Z,
+    COST_BASIS_Z2,
+    DROP_XD2_STATE_FEATURE_INDICES,
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
     FSRS6CostConditionedADRPolicy,
 )
 from simulator.batched_engine.mixed_scheduler import (
@@ -271,10 +275,16 @@ class FSRS6ADRSchedulerTests(unittest.TestCase):
 
 class FSRS6CostConditionedADRTests(unittest.TestCase):
     def test_cost_adr_policy_defaults_to_desired_retention_head(self) -> None:
-        policy = FSRS6CostConditionedADRPolicy(coefficients=(0.0,) * 24)
+        policy = FSRS6CostConditionedADRPolicy(coefficients=(0.0,) * 15)
 
         self.assertEqual(policy.action_head, ACTION_HEAD_RETENTION)
-        self.assertEqual(policy.feature_version, "fsrs6_cost_adr_retention_mono_v1")
+        self.assertEqual(
+            policy.feature_version,
+            FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
+        )
+        self.assertEqual(policy.parameter_count, 15)
+        self.assertEqual(policy.state_feature_indices, DROP_XD2_STATE_FEATURE_INDICES)
+        self.assertEqual(policy.cost_basis, (COST_BASIS_Z, COST_BASIS_Z2))
 
     def test_retention_baseline_matches_fsrs6_scheduler(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
