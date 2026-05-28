@@ -299,7 +299,10 @@ def _hovertemplate(
 
 def _entry_needs_fsrs6_params(entry: PolicyEntry, z_mode: ZMode) -> bool:
     if z_mode == "retention":
-        return entry.policy.action_head == ACTION_HEAD_INTERVAL
+        return entry.policy.action_head in {
+            ACTION_HEAD_INTERVAL,
+            ACTION_HEAD_RETENTION,
+        }
     return entry.policy.action_head == ACTION_HEAD_RETENTION
 
 
@@ -678,7 +681,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Optional srs-benchmark root for FSRS6 user weights. Required only when "
-            "the selected z mode needs interval/retention conversion."
+            "the selected z mode or hover data needs interval/retention conversion."
         ),
     )
     parser.add_argument(

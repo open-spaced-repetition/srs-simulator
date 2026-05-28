@@ -13,7 +13,9 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.rl_scheduler import plot_fsrs6_cost_adr_policy_surfaces as plot  # noqa: E402
 from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     ACTION_HEAD_INTERVAL,
+    ACTION_HEAD_RETENTION,
     FEATURE_VERSION_INTERVAL_MONO,
+    FEATURE_VERSION_RETENTION_MONO,
     FSRS6CostConditionedADRPolicy,
 )
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS  # noqa: E402
@@ -133,6 +135,33 @@ class PlotFSRS6CostADRPolicySurfacesTests(unittest.TestCase):
         self.assertAlmostEqual(customdata[0][0][2], 1.0)
         self.assertAlmostEqual(customdata[0][0][3], z_values[0][0])
         self.assertAlmostEqual(customdata[2][1][3], z_values[1][2])
+
+    def test_retention_policy_retention_surface_includes_interval_customdata(
+        self,
+    ) -> None:
+        policy = FSRS6CostConditionedADRPolicy(
+            coefficients=COEFFICIENTS,
+            action_head=ACTION_HEAD_RETENTION,
+            feature_version=FEATURE_VERSION_RETENTION_MONO,
+        )
+        params = FSRS6Params(DEFAULT_FSRS6_WEIGHTS)
+
+        z_values, customdata = plot._build_surface_arrays(
+            policy=policy,
+            fsrs6_params=params,
+            cost_weight=0.0,
+            s_grid=(1.0, 10.0),
+            d_grid=(1.0,),
+            z_mode="retention",
+        )
+
+        self.assertTrue(
+            plot._entry_needs_fsrs6_params(
+                plot.PolicyEntry(1, Path("policy.json"), policy, (0.0,)), "retention"
+            )
+        )
+        self.assertAlmostEqual(z_values[0][0], customdata[0][0][3])
+        self.assertGreater(customdata[0][0][2], 0.0)
 
 
 if __name__ == "__main__":
