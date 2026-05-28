@@ -282,10 +282,18 @@ Representative profiles:
   objective, and diagonal search scale as the interval-head repair profile, but
   uses `action_head = "desired_retention"` and a baseline cost-decay
   initializer instead of the interval distill mean.
-- `configs/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1.toml`:
+- `configs/fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml`:
   the Cost-ADR default-action profile initialized from the built-in first-eight
   interval-implied R coefficient mean. It uses wider `[0.30, 0.995]` R bounds,
-  the matched 16 cost weights, and the same scheduler-HV diagonal-search setup.
+  the matched 16 cost weights, scheduler-HV training objective, and no
+  coefficient preconditioning. This is the default retention-head setup; the
+  older std-preconditioned retention-head configs are retained as historical
+  diagnostics.
+- `configs/fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml`:
+  the same default retention-head Cost-ADR setup, but trained in the LSTM
+  environment. It keeps pop16/gen20, `sigma0 = 1.0`, no coefficient
+  preconditioning, and the matched 16 cost weights, while capping in-process
+  LSTM training batches at 1024 lanes.
 - `configs/fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml`: the
   first-128-user scale-up of the scheduler-HV std-preconditioned Cost-ADR
   profile. It keeps pop16/gen20 CMA-ES, the matched 16 cost weights, and
@@ -456,8 +464,18 @@ Cost-ADR default-action profile with first-eight interval-implied R mean:
 
 ```bash
 uv run python experiments/rl_scheduler/run_portfolio_workflow.py \
-  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1.toml \
-  --run-id fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1_markov_off
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml \
+  --run-id fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1_markov_off
+```
+
+LSTM-trained Cost-ADR default-action profile with no coefficient
+preconditioning:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml \
+  --stage all \
+  --run-id fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1
 ```
 
 Scheduler-HV std-preconditioned Cost-ADR run for users 1-128:

@@ -358,7 +358,7 @@ class BatchedSweepConfigTests(unittest.TestCase):
             / "experiments"
             / "rl_scheduler"
             / "configs"
-            / "fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1.toml",
+            / "fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml",
             repo_root=REPO_ROOT,
         )
 
@@ -374,8 +374,35 @@ class BatchedSweepConfigTests(unittest.TestCase):
             REPO_ROOT
             / "artifacts"
             / "rl_scheduler"
-            / "fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8"
-            / "fsrs6_cost_adr_rethead_intervalinit_wide_users_1_8_pop16_gen20_v1_markov_off",
+            / "fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_8"
+            / "fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1_markov_off",
+        )
+
+    def test_loads_cost_adr_lstm_train_retention_head_config(self) -> None:
+        config = load_batched_sweep_config(
+            REPO_ROOT
+            / "experiments"
+            / "rl_scheduler"
+            / "configs"
+            / "fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml",
+            repo_root=REPO_ROOT,
+        )
+
+        self.assertEqual(config.args.user_ids, list(range(1, 9)))
+        self.assertEqual(config.envs, ("fsrs6", "lstm"))
+        self.assertEqual(config.schedulers, ("fsrs6_cost_adr",))
+        self.assertEqual(
+            config.args.fsrs6_cost_adr_cost_weights,
+            DEFAULT_COST_ADR_COST_WEIGHTS,
+        )
+        self.assertEqual(config.args.max_lanes_per_batch, 1024)
+        self.assertEqual(
+            config.args.fsrs6_cost_adr_train_run_root,
+            REPO_ROOT
+            / "artifacts"
+            / "rl_scheduler"
+            / "fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8"
+            / "fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1",
         )
 
     def test_loads_adr_pop16_users_1_128_experiment_config(self) -> None:

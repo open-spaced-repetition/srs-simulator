@@ -21,6 +21,7 @@ from experiments.single_card_tradeoff.cli.fsrs6_cost_adr_train import (  # noqa:
 from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (  # noqa: E402
     COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1,
     COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1,
+    COEFFICIENT_PRECONDITIONING_NONE,
     CoefficientPreconditioningSettings,
     CostADRTrainJob,
     CoverageObjectiveSettings,
@@ -1126,6 +1127,19 @@ seed = 7
         self.assertEqual(
             config_loaded["feature_version"],
             "fsrs6_cost_adr_retention_mono_v1",
+        )
+        self.assertEqual(
+            config_loaded["coefficient_preconditioning"]["mode"],
+            COEFFICIENT_PRECONDITIONING_NONE,
+        )
+        self.assertFalse(config_loaded["coefficient_preconditioning"]["enabled"])
+        self.assertEqual(
+            metrics["coefficient_preconditioning"]["mode"],
+            COEFFICIENT_PRECONDITIONING_NONE,
+        )
+        self.assertEqual(
+            metadata["coefficient_preconditioning"]["mode"],
+            COEFFICIENT_PRECONDITIONING_NONE,
         )
 
     def test_cmaes_trainer_batches_users_and_writes_artifacts(self) -> None:
