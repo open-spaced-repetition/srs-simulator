@@ -428,8 +428,9 @@ def _build_surface_arrays(
             )
         z_rows.append(z_row)
         customdata_d_major.append(customdata_row)
-    # Plotly Surface uses d-major z rows with 1-D x/y grids, but hover customdata is
-    # indexed x-major. Transpose customdata so hover values match the displayed point.
+    # Plotly Surface consumes z/surfacecolor as y-major rows, but hover customdata
+    # is indexed x-major. Keep customdata transposed so interval/retention values
+    # line up with the displayed S/D/z point.
     customdata_x_major = [
         [customdata_d_major[d_index][s_index] for d_index in range(len(d_grid))]
         for s_index in range(len(s_grid))

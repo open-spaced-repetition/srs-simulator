@@ -19,7 +19,7 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     FSRS6CostConditionedADRPolicy,
 )
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS  # noqa: E402
-from simulator.math.fsrs import FSRS6Params  # noqa: E402
+from simulator.math.fsrs import FSRS6Params, fsrs6_forgetting_curve  # noqa: E402
 
 
 COEFFICIENTS = (0.0,) * 24
@@ -135,6 +135,10 @@ class PlotFSRS6CostADRPolicySurfacesTests(unittest.TestCase):
         self.assertAlmostEqual(customdata[0][0][2], 1.0)
         self.assertAlmostEqual(customdata[0][0][3], z_values[0][0])
         self.assertAlmostEqual(customdata[2][1][3], z_values[1][2])
+        self.assertAlmostEqual(
+            fsrs6_forgetting_curve(params, customdata[2][1][2], 100.0),
+            z_values[1][2],
+        )
 
     def test_retention_policy_retention_surface_includes_interval_customdata(
         self,
@@ -162,6 +166,35 @@ class PlotFSRS6CostADRPolicySurfacesTests(unittest.TestCase):
         )
         self.assertAlmostEqual(z_values[0][0], customdata[0][0][3])
         self.assertGreater(customdata[0][0][2], 0.0)
+
+    def test_retention_policy_interval_customdata_matches_plotly_surface_point(
+        self,
+    ) -> None:
+        policy = FSRS6CostConditionedADRPolicy(
+            coefficients=COEFFICIENTS,
+            action_head=ACTION_HEAD_RETENTION,
+            feature_version=FEATURE_VERSION_RETENTION_MONO,
+        )
+        params = FSRS6Params(DEFAULT_FSRS6_WEIGHTS)
+
+        z_values, customdata = plot._build_surface_arrays(
+            policy=policy,
+            fsrs6_params=params,
+            cost_weight=0.0,
+            s_grid=(1.0, 10.0, 100.0),
+            d_grid=(1.0, 5.0),
+            z_mode="retention",
+        )
+
+        s_index = 2
+        d_index = 1
+        interval_days = customdata[s_index][d_index][2]
+        retention = customdata[s_index][d_index][3]
+        self.assertAlmostEqual(retention, z_values[d_index][s_index])
+        self.assertAlmostEqual(
+            fsrs6_forgetting_curve(params, interval_days, 100.0),
+            z_values[d_index][s_index],
+        )
 
 
 if __name__ == "__main__":
