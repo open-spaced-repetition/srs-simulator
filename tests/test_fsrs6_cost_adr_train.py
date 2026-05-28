@@ -62,6 +62,10 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (  # noqa: E402
     ACTION_HEAD_INTERVAL,
     ACTION_HEAD_RETENTION,
     FEATURE_VERSION_INTERVAL_MONO,
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z,
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
+    FEATURE_VERSION_RETENTION_MONO_DROP_XD2,
+    FEATURE_VERSION_RETENTION_MONO_Z2_ONLY,
     FSRS6CostConditionedADRPolicy,
     STATE_FEATURE_COUNT_COMPACT,
 )
@@ -85,6 +89,36 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
             retention.feature_version,
             "fsrs6_cost_adr_retention_mono_v1",
         )
+
+    def test_action_head_setting_accepts_compressed_retention_variants(self) -> None:
+        expected_counts = {
+            FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z: 18,
+            FEATURE_VERSION_RETENTION_MONO_DROP_XD2: 20,
+            FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2: 15,
+            FEATURE_VERSION_RETENTION_MONO_Z2_ONLY: 12,
+        }
+
+        for feature_version, parameter_count in expected_counts.items():
+            with self.subTest(feature_version=feature_version):
+                action_settings = CostADRActionSettings.from_mapping(
+                    {
+                        "action_head": ACTION_HEAD_RETENTION,
+                        "feature_version": feature_version,
+                    }
+                )
+
+                self.assertEqual(action_settings.action_head, ACTION_HEAD_RETENTION)
+                self.assertEqual(action_settings.feature_version, feature_version)
+                self.assertEqual(action_settings.parameter_count, parameter_count)
+
+    def test_action_head_setting_rejects_incompatible_feature_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "incompatible"):
+            CostADRActionSettings.from_mapping(
+                {
+                    "action_head": ACTION_HEAD_INTERVAL,
+                    "feature_version": FEATURE_VERSION_RETENTION_MONO_Z2_ONLY,
+                }
+            )
 
     def test_builtin_mean_source_is_exclusive_with_policy_sources(self) -> None:
         with self.assertRaisesRegex(ValueError, "Only one Cost-ADR initial policy"):
@@ -128,6 +162,55 @@ class FSRS6CostADRTrainTests(unittest.TestCase):
         self.assertEqual(initial_policy.action_head, ACTION_HEAD_RETENTION)
         self.assertEqual(initial_policy.retention_min, 0.30)
         self.assertEqual(initial_policy.retention_max, 0.995)
+
+    def test_interval_implied_r_mean_source_projects_to_compressed_variant(
+        self,
+    ) -> None:
+        settings = PolicySearchSettings.from_mapping(
+            {
+                "coefficient_min": -64.0,
+                "coefficient_max": 64.0,
+                "retention_min": 0.30,
+                "retention_max": 0.995,
+                "baseline_desired_retention": 0.9,
+            }
+        )
+        action_settings = CostADRActionSettings.from_mapping(
+            {
+                "action_head": ACTION_HEAD_RETENTION,
+                "feature_version": FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
+            }
+        )
+
+        initial_policy = _built_in_initial_mean(
+            source=INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1,
+            cost_weights=(0.0, 1024.0),
+            policy_search_settings=settings,
+            action_settings=action_settings,
+        )
+
+        expected = (
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[0],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[1],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[2],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[3],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[4],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[12],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[13],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[14],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[15],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[16],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[18],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[19],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[20],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[21],
+            FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS[22],
+        )
+        self.assertEqual(initial_policy.coefficients, expected)
+        self.assertEqual(
+            initial_policy.feature_version, action_settings.feature_version
+        )
+        self.assertEqual(len(initial_policy.coefficients), 15)
 
     def test_interval_implied_r_mean_source_rejects_mismatched_bounds(self) -> None:
         settings = PolicySearchSettings.from_mapping(

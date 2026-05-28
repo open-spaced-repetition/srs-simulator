@@ -169,6 +169,9 @@ class FSRS6CostConditionedADRBatchSchedulerOps:
         self._bounds = bounds
         self._policy = policy
         self._feature_count = policy.state_feature_count
+        self._state_feature_indices = policy.state_feature_indices
+        self._cost_basis = policy.cost_basis
+        self._coefficient_group_count = policy.coefficient_group_count
         self._action_head = policy.action_head
         if coefficients is None:
             self._coefficients = torch.tensor(
@@ -354,31 +357,26 @@ class FSRS6CostConditionedADRBatchSchedulerOps:
             s_norm * s_norm,
             d_norm * d_norm,
         ]
-        if self._feature_count == 8:
+        if max(self._state_feature_indices) >= 6:
             features.extend(
                 [
                     self._torch.clamp(s_norm - 0.5, min=0.0),
                     self._torch.clamp(d_norm - 0.5, min=0.0),
                 ]
             )
-        return features
+        return [features[index] for index in self._state_feature_indices]
 
     def _policy_value(
         self, s: "torch.Tensor", d: "torch.Tensor", user_idx: "torch.Tensor"
     ) -> "torch.Tensor":
         features = self._torch.stack(self._state_features(s, d), dim=1)
         coefficients = self._coefficients.index_select(0, user_idx)
-        groups = coefficients.reshape(-1, 4, self._feature_count)
+        groups = coefficients.reshape(
+            -1,
+            self._coefficient_group_count,
+            self._feature_count,
+        )
         base = self._torch.sum(groups[:, 0, :] * features, dim=1)
-        slope_1 = self._torch.nn.functional.softplus(
-            self._torch.sum(groups[:, 1, :] * features, dim=1)
-        )
-        slope_2 = self._torch.nn.functional.softplus(
-            self._torch.sum(groups[:, 2, :] * features, dim=1)
-        )
-        slope_3 = self._torch.nn.functional.softplus(
-            self._torch.sum(groups[:, 3, :] * features, dim=1)
-        )
         weights = self._goal_cost_weight.index_select(0, user_idx)
         lo = self._torch.log1p(
             self._torch.tensor(
@@ -405,7 +403,17 @@ class FSRS6CostConditionedADRBatchSchedulerOps:
             - lo
         ) / (hi - lo)
         z = self._torch.clamp(z, 0.0, 1.0)
-        cost_effect = slope_1 * self._torch.sqrt(z) + slope_2 * z + slope_3 * z * z
+        basis_values = {
+            "sqrt_z": self._torch.sqrt(z),
+            "z": z,
+            "z2": z * z,
+        }
+        cost_effect = self._torch.zeros_like(base)
+        for group_index, basis in enumerate(self._cost_basis, start=1):
+            slope = self._torch.nn.functional.softplus(
+                self._torch.sum(groups[:, group_index, :] * features, dim=1)
+            )
+            cost_effect = cost_effect + slope * basis_values[basis]
         if self._action_head == ACTION_HEAD_RETENTION:
             return base - cost_effect
         return base + cost_effect

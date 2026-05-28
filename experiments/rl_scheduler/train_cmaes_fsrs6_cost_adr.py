@@ -50,6 +50,9 @@ from simulator.fsrs6_cost_conditioned_adr_policy import (
     FEATURE_VERSION_INTERVAL_MONO,
     FEATURE_VERSION_RETENTION_MONO,
     FSRS6CostConditionedADRPolicy,
+    action_head_for_feature_version,
+    parameter_count_for_feature_version,
+    project_coefficients_to_feature_version,
 )
 from simulator.math.fsrs import Bounds
 from simulator.scheduler_catalog import fsrs6_cost_adr_action_space_for_feature_version
@@ -213,6 +216,7 @@ ACTION_HEAD_FEATURE_VERSIONS = {
 @dataclass(frozen=True, slots=True)
 class CostADRActionSettings:
     action_head: ActionHead = ACTION_HEAD_RETENTION
+    feature_version: str = FEATURE_VERSION_RETENTION_MONO
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> CostADRActionSettings:
@@ -229,11 +233,31 @@ class CostADRActionSettings:
             raise ValueError(
                 f"training.policy_search.action_head must be one of: {allowed}."
             )
-        return cls(action_head=cast(ActionHead, value))
+        raw_feature_version = raw.get("feature_version")
+        if raw_feature_version is None:
+            feature_version = ACTION_HEAD_FEATURE_VERSIONS[cast(ActionHead, value)]
+        else:
+            if (
+                not isinstance(raw_feature_version, str)
+                or not raw_feature_version.strip()
+            ):
+                raise ValueError(
+                    "training.policy_search.feature_version must be a non-empty "
+                    "string when provided."
+                )
+            feature_version = raw_feature_version.strip()
+        expected_action_head = action_head_for_feature_version(feature_version)
+        if value != expected_action_head:
+            raise ValueError(
+                "training.policy_search.feature_version is incompatible with "
+                f"action_head={value!r}: {feature_version!r} uses "
+                f"{expected_action_head!r}."
+            )
+        return cls(action_head=cast(ActionHead, value), feature_version=feature_version)
 
     @property
-    def feature_version(self) -> str:
-        return ACTION_HEAD_FEATURE_VERSIONS[self.action_head]
+    def parameter_count(self) -> int:
+        return parameter_count_for_feature_version(self.feature_version)
 
     @property
     def max_interval_days(self) -> float | None:
@@ -243,6 +267,7 @@ class CostADRActionSettings:
         return {
             "action_head": self.action_head,
             "feature_version": self.feature_version,
+            "parameter_count": self.parameter_count,
             "max_interval_days": self.max_interval_days,
         }
 
@@ -532,9 +557,10 @@ class CoefficientSearchTransform:
         self,
         values: Sequence[float],
     ) -> tuple[float, ...]:
-        if len(values) != PARAMETER_COUNT:
+        parameter_count = len(self.origin)
+        if len(values) != parameter_count:
             raise ValueError(
-                f"Cost-ADR search vector must have {PARAMETER_COUNT} values, "
+                f"Cost-ADR search vector must have {parameter_count} values, "
                 f"got {len(values)}."
             )
         lower, upper = self.actual_bounds
@@ -685,12 +711,13 @@ def optimizer_settings_from_mapping(
     raw: Mapping[str, Any],
     *,
     settings: PolicySearchSettings | None = None,
+    parameter_count: int = PARAMETER_COUNT,
 ) -> CMAESSettings:
     coefficient_min = -12.0 if settings is None else settings.coefficient_min
     coefficient_max = 12.0 if settings is None else settings.coefficient_max
     return CMAESSettings.from_mapping(
         raw,
-        coefficient_count=PARAMETER_COUNT,
+        coefficient_count=parameter_count,
         coefficient_min=coefficient_min,
         coefficient_max=coefficient_max,
     )
@@ -775,12 +802,13 @@ def run_training_jobs(
 
     settings = PolicySearchSettings.from_mapping(config.training_policy_search)
     raw_training_policy_search = dict(_read_training_policy_search(config_path))
+    action_settings = CostADRActionSettings.from_mapping(raw_training_policy_search)
     optimizer_settings = optimizer_settings_from_mapping(
         config.training_optimizer,
         settings=settings,
+        parameter_count=action_settings.parameter_count,
     )
     cost_weights = cost_weights_from_mapping(raw_training_policy_search)
-    action_settings = CostADRActionSettings.from_mapping(raw_training_policy_search)
     hypervolume_delta_mode = hypervolume_delta_mode_from_mapping(
         raw_training_policy_search
     )
@@ -860,7 +888,7 @@ def run_training_jobs(
                 action_settings=action_settings.to_dict(),
                 feature_version=action_settings.feature_version,
                 action_head=action_settings.action_head,
-                parameter_count=PARAMETER_COUNT,
+                parameter_count=action_settings.parameter_count,
                 cost_weights=list(cost_weights),
                 hypervolume_delta_mode=hypervolume_delta_mode,
                 coverage_objective=coverage_settings.to_dict(),
@@ -1155,10 +1183,10 @@ def _load_initial_policy_for_user(
             "Cost-ADR initial policy feature_version must be "
             f"{action_settings.feature_version!r}."
         )
-    if policy.parameter_count != PARAMETER_COUNT:
+    if policy.parameter_count != action_settings.parameter_count:
         raise ValueError(
             "Cost-ADR initial policy coefficient count must be "
-            f"{PARAMETER_COUNT}, got {policy.parameter_count}."
+            f"{action_settings.parameter_count}, got {policy.parameter_count}."
         )
     for index, coefficient in enumerate(policy.coefficients):
         if not math.isfinite(coefficient):
@@ -1217,6 +1245,7 @@ def _built_in_initial_mean(
                 "action_head='interval'."
             )
         coefficients = FIRST8_DISTILL24_MEAN_V1_COEFFICIENTS
+        source_feature_version = FEATURE_VERSION_INTERVAL_MONO
         title = "FSRS6 Cost-ADR first8 distill24 mean initializer v1"
     elif source == INITIAL_MEAN_SOURCE_RETENTION_BASELINE_COST_DECAY_V1:
         if action_settings.action_head != ACTION_HEAD_RETENTION:
@@ -1225,8 +1254,10 @@ def _built_in_initial_mean(
                 "action_head='desired_retention'."
             )
         coefficients = _retention_baseline_cost_decay_coefficients(
-            policy_search_settings
+            policy_search_settings,
+            parameter_count=action_settings.parameter_count,
         )
+        source_feature_version = action_settings.feature_version
         title = "FSRS6 Cost-ADR baseline cost-decay initializer v1"
     elif source == INITIAL_MEAN_SOURCE_FIRST8_INTERVAL_IMPLIED_R_MEAN_V1:
         if action_settings.action_head != ACTION_HEAD_RETENTION:
@@ -1239,16 +1270,23 @@ def _built_in_initial_mean(
             policy_search_settings=policy_search_settings,
         )
         coefficients = FIRST8_INTERVAL_IMPLIED_R_MEAN_V1_COEFFICIENTS
+        source_feature_version = FEATURE_VERSION_RETENTION_MONO
         title = "FSRS6 Cost-ADR first8 interval-implied R mean initializer v1"
     else:
         allowed = ", ".join(sorted(SUPPORTED_INITIAL_MEAN_SOURCES))
         raise ValueError(
             f"training.policy_search.initial_mean_source must be one of: {allowed}."
         )
-    if len(coefficients) != PARAMETER_COUNT:
+    if source_feature_version != action_settings.feature_version:
+        coefficients = project_coefficients_to_feature_version(
+            coefficients,
+            source_feature_version=source_feature_version,
+            target_feature_version=action_settings.feature_version,
+        )
+    if len(coefficients) != action_settings.parameter_count:
         raise ValueError(
             f"Built-in Cost-ADR initial mean {source!r} must have "
-            f"{PARAMETER_COUNT} coefficients."
+            f"{action_settings.parameter_count} coefficients."
         )
     for index, coefficient in enumerate(coefficients):
         if not math.isfinite(coefficient):
@@ -1300,13 +1338,15 @@ def _require_interval_implied_r_bounds(
 
 def _retention_baseline_cost_decay_coefficients(
     policy_search_settings: PolicySearchSettings,
+    *,
+    parameter_count: int = PARAMETER_COUNT,
 ) -> tuple[float, ...]:
     ratio = (
         policy_search_settings.baseline_desired_retention
         - policy_search_settings.retention_min
     ) / (policy_search_settings.retention_max - policy_search_settings.retention_min)
     ratio = min(1.0 - 1e-9, max(1e-9, ratio))
-    coefficients = [0.0 for _ in range(PARAMETER_COUNT)]
+    coefficients = [0.0 for _ in range(parameter_count)]
     coefficients[0] = math.log(ratio / (1.0 - ratio))
     return tuple(coefficients)
 
@@ -1396,16 +1436,22 @@ def _coefficient_search_transform(
     preconditioning_settings: CoefficientPreconditioningSettings,
 ) -> CoefficientSearchTransform:
     actual_bounds = optimizer_settings.bounds
+    parameter_count = len(optimizer_settings.initial_mean)
     if not preconditioning_settings.enabled:
         return CoefficientSearchTransform(
             mode=COEFFICIENT_PRECONDITIONING_NONE,
-            origin=(0.0,) * PARAMETER_COUNT,
-            scale=(1.0,) * PARAMETER_COUNT,
+            origin=(0.0,) * parameter_count,
+            scale=(1.0,) * parameter_count,
             actual_bounds=actual_bounds,
             search_initial_mean=optimizer_settings.initial_mean,
             search_bounds=actual_bounds,
         )
 
+    if parameter_count != PARAMETER_COUNT:
+        raise ValueError(
+            "Built-in Cost-ADR coefficient preconditioning is only defined for "
+            f"{PARAMETER_COUNT}-parameter policies; got {parameter_count}."
+        )
     if preconditioning_settings.mode not in {
         COEFFICIENT_PRECONDITIONING_FIRST8_DISTILL24_STD_V1,
         COEFFICIENT_PRECONDITIONING_FIRST8_INTERVAL_IMPLIED_R_STD_V1,
@@ -1430,18 +1476,18 @@ def _coefficient_search_transform(
     lower, upper = actual_bounds
     search_lower = tuple(
         (lower[index] - origin[index]) / scale[index]
-        for index in range(PARAMETER_COUNT)
+        for index in range(parameter_count)
     )
     search_upper = tuple(
         (upper[index] - origin[index]) / scale[index]
-        for index in range(PARAMETER_COUNT)
+        for index in range(parameter_count)
     )
     return CoefficientSearchTransform(
         mode=preconditioning_settings.mode,
         origin=origin,
         scale=scale,
         actual_bounds=actual_bounds,
-        search_initial_mean=(0.0,) * PARAMETER_COUNT,
+        search_initial_mean=(0.0,) * parameter_count,
         search_bounds=(search_lower, search_upper),
     )
 
@@ -2030,7 +2076,7 @@ def _policy_template(
     cost_weights: Sequence[float],
 ) -> FSRS6CostConditionedADRPolicy:
     return FSRS6CostConditionedADRPolicy(
-        coefficients=(0.0,) * PARAMETER_COUNT,
+        coefficients=(0.0,) * action_settings.parameter_count,
         action_head=action_settings.action_head,
         feature_version=action_settings.feature_version,
         cost_weight_min=min(cost_weights),
@@ -2138,7 +2184,7 @@ def write_artifact(
             ],
             "feature_version": action_settings.feature_version,
             "action_head": action_settings.action_head,
-            "parameter_count": PARAMETER_COUNT,
+            "parameter_count": action_settings.parameter_count,
             "action_settings": action_settings.to_dict(),
             "optimizer": optimizer,
             "search_optimizer": search_optimizer,

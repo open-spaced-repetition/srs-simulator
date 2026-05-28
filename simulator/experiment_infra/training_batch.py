@@ -117,6 +117,7 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         optimizer_settings_from_mapping as ap_optimizer_settings_from_mapping,
     )
     from experiments.rl_scheduler.train_cmaes_fsrs6_cost_adr import (
+        CostADRActionSettings,
         cost_weights_from_mapping as cost_adr_cost_weights_from_mapping,
         optimizer_settings_from_mapping as cost_adr_optimizer_settings_from_mapping,
     )
@@ -138,9 +139,11 @@ def estimate_lanes_per_job(*, trainer: str, config: ExperimentConfig) -> int:
         )
         return max(1, optimizer.population_size)
     if trainer == "fsrs6_cost_adr_cmaes":
+        action_settings = CostADRActionSettings.from_mapping(raw_training_policy_search)
         optimizer = cost_adr_optimizer_settings_from_mapping(
             config.training_optimizer,
             settings=settings,
+            parameter_count=action_settings.parameter_count,
         )
         cost_weights = cost_adr_cost_weights_from_mapping(raw_training_policy_search)
         return max(1, optimizer.population_size * len(cost_weights))

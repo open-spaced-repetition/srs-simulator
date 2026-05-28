@@ -4,7 +4,7 @@ import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence, cast
 
 from simulator.math.fsrs import Bounds
 
@@ -12,6 +12,14 @@ from simulator.math.fsrs import Bounds
 POLICY_KIND = "fsrs6-cost-conditioned-adr"
 FEATURE_VERSION_INTERVAL_MONO = "fsrs6_cost_adr_interval_mono_v1"
 FEATURE_VERSION_RETENTION_MONO = "fsrs6_cost_adr_retention_mono_v1"
+FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z = (
+    "fsrs6_cost_adr_retention_mono_drop_sqrt_z_v1"
+)
+FEATURE_VERSION_RETENTION_MONO_DROP_XD2 = "fsrs6_cost_adr_retention_mono_drop_xd2_v1"
+FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2 = (
+    "fsrs6_cost_adr_retention_mono_drop_sqrt_z_xd2_v1"
+)
+FEATURE_VERSION_RETENTION_MONO_Z2_ONLY = "fsrs6_cost_adr_retention_mono_z2_only_v1"
 ACTION_HEAD_INTERVAL = "interval"
 ACTION_HEAD_RETENTION = "desired_retention"
 DEFAULT_ACTION_HEAD = ACTION_HEAD_RETENTION
@@ -19,6 +27,13 @@ DEFAULT_FEATURE_VERSION = FEATURE_VERSION_RETENTION_MONO
 STATE_FEATURE_COUNT_COMPACT = 6
 STATE_FEATURE_COUNT_HINGE = 8
 COEFFICIENT_GROUP_COUNT = 4
+COST_BASIS_SQRT_Z = "sqrt_z"
+COST_BASIS_Z = "z"
+COST_BASIS_Z2 = "z2"
+FULL_COST_BASIS = (COST_BASIS_SQRT_Z, COST_BASIS_Z, COST_BASIS_Z2)
+COMPACT_STATE_FEATURE_INDICES = (0, 1, 2, 3, 4, 5)
+DROP_XD2_STATE_FEATURE_INDICES = (0, 1, 2, 3, 4)
+HINGE_STATE_FEATURE_INDICES = (0, 1, 2, 3, 4, 5, 6, 7)
 FEATURE_COUNTS = {
     FEATURE_VERSION_INTERVAL_MONO: {
         STATE_FEATURE_COUNT_COMPACT * COEFFICIENT_GROUP_COUNT,
@@ -28,6 +43,26 @@ FEATURE_COUNTS = {
         STATE_FEATURE_COUNT_COMPACT * COEFFICIENT_GROUP_COUNT,
         STATE_FEATURE_COUNT_HINGE * COEFFICIENT_GROUP_COUNT,
     },
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z: {
+        STATE_FEATURE_COUNT_COMPACT * 3,
+    },
+    FEATURE_VERSION_RETENTION_MONO_DROP_XD2: {
+        len(DROP_XD2_STATE_FEATURE_INDICES) * COEFFICIENT_GROUP_COUNT,
+    },
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2: {
+        len(DROP_XD2_STATE_FEATURE_INDICES) * 3,
+    },
+    FEATURE_VERSION_RETENTION_MONO_Z2_ONLY: {
+        STATE_FEATURE_COUNT_COMPACT * 2,
+    },
+}
+FEATURE_VERSION_ACTION_HEADS = {
+    FEATURE_VERSION_INTERVAL_MONO: ACTION_HEAD_INTERVAL,
+    FEATURE_VERSION_RETENTION_MONO: ACTION_HEAD_RETENTION,
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z: ACTION_HEAD_RETENTION,
+    FEATURE_VERSION_RETENTION_MONO_DROP_XD2: ACTION_HEAD_RETENTION,
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2: ACTION_HEAD_RETENTION,
+    FEATURE_VERSION_RETENTION_MONO_Z2_ONLY: ACTION_HEAD_RETENTION,
 }
 
 
@@ -132,16 +167,14 @@ class FSRS6CostConditionedADRPolicy:
 
     def __post_init__(self) -> None:
         _validate_feature_version(self.feature_version, len(self.coefficients))
-        if self.action_head == ACTION_HEAD_INTERVAL:
-            expected = FEATURE_VERSION_INTERVAL_MONO
-        elif self.action_head == ACTION_HEAD_RETENTION:
-            expected = FEATURE_VERSION_RETENTION_MONO
-        else:
+        if self.action_head not in {ACTION_HEAD_INTERVAL, ACTION_HEAD_RETENTION}:
             raise ValueError(f"Unsupported action_head {self.action_head!r}.")
-        if self.feature_version != expected:
+        expected_action_head = action_head_for_feature_version(self.feature_version)
+        if self.action_head != expected_action_head:
             raise ValueError(
                 f"action_head={self.action_head!r} expects feature_version "
-                f"{expected!r}."
+                f"compatible with {self.action_head!r}; "
+                f"{self.feature_version!r} uses {expected_action_head!r}."
             )
         if self.cost_weight_min < 0.0 or not math.isfinite(self.cost_weight_min):
             raise ValueError("cost_weight_min must be finite and >= 0.")
@@ -160,7 +193,25 @@ class FSRS6CostConditionedADRPolicy:
 
     @property
     def state_feature_count(self) -> int:
-        return len(self.coefficients) // COEFFICIENT_GROUP_COUNT
+        return len(self.state_feature_indices)
+
+    @property
+    def state_feature_indices(self) -> tuple[int, ...]:
+        return state_feature_indices_for_feature_version(
+            self.feature_version,
+            coefficient_count=len(self.coefficients),
+        )
+
+    @property
+    def cost_basis(self) -> tuple[str, ...]:
+        return cost_basis_for_feature_version(
+            self.feature_version,
+            coefficient_count=len(self.coefficients),
+        )
+
+    @property
+    def coefficient_group_count(self) -> int:
+        return 1 + len(self.cost_basis)
 
     @property
     def parameter_count(self) -> int:
@@ -178,6 +229,8 @@ class FSRS6CostConditionedADRPolicy:
             "retention_min": self.retention_min,
             "retention_max": self.retention_max,
             "max_interval_days": self.max_interval_days,
+            "state_feature_indices": list(self.state_feature_indices),
+            "cost_basis": list(self.cost_basis),
             "bounds": {
                 "s_min": self.bounds.s_min,
                 "s_max": self.bounds.s_max,
@@ -210,6 +263,7 @@ class FSRS6CostConditionedADRPolicy:
             cost_weight_min=self.cost_weight_min,
             cost_weight_max=self.cost_weight_max,
             state_feature_count=self.state_feature_count,
+            feature_version=self.feature_version,
             cost_sign=-1.0 if self.action_head == ACTION_HEAD_RETENTION else 1.0,
         )
         if self.action_head == ACTION_HEAD_INTERVAL:
@@ -308,29 +362,184 @@ def _monotone_value(
     cost_weight_min: float,
     cost_weight_max: float,
     state_feature_count: int,
+    feature_version: str = DEFAULT_FEATURE_VERSION,
     cost_sign: float = 1.0,
 ) -> float:
-    phi = state_features(
+    feature_indices = state_feature_indices_for_feature_version(
+        feature_version,
+        coefficient_count=len(coefficients),
+    )
+    if len(feature_indices) != state_feature_count:
+        raise ValueError("state_feature_count does not match feature_version.")
+    full_feature_count = (
+        STATE_FEATURE_COUNT_HINGE
+        if max(feature_indices) >= STATE_FEATURE_COUNT_COMPACT
+        else STATE_FEATURE_COUNT_COMPACT
+    )
+    all_features = state_features(
         stability,
         difficulty,
         bounds,
-        state_feature_count=state_feature_count,
+        state_feature_count=full_feature_count,
     )
+    phi = tuple(all_features[index] for index in feature_indices)
     z = normalized_cost_weight(
         cost_weight,
         cost_weight_min=cost_weight_min,
         cost_weight_max=cost_weight_max,
     )
-    sqrt_z = math.sqrt(z)
+    cost_basis = cost_basis_for_feature_version(
+        feature_version,
+        coefficient_count=len(coefficients),
+    )
+    group_count = 1 + len(cost_basis)
+    if len(coefficients) != state_feature_count * group_count:
+        raise ValueError("coefficient count does not match policy structure.")
     groups = [
         coefficients[idx : idx + state_feature_count]
         for idx in range(0, len(coefficients), state_feature_count)
     ]
     base = _dot(groups[0], phi)
-    slope_1 = _softplus(_dot(groups[1], phi))
-    slope_2 = _softplus(_dot(groups[2], phi))
-    slope_3 = _softplus(_dot(groups[3], phi))
-    return base + cost_sign * (slope_1 * sqrt_z + slope_2 * z + slope_3 * z * z)
+    basis_values = {
+        COST_BASIS_SQRT_Z: math.sqrt(z),
+        COST_BASIS_Z: z,
+        COST_BASIS_Z2: z * z,
+    }
+    cost_effect = 0.0
+    for group, basis in zip(groups[1:], cost_basis, strict=True):
+        cost_effect += _softplus(_dot(group, phi)) * basis_values[basis]
+    return base + cost_sign * cost_effect
+
+
+def action_head_for_feature_version(feature_version: str) -> ActionHead:
+    try:
+        return cast(ActionHead, FEATURE_VERSION_ACTION_HEADS[feature_version])
+    except KeyError as exc:
+        supported = ", ".join(sorted(FEATURE_VERSION_ACTION_HEADS))
+        raise ValueError(
+            f"Unsupported cost ADR feature_version {feature_version!r}; "
+            f"expected one of: {supported}."
+        ) from exc
+
+
+def state_feature_indices_for_feature_version(
+    feature_version: str,
+    *,
+    coefficient_count: int,
+) -> tuple[int, ...]:
+    _validate_feature_version(feature_version, coefficient_count)
+    if feature_version in {
+        FEATURE_VERSION_INTERVAL_MONO,
+        FEATURE_VERSION_RETENTION_MONO,
+    }:
+        group_count = COEFFICIENT_GROUP_COUNT
+        state_feature_count = coefficient_count // group_count
+        if state_feature_count == STATE_FEATURE_COUNT_COMPACT:
+            return COMPACT_STATE_FEATURE_INDICES
+        if state_feature_count == STATE_FEATURE_COUNT_HINGE:
+            return HINGE_STATE_FEATURE_INDICES
+    if feature_version == FEATURE_VERSION_RETENTION_MONO_DROP_XD2:
+        return DROP_XD2_STATE_FEATURE_INDICES
+    if feature_version == FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2:
+        return DROP_XD2_STATE_FEATURE_INDICES
+    return COMPACT_STATE_FEATURE_INDICES
+
+
+def cost_basis_for_feature_version(
+    feature_version: str,
+    *,
+    coefficient_count: int,
+) -> tuple[str, ...]:
+    _validate_feature_version(feature_version, coefficient_count)
+    if feature_version == FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z:
+        return (COST_BASIS_Z, COST_BASIS_Z2)
+    if feature_version == FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2:
+        return (COST_BASIS_Z, COST_BASIS_Z2)
+    if feature_version == FEATURE_VERSION_RETENTION_MONO_Z2_ONLY:
+        return (COST_BASIS_Z2,)
+    return FULL_COST_BASIS
+
+
+def parameter_count_for_feature_version(
+    feature_version: str,
+    *,
+    default_state_feature_count: int = STATE_FEATURE_COUNT_COMPACT,
+) -> int:
+    if feature_version in {
+        FEATURE_VERSION_INTERVAL_MONO,
+        FEATURE_VERSION_RETENTION_MONO,
+    }:
+        if default_state_feature_count not in {
+            STATE_FEATURE_COUNT_COMPACT,
+            STATE_FEATURE_COUNT_HINGE,
+        }:
+            raise ValueError("default_state_feature_count must be 6 or 8.")
+        return default_state_feature_count * COEFFICIENT_GROUP_COUNT
+    expected = FEATURE_COUNTS.get(feature_version)
+    if expected is None:
+        supported = ", ".join(sorted(FEATURE_COUNTS))
+        raise ValueError(
+            f"Unsupported cost ADR feature_version {feature_version!r}; "
+            f"expected one of: {supported}."
+        )
+    if len(expected) != 1:
+        raise ValueError(
+            f"feature_version {feature_version!r} needs an explicit coefficient count."
+        )
+    return next(iter(expected))
+
+
+def project_coefficients_to_feature_version(
+    coefficients: Sequence[float],
+    *,
+    source_feature_version: str,
+    target_feature_version: str,
+) -> tuple[float, ...]:
+    source_count = len(coefficients)
+    source_features = state_feature_indices_for_feature_version(
+        source_feature_version,
+        coefficient_count=source_count,
+    )
+    source_basis = cost_basis_for_feature_version(
+        source_feature_version,
+        coefficient_count=source_count,
+    )
+    target_count = parameter_count_for_feature_version(target_feature_version)
+    target_features = state_feature_indices_for_feature_version(
+        target_feature_version,
+        coefficient_count=target_count,
+    )
+    target_basis = cost_basis_for_feature_version(
+        target_feature_version,
+        coefficient_count=target_count,
+    )
+    source_group_names = ("base", *source_basis)
+    target_group_names = ("base", *target_basis)
+    source_group_count = len(source_group_names)
+    source_feature_count = len(source_features)
+    if source_count != source_group_count * source_feature_count:
+        raise ValueError("source coefficients do not match source feature_version.")
+    result: list[float] = []
+    for group_name in target_group_names:
+        if group_name not in source_group_names:
+            raise ValueError(
+                f"Cannot project missing coefficient group {group_name!r}."
+            )
+        source_group_index = source_group_names.index(group_name)
+        for feature_index in target_features:
+            if feature_index not in source_features:
+                raise ValueError(
+                    f"Cannot project missing state feature index {feature_index}."
+                )
+            source_feature_index = source_features.index(feature_index)
+            result.append(
+                float(
+                    coefficients[
+                        source_group_index * source_feature_count + source_feature_index
+                    ]
+                )
+            )
+    return tuple(result)
 
 
 def _validate_feature_version(feature_version: str, coefficient_count: int) -> None:
@@ -380,9 +589,7 @@ def _action_head(value: Any) -> ActionHead:
 
 
 def _action_head_for_feature_version(feature_version: str) -> ActionHead:
-    if feature_version == FEATURE_VERSION_INTERVAL_MONO:
-        return ACTION_HEAD_INTERVAL
-    return DEFAULT_ACTION_HEAD
+    return action_head_for_feature_version(feature_version)
 
 
 def _require_str(value: Any, field_name: str) -> str:
@@ -420,13 +627,25 @@ def _float_tuple(value: Any, field_name: str) -> tuple[float, ...]:
 __all__ = [
     "ACTION_HEAD_INTERVAL",
     "ACTION_HEAD_RETENTION",
+    "COST_BASIS_SQRT_Z",
+    "COST_BASIS_Z",
+    "COST_BASIS_Z2",
     "FEATURE_VERSION_INTERVAL_MONO",
     "FEATURE_VERSION_RETENTION_MONO",
+    "FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z",
+    "FEATURE_VERSION_RETENTION_MONO_DROP_XD2",
+    "FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2",
+    "FEATURE_VERSION_RETENTION_MONO_Z2_ONLY",
     "FSRS6CostConditionedADRPolicy",
     "POLICY_KIND",
     "STATE_FEATURE_COUNT_COMPACT",
     "STATE_FEATURE_COUNT_HINGE",
+    "action_head_for_feature_version",
+    "cost_basis_for_feature_version",
     "normalized_cost_weight",
     "normalized_inputs",
+    "parameter_count_for_feature_version",
+    "project_coefficients_to_feature_version",
     "state_features",
+    "state_feature_indices_for_feature_version",
 ]

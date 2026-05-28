@@ -294,6 +294,11 @@ Representative profiles:
   environment. It keeps pop16/gen20, `sigma0 = 1.0`, no coefficient
   preconditioning, and the matched 16 cost weights, while capping in-process
   LSTM training batches at 1024 lanes.
+- `configs/fsrs6_cost_adr_rethead_ablate_*_users_1_8_pop16_gen20_v1.toml`:
+  structure ablations for the default retention-head Cost-ADR policy. These
+  keep the same FSRS6 users 1-8, pop16/gen20 budget, no preconditioning, and
+  matched 16 cost weights while training compressed variants that drop
+  `sqrt_z`, drop `x_d^2`, drop both, or keep only the `z2` cost basis.
 - `configs/fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml`: the
   first-128-user scale-up of the scheduler-HV std-preconditioned Cost-ADR
   profile. It keeps pop16/gen20 CMA-ES, the matched 16 cost weights, and
@@ -476,6 +481,15 @@ uv run python experiments/rl_scheduler/run_experiment.py \
   --config experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1.toml \
   --stage all \
   --run-id fsrs6_cost_adr_rethead_lstmtrain_intervalinit_wide_nopre_users_1_8_pop16_gen20_v1
+```
+
+Cost-ADR retention-head structure ablation example:
+
+```bash
+uv run python experiments/rl_scheduler/run_experiment.py \
+  --config experiments/rl_scheduler/configs/fsrs6_cost_adr_rethead_ablate_drop_sqrt_z_users_1_8_pop16_gen20_v1.toml \
+  --stage all \
+  --run-id fsrs6_cost_adr_rethead_ablate_drop_sqrt_z_users_1_8_pop16_gen20_v1
 ```
 
 Scheduler-HV std-preconditioned Cost-ADR run for users 1-128:

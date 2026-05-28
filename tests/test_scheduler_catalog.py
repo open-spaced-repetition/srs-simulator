@@ -11,6 +11,10 @@ from simulator.fsrs6_adr_policy import (
 from simulator.fsrs6_cost_conditioned_adr_policy import (
     FEATURE_VERSION_INTERVAL_MONO as COST_ADR_FEATURE_VERSION_INTERVAL_MONO,
     FEATURE_VERSION_RETENTION_MONO as COST_ADR_FEATURE_VERSION_RETENTION_MONO,
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z as COST_ADR_FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z,
+    FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2 as COST_ADR_FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
+    FEATURE_VERSION_RETENTION_MONO_DROP_XD2 as COST_ADR_FEATURE_VERSION_RETENTION_MONO_DROP_XD2,
+    FEATURE_VERSION_RETENTION_MONO_Z2_ONLY as COST_ADR_FEATURE_VERSION_RETENTION_MONO_Z2_ONLY,
 )
 from simulator.scheduler_catalog import (
     action_space_allows_lambda_none,
@@ -74,9 +78,20 @@ class SchedulerCatalogTests(unittest.TestCase):
         retention_action_space = fsrs6_cost_adr_action_space_for_feature_version(
             COST_ADR_FEATURE_VERSION_RETENTION_MONO
         )
+        compressed_retention_versions = (
+            COST_ADR_FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z,
+            COST_ADR_FEATURE_VERSION_RETENTION_MONO_DROP_XD2,
+            COST_ADR_FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
+            COST_ADR_FEATURE_VERSION_RETENTION_MONO_Z2_ONLY,
+        )
 
         self.assertEqual(interval_action_space, "sd_cost_interval_function")
         self.assertEqual(retention_action_space, "sd_cost_retention_function")
+        for feature_version in compressed_retention_versions:
+            self.assertEqual(
+                fsrs6_cost_adr_action_space_for_feature_version(feature_version),
+                "sd_cost_retention_function",
+            )
         self.assertTrue(action_space_allows_lambda_none(interval_action_space))
         self.assertTrue(action_space_allows_lambda_none(retention_action_space))
 
