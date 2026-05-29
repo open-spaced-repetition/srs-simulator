@@ -10,12 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import torch
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.cuda_allocator import enable_expandable_cuda_segments  # noqa: E402
+
+CUDA_EXPANDABLE_SEGMENTS_ENABLED = enable_expandable_cuda_segments()
+
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
 
 from simulator.batched_engine.fuzz import round_intervals  # noqa: E402
 from simulator.batched_engine.multiuser_engine import simulate_multiuser  # noqa: E402
@@ -1050,6 +1054,7 @@ def write_outputs(
             "review_markov_transition": False,
             "fsrs6_max_lanes": config.fsrs6_max_lanes,
             "lstm_max_lanes": config.lstm_max_lanes,
+            "cuda_expandable_segments_enabled": CUDA_EXPANDABLE_SEGMENTS_ENABLED,
             "retention_bins": RETENTION_BINS,
             "log_interval_bins": INTERVAL_BINS,
         },
@@ -1144,10 +1149,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lstm-max-lanes",
         type=positive_int,
-        default=512,
+        default=1024,
         help=(
-            "Maximum simultaneous LSTM lanes. Default 512 is deliberately below "
-            "the production 1024 cap to reduce VRAM/OOM risk while tracing."
+            "Maximum simultaneous LSTM lanes. Default 1024 matches the "
+            "batched LSTM cap and relies on expandable CUDA allocator segments."
         ),
     )
     parser.add_argument("--gpu-monitor-interval", type=float, default=2.0)
@@ -1207,6 +1212,10 @@ def run(config: AnalysisConfig) -> None:
     try:
         print(f"benchmark_root={config.benchmark_root}", flush=True)
         print(f"device={config.device}", flush=True)
+        print(
+            f"cuda_expandable_segments_enabled={CUDA_EXPANDABLE_SEGMENTS_ENABLED}",
+            flush=True,
+        )
         for env in config.envs:
             max_lanes = (
                 config.fsrs6_max_lanes if env == "fsrs6" else config.lstm_max_lanes
