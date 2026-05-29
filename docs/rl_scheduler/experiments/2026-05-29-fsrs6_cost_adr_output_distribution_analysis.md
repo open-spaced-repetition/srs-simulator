@@ -28,6 +28,10 @@ Analysis artifacts:
 
 `artifacts/rl_scheduler/cost_adr_output_distribution_analysis_2026_05_29`
 
+Empirical occupancy artifacts:
+
+`artifacts/rl_scheduler/cost_adr_empirical_occupancy_analysis_2026_05_29`
+
 Key files:
 
 - `summary.json`
@@ -37,6 +41,10 @@ Key files:
 - `coefficient_summary.csv`
 - `performance_by_cost_weight.csv`
 - `cost_weight_baseline_nearest_comparison.csv`
+- `empirical_summary.json`
+- `empirical_by_cost_phase.csv`
+- `empirical_state_region_by_cost_phase.csv`
+- `empirical_lane_phase_summary.csv`
 
 ## Policy Formula
 
@@ -74,9 +82,26 @@ partition `0`, matching the scheduler visualization path. Pareto metrics come
 from the run's existing `analysis_summary.json`.
 
 Important caveat: the S/D grid is a structural policy probe, not the empirical
-review-state distribution encountered during simulation. Runtime efficiency is
-therefore interpreted from the sweep/Pareto outputs, while the grid explains the
-shape of the learned policy.
+review-state distribution encountered during simulation. I therefore added a
+second occupancy-weighted replay that hooks scheduler updates during
+`simulate_multiuser` and records the retention/interval actually chosen for
+each scheduling decision.
+
+Reproducible command:
+
+```bash
+uv run python experiments/rl_scheduler/analyze_fsrs6_cost_adr_empirical_occupancy.py \
+  --run-root artifacts/rl_scheduler/fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_128/fsrs6_cost_adr_rethead_intervalinit_wide_nopre_users_1_128_pop16_gen20_v1_markov_off \
+  --out-dir artifacts/rl_scheduler/cost_adr_empirical_occupancy_analysis_2026_05_29 \
+  --users 1-128 \
+  --envs fsrs6,lstm \
+  --fsrs6-max-lanes 2048 \
+  --lstm-max-lanes 1024
+```
+
+The replay used `enable_expandable_cuda_segments()` before CUDA allocation.
+GPU monitor summary: shared memory peak `177,389,568` bytes, shared-memory
+spill `false`, and `nvidia-smi` peak memory `6900 MiB`.
 
 ## Retention Distribution By Cost Weight
 
@@ -99,6 +124,44 @@ retention to 0.5" rule; at `w=1024`, 11.66% of sampled states still output
 `R>0.90`.
 
 All 128 users were monotone non-increasing in `w` at every sampled grid point.
+
+## Empirical Review Occupancy
+
+The occupancy replay confirms the same monotone triage pattern, but it also
+shows why the uniform grid overstates how often the high-retention tail is
+experienced. Actual review decisions concentrate heavily in low/mid stability
+and hard difficulty regions, especially as `w` increases.
+
+Review-phase retention and interval distributions:
+
+| env | w | review events | mean R | median R | q05 R | q95 R | median interval days | q95 interval days |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| FSRS6 | 0 | 121.76M | 0.916 | 0.962 | 0.693 | 0.986 | 3.00 | 50.99 |
+| FSRS6 | 16 | 67.28M | 0.842 | 0.881 | 0.585 | 0.971 | 4.98 | 109.02 |
+| FSRS6 | 64 | 38.24M | 0.763 | 0.781 | 0.534 | 0.950 | 7.04 | 222.59 |
+| FSRS6 | 128 | 26.36M | 0.713 | 0.711 | 0.504 | 0.945 | 7.99 | 382.38 |
+| FSRS6 | 384 | 14.10M | 0.638 | 0.615 | 0.449 | 0.946 | 11.03 | 1128.50 |
+| FSRS6 | 1024 | 9.05M | 0.581 | 0.559 | 0.377 | 0.954 | 15.05 | 3527.77 |
+| LSTM | 0 | 159.87M | 0.920 | 0.959 | 0.704 | 0.987 | 3.00 | 34.87 |
+| LSTM | 16 | 77.38M | 0.855 | 0.892 | 0.667 | 0.979 | 4.98 | 88.61 |
+| LSTM | 64 | 42.59M | 0.771 | 0.779 | 0.627 | 0.971 | 5.99 | 193.87 |
+| LSTM | 128 | 29.93M | 0.720 | 0.687 | 0.549 | 0.967 | 5.99 | 325.46 |
+| LSTM | 384 | 17.15M | 0.646 | 0.615 | 0.457 | 0.953 | 7.04 | 846.25 |
+| LSTM | 1024 | 11.77M | 0.592 | 0.578 | 0.389 | 0.944 | 5.99 | 2077.30 |
+
+The empirical medians are lower than the structural-grid medians at high `w`
+because runtime traffic is not uniformly spread across S/D. At `w=1024`, the
+dominant review region is `low_s/hard_d`: `53.87%` of FSRS6 review events and
+`65.79%` of LSTM review events. That region receives low retention and short
+rounded intervals: mean `R=0.572`, mean interval `39.4` days in FSRS6;
+mean `R=0.588`, mean interval `28.1` days in LSTM.
+
+The second most important high-cost region is `mid_s/hard_d`, where the policy
+allows very long intervals while lowering retention further: at `w=1024`, mean
+`R=0.479` and mean interval `1860.4` days in FSRS6; mean `R=0.491` and mean
+interval `1842.3` days in LSTM. This explains the frontier movement: a large
+share of hard cards is either kept cheap at low stability or deferred
+aggressively once stability is high enough.
 
 ## Cross-User Regularities
 
@@ -252,8 +315,9 @@ does not waste parameters modeling weak directions (`sqrt_z`, `x_d^2`) and
 keeps the search focused on the dominant pattern: a concave stability effect
 plus a monotone, stability-sensitive cost penalty.
 
-Remaining uncertainty: this report uses a uniform S/D probe. A stronger next
-analysis would log or reconstruct the empirical distribution of scheduler
-states visited during simulation and reweight the policy-output summaries by
-actual state occupancy. That would make the interval distribution directly
-match runtime behavior.
+The empirical occupancy replay qualifies the uniform-grid view. The grid is
+still useful for inspecting the policy's global shape and monotonicity, but
+runtime behavior is dominated by hard low/mid-stability cards. The actual
+review-weighted distribution therefore looks more aggressive than the grid
+median at high `w`, while preserving the same qualitative mechanism:
+state-conditioned triage under an explicit cost weight.
