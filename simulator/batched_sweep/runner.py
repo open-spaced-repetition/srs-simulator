@@ -96,6 +96,7 @@ class BatchedSweepContext:
     fsrs6_ap_policy_specs: tuple[FSRS6APPolicySpec, ...] = ()
     anki_sm2_ap_policy: Path | None = None
     anki_sm2_ap_policy_specs: tuple[AnkiSM2APPolicySpec, ...] = ()
+    fsrs3_dr_values_by_user: Mapping[int, tuple[float, ...]] | None = None
     fsrs6_dr_values_by_user: Mapping[int, tuple[float, ...]] | None = None
 
 
@@ -199,9 +200,13 @@ def _build_sweep_lanes(
                     scheduler_name=name,
                     scheduler_spec=raw,
                     dr_values=ctx.dr_values,
-                    dr_values_by_user=ctx.fsrs6_dr_values_by_user
-                    if name == "fsrs6" and ctx.fsrs6_dr_values_by_user
-                    else None,
+                    dr_values_by_user=ctx.fsrs3_dr_values_by_user
+                    if name == "fsrs3" and ctx.fsrs3_dr_values_by_user
+                    else (
+                        ctx.fsrs6_dr_values_by_user
+                        if name == "fsrs6" and ctx.fsrs6_dr_values_by_user
+                        else None
+                    ),
                     fixed_interval=None,
                 )
             )

@@ -5274,6 +5274,9 @@ def _run_configured_batched_retention_sweep(
         if "anki_sm2_ap" in scheduler_names
         else None,
         anki_sm2_ap_policy_manifest=None,
+        fsrs3_dr_manifest=_resolve_repo_path(repo_root, sweep_config.fsrs3_dr_manifest)
+        if sweep_config.fsrs3_dr_manifest is not None
+        else None,
         fsrs6_dr_manifest=_resolve_baseline_dr_manifest_path(
             config=config,
             repo_root=repo_root,

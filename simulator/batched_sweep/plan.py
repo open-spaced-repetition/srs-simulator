@@ -157,6 +157,18 @@ def build_batched_sweep_plan(
     drs = dr_values(args.start_retention, args.end_retention, args.step)
     if any(value <= 0.0 or value >= 1.0 for value in drs):
         raise ValueError("Retention grid values must satisfy 0 < value < 1.")
+    fsrs3_dr_values_by_user: dict[int, tuple[float, ...]] = {}
+    fsrs3_dr_manifest = getattr(args, "fsrs3_dr_manifest", None)
+    if fsrs3_dr_manifest is not None and any(
+        parse_scheduler_spec(raw)[0] == "fsrs3" for raw in schedulers
+    ):
+        manifest = load_baseline_dr_manifest(
+            Path(fsrs3_dr_manifest),
+            user_ids=user_ids,
+        )
+        fsrs3_dr_values_by_user = {
+            user_id: manifest.values_for_user(user_id) for user_id in user_ids
+        }
     fsrs6_dr_values_by_user: dict[int, tuple[float, ...]] = {}
     fsrs6_dr_manifest = getattr(args, "fsrs6_dr_manifest", None)
     if fsrs6_dr_manifest is not None and any(
@@ -271,6 +283,7 @@ def build_batched_sweep_plan(
         fsrs6_ap_policy_specs=fsrs6_ap_policy_specs,
         anki_sm2_ap_policy=getattr(args, "anki_sm2_ap_policy", None),
         anki_sm2_ap_policy_specs=anki_sm2_ap_policy_specs,
+        fsrs3_dr_values_by_user=fsrs3_dr_values_by_user,
         fsrs6_dr_values_by_user=fsrs6_dr_values_by_user,
     )
     batches_by_env: dict[str, list[list[int]]] = {}

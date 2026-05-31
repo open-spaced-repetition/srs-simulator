@@ -94,6 +94,7 @@ class BatchedSweepConfig:
         )
         fsrs6_ap = _table(raw, "fsrs6_ap", required=False)
         anki_sm2_ap = _table(raw, "anki_sm2_ap", required=False)
+        fsrs3 = _table(raw, "fsrs3", required=False)
         fsrs6 = _table(raw, "fsrs6", required=False)
 
         args = argparse.Namespace(
@@ -317,6 +318,11 @@ class BatchedSweepConfig:
                 "anki_sm2_ap.policy_manifest",
                 base_path=base_path,
             ),
+            fsrs3_dr_manifest=_optional_path(
+                fsrs3.get("dr_manifest"),
+                "fsrs3.dr_manifest",
+                base_path=base_path,
+            ),
             fsrs6_dr_manifest=_optional_path(
                 fsrs6.get("dr_manifest"),
                 "fsrs6.dr_manifest",
@@ -457,6 +463,9 @@ def _adapt_experiment_config(
         else None,
     )
     baseline_dr_selection = _table(raw, "baseline_dr_selection", required=False)
+    fsrs3 = {}
+    if sweep.get("fsrs3_dr_manifest") is not None:
+        fsrs3["dr_manifest"] = sweep["fsrs3_dr_manifest"]
     fsrs6 = {}
     if baseline_dr_selection.get("manifest") is not None:
         fsrs6["dr_manifest"] = baseline_dr_selection["manifest"]
@@ -484,6 +493,7 @@ def _adapt_experiment_config(
             "diagnostic_csv_logs": performance.get("diagnostic_csv_logs", False),
         },
         "short_term": short_term,
+        "fsrs3": fsrs3,
         "fsrs6": fsrs6,
         "fsrs6_adr": fsrs6_adr,
         "fsrs6_cost_adr": fsrs6_cost_adr,

@@ -286,6 +286,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "set, fsrs6 DR lanes use those values instead of the uniform range."
         ),
     )
+    parser.add_argument(
+        "--fsrs3-dr-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "JSON manifest with per-user FSRSv3 desired-retention values. When "
+            "set, fsrs3 DR lanes use those values instead of the uniform range."
+        ),
+    )
     add_log_args(
         parser, log_dir_default=None, include_no_log=True, include_no_progress=True
     )
@@ -457,6 +466,7 @@ def _merge_config_args(
         "anki_sm2_ap_policy_root": ("--anki-sm2-ap-policy-root",),
         "anki_sm2_ap_train_run_root": ("--anki-sm2-ap-train-run-root",),
         "anki_sm2_ap_policy_manifest": ("--anki-sm2-ap-policy-manifest",),
+        "fsrs3_dr_manifest": ("--fsrs3-dr-manifest",),
         "fsrs6_dr_manifest": ("--fsrs6-dr-manifest",),
         "log_dir": ("--log-dir",),
         "log_layout": ("--log-layout",),

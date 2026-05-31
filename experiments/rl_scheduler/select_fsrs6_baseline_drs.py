@@ -23,7 +23,7 @@ from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
     PolicySearchSettings,
     _build_bundle,
-    _evaluate_fsrs6_baseline_grid,
+    _evaluate_desired_retention_scheduler_grid,
     _git_commit,
     _read_training_policy_search,
     _write_json,
@@ -44,10 +44,16 @@ DEFAULT_MAX_LANES_PER_BATCH = 8192
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate per-user FSRS6 baseline DR selection manifests.",
+        description="Generate per-user scheduler DR selection manifests.",
         allow_abbrev=False,
     )
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument(
+        "--scheduler",
+        choices=["fsrs6", "fsrs3"],
+        default="fsrs6",
+        help="Desired-retention scheduler whose DR values are optimized.",
+    )
     parser.add_argument(
         "--output-manifest",
         type=Path,
@@ -66,7 +72,7 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_MAX_LANES_PER_BATCH,
         help=(
-            "Maximum FSRS6 lanes per selector evaluation batch. The selector "
+            "Maximum scheduler lanes per selector evaluation batch. The selector "
             "batches multiple users together up to this cap."
         ),
     )
@@ -87,6 +93,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     config = ExperimentConfig.from_toml(args.config)
+    if args.scheduler != "fsrs6" and args.output_manifest is None:
+        raise SystemExit(
+            "--output-manifest is required when selecting DRs for a non-FSRS6 scheduler."
+        )
     output_manifest = args.output_manifest or config.baseline_dr_selection.manifest
     if output_manifest is None:
         raise SystemExit(
@@ -130,6 +140,7 @@ def main() -> int:
             config_path=args.config,
             output_manifest=output_manifest,
             user_ids=config.users.train,
+            selection_scheduler=args.scheduler,
             selection_environment=selection_config.selection_environment,
             target_count=selection_config.target_count,
             population_size=selection_config.population_size,
@@ -145,6 +156,7 @@ def main() -> int:
             overrides=overrides,
             benchmark_partition=args.benchmark_partition,
             button_usage=args.button_usage,
+            scheduler_name=args.scheduler,
             device=device,
             short_term_source=short_term_source,
             learning_steps=learning_steps,
@@ -167,6 +179,7 @@ def main() -> int:
                     "seed": config.seed,
                 },
                 "code_commit": _git_commit(),
+                "selection_scheduler": args.scheduler,
                 "selection_environment": selection_config.selection_environment,
                 "simulation": selection_experiment.simulation.to_dict(),
                 "button_usage": str(args.button_usage)
@@ -226,6 +239,7 @@ def _select_users_drs_batched(
     overrides: dict[str, str],
     benchmark_partition: str | None,
     button_usage: Path | None,
+    scheduler_name: str,
     device: torch.device,
     short_term_source: str | None,
     learning_steps: list[float],
@@ -248,6 +262,7 @@ def _select_users_drs_batched(
         overrides=overrides,
         benchmark_partition=benchmark_partition,
         button_usage=button_usage,
+        scheduler_name=scheduler_name,
         device=device,
         short_term_source=short_term_source,
         learning_steps=learning_steps,
@@ -329,6 +344,7 @@ def _select_users_drs_batched(
             overrides=overrides,
             benchmark_partition=benchmark_partition,
             button_usage=button_usage,
+            scheduler_name=scheduler_name,
             device=device,
             short_term_source=short_term_source,
             learning_steps=learning_steps,
@@ -391,6 +407,7 @@ def _select_users_drs_batched(
             state=states[int(user_id)],
             config=config,
             config_path=config_path,
+            scheduler_name=scheduler_name,
         )
         for user_id in user_ids
     ]
@@ -401,6 +418,7 @@ def _manifest_entry_from_state(
     state: _UserSelectionState,
     config: ExperimentConfig,
     config_path: Path,
+    scheduler_name: str,
 ) -> dict[str, Any]:
     return {
         "user_id": state.user_id,
@@ -424,6 +442,7 @@ def _manifest_entry_from_state(
         },
         "config_snapshot": {
             "config_path": str(config_path),
+            "selection_scheduler": scheduler_name,
             "selection_environment": config.baseline_dr_selection.selection_environment,
         },
     }
@@ -458,6 +477,7 @@ class _SelectionProgressLogger:
         config_path: Path,
         output_manifest: Path,
         user_ids: Sequence[int],
+        selection_scheduler: str = "fsrs6",
         selection_environment: str,
         target_count: int,
         population_size: int,
@@ -469,6 +489,7 @@ class _SelectionProgressLogger:
             config_path=str(config_path),
             output_manifest=str(output_manifest),
             user_ids=list(user_ids),
+            selection_scheduler=selection_scheduler,
             selection_environment=selection_environment,
             target_count=target_count,
             population_size=population_size,
@@ -540,6 +561,7 @@ def _evaluate_multi_user_candidate_sets(
     overrides: dict[str, str],
     benchmark_partition: str | None,
     button_usage: Path | None,
+    scheduler_name: str,
     device: torch.device,
     short_term_source: str | None,
     learning_steps: list[float],
@@ -578,13 +600,15 @@ def _evaluate_multi_user_candidate_sets(
             overrides=overrides,
             benchmark_partition=benchmark_partition,
             button_usage=button_usage,
+            scheduler_name=scheduler_name,
             device=device,
             short_term_source=short_term_source,
             learning_steps=learning_steps,
             relearning_steps=relearning_steps,
         )
         try:
-            metrics_by_job = _evaluate_fsrs6_baseline_grid(
+            metrics_by_job = _evaluate_desired_retention_scheduler_grid(
+                scheduler_name=scheduler_name,
                 config=config,
                 settings=settings,
                 bundle=bundle,

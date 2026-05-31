@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from simulator.batched_sweep.behavior_cost import build_behavior_cost, load_usage
 from simulator.batched_sweep.weights import (
     build_default_fsrs6_weights,
+    load_fsrs3_weights,
     load_fsrs6_weights,
     resolve_lstm_paths,
 )
@@ -35,7 +36,7 @@ from simulator.fsrs6_adr_policy import (
     FSRS6ADRPolicy,
     feature_count,
 )
-from simulator.schedulers.fsrs import FSRS6BatchSchedulerOps
+from simulator.schedulers.fsrs import FSRS3BatchSchedulerOps, FSRS6BatchSchedulerOps
 from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
 from simulator.batched_engine.multiuser_engine import simulate_multiuser
 from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
@@ -263,6 +264,7 @@ def _build_bundle(
     short_term_source: str | None,
     learning_steps: list[float],
     relearning_steps: list[float],
+    scheduler_name: str = "fsrs6",
 ) -> SimulationBundle:
     if lane_user_ids is None:
         if user_id is None or lanes is None:
@@ -274,7 +276,11 @@ def _build_bundle(
         if lanes < 1:
             raise ValueError("lane_user_ids must not be empty.")
     short_term = bool(short_term_source)
-    if settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_USER_FIT:
+    scheduler_name = scheduler_name.lower()
+    if (
+        scheduler_name == "fsrs6"
+        and settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_USER_FIT
+    ):
         scheduler_weights, kept_users = load_fsrs6_weights(
             repo_root=REPO_ROOT,
             user_ids=user_ids,
@@ -286,14 +292,35 @@ def _build_bundle(
         )
         if scheduler_weights is None or len(kept_users) != lanes:
             raise SystemExit(f"Missing FSRS-6 scheduler weights for user {user_id}.")
-    elif settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT:
+    elif (
+        scheduler_name == "fsrs6"
+        and settings.scheduler_weight_source == SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT
+    ):
         scheduler_weights = build_default_fsrs6_weights(
             user_ids=user_ids,
             device=device,
         )
+    elif scheduler_name == "fsrs3":
+        if settings.scheduler_weight_source != SCHEDULER_WEIGHT_SOURCE_USER_FIT:
+            raise SystemExit(
+                "FSRSv3 DR selection requires user-fitted scheduler weights."
+            )
+        scheduler_weights, kept_users = load_fsrs3_weights(
+            repo_root=REPO_ROOT,
+            user_ids=user_ids,
+            benchmark_root=benchmark_root,
+            benchmark_partition=benchmark_partition,
+            overrides=overrides,
+            short_term=short_term,
+            device=device,
+        )
+        if scheduler_weights is None or len(kept_users) != lanes:
+            raise SystemExit(f"Missing FSRS-3 scheduler weights for user {user_id}.")
     else:
         raise AssertionError(
-            f"Unexpected scheduler_weight_source={settings.scheduler_weight_source!r}."
+            "Unexpected scheduler selection: "
+            f"scheduler_name={scheduler_name!r}, "
+            f"scheduler_weight_source={settings.scheduler_weight_source!r}."
         )
 
     environment = config.simulation.environment
@@ -399,13 +426,11 @@ def _evaluate_fsrs6_baseline(
     bundle: SimulationBundle,
     seed: int,
 ) -> CandidateMetrics:
-    sched_ops = FSRS6BatchSchedulerOps(
-        weights=bundle.scheduler_weights,
+    sched_ops = _desired_retention_scheduler_ops(
+        scheduler_name="fsrs6",
+        config=config,
+        bundle=bundle,
         desired_retention=settings.baseline_desired_retention,
-        bounds=Bounds(),
-        priority_mode=config.simulation.scheduler_priority,
-        device=bundle.device,
-        dtype=torch.float32,
     )
     stats = simulate_multiuser(
         days=config.simulation.days,
@@ -439,6 +464,29 @@ def _evaluate_fsrs6_baseline_grid(
     seed: int,
     baseline_dr_values_by_job: Sequence[tuple[float, ...]] | None = None,
 ) -> list[list[CandidateMetrics]]:
+    return _evaluate_desired_retention_scheduler_grid(
+        scheduler_name="fsrs6",
+        config=config,
+        settings=settings,
+        bundle=bundle,
+        baseline_dr_values=baseline_dr_values,
+        job_count=job_count,
+        seed=seed,
+        baseline_dr_values_by_job=baseline_dr_values_by_job,
+    )
+
+
+def _evaluate_desired_retention_scheduler_grid(
+    *,
+    scheduler_name: str,
+    config: ExperimentConfig,
+    settings: PolicySearchSettings,
+    bundle: SimulationBundle,
+    baseline_dr_values: tuple[float, ...],
+    job_count: int,
+    seed: int,
+    baseline_dr_values_by_job: Sequence[tuple[float, ...]] | None = None,
+) -> list[list[CandidateMetrics]]:
     if baseline_dr_values_by_job is None:
         baseline_dr_values_by_job = [baseline_dr_values for _job in range(job_count)]
     if len(baseline_dr_values_by_job) != job_count:
@@ -446,17 +494,15 @@ def _evaluate_fsrs6_baseline_grid(
     flat_dr_values = [
         dr for job_dr_values in baseline_dr_values_by_job for dr in job_dr_values
     ]
-    sched_ops = FSRS6BatchSchedulerOps(
-        weights=bundle.scheduler_weights,
+    sched_ops = _desired_retention_scheduler_ops(
+        scheduler_name=scheduler_name,
+        config=config,
+        bundle=bundle,
         desired_retention=torch.tensor(
             flat_dr_values,
             device=bundle.device,
             dtype=torch.float32,
         ),
-        bounds=Bounds(),
-        priority_mode=config.simulation.scheduler_priority,
-        device=bundle.device,
-        dtype=torch.float32,
     )
     stats = simulate_multiuser(
         days=config.simulation.days,
@@ -485,6 +531,34 @@ def _evaluate_fsrs6_baseline_grid(
         split_metrics.append(metrics[offset:next_offset])
         offset = next_offset
     return split_metrics
+
+
+def _desired_retention_scheduler_ops(
+    *,
+    scheduler_name: str,
+    config: ExperimentConfig,
+    bundle: SimulationBundle,
+    desired_retention: float | torch.Tensor,
+) -> Any:
+    scheduler_name = scheduler_name.lower()
+    if scheduler_name == "fsrs6":
+        return FSRS6BatchSchedulerOps(
+            weights=bundle.scheduler_weights,
+            desired_retention=desired_retention,
+            bounds=Bounds(),
+            priority_mode=config.simulation.scheduler_priority,
+            device=bundle.device,
+            dtype=torch.float32,
+        )
+    if scheduler_name == "fsrs3":
+        return FSRS3BatchSchedulerOps(
+            weights=bundle.scheduler_weights,
+            desired_retention=desired_retention,
+            bounds=Bounds(),
+            device=bundle.device,
+            dtype=torch.float32,
+        )
+    raise ValueError(f"Unsupported desired-retention scheduler: {scheduler_name}")
 
 
 def _evaluate_adr_candidates(

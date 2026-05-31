@@ -641,6 +641,7 @@ class BatchedSweepStageConfig:
     start_retention: float = 0.50
     end_retention: float = 0.98
     step: float = 0.02
+    fsrs3_dr_manifest: Path | None = None
     fsrs6_cost_adr_cost_weights: tuple[float, ...] | None = None
     no_progress: bool = True
     no_log: bool = False
@@ -650,6 +651,7 @@ class BatchedSweepStageConfig:
         log_dir = raw.get("log_dir")
         torch_device = raw.get("torch_device")
         cuda_devices = raw.get("cuda_devices")
+        fsrs3_dr_manifest = raw.get("fsrs3_dr_manifest")
         cost_adr_cost_weights = raw.get("fsrs6_cost_adr_cost_weights")
         env_overrides = _sweep_environment_batch_configs(
             raw.get("env_overrides"),
@@ -689,6 +691,11 @@ class BatchedSweepStageConfig:
                 or 0.98
             ),
             step=float(_optional_float(raw.get("step", 0.02), "sweep.step") or 0.02),
+            fsrs3_dr_manifest=Path(
+                _require_str(fsrs3_dr_manifest, "sweep.fsrs3_dr_manifest")
+            )
+            if fsrs3_dr_manifest is not None
+            else None,
             fsrs6_cost_adr_cost_weights=_float_tuple(
                 cost_adr_cost_weights,
                 "sweep.fsrs6_cost_adr_cost_weights",
@@ -745,6 +752,9 @@ class BatchedSweepStageConfig:
             "start_retention": self.start_retention,
             "end_retention": self.end_retention,
             "step": self.step,
+            "fsrs3_dr_manifest": str(self.fsrs3_dr_manifest)
+            if self.fsrs3_dr_manifest is not None
+            else None,
             "fsrs6_cost_adr_cost_weights": list(self.fsrs6_cost_adr_cost_weights)
             if self.fsrs6_cost_adr_cost_weights is not None
             else None,

@@ -33,6 +33,7 @@ expected_engine = "batched"
 stage_mode = "copy"
 environments = ["fsrs6", "lstm"]
 desired_retention_values = [
+  0.50,
   0.52,
   0.54,
   0.56,
@@ -56,7 +57,16 @@ desired_retention_values = [
   0.92,
   0.94,
   0.96,
+  0.98,
 ]
+
+[baseline_dr_selection]
+manifest = "artifacts/rl_scheduler/baseline_dr_selection/fsrs6_users_1_8_16dr_pop16_gen5.json"
+selection_environment = "fsrs6"
+target_count = 16
+reference = "uniform_anchor"
+population_size = 16
+generations = 5
 
 [simulation]
 engine = "batched"
@@ -86,6 +96,14 @@ diagnostic_csv_logs = false
 [training]
 lambda_grid = [0.0]
 
+[training.policy_search]
+retention_min = 0.50
+retention_max = 0.98
+baseline_desired_retention = 0.90
+torch_device = "cuda"
+short_term_threshold = 0.5
+short_term_loops_limit = 10
+
 [sweep]
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
@@ -96,9 +114,10 @@ log_layout = "user"
 max_lanes_per_batch = 8192
 torch_device = "cuda"
 benchmark_partition = "0"
-start_retention = 0.52
-end_retention = 0.96
+start_retention = 0.50
+end_retention = 0.98
 step = 0.02
+fsrs3_dr_manifest = "artifacts/rl_scheduler/baseline_dr_selection/fsrs3_users_1_8_16dr_pop16_gen5.json"
 no_progress = true
 no_log = false
 
@@ -108,8 +127,8 @@ schedulers = ["fsrs6", "fsrs3"]
 log_dir = "logs/retention_sweep"
 result_glob = "simulation_results_retention_sweep_user_*.json"
 plot_glob = "*.png"
-start_retention = 0.52
-end_retention = 0.96
+start_retention = 0.50
+end_retention = 0.98
 short_term = "off"
 short_term_source = "any"
 engine = "batched"
@@ -124,8 +143,8 @@ envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6", "fsrs3"]
 comparisons = ["fsrs3:fsrs6"]
 result_glob = "analysis.md"
-start_retention = 0.52
-end_retention = 0.96
+start_retention = 0.50
+end_retention = 0.98
 short_term = "off"
 engine = "batched"
 fuzz = "off"
