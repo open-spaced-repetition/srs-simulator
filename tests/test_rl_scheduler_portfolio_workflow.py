@@ -16,6 +16,9 @@ from experiments.rl_scheduler.run_portfolio_workflow import (
     _report_command,
     build_workflow_steps,
 )
+from experiments.rl_scheduler.train_fsrs6_oracle_stationary_finite_distill_portfolio import (
+    _build_family_context,
+)
 from simulator.experiment_infra.schemas import ExperimentConfig
 
 
@@ -57,6 +60,7 @@ class PortfolioWorkflowTests(unittest.TestCase):
         self.assertEqual(
             command[command.index("--fsrs6-dr-manifest") + 1], str(manifest)
         )
+        self.assertEqual(command[command.index("--seed") + 1], "43")
         self.assertNotIn("--max-lanes-per-batch", command)
 
     def test_existing_manifest_skips_selector_without_force(self) -> None:
@@ -184,6 +188,22 @@ class PortfolioWorkflowTests(unittest.TestCase):
             command[command.index("--candidate-label") + 1],
             "Oracle stationary finite distill",
         )
+
+    def test_oracle_distill_family_context_sets_parser_defaults(self) -> None:
+        config_path = (
+            REPO_ROOT
+            / "experiments/rl_scheduler/configs/"
+            / "fsrs6_oracle_stationary_finite_distill_portfolio_users_1_8_pop16_v1.toml"
+        )
+        config = ExperimentConfig.from_toml(config_path)
+
+        context = _build_family_context(
+            config=config,
+            raw_training_policy_search=config.training_policy_search,
+            baseline_dr_values=(),
+        )
+
+        self.assertFalse(context.distill_args.per_user_models)
 
 
 if __name__ == "__main__":

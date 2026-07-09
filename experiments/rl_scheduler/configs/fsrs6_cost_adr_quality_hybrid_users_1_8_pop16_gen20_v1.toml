@@ -67,6 +67,7 @@ trainer = "fsrs6_cost_adr_cmaes"
 max_lanes_per_batch = 6400
 
 [sweep]
+seed = 43
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6_cost_adr"]

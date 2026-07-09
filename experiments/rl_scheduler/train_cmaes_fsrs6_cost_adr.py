@@ -10,11 +10,16 @@ from typing import Any, cast
 import sys
 
 import cma
-import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.cuda_allocator import enable_expandable_cuda_segments
+
+enable_expandable_cuda_segments()
+
+import torch
 
 from experiments.rl_scheduler.policy_search_common import (
     CMAESSettings,
@@ -29,6 +34,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _read_training_policy_search,
     _relative_path_string,
     _write_json,
+    training_simulation_seed,
 )
 from experiments.rl_scheduler.portfolio_selection import (
     ObjectivePoint,
@@ -1652,6 +1658,7 @@ def _run_cmaes_multiuser(
             device=bundle.device,
             dtype=torch.float32,
         )
+        simulation_seed = training_simulation_seed(config, generation=generation)
         metrics_by_job = _evaluate_cost_adr_candidates_multiuser(
             config=config,
             settings=settings,
@@ -1660,7 +1667,7 @@ def _run_cmaes_multiuser(
             jobs=jobs,
             coefficients_by_job=coefficients_by_job,
             cost_weights=cost_weights,
-            seed=config.seed,
+            seed=simulation_seed,
         )
         for job_index, state in enumerate(prepared_jobs):
             reference = state.reference_point
@@ -1703,6 +1710,7 @@ def _run_cmaes_multiuser(
             objective_scores = [score.objective_score for score in candidate_scores]
             history_entry = {
                 "generation": float(generation),
+                "simulation_seed": float(simulation_seed),
                 "sigma": float(state.optimizer.sigma),
                 "best_objective_score": float(state.best_objective_score),
                 "generation_best_objective_score": float(

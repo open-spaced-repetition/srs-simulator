@@ -630,6 +630,7 @@ class BatchedSweepStageConfig:
     schedulers: tuple[str, ...] = ()
     log_dir: Path | None = None
     log_layout: str = "user"
+    seed: int | None = None
     batch_size: int | None = None
     max_lanes_per_batch: int | None = None
     env_overrides: Mapping[str, SweepEnvironmentBatchConfig] = field(
@@ -664,6 +665,7 @@ class BatchedSweepStageConfig:
             if log_dir is not None
             else None,
             log_layout=_require_str(raw.get("log_layout", "user"), "sweep.log_layout"),
+            seed=_optional_int(raw.get("seed"), "sweep.seed", minimum=0),
             batch_size=_optional_int(
                 raw.get("batch_size"), "sweep.batch_size", minimum=1
             ),
@@ -740,6 +742,7 @@ class BatchedSweepStageConfig:
             "schedulers": list(self.schedulers),
             "log_dir": str(self.log_dir) if self.log_dir is not None else None,
             "log_layout": self.log_layout,
+            "seed": self.seed,
             "batch_size": self.batch_size,
             "max_lanes_per_batch": self.max_lanes_per_batch,
             "env_overrides": {
@@ -1239,6 +1242,14 @@ class ExperimentConfig:
             ),
             config_path=config_path,
             schema_version=schema_version,
+        )
+
+    @property
+    def evaluation_seed(self) -> int:
+        return (
+            self.sweep_batched.seed
+            if self.sweep_batched.seed is not None
+            else self.seed
         )
 
     def to_dict(self) -> dict[str, Any]:

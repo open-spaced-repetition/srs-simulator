@@ -11,11 +11,16 @@ from typing import Any
 import sys
 
 import cma
-import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.cuda_allocator import enable_expandable_cuda_segments
+
+enable_expandable_cuda_segments()
+
+import torch
 
 from experiments.rl_scheduler.policy_search_common import (
     CMAESSettings,
@@ -37,6 +42,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _relative_path_string,
     _score,
     _write_json,
+    training_simulation_seed,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
@@ -417,6 +423,11 @@ def run_training_jobs(
                 device=train_bundle.device,
                 dtype=torch.float32,
             )
+            simulation_seed = training_simulation_seed(
+                config,
+                generation=generation,
+                offset=chunk_start,
+            )
             metrics_by_job_dr, weights_by_job_dr = _evaluate_ap_candidates(
                 config=config,
                 settings=settings,
@@ -425,7 +436,7 @@ def run_training_jobs(
                 jobs=jobs,
                 chunk_dr_values=chunk_dr_values,
                 search_vectors=search_vectors,
-                seed=config.seed + chunk_start,
+                seed=simulation_seed,
             )
 
             for job_index, job in enumerate(jobs):
@@ -461,6 +472,7 @@ def run_training_jobs(
                         best_metrics[job_index][dr_index] = generation_best
                     history_entry = {
                         "generation": float(generation),
+                        "simulation_seed": float(simulation_seed),
                         "baseline_desired_retention": float(baseline_dr),
                         "sigma": float(strategies[job_index][dr_index].sigma),
                         "best_score": float(best_scores[job_index][dr_index]),
@@ -481,6 +493,7 @@ def run_training_jobs(
                     "cmaes_generation",
                     device=train_bundle.device,
                     generation=generation,
+                    simulation_seed=simulation_seed,
                     baseline_desired_retention_values=list(chunk_dr_values),
                     effective_lanes=len(chunk_dr_values)
                     * optimizer_settings.population_size,

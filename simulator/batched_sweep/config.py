@@ -360,9 +360,12 @@ def _adapt_experiment_config(
     training_policy_search = _nested_table(training, "policy_search", required=False)
 
     adapted_simulation = dict(simulation)
-    adapted_simulation["seed"] = raw.get(
+    adapted_simulation["seed"] = sweep.get(
         "seed",
-        adapted_simulation.get("seed", DEFAULT_SEED),
+        raw.get(
+            "seed",
+            adapted_simulation.get("seed", DEFAULT_SEED),
+        ),
     )
 
     paths = {

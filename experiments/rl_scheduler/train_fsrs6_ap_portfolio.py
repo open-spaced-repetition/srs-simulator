@@ -8,11 +8,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import torch
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.cuda_allocator import enable_expandable_cuda_segments
+
+enable_expandable_cuda_segments()
+
+import torch
 
 from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,

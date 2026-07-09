@@ -19,6 +19,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _float,
     _read_training_policy_search,
     _relative_path_string,
+    training_simulation_seed,
 )
 from experiments.rl_scheduler.portfolio_selection import (
     DEFAULT_SELECTION_PROCESS_POOL_MIN_JOBS,
@@ -268,6 +269,7 @@ def run_portfolio_train_jobs(
         portfolio=portfolio,
         family_context=family_context,
     )
+    initial_simulation_seed = training_simulation_seed(config, generation=0)
     populations = adapter.evaluate_candidates(
         config=config,
         settings=settings,
@@ -276,7 +278,7 @@ def run_portfolio_train_jobs(
         family_state=family_state,
         bundle=initial_bundle,
         candidates_by_job=populations,
-        seed=config.seed,
+        seed=initial_simulation_seed,
     )
     for progress in progresses:
         progress.write(
@@ -284,6 +286,7 @@ def run_portfolio_train_jobs(
             device=initial_bundle.device,
             effective_lanes=portfolio.population_size,
             batch_effective_lanes=len(jobs) * portfolio.population_size,
+            simulation_seed=initial_simulation_seed,
         )
     del initial_bundle
     clear_cuda_cache(device)
@@ -356,6 +359,10 @@ def run_portfolio_train_jobs(
                 next_candidate_ids[job_index] = next_id
                 offspring_by_job.append(offspring)
             evaluation_started = time.perf_counter()
+            simulation_seed = training_simulation_seed(
+                config,
+                generation=generation + 1,
+            )
             offspring_by_job = adapter.evaluate_candidates(
                 config=config,
                 settings=settings,
@@ -364,7 +371,7 @@ def run_portfolio_train_jobs(
                 family_state=family_state,
                 bundle=offspring_bundle,
                 candidates_by_job=offspring_by_job,
-                seed=config.seed,
+                seed=simulation_seed,
             )
             offspring_evaluation_seconds = time.perf_counter() - evaluation_started
 
@@ -418,6 +425,7 @@ def run_portfolio_train_jobs(
                 )
                 entry = {
                     "generation": float(generation),
+                    "simulation_seed": float(simulation_seed),
                     "baseline_hypervolume": baseline_hv[job_index],
                     "portfolio_hypervolume": current_hv,
                     "hypervolume_improvement": current_hv - baseline_hv[job_index],

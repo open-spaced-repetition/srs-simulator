@@ -49,6 +49,10 @@ def build_hybrid_root(
         if destination.exists():
             shutil.rmtree(destination)
         shutil.copytree(selected["path"], destination)
+        _copy_referenced_training_command(
+            source_user_dir=selected["path"],
+            destination_user_dir=destination,
+        )
         selection.append(
             {
                 "user_id": user_id,
@@ -94,6 +98,38 @@ def build_hybrid_root(
             output_run_root=output_run_root,
         )
     return manifest
+
+
+def _copy_referenced_training_command(
+    *,
+    source_user_dir: Path,
+    destination_user_dir: Path,
+) -> None:
+    metadata_path = source_user_dir / "metadata.json"
+    if not metadata_path.is_file():
+        return
+    metadata = _read_json(metadata_path)
+    if not isinstance(metadata, Mapping):
+        return
+    raw_command_path = metadata.get("training_command_path")
+    if not isinstance(raw_command_path, str) or not raw_command_path:
+        return
+
+    source_command_path = Path(raw_command_path)
+    if not source_command_path.is_absolute():
+        source_command_path = (source_user_dir / source_command_path).resolve()
+    if not source_command_path.is_file():
+        raise FileNotFoundError(source_command_path)
+
+    destination_command_path = Path(raw_command_path)
+    if destination_command_path.is_absolute():
+        return
+    destination_command_path = (
+        destination_user_dir / destination_command_path
+    ).resolve()
+    destination_command_path.parent.mkdir(parents=True, exist_ok=True)
+    if source_command_path != destination_command_path:
+        shutil.copy2(source_command_path, destination_command_path)
 
 
 def _write_training_summaries(

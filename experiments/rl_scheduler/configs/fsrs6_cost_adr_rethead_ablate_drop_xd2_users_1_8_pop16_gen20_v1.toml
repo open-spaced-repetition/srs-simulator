@@ -76,6 +76,8 @@ trainer = "auto"
 max_lanes_per_batch = 6400
 
 [training.policy_search]
+simulation_seed_strategy = "generation"
+simulation_seed_stride = 1009
 action_head = "desired_retention"
 feature_version = "fsrs6_cost_adr_retention_mono_drop_xd2_v1"
 coefficient_min = -64.0
@@ -101,6 +103,7 @@ sigma0 = 1.0
 seed = 42
 
 [sweep]
+seed = 43
 log_glob = "**/*.jsonl"
 envs = ["fsrs6"]
 schedulers = ["fsrs6_cost_adr"]

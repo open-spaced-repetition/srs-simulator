@@ -93,6 +93,8 @@ trainer = "auto"
 max_lanes_per_batch = 6400
 
 [training.policy_search]
+simulation_seed_strategy = "generation"
+simulation_seed_stride = 1009
 feature_version = "fsrs6_adr_log_poly_v1"
 chains = 32
 iterations = 0
@@ -119,6 +121,7 @@ reference_margin_fraction = 0.05
 hv_epsilon = 0.0
 
 [sweep]
+seed = 43
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6_adr"]

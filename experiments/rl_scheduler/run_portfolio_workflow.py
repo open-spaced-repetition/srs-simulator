@@ -398,6 +398,8 @@ def _baseline_sweep_command(
         str(config.baseline.log_root),
         "--log-layout",
         config.sweep_batched.log_layout,
+        "--seed",
+        str(config.evaluation_seed),
         "--no-progress",
     ]
     if baseline_max_lanes_per_batch is not None:

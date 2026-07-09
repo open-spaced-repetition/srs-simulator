@@ -246,7 +246,7 @@ def _merge_config_args(
             "on" if experiment.simulation.review_markov_transition else "off"
         )
     if not has_flag(argv, "--seed"):
-        cli_args.seed = experiment.seed
+        cli_args.seed = experiment.evaluation_seed
     if not has_flag(argv, "--max-parallel"):
         cli_args.max_parallel = build_config.max_parallel
     if build_config.compare_short_term and not has_flag(argv, "--compare-short-term"):

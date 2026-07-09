@@ -3802,6 +3802,7 @@ def _baseline_metadata_errors(
         expected_engine=config.baseline.expected_engine,
         expected_scheduler=config.baseline.scheduler,
         expected_environment=expected_environment,
+        expected_seed=config.evaluation_seed,
     )
     expected_retentions = (
         expected_desired_retention_values
@@ -3847,6 +3848,7 @@ def _baseline_filename_filter(
         start_retention=start_retention,
         end_retention=end_retention,
         priority=config.simulation.priority,
+        seed=config.evaluation_seed,
         retention_values_by_scheduler=retention_values_by_scheduler,
     )
 
@@ -3892,6 +3894,7 @@ def _simulation_metadata_errors(
     expected_scheduler: str | None = None,
     expected_user_id: int | None = None,
     expected_environment: str | None = None,
+    expected_seed: int | None = None,
 ) -> list[str]:
     expected: dict[str, Any] = {
         "engine": expected_engine,
@@ -3903,7 +3906,7 @@ def _simulation_metadata_errors(
         "priority": config.simulation.priority,
         "environment": expected_environment or config.simulation.environment,
         "scheduler_priority": config.simulation.scheduler_priority,
-        "seed": config.seed,
+        "seed": config.seed if expected_seed is None else expected_seed,
         "fuzz": config.simulation.fuzz,
         "short_term": bool(config.simulation.short_term_source),
         "short_term_source": config.simulation.short_term_source,
@@ -4038,6 +4041,8 @@ def _format_train_command(
         "baseline_desired_retention_token": baseline_dr_token,
         "run_id": run_id,
         "seed": config.seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -5092,7 +5097,7 @@ def _run_batched_sweep_jobs(
         sched_ops=sched_ops,
         behavior=behavior,
         cost_model=cost_model,
-        seed=config.seed,
+        seed=config.evaluation_seed,
         device=device,
         dtype=torch.float32,
         fuzz=config.simulation.fuzz,
@@ -5127,7 +5132,7 @@ def _run_batched_sweep_jobs(
             sspmmc_policy=None,
             fsrs6_adr_policy=job.fsrs6_adr_policy_path,
             fixed_interval=job.fixed_interval,
-            seed=config.seed,
+            seed=config.evaluation_seed,
             fuzz=config.simulation.fuzz,
             short_term_source=short_term_source,
             learning_steps=learning_steps_arg,
@@ -5151,7 +5156,7 @@ def _run_batched_sweep_jobs(
             "engine": config.simulation.engine,
             "review_markov_transition": (config.simulation.review_markov_transition),
             "device": str(device),
-            "seed": config.seed,
+            "seed": config.evaluation_seed,
             "artifact_metadata_paths": [
                 str(job.metadata_path) for job in jobs if job.metadata_path is not None
             ],
@@ -5217,7 +5222,7 @@ def _run_configured_batched_retention_sweep(
         cost_limit_minutes=config.simulation.cost_limit_minutes
         if config.simulation.cost_limit_minutes is not None
         else DEFAULT_COST_LIMIT_MINUTES,
-        seed=config.seed,
+        seed=config.evaluation_seed,
         priority=config.simulation.priority,
         scheduler_priority=config.simulation.scheduler_priority,
         button_usage=DEFAULT_BUTTON_USAGE_PATH,
@@ -5418,7 +5423,7 @@ def _run_configured_batched_retention_sweep(
             "log_layout": plan.ctx.log_layout,
             "device": str(plan.device) if plan.device is not None else None,
             "devices": plan.devices,
-            "seed": config.seed,
+            "seed": config.evaluation_seed,
             "lanes": lane_results,
         },
     )
@@ -5453,7 +5458,7 @@ def _batched_retention_lane_filename_filter(
         engine="batched",
         short_term=short_term,
         short_term_source=short_term_source,
-        seed=config.seed,
+        seed=config.evaluation_seed,
         run_id=run_id
         if lane.scheduler_name in RUN_ID_SCOPED_SWEEP_SCHEDULERS
         else None,
@@ -5497,6 +5502,7 @@ def _validate_batched_retention_lane_logs(
             expected_scheduler=lane.scheduler_name,
             expected_user_id=lane.user_id,
             expected_environment=lane.environment,
+            expected_seed=config.evaluation_seed,
         )
         if lane.desired_retention is not None:
             actual_retention = meta.get("desired_retention")
@@ -5626,7 +5632,9 @@ def _format_sweep_command(
         if baseline_dr is not None
         else "",
         "run_id": run_id,
-        "seed": config.seed,
+        "seed": config.evaluation_seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -5666,7 +5674,9 @@ def _format_pareto_command(
 ) -> list[str]:
     values: dict[str, Any] = {
         "run_id": run_id,
-        "seed": config.seed,
+        "seed": config.evaluation_seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -5716,7 +5726,9 @@ def _format_build_pareto_command(
     log_dir = run_root
     values: dict[str, Any] = {
         "run_id": run_id,
-        "seed": config.seed,
+        "seed": config.evaluation_seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -5785,7 +5797,9 @@ def _format_analyze_pareto_command(
     summary_path = output_dir / "analysis_summary.json"
     values: dict[str, Any] = {
         "run_id": run_id,
-        "seed": config.seed,
+        "seed": config.evaluation_seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -5849,7 +5863,9 @@ def _format_select_command(
 ) -> list[str]:
     values: dict[str, Any] = {
         "run_id": run_id,
-        "seed": config.seed,
+        "seed": config.evaluation_seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -5896,7 +5912,9 @@ def _format_aggregate_command(
 ) -> list[str]:
     values: dict[str, Any] = {
         "run_id": run_id,
-        "seed": config.seed,
+        "seed": config.evaluation_seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -5951,7 +5969,9 @@ def _format_reserved_test_command(
         "reserved_user_start": min(config.users.reserved_test),
         "reserved_user_end": max(config.users.reserved_test),
         "run_id": run_id,
-        "seed": config.seed,
+        "seed": config.evaluation_seed,
+        "training_seed": config.seed,
+        "evaluation_seed": config.evaluation_seed,
         "family": config.family,
         "engine": config.simulation.engine,
         "environment": config.simulation.environment,
@@ -6426,6 +6446,7 @@ def _validate_sweep_logs(
             expected_engine=config.simulation.engine,
             expected_scheduler=job.scheduler_name,
             expected_user_id=job.user_id,
+            expected_seed=config.evaluation_seed,
         )
         if job.desired_retention is not None:
             actual_retention = meta.get("desired_retention")
@@ -6572,6 +6593,7 @@ def _validate_reserved_test_logs(
             expected_engine=config.simulation.engine,
             expected_scheduler=metadata.scheduler_name,
             expected_user_id=user_id,
+            expected_seed=config.evaluation_seed,
         )
         if errors:
             return (

@@ -522,6 +522,7 @@ def _run_fsrs6_adr_cmaes_jobs(
         _relative_gain,
         _relative_path_string,
         _score,
+        training_simulation_seed,
     )
     from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
     from simulator.schedulers.fsrs6_adr import FSRS6ADRBatchSchedulerOps
@@ -643,7 +644,11 @@ def _run_fsrs6_adr_cmaes_jobs(
             )
         )
 
-    def evaluate(coefficients_by_job: torch.Tensor) -> list[list[Any]]:
+    def evaluate(
+        coefficients_by_job: torch.Tensor,
+        *,
+        simulation_seed: int,
+    ) -> list[list[Any]]:
         flat_coefficients = coefficients_by_job.reshape(
             len(jobs) * optimizer_settings.population_size,
             coefficients_by_job.shape[-1],
@@ -670,7 +675,7 @@ def _run_fsrs6_adr_cmaes_jobs(
             sched_ops=sched_ops,
             behavior=train_bundle.behavior,
             cost_model=train_bundle.cost_model,
-            seed=config.seed,
+            seed=simulation_seed,
             device=train_bundle.device,
             dtype=torch.float32,
             fuzz=config.simulation.fuzz,
@@ -715,7 +720,11 @@ def _run_fsrs6_adr_cmaes_jobs(
             device=train_bundle.device,
             dtype=torch.float32,
         )
-        metrics_by_job = evaluate(coefficients)
+        simulation_seed = training_simulation_seed(config, generation=generation)
+        metrics_by_job = evaluate(
+            coefficients,
+            simulation_seed=simulation_seed,
+        )
         for job_index, strategy in enumerate(strategies):
             scores = [
                 _score(
@@ -737,6 +746,7 @@ def _run_fsrs6_adr_cmaes_jobs(
                 best_metrics[job_index] = generation_best
             history_entry = {
                 "generation": float(generation),
+                "simulation_seed": float(simulation_seed),
                 "sigma": float(strategy.sigma),
                 "best_score": float(best_scores[job_index]),
                 "generation_best_score": generation_best_score,

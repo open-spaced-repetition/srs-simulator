@@ -9,11 +9,16 @@ from collections.abc import Mapping
 from typing import Any
 
 import cma
-import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.cuda_allocator import enable_expandable_cuda_segments
+
+enable_expandable_cuda_segments()
+
+import torch
 
 from experiments.rl_scheduler.policy_search_common import (
     CMAESSettings,
@@ -34,6 +39,7 @@ from experiments.rl_scheduler.policy_search_common import (
     _score,
     _optimizer_seed,
     _write_json,
+    training_simulation_seed,
 )
 from simulator.benchmark_loader import parse_result_overrides, resolve_benchmark_root
 from simulator.button_usage import DEFAULT_BUTTON_USAGE_PATH
@@ -320,13 +326,14 @@ def _run_cmaes(
             device=bundle.device,
             dtype=torch.float32,
         )
+        simulation_seed = training_simulation_seed(config, generation=generation)
         metrics = _evaluate_adr_candidates(
             config=config,
             settings=settings,
             bundle=bundle,
             coefficients=coefficients,
             feature_version=feature_version,
-            seed=config.seed,
+            seed=simulation_seed,
         )
         scores = [_score(metric, baseline, lambda_value) for metric in metrics]
         es.tell(solutions, [-score for score in scores])
@@ -341,6 +348,7 @@ def _run_cmaes(
 
         history_entry = {
             "generation": float(generation),
+            "simulation_seed": float(simulation_seed),
             "sigma": float(es.sigma),
             "best_score": float(best_score),
             "generation_best_score": generation_best_score,

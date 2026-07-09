@@ -113,6 +113,8 @@ batch_size = 8
 max_lanes_per_batch = 6400
 
 [training.policy_search]
+simulation_seed_strategy = "generation"
+simulation_seed_stride = 1009
 coefficient_min = -12.0
 coefficient_max = 12.0
 retention_min = 0.50
@@ -206,6 +208,7 @@ bounds = [
 ]
 
 [sweep]
+seed = 43
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs6_ap"]

@@ -105,6 +105,7 @@ short_term_threshold = 0.5
 short_term_loops_limit = 10
 
 [sweep]
+seed = 43
 log_glob = "**/*.jsonl"
 envs = ["fsrs6", "lstm"]
 schedulers = ["fsrs3"]

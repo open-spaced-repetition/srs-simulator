@@ -60,6 +60,14 @@ experiment should continue.
   seed, days, deck size, limits, engine, environment, short-term mode, fuzz,
   review Markov transition mode, GPU guard, training settings, sweep, Pareto
   build, and Pareto analysis settings belong in TOML.
+- **seed split**: top-level `seed` is the training/artifact provenance seed.
+  `[sweep].seed` is the formal evaluation seed used by staged baselines,
+  sweeps, Pareto inputs, and reserved tests. Checked-in formal RL scheduler
+  profiles use `seed = 42` and `[sweep].seed = 43`. Learned profiles also set
+  `training.policy_search.simulation_seed_strategy = "generation"` so training
+  candidate simulations rotate by generation without increasing training
+  volume. The full checkpoint plan is
+  `docs/rl_scheduler/reboot/seed-refactor-plan.md`.
 - **run id**: the stable identifier for one run. Stage outputs are written to
   `<output_root>/<run_id>/<stage>/`. Use a fixed run id when continuing or
   reproducing a run.
@@ -303,6 +311,11 @@ Representative profiles:
   cost weights while training compressed variants that drop `sqrt_z`, drop
   `x_d^2`, drop both, or keep only the `z2` cost basis. The variant that drops
   both `sqrt_z` and `x_d^2` is now the default formula.
+- `run_fsrs6_cost_adr_init_sensitivity.py`: a strict matched-seed
+  initialization-sensitivity runner for the default 15-parameter retention-head
+  Cost-ADR setup. It reuses the default first-eight mean, constant-R, zero, and
+  supplied-vector initializers while holding users, cost weights, bounds,
+  objective, preconditioning, and baseline DRs fixed.
 - `configs/fsrs6_cost_adr_schedhv_stdpre_users_1_128_pop16_gen20_v1.toml`: the
   first-128-user scale-up of the scheduler-HV std-preconditioned Cost-ADR
   profile. It keeps pop16/gen20 CMA-ES, the matched 16 cost weights, and
@@ -613,8 +626,12 @@ Formal experiments must satisfy these rules:
 
 - Add or copy a `configs/*.toml` profile before running a new experiment. Do not
   rely on shell history for parameters.
-- Record `seed`, `users`, `simulation`, `gpu_guard`, `performance`, `training`,
-  `sweep`, `build_pareto`, and `analyze_pareto` settings in TOML.
+- Record training `seed`, `[sweep].seed`, `users`, `simulation`, `gpu_guard`,
+  `performance`, `training`, `sweep`, `build_pareto`, and `analyze_pareto`
+  settings in TOML.
+- Pre-generate baseline logs for the configured `[sweep].seed`; `stage-baseline`
+  must copy exact logs and must not silently generate missing seed-specific
+  baselines.
 - Record `simulation.review_markov_transition` explicitly for formal reruns.
   The default is `false`, which keeps `button_usage` marginal probabilities and
   costs but ignores `long_term_transition`.

@@ -17,6 +17,8 @@ base branch name. If the upstream branch is renamed later, read `main` and
   reproducibility, GPU, and reporting rules.
 - [GPU Utilization Plan](./gpu-utilization-plan.md): concrete profiling,
   batching, and GPU evidence tasks.
+- [Seed Refactor Plan](./seed-refactor-plan.md): training/evaluation seed split,
+  code checkpoints, and rerun matrix for RL scheduler experiments.
 - [Build vs Buy](./build-vs-buy.md): which custom infrastructure should be
   replaced by mature libraries, and which domain logic should remain custom.
 - [Agent Skill Draft](./agent-skill/SKILL.md): a concise Codex skill draft for

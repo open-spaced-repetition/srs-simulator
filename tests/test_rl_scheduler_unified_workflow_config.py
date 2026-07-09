@@ -301,6 +301,9 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(config.name, "fsrs6_adr_linear_portfolio_users_1_8")
+        self.assertEqual(config.seed, 42)
+        self.assertEqual(config.sweep_batched.seed, 43)
+        self.assertEqual(config.evaluation_seed, 43)
         self.assertEqual(config.lambda_grid, ())
         self.assertNotIn("{lambda_value}", config.train_command_template)
         self.assertNotIn("--lambda", config.train_command_template)
@@ -312,6 +315,11 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             config.training_policy_search["feature_version"],
             "fsrs6_adr_log_linear_v1",
         )
+        self.assertEqual(
+            config.training_policy_search["simulation_seed_strategy"],
+            "generation",
+        )
+        self.assertEqual(config.training_policy_search["simulation_seed_stride"], 1009)
         self.assertEqual(config.baseline_dr_selection.target_count, 16)
         self.assertEqual(
             config.baseline_dr_selection.manifest,
@@ -541,7 +549,11 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(config.name, "fsrs3_scheduler_users_1_8")
+        self.assertEqual(config.seed, 42)
+        self.assertEqual(config.sweep_batched.seed, 43)
+        self.assertEqual(config.evaluation_seed, 43)
         self.assertNotIn(StageName.TRAIN_OVERFIT, config.stages)
+        self.assertNotIn("simulation_seed_strategy", config.training_policy_search)
         self.assertEqual(config.baseline.scheduler, "fsrs6")
         self.assertEqual(config.baseline.environments, ("fsrs6", "lstm"))
         self.assertIsNotNone(config.baseline_dr_selection.manifest)

@@ -10,11 +10,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import torch
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from simulator.cuda_allocator import enable_expandable_cuda_segments
+
+enable_expandable_cuda_segments()
+
+import torch
 
 from experiments.rl_scheduler.policy_search_common import (
     CandidateMetrics,
@@ -404,6 +408,7 @@ def _build_family_context(
         deck_scale=config.simulation.deck,
         seed=config.seed,
         torch_device=settings.torch_device,
+        per_user_models=False,
         benchmark_result=raw_training_policy_search.get("benchmark_result"),
         benchmark_partition=str(
             raw_training_policy_search.get("benchmark_partition", "0")

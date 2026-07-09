@@ -50,6 +50,12 @@ class FSRS6CostADRHybridTests(unittest.TestCase):
                     / "policy.json"
                 ).exists()
             )
+            self.assertTrue(
+                (output / "train-overfit" / "commands" / "user_1_command.json").exists()
+            )
+            self.assertTrue(
+                (output / "train-overfit" / "commands" / "user_2_command.json").exists()
+            )
             summary = json.loads(
                 (output / "train-overfit" / "training_summary.json").read_text(
                     encoding="utf-8"
@@ -74,7 +80,16 @@ class FSRS6CostADRHybridTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        (path / "metadata.json").write_text("{}\n", encoding="utf-8")
+        command_path = path.parents[1] / "commands" / f"{path.name}_command.json"
+        command_path.parent.mkdir(parents=True, exist_ok=True)
+        command_path.write_text("{}\n", encoding="utf-8")
+        (path / "metadata.json").write_text(
+            json.dumps(
+                {"training_command_path": (f"../../commands/{path.name}_command.json")}
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         (path / "policy.json").write_text("{}\n", encoding="utf-8")
         (path / "training_progress.jsonl").write_text("", encoding="utf-8")
 

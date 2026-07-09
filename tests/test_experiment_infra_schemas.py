@@ -11,6 +11,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from simulator.experiment_infra import ExperimentConfig, StageName
+from experiments.rl_scheduler.policy_search_common import training_simulation_seed
 
 
 VALID_CONFIG = """
@@ -95,6 +96,7 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertFalse(config.train_batch_baseline_desired_retention_values)
         self.assertFalse(config.training_batch.enabled)
         self.assertFalse(config.report.enabled)
+        self.assertEqual(config.evaluation_seed, 42)
 
     def test_loads_review_markov_transition_flag(self) -> None:
         raw = VALID_CONFIG.replace(
@@ -109,6 +111,48 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
 
         self.assertTrue(config.simulation.review_markov_transition)
         self.assertTrue(config.to_dict()["simulation"]["review_markov_transition"])
+
+    def test_loads_sweep_seed_as_evaluation_seed(self) -> None:
+        raw = VALID_CONFIG + "\n[sweep]\nseed = 43\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertEqual(config.seed, 42)
+        self.assertEqual(config.sweep_batched.seed, 43)
+        self.assertEqual(config.evaluation_seed, 43)
+        self.assertEqual(config.to_dict()["sweep"]["seed"], 43)
+
+    def test_training_simulation_seed_strategy_defaults_to_fixed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(VALID_CONFIG, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertEqual(training_simulation_seed(config), 42)
+        self.assertEqual(training_simulation_seed(config, generation=7, offset=3), 45)
+
+    def test_training_simulation_seed_strategy_can_rotate_by_generation(self) -> None:
+        raw = VALID_CONFIG.replace(
+            "[training.policy_search]\n",
+            (
+                "[training.policy_search]\n"
+                'simulation_seed_strategy = "generation"\n'
+                "simulation_seed_stride = 11\n"
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertEqual(training_simulation_seed(config), 42)
+        self.assertEqual(training_simulation_seed(config, generation=2), 64)
+        self.assertEqual(training_simulation_seed(config, generation=2, offset=5), 69)
 
     def test_rejects_overlapping_user_splits(self) -> None:
         raw = VALID_CONFIG.replace("validation = [2, 3]", "validation = [1, 3]")

@@ -186,6 +186,7 @@ class BatchedSweepConfigTests(unittest.TestCase):
         self.assertEqual(config.envs, ("lstm",))
         self.assertEqual(config.schedulers, ("fsrs6", "anki_sm2"))
         self.assertEqual(config.args.log_layout, "user")
+        self.assertEqual(config.args.seed, 42)
         self.assertFalse(config.args.diagnostic_csv_logs)
         self.assertFalse(config.args.review_markov_transition)
 
@@ -220,6 +221,7 @@ class BatchedSweepConfigTests(unittest.TestCase):
         self.assertEqual(config.schedulers, ("fsrs6_adr",))
         self.assertEqual(config.args.log_dir, REPO_ROOT / "logs" / "retention_sweep")
         self.assertEqual(config.args.batch_size, 8)
+        self.assertEqual(config.args.seed, 43)
         self.assertEqual(config.args.torch_device, "cuda")
         self.assertEqual(config.args.fsrs6_adr_lambda_values, (0.5,))
         self.assertFalse(config.args.no_progress)

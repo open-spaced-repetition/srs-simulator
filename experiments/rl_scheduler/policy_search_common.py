@@ -52,6 +52,15 @@ SCHEDULER_WEIGHT_SOURCES = frozenset(
         SCHEDULER_WEIGHT_SOURCE_FSRS6_DEFAULT,
     }
 )
+TRAINING_SIMULATION_SEED_STRATEGY_FIXED = "fixed"
+TRAINING_SIMULATION_SEED_STRATEGY_GENERATION = "generation"
+TRAINING_SIMULATION_SEED_STRATEGIES = frozenset(
+    {
+        TRAINING_SIMULATION_SEED_STRATEGY_FIXED,
+        TRAINING_SIMULATION_SEED_STRATEGY_GENERATION,
+    }
+)
+DEFAULT_TRAINING_SIMULATION_SEED_STRIDE = 1009
 
 
 @dataclass(frozen=True, slots=True)
@@ -869,6 +878,51 @@ def _optimizer_seed(
     if settings.seed is not None:
         return settings.seed
     return int(config.seed + 1009 * user_id + round(lambda_value * 1000))
+
+
+def training_simulation_seed_strategy(config: ExperimentConfig) -> str:
+    strategy = _str(
+        config.training_policy_search.get(
+            "simulation_seed_strategy",
+            TRAINING_SIMULATION_SEED_STRATEGY_FIXED,
+        ),
+        "training.policy_search.simulation_seed_strategy",
+    )
+    if strategy not in TRAINING_SIMULATION_SEED_STRATEGIES:
+        allowed = ", ".join(sorted(TRAINING_SIMULATION_SEED_STRATEGIES))
+        raise ValueError(
+            "training.policy_search.simulation_seed_strategy must be one of: "
+            f"{allowed}."
+        )
+    return strategy
+
+
+def training_simulation_seed(
+    config: ExperimentConfig,
+    *,
+    generation: int | None = None,
+    offset: int = 0,
+) -> int:
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        raise ValueError("training simulation seed offset must be an integer.")
+    strategy = training_simulation_seed_strategy(config)
+    if strategy == TRAINING_SIMULATION_SEED_STRATEGY_FIXED:
+        return config.seed + offset
+    if generation is None:
+        generation = 0
+    if isinstance(generation, bool) or not isinstance(generation, int):
+        raise ValueError("training simulation seed generation must be an integer.")
+    if generation < 0:
+        raise ValueError("training simulation seed generation must be >= 0.")
+    stride = _int(
+        config.training_policy_search.get(
+            "simulation_seed_stride",
+            DEFAULT_TRAINING_SIMULATION_SEED_STRIDE,
+        ),
+        "training.policy_search.simulation_seed_stride",
+        1,
+    )
+    return config.seed + generation * stride + offset
 
 
 def _float_token(value: float) -> str:

@@ -165,6 +165,7 @@ def _write_baseline_log(
     user_id: int,
     scheduler: str = "fsrs6",
     desired_retention: float = 0.9,
+    seed: int = 42,
     review_markov_transition: bool | None = False,
 ) -> None:
     meta = {
@@ -183,7 +184,7 @@ def _write_baseline_log(
             "user_id": user_id,
             "desired_retention": desired_retention,
             "scheduler_priority": "low_retrievability",
-            "seed": 42,
+            "seed": seed,
             "fuzz": False,
             "short_term": True,
             "short_term_source": "steps",
@@ -2509,6 +2510,71 @@ class ExperimentInfraRunnerTests(unittest.TestCase):
             summary = json.loads((stage_root / "baseline_summary.json").read_text())
             self.assertTrue(summary["passed"])
             self.assertEqual(summary["matched_users"], [1, 2, 3])
+
+    def test_stage_baseline_accepts_sweep_seed_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                    seed=43,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                sweep_extra="seed = 43\n",
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.STAGE_BASELINE,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 0)
+            stage_root = output_root / "test-run" / "stage-baseline"
+            summary = json.loads((stage_root / "baseline_summary.json").read_text())
+            self.assertTrue(summary["passed"])
+            self.assertEqual(summary["matched_users"], [1, 2, 3])
+
+    def test_stage_baseline_rejects_training_seed_when_sweep_seed_configured(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_root = root / "baseline"
+            output_root = root / "out"
+            for user_id in (1, 2, 3):
+                _write_baseline_log(
+                    baseline_root / f"user_{user_id}" / f"log_user_{user_id}.jsonl",
+                    user_id=user_id,
+                    seed=42,
+                )
+            config_path = _write_config(
+                root=root,
+                baseline_root=baseline_root,
+                output_root=output_root,
+                sweep_extra="seed = 43\n",
+            )
+
+            result = run_stage(
+                config_path=config_path,
+                stage=StageName.STAGE_BASELINE,
+                repo_root=root,
+                run_id="test-run",
+            )
+
+            self.assertEqual(result.exit_code, 1)
+            stage_root = output_root / "test-run" / "stage-baseline"
+            gate = json.loads((stage_root / "gate_summary.json").read_text())
+            self.assertFalse(gate["passed"])
+            self.assertIn("invalid-baseline", gate["failures"])
+            self.assertEqual(list((stage_root / "baseline_logs").rglob("*.jsonl")), [])
 
     def test_stage_baseline_rejects_metadata_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
