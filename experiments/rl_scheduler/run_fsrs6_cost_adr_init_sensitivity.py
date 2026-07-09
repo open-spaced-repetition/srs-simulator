@@ -27,6 +27,29 @@ OUTPUT_ROOT = Path("artifacts/rl_scheduler/fsrs6_cost_adr_init_sensitivity_users
 DEFAULT_SEEDS = (42, 43, 44)
 DEFAULT_USERS = (1, 2, 3, 4, 5, 6, 7, 8)
 PARAMETER_COUNT = 15
+USER_PROVIDED_INITIAL_COEFFICIENTS = (
+    -0.399,
+    9.83,
+    -0.804,
+    0.425,
+    -6.79,
+    -9.23,
+    23.9,
+    -1.74,
+    2.54,
+    -23.1,
+    -6.49,
+    22.2,
+    5.03,
+    0.609,
+    -17.2,
+)
+DEFAULT_CONDITIONS = (
+    "first8_mean",
+    "provided_vector",
+    "constant_r90",
+    "zero",
+)
 REPORT_SCRIPT = Path(
     "experiments/rl_scheduler/analyze_fsrs6_cost_adr_init_sensitivity.py"
 )
@@ -39,6 +62,7 @@ class InitCondition:
     description: str
     initial_mean_source: str | None = None
     initial_policy_root: Path | None = None
+    initial_coefficients: tuple[float, ...] | None = None
 
     def config_line(self) -> str:
         if self.initial_mean_source is not None:
@@ -64,7 +88,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--conditions",
-        default="first8_mean,constant_r90,zero",
+        default=",".join(DEFAULT_CONDITIONS),
         help="Comma-separated condition names.",
     )
     parser.add_argument(
@@ -92,13 +116,26 @@ def main() -> int:
     seeds = _parse_ints(args.seeds, "--seeds")
     condition_names = _parse_names(args.conditions)
     zero_policy_root = output_root / "initial_policies" / "zero"
-    conditions = _conditions(zero_policy_root)
+    provided_policy_root = output_root / "initial_policies" / "provided_vector"
+    conditions = _conditions(
+        zero_policy_root=zero_policy_root,
+        provided_policy_root=provided_policy_root,
+    )
     selected_conditions = [
         _condition_by_name(conditions, name) for name in condition_names
     ]
 
     output_root.mkdir(parents=True, exist_ok=True)
-    _write_zero_policy_root(zero_policy_root)
+    _write_policy_root(
+        zero_policy_root,
+        coefficients=(0.0,) * PARAMETER_COUNT,
+        title="FSRS6 Cost-ADR zero initializer",
+    )
+    _write_policy_root(
+        provided_policy_root,
+        coefficients=USER_PROVIDED_INITIAL_COEFFICIENTS,
+        title="FSRS6 Cost-ADR provided-vector initializer",
+    )
 
     manifest = {
         "base_config": _relative(base_config),
@@ -115,6 +152,9 @@ def main() -> int:
                     _repo_path(condition.initial_policy_root)
                 )
                 if condition.initial_policy_root is not None
+                else None,
+                "initial_coefficients": list(condition.initial_coefficients)
+                if condition.initial_coefficients is not None
                 else None,
             }
             for condition in selected_conditions
@@ -200,13 +240,28 @@ def main() -> int:
     return 0
 
 
-def _conditions(zero_policy_root: Path) -> tuple[InitCondition, ...]:
+def _conditions(
+    *,
+    zero_policy_root: Path,
+    provided_policy_root: Path,
+) -> tuple[InitCondition, ...]:
     return (
         InitCondition(
             name="first8_mean",
             label="first8 interval-implied R mean",
             description="Current default built-in first-8 interval-implied-retention mean.",
             initial_mean_source="first8_interval_implied_r_mean_v1",
+        ),
+        InitCondition(
+            name="provided_vector",
+            label="provided 15-coefficient vector",
+            description=(
+                "User-provided 15-coefficient Cost-ADR initializer "
+                "[-0.399, 9.83, -0.804, 0.425, -6.79, -9.23, 23.9, "
+                "-1.74, 2.54, -23.1, -6.49, 22.2, 5.03, 0.609, -17.2]."
+            ),
+            initial_policy_root=provided_policy_root,
+            initial_coefficients=USER_PROVIDED_INITIAL_COEFFICIENTS,
         ),
         InitCondition(
             name="constant_r90",
@@ -234,17 +289,26 @@ def _condition_by_name(
     raise SystemExit(f"Unknown condition {name!r}; allowed: {allowed}.")
 
 
-def _write_zero_policy_root(policy_root: Path) -> None:
+def _write_policy_root(
+    policy_root: Path,
+    *,
+    coefficients: tuple[float, ...],
+    title: str,
+) -> None:
+    if len(coefficients) != PARAMETER_COUNT:
+        raise ValueError(
+            f"Cost-ADR initializer must have {PARAMETER_COUNT} coefficients."
+        )
     for user_id in DEFAULT_USERS:
         policy = FSRS6CostConditionedADRPolicy(
-            coefficients=(0.0,) * PARAMETER_COUNT,
+            coefficients=coefficients,
             action_head=ACTION_HEAD_RETENTION,
             feature_version=FEATURE_VERSION_RETENTION_MONO_DROP_SQRT_Z_XD2,
             cost_weight_min=0.0,
             cost_weight_max=1024.0,
             retention_min=0.30,
             retention_max=0.995,
-            title="FSRS6 Cost-ADR zero initializer",
+            title=title,
         )
         policy.write_json(policy_root / f"user_{user_id}" / "policy.json")
 

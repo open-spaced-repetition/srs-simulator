@@ -16,6 +16,7 @@ Simulator/baseline seed is fixed at 42. Optimizer seeds are matched across initi
 | --- | --- |
 | `constant_r90` | Hand-crafted constant desired-retention 0.90 starting point. |
 | `first8_mean` | Current default built-in first-8 interval-implied-retention mean. |
+| `provided_vector` | User-provided 15-coefficient Cost-ADR initializer [-0.399, 9.83, -0.804, 0.425, -6.79, -9.23, 23.9, -1.74, 2.54, -23.1, -6.49, 22.2, 5.03, 0.609, -17.2]. |
 | `zero` | All coefficients set to zero; generated as policy JSONs. |
 
 The reproducible runner is:
@@ -34,14 +35,16 @@ The analysis summary JSON is:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `constant_r90` | 3 | 100,494 +- 790 | 12.910 +- 0.445% | 89.477 +- 1.190% | 100,622 +- 970 | -5,704 +- 42,920 |
 | `first8_mean` | 3 | 106,543 +- 674 | 13.435 +- 0.237% | 91.965 +- 1.557% | 106,679 +- 337 | 27,018 +- 21,428 |
+| `provided_vector` | 3 | 98,067 +- 3,965 | 12.188 +- 0.810% | 88.470 +- 2.307% | 98,269 +- 3,913 | 55,104 +- 5,118 |
 | `zero` | 3 | 101,427 +- 1,464 | 12.645 +- 0.408% | 88.829 +- 2.070% | 102,142 +- 2,269 | -220,572 +- 133,824 |
 
 ## Paired Deltas Versus `first8_mean`
 
-| condition | seeds | HV delta diff mean +- std | rel time-save diff mean +- std | target coverage diff mean +- std | train final HV diff mean +- std | gen0 train HV diff mean +- std |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `constant_r90` | 3 | -6,048 +- 1,386 | -0.525 +- 0.653 pp | -2.488 +- 2.399 pp | -6,057 +- 1,223 | -32,723 +- 49,040 |
-| `zero` | 3 | -5,116 +- 1,211 | -0.790 +- 0.214 pp | -3.136 +- 2.331 pp | -4,537 +- 1,935 | -247,590 +- 152,939 |
+| condition | seeds | HV delta diff mean +- std | HV sign-test p | rel time-save diff mean +- std | target coverage diff mean +- std | train final HV diff mean +- std | gen0 train HV diff mean +- std |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `constant_r90` | 3 | -6,048 +- 1,386 | 0.250 | -0.525 +- 0.653 pp | -2.488 +- 2.399 pp | -6,057 +- 1,223 | -32,723 +- 49,040 |
+| `provided_vector` | 3 | -8,476 +- 3,296 | 0.250 | -1.247 +- 1.040 pp | -3.495 +- 1.769 pp | -8,410 +- 3,601 | 28,086 +- 16,336 |
+| `zero` | 3 | -5,116 +- 1,211 | 0.250 | -0.790 +- 0.214 pp | -3.136 +- 2.331 pp | -4,537 +- 1,935 | -247,590 +- 152,939 |
 
 ## Per-Run Results
 
@@ -53,13 +56,18 @@ The analysis summary JSON is:
 | `first8_mean` | 42 | 106,075 | 13.707% | 90.231% | 74.560% | 106,466 | 4,418 | yes |
 | `first8_mean` | 43 | 107,315 | 13.273% | 92.424% | 81.218% | 107,068 | 47,041 | yes |
 | `first8_mean` | 44 | 106,237 | 13.325% | 93.241% | 80.753% | 106,502 | 29,595 | yes |
+| `provided_vector` | 42 | 94,911 | 11.318% | 87.353% | 89.312% | 94,604 | 49,939 | yes |
+| `provided_vector` | 43 | 102,517 | 12.919% | 86.934% | 83.991% | 102,390 | 60,173 | yes |
+| `provided_vector` | 44 | 96,772 | 12.329% | 91.123% | 91.621% | 97,812 | 55,202 | yes |
 | `zero` | 42 | 101,953 | 13.094% | 88.989% | 90.622% | 101,035 | -66,598 | yes |
 | `zero` | 43 | 102,555 | 12.545% | 86.684% | 91.440% | 104,751 | -286,252 | yes |
 | `zero` | 44 | 99,772 | 12.297% | 90.815% | 82.858% | 100,639 | -308,865 | yes |
 
 ## Interpretation
 
-Initialization is materially relevant if the matched-seed spread is large relative to seed-to-seed noise. In this run, the best aggregate condition is `first8_mean` and the worst is `constant_r90`, with a mean FSRS6 HV spread of 6,048.
-Against `first8_mean`, `constant_r90` changes mean HV by -6,048 and relative time-save AUC by -0.525 pp.
-Against `first8_mean`, `zero` changes mean HV by -5,116 and relative time-save AUC by -0.790 pp.
+Initialization is materially relevant if the matched-seed spread is large relative to seed-to-seed noise. In this run, the best aggregate condition is `first8_mean` and the worst is `provided_vector`, with a mean FSRS6 HV spread of 8,476.
+Against `first8_mean`, `constant_r90` changes mean HV by -6,048 and relative time-save AUC by -0.525 pp; the paired HV sign-test p-value is 0.250, so this is not statistically significant at alpha=0.05 with the current 3 seeds.
+Against `first8_mean`, `provided_vector` changes mean HV by -8,476 and relative time-save AUC by -1.247 pp; the paired HV sign-test p-value is 0.250, so this is not statistically significant at alpha=0.05 with the current 3 seeds.
+Against `first8_mean`, `zero` changes mean HV by -5,116 and relative time-save AUC by -0.790 pp; the paired HV sign-test p-value is 0.250, so this is not statistically significant at alpha=0.05 with the current 3 seeds.
+With only three matched optimizer seeds, the exact two-sided sign test cannot pass p<0.05 even when every seed moves in the same direction; the report therefore separates practical effect size from formal statistical significance.
 Because all conditions use identical users, cost weights, objective, budget, bounds, preconditioning mode, and matched seeds, these deltas are attributable to the initialization point plus normal matched-seed optimizer noise.

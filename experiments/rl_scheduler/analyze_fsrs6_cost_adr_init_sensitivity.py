@@ -276,7 +276,10 @@ def _paired_differences(
         output[condition] = {
             "baseline_condition": baseline_condition,
             "seeds": used_seeds,
-            **{key: _stats(values) for key, values in sorted(diffs.items())},
+            **{
+                key: _paired_metric_stats(values)
+                for key, values in sorted(diffs.items())
+            },
         }
     return output
 
@@ -291,6 +294,38 @@ def _stats(values: Any) -> dict[str, float]:
         "min": min(clean),
         "max": max(clean),
     }
+
+
+def _paired_metric_stats(values: Any) -> dict[str, float]:
+    clean = [float(value) for value in values if math.isfinite(float(value))]
+    stats = _stats(clean)
+    positive = sum(1 for value in clean if value > 0.0)
+    negative = sum(1 for value in clean if value < 0.0)
+    nonzero = positive + negative
+    stats.update(
+        {
+            "positive_count": float(positive),
+            "negative_count": float(negative),
+            "nonzero_count": float(nonzero),
+            "two_sided_sign_test_p": _two_sided_sign_test_p(
+                positive=positive,
+                negative=negative,
+            ),
+        }
+    )
+    return stats
+
+
+def _two_sided_sign_test_p(*, positive: int, negative: int) -> float:
+    trials = positive + negative
+    if trials <= 0:
+        return math.nan
+    smaller_side = min(positive, negative)
+    probability = 2.0 * sum(
+        math.comb(trials, successes) * (0.5**trials)
+        for successes in range(smaller_side + 1)
+    )
+    return min(1.0, probability)
 
 
 def _render_report(
@@ -369,8 +404,8 @@ def _render_report(
             "",
             f"## Paired Deltas Versus `{baseline_condition}`",
             "",
-            "| condition | seeds | HV delta diff mean +- std | rel time-save diff mean +- std | target coverage diff mean +- std | train final HV diff mean +- std | gen0 train HV diff mean +- std |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| condition | seeds | HV delta diff mean +- std | HV sign-test p | rel time-save diff mean +- std | target coverage diff mean +- std | train final HV diff mean +- std | gen0 train HV diff mean +- std |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for condition, summary in sorted(paired_differences.items()):
@@ -378,6 +413,7 @@ def _render_report(
             "| "
             f"`{condition}` | {len(summary['seeds'])} | "
             f"{_fmt_stats(summary['fsrs6_hv_delta'], digits=0)} | "
+            f"{summary['fsrs6_hv_delta']['two_sided_sign_test_p']:.3f} | "
             f"{_fmt_stats(summary['fsrs6_relative_time_save_auc_percent'])} pp | "
             f"{_fmt_stats(summary['fsrs6_target_span_coverage_percent'])} pp | "
             f"{_fmt_stats(summary['training_final_hv_delta'], digits=0)} | "
@@ -440,10 +476,24 @@ def _interpretation(
     for condition, diffs in sorted(paired_differences.items()):
         hv = diffs["fsrs6_hv_delta"]["mean"]
         time_save = diffs["fsrs6_relative_time_save_auc_percent"]["mean"]
+        sign_p = diffs["fsrs6_hv_delta"]["two_sided_sign_test_p"]
+        significance = (
+            "statistically significant at alpha=0.05"
+            if sign_p <= 0.05
+            else "not statistically significant at alpha=0.05"
+        )
         lines.append(
             f"Against `{baseline_condition}`, `{condition}` changes mean HV by "
-            f"{hv:,.0f} and relative time-save AUC by {time_save:+.3f} pp."
+            f"{hv:,.0f} and relative time-save AUC by {time_save:+.3f} pp; "
+            f"the paired HV sign-test p-value is {sign_p:.3f}, so this is "
+            f"{significance} with the current {len(diffs['seeds'])} seeds."
         )
+    lines.append(
+        "With only three matched optimizer seeds, the exact two-sided sign test "
+        "cannot pass p<0.05 even when every seed moves in the same direction; "
+        "the report therefore separates practical effect size from formal "
+        "statistical significance."
+    )
     lines.append(
         "Because all conditions use identical users, cost weights, objective, "
         "budget, bounds, preconditioning mode, and matched seeds, these deltas "
