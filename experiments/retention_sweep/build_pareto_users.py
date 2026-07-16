@@ -14,6 +14,12 @@ if str(REPO_ROOT) not in sys.path:
 from simulator.fanout import FanoutJob, create_fanout_bars, run_fanout
 from simulator.subprocess_runner import run_command_with_progress
 from simulator.experiment_infra import ExperimentConfig
+from simulator.retention_sweep.metrics import (
+    DEFAULT_PARETO_MEMORY_FIELD,
+    DEFAULT_PARETO_TIME_FIELD,
+    PARETO_MEMORY_FIELDS,
+    PARETO_TIME_FIELDS,
+)
 
 from experiments.retention_sweep.cli_utils import (
     add_user_range_args,
@@ -106,6 +112,18 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[
             "Directory for per-user Pareto JSON/PNG outputs. When set, each user "
             "writes simulation_results_retention_sweep_user_<id>.json here."
         ),
+    )
+    parser.add_argument(
+        "--memory-field",
+        choices=PARETO_MEMORY_FIELDS,
+        default=DEFAULT_PARETO_MEMORY_FIELD,
+        help="Memory-axis field passed to build_pareto.py.",
+    )
+    parser.add_argument(
+        "--time-field",
+        choices=PARETO_TIME_FIELDS,
+        default=DEFAULT_PARETO_TIME_FIELD,
+        help="Time-axis field passed to build_pareto.py.",
     )
     parser.add_argument(
         "--start-retention",
@@ -241,6 +259,10 @@ def _merge_config_args(
         cli_args.short_term_source = build_config.short_term_source
     if not has_flag(argv, "--engine"):
         cli_args.engine = build_config.engine
+    if not has_flag(argv, "--memory-field"):
+        cli_args.memory_field = build_config.memory_field
+    if not has_flag(argv, "--time-field"):
+        cli_args.time_field = build_config.time_field
     if not has_flag(argv, "--review-markov-transition"):
         cli_args.review_markov_transition = (
             "on" if experiment.simulation.review_markov_transition else "off"
@@ -281,6 +303,8 @@ def _build_command(
         cmd.extend(["--log-dir", str(args.log_dir)])
     cmd.extend(["--start-retention", str(args.start_retention)])
     cmd.extend(["--end-retention", str(args.end_retention)])
+    cmd.extend(["--memory-field", args.memory_field])
+    cmd.extend(["--time-field", args.time_field])
     if args.short_term != "any":
         cmd.extend(["--short-term", args.short_term])
     if args.short_term_source != "any":

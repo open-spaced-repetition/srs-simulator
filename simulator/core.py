@@ -113,6 +113,8 @@ class SimulationStats:
     daily_phase_reviews: list[int] | None = None
     daily_phase_lapses: list[int] | None = None
     daily_short_loops: list[int] | None = None
+    daily_learning_cost: list[float] | None = None
+    daily_review_cost: list[float] | None = None
 
 
 class Action(Enum):
@@ -301,6 +303,8 @@ class SimulationEngine:
         self.daily_new = [0 for _ in range(days)]
         self.daily_retention = [0.0 for _ in range(days)]
         self.daily_cost = [0.0 for _ in range(days)]
+        self.daily_learning_cost = [0.0 for _ in range(days)]
+        self.daily_review_cost = [0.0 for _ in range(days)]
         self.daily_memorized = [0.0 for _ in range(days)]
         self.daily_lapses = [0 for _ in range(days)]
         self.daily_phase_reviews = [0 for _ in range(days)]
@@ -337,6 +341,8 @@ class SimulationEngine:
             daily_phase_reviews=self.daily_phase_reviews,
             daily_phase_lapses=self.daily_phase_lapses,
             daily_short_loops=None,
+            daily_learning_cost=self.daily_learning_cost,
+            daily_review_cost=self.daily_review_cost,
         )
 
     def _start_progress(self) -> None:
@@ -471,6 +477,7 @@ class SimulationEngine:
 
         cost = self.cost_model.review_cost(retrievability, rating, view, float(now))
         self.daily_cost[day] += cost
+        self.daily_review_cost[day] += cost
         self.total_cost += cost
         self.behavior.record_review(cost)
         self.events.append(
@@ -517,6 +524,7 @@ class SimulationEngine:
         card.history.append(ReviewLog(first_rating, 0.0, float(now)))
         self.daily_new[day] += 1
         self.daily_cost[day] += learn_cost
+        self.daily_learning_cost[day] += learn_cost
         self.total_cost += learn_cost
         self.behavior.record_learning(learn_cost)
         self.events.append(

@@ -120,6 +120,20 @@ def build_report_summary(
     comparison_analysis_path = _analysis_summary_path(comparison_run_root)
     candidate_analysis = _read_json(candidate_analysis_path)
     comparison_analysis = _read_json(comparison_analysis_path)
+    candidate_memory_field = _analysis_memory_field(candidate_analysis)
+    comparison_memory_field = _analysis_memory_field(comparison_analysis)
+    if candidate_memory_field != comparison_memory_field:
+        raise ValueError(
+            "Cannot compare analysis summaries with different Pareto memory fields: "
+            f"{candidate_memory_field!r} != {comparison_memory_field!r}."
+        )
+    candidate_time_field = _analysis_time_field(candidate_analysis)
+    comparison_time_field = _analysis_time_field(comparison_analysis)
+    if candidate_time_field != comparison_time_field:
+        raise ValueError(
+            "Cannot compare analysis summaries with different Pareto time fields: "
+            f"{candidate_time_field!r} != {comparison_time_field!r}."
+        )
     candidate_scheduler = _primary_scheduler(candidate_analysis)
     comparison_scheduler = _primary_scheduler(comparison_analysis)
     candidate_label = _normalize_strategy_label(candidate_label)
@@ -193,6 +207,8 @@ def build_report_summary(
         "external_pareto": {
             "candidate_scheduler": candidate_scheduler,
             "comparison_scheduler": comparison_scheduler,
+            "memory_field": candidate_memory_field,
+            "time_field": candidate_time_field,
             "environments": _external_pareto_environments(
                 candidate_analysis=candidate_analysis,
                 comparison_analysis=comparison_analysis,
@@ -350,6 +366,13 @@ def render_report_from_summary(
     lines.append("## External Pareto Results")
     lines.append("")
     lines.append(
+        "Pareto axes: memory="
+        f"`{summary['external_pareto'].get('memory_field', 'memorized_average')}`, "
+        "time="
+        f"`{summary['external_pareto'].get('time_field', 'time_average')}`."
+    )
+    lines.append("")
+    lines.append(
         "Scheduler-only hypervolume values are sums of per-user HV delta against "
         "the same staged FSRS6 baseline manifest. Positive HV delta and "
         "same-budget memory lift are better. Positive same-target time saved is better. "
@@ -475,6 +498,18 @@ def _primary_scheduler(analysis: dict[str, Any]) -> str:
     if not schedulers:
         raise ValueError("analysis summary does not contain a non-fsrs6 scheduler.")
     return str(schedulers[0])
+
+
+def _analysis_memory_field(analysis: dict[str, Any]) -> str:
+    filters = _mapping(analysis.get("filters"))
+    value = filters.get("memory_field", "memorized_average")
+    return str(value)
+
+
+def _analysis_time_field(analysis: dict[str, Any]) -> str:
+    filters = _mapping(analysis.get("filters"))
+    value = filters.get("time_field", "time_average")
+    return str(value)
 
 
 def _run_metadata(

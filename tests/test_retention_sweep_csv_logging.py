@@ -32,6 +32,7 @@ from simulator.batched_sweep.runner import (
     _group_lane_indices,
 )
 from simulator.core import SimulationStats
+from simulator.retention_sweep.no_review import calculate_no_review_memory_series
 from simulator.fsrs6_adr_policy import FSRS6ADRPolicy
 from simulator.fsrs_defaults import DEFAULT_FSRS6_WEIGHTS
 from simulator.fsrs6_ap_policy import FSRS6APPolicy
@@ -62,6 +63,8 @@ def _stats(days: int = 2, memorized: float = 10.0) -> SimulationStats:
         daily_phase_reviews=[1 for _ in range(days)],
         daily_phase_lapses=[0 for _ in range(days)],
         daily_short_loops=[0 for _ in range(days)],
+        daily_learning_cost=[20.0 for _ in range(days)],
+        daily_review_cost=[40.0 for _ in range(days)],
     )
 
 
@@ -80,6 +83,8 @@ def _write_log_args(log_dir: Path, write_daily_csv: bool | None) -> argparse.Nam
         "scheduler_spec": "anki_sm2",
         "user_id": 1,
         "button_usage": None,
+        "first_rating_prob": [0.25, 0.25, 0.25, 0.25],
+        "no_review_retention_kernel": [1.0, 0.5],
         "review_markov_transition": False,
         "desired_retention": None,
         "scheduler_priority": "low_retrievability",
@@ -178,6 +183,50 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
 
             self.assertEqual(len(list(log_dir.glob("*.jsonl"))), 1)
             self.assertEqual(list(log_dir.glob("*.csv")), [])
+
+    def test_write_log_includes_dynamic_no_review_metrics(self) -> None:
+        stats = _stats(days=3, memorized=0.0)
+        stats.daily_memorized = [0.0, 5.0, 6.0]
+        stats.daily_new = [2, 1, 0]
+        stats.daily_learning_cost = [120.0, 60.0, 0.0]
+        stats.daily_review_cost = [0.0, 60.0, 120.0]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            args = _write_log_args(log_dir, False)
+            args.days = 3
+            args.deck = 10
+            args.first_rating_prob = [0.25, 0.25, 0.25, 0.25]
+            args.no_review_retention_kernel = [1.0, 0.5, 0.25]
+
+            simulate_cli._write_log(args, stats)
+
+            payloads = [
+                json.loads(line)
+                for line in next(log_dir.glob("*.jsonl")).read_text().splitlines()
+            ]
+            totals = next(
+                payload["data"] for payload in payloads if payload["type"] == "totals"
+            )
+
+        self.assertEqual(totals["first_rating_recall_prior"], 0.75)
+        self.assertEqual(totals["no_review_memorized_average"], 7)
+        self.assertEqual(totals["review_memory_gain_average"], 3)
+        self.assertEqual(totals["learning_time_average"], 1.0)
+        self.assertEqual(totals["review_time_average"], 1.0)
+        self.assertEqual(totals["review_memory_gain_per_minute"], 3.0)
+
+    def test_no_review_series_matches_first_exposure_cohorts(self) -> None:
+        series = calculate_no_review_memory_series(
+            daily_memorized=[0.0, 5.0, 6.0],
+            daily_new=[2, 1, 0],
+            deck_size=10,
+            first_rating_prob=[0.25, 0.25, 0.25, 0.25],
+            no_review_retention_kernel=[1.0, 0.5, 0.25],
+        )
+
+        self.assertEqual(series.no_review_memorized, [7.5, 7.0, 6.25])
+        self.assertEqual(series.review_memory_gain, [0.0, 4.0, 5.0])
 
     def test_write_log_includes_run_id_in_filename_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -412,6 +461,74 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(list(root.rglob("*.csv")), [])
+
+    def test_batched_logging_passes_lane_first_rating_probabilities(self) -> None:
+        def fake_simulate_multiuser(**_kwargs):
+            return [_stats(), _stats()]
+
+        captured: list[list[float]] = []
+        behavior = argparse.Namespace(
+            first_rating_prob=torch.tensor(
+                [
+                    [0.1, 0.2, 0.3, 0.4],
+                    [0.4, 0.3, 0.2, 0.1],
+                ]
+            )
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "logs"
+            args = _batched_args(False)
+            args.no_log = False
+            lanes = [
+                BatchedSweepLogLane(
+                    user_id=user_id,
+                    log_root=root,
+                    environment="fsrs6",
+                    scheduler_name="anki_sm2",
+                    scheduler_spec="anki_sm2",
+                    desired_retention=None,
+                    fixed_interval=None,
+                )
+                for user_id in (1, 2)
+            ]
+
+            with patch(
+                "simulator.batched_sweep.logging.simulate_multiuser",
+                side_effect=fake_simulate_multiuser,
+            ):
+                simulate_and_log_lanes(
+                    write_log=lambda log_args, _stats: captured.append(
+                        log_args.first_rating_prob
+                    ),
+                    args=args,
+                    lanes=lanes,
+                    env_ops=cast(Any, FakeEnvOps()),
+                    sched_ops=cast(Any, object()),
+                    behavior=cast(Any, behavior),
+                    cost_model=cast(Any, object()),
+                    progress=False,
+                    progress_queue=None,
+                    device_label="cpu",
+                    run_label="first rating probabilities",
+                    short_term_source=None,
+                    learning_steps=[],
+                    relearning_steps=[],
+                    learning_steps_arg=None,
+                    relearning_steps_arg=None,
+                    batch_log_root=root / "batch_logs",
+                )
+
+        expected = [
+            [0.1, 0.2, 0.3, 0.4],
+            [0.4, 0.3, 0.2, 0.1],
+        ]
+        for actual_row, expected_row in zip(captured, expected, strict=True):
+            for actual, expected_value in zip(
+                actual_row,
+                expected_row,
+                strict=True,
+            ):
+                self.assertAlmostEqual(actual, expected_value)
 
     def test_batched_lanes_allow_mixed_scheduler_logs(self) -> None:
         calls: list[dict[str, Any]] = []
@@ -768,6 +885,10 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["user_id"], 1)
         self.assertEqual(results[0]["memorized_average"], 10.0)
+        self.assertEqual(results[0]["first_rating_recall_prior"], 0.75)
+        self.assertEqual(results[0]["no_review_memorized_average"], 7.0)
+        self.assertEqual(results[0]["review_memory_gain_average"], 10.0)
+        self.assertEqual(results[0]["review_time_average"], 0.67)
 
     def test_build_pareto_preserves_exact_desired_retention(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1150,6 +1271,35 @@ class RetentionSweepCsvLoggingTests(unittest.TestCase):
         self.assertEqual(
             [entry["title"] for entry in ordered],
             ["policy_1", "policy_2", "policy_0"],
+        )
+
+    def test_build_pareto_orders_points_by_selected_memory_field(self) -> None:
+        entries = [
+            {
+                "memorized_average": 10.0,
+                "review_memory_gain_average": 30.0,
+                "time_average": 1.0,
+                "review_time_average": 0.5,
+                "title": "policy_0",
+            },
+            {
+                "memorized_average": 20.0,
+                "review_memory_gain_average": 10.0,
+                "time_average": 2.0,
+                "review_time_average": 0.25,
+                "title": "policy_1",
+            },
+        ]
+
+        ordered = _plot_ordered_entries(
+            entries,
+            "review_memory_gain_average",
+            "review_time_average",
+        )
+
+        self.assertEqual(
+            [entry["title"] for entry in ordered],
+            ["policy_1", "policy_0"],
         )
 
     def test_build_pareto_keeps_fsrs6_adr_runs_separate(self) -> None:

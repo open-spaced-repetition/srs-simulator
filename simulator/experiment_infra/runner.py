@@ -36,6 +36,9 @@ from simulator.experiment_infra.baseline_dr_selection import (
 )
 from simulator.experiment_infra.gpu_monitor import GpuMonitor, GpuMonitorSummary
 from simulator.retention_sweep.log_filter import LogFilenameFilter
+from simulator.retention_sweep.no_review import (
+    build_batched_no_review_retention_kernels,
+)
 from simulator.batched_engine.mixed_scheduler import (
     MixedBatchSchedulerOps as _MixedBatchSchedulerOps,
     MixedSchedulerGroup as _MixedSchedulerGroup,
@@ -5109,8 +5112,13 @@ def _run_batched_sweep_jobs(
         short_term_threshold=short_term_threshold,
         short_term_loops_limit=short_term_loops_limit,
     )
+    no_review_kernels = build_batched_no_review_retention_kernels(
+        env_ops,
+        behavior.first_rating_prob,
+        config.simulation.days,
+    )
 
-    for job, stats in zip(jobs, stats_list, strict=True):
+    for lane_index, (job, stats) in enumerate(zip(jobs, stats_list, strict=True)):
         user_log_dir = job.output_dir / f"user_{job.user_id}"
         log_args = argparse.Namespace(
             engine="batched",
@@ -5126,6 +5134,10 @@ def _run_batched_sweep_jobs(
             run_id=run_id,
             user_id=job.user_id,
             button_usage=str(DEFAULT_BUTTON_USAGE_PATH),
+            first_rating_prob=(
+                behavior.first_rating_prob[lane_index].detach().cpu().tolist()
+            ),
+            no_review_retention_kernel=no_review_kernels[lane_index],
             review_markov_transition=config.simulation.review_markov_transition,
             desired_retention=job.desired_retention,
             scheduler_priority=config.simulation.scheduler_priority,

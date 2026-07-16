@@ -11,6 +11,9 @@ import torch
 from simulator.core import SimulationStats
 from simulator.batched_engine.multiuser_engine import simulate_multiuser
 from simulator.batched_engine.multiuser_types import MultiUserBehavior, MultiUserCost
+from simulator.retention_sweep.no_review import (
+    build_batched_no_review_retention_kernels,
+)
 
 
 def progress_callback_from_queue(
@@ -123,6 +126,8 @@ def _build_log_args(
     learning_steps_arg: str | None,
     relearning_steps_arg: str | None,
     log_dir: Path,
+    first_rating_prob: Sequence[float] | None = None,
+    no_review_retention_kernel: Sequence[float] | None = None,
     fsrs6_adr_policy: Path | None = None,
     fsrs6_cost_adr_policy: Path | None = None,
     fsrs6_oracle_stationary_finite_distill_policy: Path | None = None,
@@ -143,6 +148,14 @@ def _build_log_args(
         run_id=getattr(args, "run_id", None),
         user_id=user_id,
         button_usage=str(args.button_usage) if args.button_usage is not None else None,
+        first_rating_prob=list(first_rating_prob)
+        if first_rating_prob is not None
+        else None,
+        no_review_retention_kernel=(
+            list(no_review_retention_kernel)
+            if no_review_retention_kernel is not None
+            else None
+        ),
         review_markov_transition=bool(getattr(args, "review_markov_transition", False)),
         desired_retention=desired_retention,
         scheduler_priority=args.scheduler_priority,
@@ -258,7 +271,26 @@ def simulate_and_log_lanes(
         )
     if args.no_log:
         return
-    for lane, stats in zip(lanes, stats_list, strict=True):
+    first_rating_prob = getattr(behavior, "first_rating_prob", None)
+    supports_no_review_kernel = all(
+        hasattr(env_ops, attribute)
+        for attribute in (
+            "dtype",
+            "init_state",
+            "update_learn",
+            "retrievability_entries",
+        )
+    )
+    no_review_kernels = (
+        build_batched_no_review_retention_kernels(
+            env_ops,
+            first_rating_prob,
+            args.days,
+        )
+        if isinstance(first_rating_prob, torch.Tensor) and supports_no_review_kernel
+        else None
+    )
+    for lane_index, (lane, stats) in enumerate(zip(lanes, stats_list, strict=True)):
         user_log_dir = lane.final_log_dir
         user_log_dir.mkdir(parents=True, exist_ok=True)
         log_args = _build_log_args(
@@ -273,6 +305,14 @@ def simulate_and_log_lanes(
             learning_steps_arg=learning_steps_arg,
             relearning_steps_arg=relearning_steps_arg,
             log_dir=user_log_dir,
+            first_rating_prob=(
+                first_rating_prob[lane_index].detach().cpu().tolist()
+                if isinstance(first_rating_prob, torch.Tensor)
+                else None
+            ),
+            no_review_retention_kernel=(
+                no_review_kernels[lane_index] if no_review_kernels is not None else None
+            ),
             fsrs6_adr_policy=lane.fsrs6_adr_policy,
             fsrs6_cost_adr_policy=lane.fsrs6_cost_adr_policy,
             fsrs6_oracle_stationary_finite_distill_policy=(

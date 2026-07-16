@@ -230,6 +230,9 @@ experiments/rl_scheduler/plots/
 
 # Retention sweep figures tracked for README
 !experiments/retention_sweep/plots/dominance/dominance_sm2_memrise_env=lstm_st=on_sts=steps_engine=batched.png
+
+# Experiment figures embedded in tracked reports
+!docs/rl_scheduler/experiments/plots/*.png
 !experiments/retention_sweep/plots/dominance/dominance_fsrs6_default_vs_anki_sm2_env=lstm_st=on_sts=steps_engine=batched.png
 !experiments/retention_sweep/plots/dominance/dominance_fsrs6_default_vs_memrise_env=lstm_st=on_sts=steps_engine=batched.png
 !experiments/retention_sweep/plots/user_averages/retention_sweep_equivalent_fsrs6_distributions_anki_sm2_env=lstm_st=on_sts=steps_engine=batched.png

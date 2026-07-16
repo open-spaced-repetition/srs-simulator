@@ -73,7 +73,11 @@ def _analysis_summary(
 
     return {
         "type": "scheduler-comparison-analysis",
-        "filters": {"schedulers": ["fsrs6", scheduler]},
+        "filters": {
+            "schedulers": ["fsrs6", scheduler],
+            "memory_field": "memorized_average",
+            "time_field": "time_average",
+        },
         "environments": {
             "fsrs6": {
                 "primary_hypervolume_summary": [
@@ -289,6 +293,10 @@ class GenerateExperimentReportTests(unittest.TestCase):
         self.assertIn("policy-point avg memorized", markdown)
         self.assertIn("same-budget memory lift / baseline", markdown)
         self.assertIn("same-target time saved / baseline", markdown)
+        self.assertIn(
+            "Pareto axes: memory=`memorized_average`, time=`time_average`",
+            markdown,
+        )
         self.assertIn("+2.000%", markdown)
         self.assertIn("+0.200%", markdown)
         self.assertIn(

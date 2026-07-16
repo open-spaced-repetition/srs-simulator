@@ -33,6 +33,12 @@ from experiments.rl_scheduler.train_fsrs6_adr_portfolio import (
     reference_point,
 )
 from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
+from simulator.retention_sweep.metrics import (
+    DEFAULT_PARETO_MEMORY_FIELD,
+    DEFAULT_PARETO_TIME_FIELD,
+    PARETO_MEMORY_FIELDS,
+    PARETO_TIME_FIELDS,
+)
 
 
 DEFAULT_ENVS = ("fsrs6", "lstm")
@@ -221,6 +227,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Efficiency metric field to compare.",
     )
     parser.add_argument(
+        "--memory-field",
+        choices=PARETO_MEMORY_FIELDS,
+        default=DEFAULT_PARETO_MEMORY_FIELD,
+        help="Result field to use as the Pareto memory dimension.",
+    )
+    parser.add_argument(
+        "--time-field",
+        choices=PARETO_TIME_FIELDS,
+        default=DEFAULT_PARETO_TIME_FIELD,
+        help="Result field to use as the Pareto time dimension.",
+    )
+    parser.add_argument(
         "--no-dedupe",
         action="store_true",
         help=(
@@ -298,6 +316,10 @@ def _merge_config_args(
         )
     if not has_flag(argv, "--metric"):
         cli_args.metric = analyze.metric
+    if not has_flag(argv, "--memory-field"):
+        cli_args.memory_field = analyze.memory_field
+    if not has_flag(argv, "--time-field"):
+        cli_args.time_field = analyze.time_field
     if analyze.no_dedupe and not has_flag(argv, "--no-dedupe"):
         cli_args.no_dedupe = True
     if analyze.comparisons and not has_flag(argv, "--comparisons"):
@@ -393,6 +415,8 @@ def row_from_item(
     path: Path,
     mtime_ns: int,
     metric: str,
+    memory_field: str = DEFAULT_PARETO_MEMORY_FIELD,
+    time_field: str = DEFAULT_PARETO_TIME_FIELD,
 ) -> SweepRow | None:
     desired_retention = parse_desired_retention(item)
     if desired_retention is None and item.get("scheduler") not in {
@@ -408,8 +432,8 @@ def row_from_item(
         scheduler=str(item["scheduler"]),
         user_id=int(item["user_id"]),
         desired_retention=desired_retention,
-        memorized_average=float(item["memorized_average"]),
-        time_average=float(item["time_average"]),
+        memorized_average=float(item[memory_field]),
+        time_average=float(item[time_field]),
         reviews_average=float(item["reviews_average"]),
         efficiency=float(item[metric]),
         path=path,
@@ -479,12 +503,26 @@ def load_rows(args: argparse.Namespace) -> tuple[list[SweepRow], int]:
                 continue
             if not bool_filter_matches(item.get("fuzz"), args.fuzz):
                 continue
+            if args.memory_field not in item:
+                raise ValueError(
+                    f"{path} contains a matching row without memory field "
+                    f"{args.memory_field!r}; rerun the simulation and build-pareto "
+                    "for newly added memory metrics."
+                )
+            if args.time_field not in item:
+                raise ValueError(
+                    f"{path} contains a matching row without time field "
+                    f"{args.time_field!r}; rerun the simulation and build-pareto "
+                    "for newly added time metrics."
+                )
             try:
                 row = row_from_item(
                     item,
                     path=path,
                     mtime_ns=mtime_ns,
                     metric=args.metric,
+                    memory_field=args.memory_field,
+                    time_field=args.time_field,
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 print(f"warning: skipping row in {path}: {exc}", file=sys.stderr)
@@ -2194,6 +2232,8 @@ def build_analysis_summary(args: argparse.Namespace) -> dict[str, Any]:
             "fuzz": args.fuzz,
             "review_markov_transition": args.review_markov_transition,
             "metric": args.metric,
+            "memory_field": args.memory_field,
+            "time_field": args.time_field,
             "dedupe": not args.no_dedupe,
             "baseline_dr_manifest": str(args.baseline_dr_manifest)
             if args.baseline_dr_manifest is not None
@@ -2667,6 +2707,8 @@ def render_summary_report(summary: dict[str, Any]) -> str:
             f"engine={filters['engine']}, short_term={filters['short_term']}, "
             f"fuzz={filters['fuzz']}, "
             f"review_markov_transition={filters['review_markov_transition']}, "
+            f"memory_field={filters.get('memory_field', 'memorized_average')}, "
+            f"time_field={filters.get('time_field', 'time_average')}, "
             "same_budget_memory_lift_auc=common_covered_frontier_interval, "
             "same_target_time_saved_auc=common_covered_frontier_interval"
         )

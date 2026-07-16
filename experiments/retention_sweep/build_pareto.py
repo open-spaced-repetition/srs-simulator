@@ -27,6 +27,14 @@ from simulator.scheduler_catalog import (
     schedulers_for_policy_source,
 )
 from simulator.retention_sweep.log_filter import LogFilenameFilter
+from simulator.retention_sweep.metrics import (
+    DEFAULT_PARETO_MEMORY_FIELD,
+    DEFAULT_PARETO_TIME_FIELD,
+    PARETO_MEMORY_FIELDS,
+    PARETO_TIME_FIELDS,
+    memory_axis_label,
+    time_axis_label,
+)
 from simulator.experiment_infra.baseline_dr_selection import (
     BaselineDRManifest,
     load_baseline_dr_manifest,
@@ -164,6 +172,18 @@ def parse_args() -> argparse.Namespace:
         help="Where to write simulation_results.json.",
     )
     parser.add_argument(
+        "--memory-field",
+        choices=PARETO_MEMORY_FIELDS,
+        default=DEFAULT_PARETO_MEMORY_FIELD,
+        help="Result field to use as the Pareto plot memory axis.",
+    )
+    parser.add_argument(
+        "--time-field",
+        choices=PARETO_TIME_FIELDS,
+        default=DEFAULT_PARETO_TIME_FIELD,
+        help="Result field to use as the Pareto plot time axis.",
+    )
+    parser.add_argument(
         "--plot-dir",
         type=Path,
         default=None,
@@ -212,9 +232,17 @@ def _format_output_dir_name(args: argparse.Namespace) -> str:
         f"compare-st={'on' if args.compare_short_term else 'off'}",
         f"compare-fuzz={'on' if args.compare_fuzz else 'off'}",
         f"compare-engine={'on' if args.compare_engine else 'off'}",
-        f"env={_clean(args.env)}",
-        f"sched={_clean(args.sched)}",
     ]
+    if args.memory_field != DEFAULT_PARETO_MEMORY_FIELD:
+        parts.append(f"memory={args.memory_field}")
+    if args.time_field != DEFAULT_PARETO_TIME_FIELD:
+        parts.append(f"time={args.time_field}")
+    parts.extend(
+        [
+            f"env={_clean(args.env)}",
+            f"sched={_clean(args.sched)}",
+        ]
+    )
     return "_".join(parts)
 
 
@@ -888,6 +916,17 @@ def _iter_log_entries(
             "review_markov_transition": review_markov_value,
             "run_id": meta.get("run_id"),
         }
+        for field in (
+            "first_rating_recall_prior",
+            "no_review_memorized_average",
+            "review_memory_gain_average",
+            "review_memory_gain_per_minute",
+            "learning_time_average",
+            "review_time_average",
+        ):
+            value = totals.get(field)
+            if value is not None:
+                entry[field] = float(value)
         if desired_value is not None:
             entry["desired_retention"] = desired_value
         if scheduler in ADR_POLICY_SCHEDULERS:
@@ -1175,12 +1214,42 @@ def _setup_plot_style() -> None:
     plt.style.use("ggplot")
 
 
-def _plot_ordered_entries(entries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _memory_value(entry: Dict[str, Any], memory_field: str) -> float:
+    value = entry.get(memory_field)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(
+            f"Result entry is missing numeric memory field {memory_field!r}. "
+            "Rerun the simulation when using a newly added memory metric."
+        )
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"Result memory field {memory_field!r} must be finite.")
+    return result
+
+
+def _time_value(entry: Dict[str, Any], time_field: str) -> float:
+    value = entry.get(time_field)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ValueError(
+            f"Result entry is missing numeric time field {time_field!r}. "
+            "Rerun the simulation when using a newly added time metric."
+        )
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"Result time field {time_field!r} must be finite.")
+    return result
+
+
+def _plot_ordered_entries(
+    entries: Sequence[Dict[str, Any]],
+    memory_field: str = DEFAULT_PARETO_MEMORY_FIELD,
+    time_field: str = DEFAULT_PARETO_TIME_FIELD,
+) -> List[Dict[str, Any]]:
     return sorted(
         entries,
         key=lambda entry: (
-            float(entry["memorized_average"]),
-            float(entry["time_average"]),
+            _memory_value(entry, memory_field),
+            _time_value(entry, time_field),
             str(entry.get("title") or ""),
         ),
     )
@@ -1191,6 +1260,8 @@ def _plot_compare_frontier(
     output_path: Path,
     title_base: str = "Pareto frontier comparison",
     show_labels: bool = False,
+    memory_field: str = DEFAULT_PARETO_MEMORY_FIELD,
+    time_field: str = DEFAULT_PARETO_TIME_FIELD,
 ) -> None:
     import matplotlib.pyplot as plt
     from collections.abc import Callable
@@ -1209,9 +1280,9 @@ def _plot_compare_frontier(
     if not all_entries:
         raise ValueError("No entries available to plot.")
 
-    min_x = min(entry["memorized_average"] for entry in all_entries)
-    max_x = max(entry["memorized_average"] for entry in all_entries)
-    max_y = max(entry["time_average"] for entry in all_entries)
+    min_x = min(_memory_value(entry, memory_field) for entry in all_entries)
+    max_x = max(_memory_value(entry, memory_field) for entry in all_entries)
+    max_y = max(_time_value(entry, time_field) for entry in all_entries)
 
     x_min = 200 * math.floor(min_x / 200) if min_x else 0
     x_max = 200 * math.ceil(max_x / 200) if max_x else 1
@@ -1316,7 +1387,7 @@ def _plot_compare_frontier(
     avoid_y = []
 
     for item in series:
-        entries = _plot_ordered_entries(item["entries"])
+        entries = _plot_ordered_entries(item["entries"], memory_field, time_field)
         if not entries:
             continue
         scheduler = item.get("scheduler")
@@ -1358,8 +1429,8 @@ def _plot_compare_frontier(
             if short_term_value is not None:
                 markerfacecolor = color if short_term_value else "none"
                 markeredgecolor = color
-        x_vals = [entry["memorized_average"] for entry in entries]
-        y_vals = [entry["time_average"] for entry in entries]
+        x_vals = [_memory_value(entry, memory_field) for entry in entries]
+        y_vals = [_time_value(entry, time_field) for entry in entries]
         avoid_x.extend(x_vals)
         avoid_y.extend(y_vals)
         if len(x_vals) > 1:
@@ -1450,12 +1521,12 @@ def _plot_compare_frontier(
             )
             ax.add_patch(arrow)
     plt.xlabel(
-        "Memorized cards (average, all days)\n(higher=better)",
+        f"{memory_axis_label(memory_field)}\n(higher=better)",
         fontsize=18,
         color="black",
     )
     plt.ylabel(
-        "Minutes of studying per day (average)\n(lower=better)",
+        f"{time_axis_label(time_field)}\n(lower=better)",
         fontsize=18,
         color="black",
     )
@@ -1749,7 +1820,7 @@ def main() -> None:
                         if not sspmmc_results:
                             continue
                         sspmmc_results.sort(
-                            key=lambda entry: entry["memorized_average"]
+                            key=lambda entry: _memory_value(entry, args.memory_field)
                         )
                         ssp_label_parts = ["sched=sspmmc"]
                         if len(envs) > 1:
@@ -1800,6 +1871,8 @@ def main() -> None:
         plot_dir / plot_name,
         title_base="Pareto frontier",
         show_labels=not args.hide_labels,
+        memory_field=args.memory_field,
+        time_field=args.time_field,
     )
     print(f"Wrote {len(combined_results)} entries to {results_path}")
 

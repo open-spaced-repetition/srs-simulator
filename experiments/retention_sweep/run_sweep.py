@@ -22,6 +22,7 @@ from simulator.scheduler_spec import (
 )
 from simulator.scheduler_catalog import PolicySource, schedulers_for_policy_source
 from simulator.retention_sweep.grid import dr_values as grid_dr_values
+from simulator.retention_sweep.no_review import build_no_review_retention_kernel
 from simulator.retention_sweep.sspmmc import (
     resolve_sspmmc_policy_paths as resolve_sspmmc_policy_paths,
 )
@@ -338,6 +339,7 @@ def _run_once(
         else None
     )
     usage = normalize_button_usage(button_usage)
+    run_args.first_rating_prob = usage["first_rating_prob"]
     behavior = behavior_cls(
         attendance_prob=1.0,
         lazy_good_bias=0.0,
@@ -390,6 +392,11 @@ def _run_once(
         progress_close()
     if not run_args.no_log:
         run_args.write_daily_csv = bool(getattr(run_args, "diagnostic_csv_logs", False))
+        run_args.no_review_retention_kernel = build_no_review_retention_kernel(
+            env,
+            usage["first_rating_prob"],
+            run_args.days,
+        )
         simulate_cli._write_log(run_args, stats)
     if run_args.plot:
         simulate_cli.plot_simulation(stats, run_args)

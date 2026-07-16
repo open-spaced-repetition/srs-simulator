@@ -8,6 +8,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from simulator.retention_sweep.metrics import (
+    DEFAULT_PARETO_MEMORY_FIELD,
+    DEFAULT_PARETO_TIME_FIELD,
+    PARETO_MEMORY_FIELDS,
+    PARETO_TIME_FIELDS,
+)
+
 
 SCHEMA_VERSION = 1
 
@@ -835,6 +842,8 @@ class BuildParetoConfig:
     compare_engine: bool = False
     no_plot: bool = False
     hide_labels: bool = True
+    memory_field: str = DEFAULT_PARETO_MEMORY_FIELD
+    time_field: str = DEFAULT_PARETO_TIME_FIELD
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> BuildParetoConfig:
@@ -889,6 +898,14 @@ class BuildParetoConfig:
             hide_labels=_require_bool(
                 raw.get("hide_labels", True), "build_pareto.hide_labels"
             ),
+            memory_field=_require_str(
+                raw.get("memory_field", DEFAULT_PARETO_MEMORY_FIELD),
+                "build_pareto.memory_field",
+            ),
+            time_field=_require_str(
+                raw.get("time_field", DEFAULT_PARETO_TIME_FIELD),
+                "build_pareto.time_field",
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -900,6 +917,10 @@ class BuildParetoConfig:
             )
         if self.engine not in {"event", "batched", "any"}:
             raise ValueError("build_pareto.engine is invalid.")
+        if self.memory_field not in PARETO_MEMORY_FIELDS:
+            raise ValueError("build_pareto.memory_field is invalid.")
+        if self.time_field not in PARETO_TIME_FIELDS:
+            raise ValueError("build_pareto.time_field is invalid.")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -919,6 +940,8 @@ class BuildParetoConfig:
             "compare_engine": self.compare_engine,
             "no_plot": self.no_plot,
             "hide_labels": self.hide_labels,
+            "memory_field": self.memory_field,
+            "time_field": self.time_field,
         }
 
 
@@ -937,6 +960,8 @@ class AnalyzeParetoConfig:
     fuzz: str = "off"
     metric: str = "avg_accum_memorized_per_hour"
     no_dedupe: bool = False
+    memory_field: str = DEFAULT_PARETO_MEMORY_FIELD
+    time_field: str = DEFAULT_PARETO_TIME_FIELD
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> AnalyzeParetoConfig:
@@ -982,6 +1007,14 @@ class AnalyzeParetoConfig:
             no_dedupe=_require_bool(
                 raw.get("no_dedupe", False), "analyze_pareto.no_dedupe"
             ),
+            memory_field=_require_str(
+                raw.get("memory_field", DEFAULT_PARETO_MEMORY_FIELD),
+                "analyze_pareto.memory_field",
+            ),
+            time_field=_require_str(
+                raw.get("time_field", DEFAULT_PARETO_TIME_FIELD),
+                "analyze_pareto.time_field",
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -991,6 +1024,10 @@ class AnalyzeParetoConfig:
             raise ValueError("analyze_pareto.engine is invalid.")
         if self.fuzz not in {"on", "off", "any"}:
             raise ValueError("analyze_pareto.fuzz must be on, off, or any.")
+        if self.memory_field not in PARETO_MEMORY_FIELDS:
+            raise ValueError("analyze_pareto.memory_field is invalid.")
+        if self.time_field not in PARETO_TIME_FIELDS:
+            raise ValueError("analyze_pareto.time_field is invalid.")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1007,6 +1044,8 @@ class AnalyzeParetoConfig:
             "fuzz": self.fuzz,
             "metric": self.metric,
             "no_dedupe": self.no_dedupe,
+            "memory_field": self.memory_field,
+            "time_field": self.time_field,
         }
 
 

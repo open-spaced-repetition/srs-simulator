@@ -125,6 +125,37 @@ class ExperimentConfigSchemaTests(unittest.TestCase):
         self.assertEqual(config.evaluation_seed, 43)
         self.assertEqual(config.to_dict()["sweep"]["seed"], 43)
 
+    def test_loads_pareto_axis_fields(self) -> None:
+        raw = (
+            VALID_CONFIG
+            + "\n[build_pareto]\n"
+            + 'memory_field = "review_memory_gain_average"\n'
+            + 'time_field = "review_time_average"\n'
+            + "\n[analyze_pareto]\n"
+            + 'memory_field = "review_memory_gain_average"\n'
+            + 'time_field = "review_time_average"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "experiment.toml"
+            path.write_text(raw, encoding="utf-8")
+
+            config = ExperimentConfig.from_toml(path)
+
+        self.assertEqual(
+            config.build_pareto.memory_field,
+            "review_memory_gain_average",
+        )
+        self.assertEqual(
+            config.analyze_pareto.memory_field,
+            "review_memory_gain_average",
+        )
+        self.assertEqual(config.build_pareto.time_field, "review_time_average")
+        self.assertEqual(config.analyze_pareto.time_field, "review_time_average")
+        self.assertEqual(
+            config.to_dict()["build_pareto"]["memory_field"],
+            "review_memory_gain_average",
+        )
+
     def test_training_simulation_seed_strategy_defaults_to_fixed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "experiment.toml"

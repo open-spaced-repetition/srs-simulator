@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 import csv
 import hashlib
 import math
@@ -61,6 +62,10 @@ from simulator.short_term import ShortTermScheduler
 from simulator.short_term_config import (
     parse_steps as _parse_steps,
     resolve_short_term_config as _resolve_short_term_config,
+)
+from simulator.retention_sweep.no_review import (
+    build_no_review_retention_kernel,
+    calculate_no_review_memory_series,
 )
 
 
@@ -536,6 +541,7 @@ def main() -> None:
         else None
     )
     usage = normalize_button_usage(button_usage)
+    args.first_rating_prob = usage["first_rating_prob"]
     behavior = StochasticBehavior(
         attendance_prob=1.0,
         lazy_good_bias=0.0,
@@ -601,6 +607,11 @@ def main() -> None:
             )
     _print_review_summary(stats)
     if not args.no_log:
+        args.no_review_retention_kernel = build_no_review_retention_kernel(
+            env,
+            usage["first_rating_prob"],
+            args.days,
+        )
         _write_log(args, stats)
 
     if args.no_plot:
@@ -900,6 +911,8 @@ def _write_daily_csv(path: Path, stats) -> None:
         "new",
         "retention",
         "cost",
+        "learning_cost",
+        "review_cost",
         "memorized",
         "phase_reviews",
         "phase_lapses",
@@ -910,6 +923,8 @@ def _write_daily_csv(path: Path, stats) -> None:
         "new": stats.daily_new,
         "retention": stats.daily_retention,
         "cost": stats.daily_cost,
+        "learning_cost": stats.daily_learning_cost,
+        "review_cost": stats.daily_review_cost,
         "memorized": stats.daily_memorized,
         "phase_reviews": stats.daily_phase_reviews,
         "phase_lapses": stats.daily_phase_lapses,
@@ -928,6 +943,22 @@ def _write_daily_csv(path: Path, stats) -> None:
                 else:
                     row.append(series[day])
             writer.writerow(row)
+
+
+def _resolve_first_rating_prob(args: argparse.Namespace) -> list[float]:
+    raw = getattr(args, "first_rating_prob", None)
+    if raw is not None:
+        if not isinstance(raw, Sequence):
+            raise ValueError("first_rating_prob must be a sequence.")
+        return normalize_button_usage(
+            {"first_rating_prob": [float(value) for value in raw]}
+        )["first_rating_prob"]
+    button_usage = (
+        load_button_usage_config(args.button_usage, args.user_id or 1)
+        if getattr(args, "button_usage", None) is not None
+        else None
+    )
+    return normalize_button_usage(button_usage)["first_rating_prob"]
 
 
 def _write_log(args: argparse.Namespace, stats) -> None:
@@ -1101,6 +1132,57 @@ def _write_log(args: argparse.Namespace, stats) -> None:
             if stats.daily_memorized
             else 0.0
         )
+        first_rating_prob = _resolve_first_rating_prob(args)
+        first_rating_recall_prior = sum(first_rating_prob[1:])
+        no_review_retention_kernel = getattr(
+            args,
+            "no_review_retention_kernel",
+            None,
+        )
+        no_review_memorized_average = None
+        review_memory_gain_average = None
+        review_memory_gain_per_minute = None
+        learning_time_average = None
+        review_time_average = None
+        if no_review_retention_kernel is not None:
+            if stats.daily_learning_cost is None or stats.daily_review_cost is None:
+                raise ValueError(
+                    "Dynamic no-review metrics require split learning and review costs."
+                )
+            no_review_series = calculate_no_review_memory_series(
+                daily_memorized=stats.daily_memorized,
+                daily_new=stats.daily_new,
+                deck_size=args.deck,
+                first_rating_prob=first_rating_prob,
+                no_review_retention_kernel=no_review_retention_kernel,
+            )
+            no_review_memorized_average = (
+                sum(no_review_series.no_review_memorized)
+                / len(no_review_series.no_review_memorized)
+                if no_review_series.no_review_memorized
+                else 0.0
+            )
+            review_memory_gain_average = (
+                sum(no_review_series.review_memory_gain)
+                / len(no_review_series.review_memory_gain)
+                if no_review_series.review_memory_gain
+                else 0.0
+            )
+            learning_time_average = (
+                sum(stats.daily_learning_cost) / len(stats.daily_learning_cost) / 60.0
+                if stats.daily_learning_cost
+                else 0.0
+            )
+            review_time_average = (
+                sum(stats.daily_review_cost) / len(stats.daily_review_cost) / 60.0
+                if stats.daily_review_cost
+                else 0.0
+            )
+            review_memory_gain_per_minute = (
+                round(review_memory_gain_average / review_time_average, 2)
+                if review_time_average > 0
+                else None
+            )
         avg_accum_memorized_per_hour = (
             round(memorized_average / accum_time_average, 2)
             if accum_time_average > 0
@@ -1113,7 +1195,29 @@ def _write_log(args: argparse.Namespace, stats) -> None:
         )
         totals = {
             "avg_accum_memorized_per_hour": avg_accum_memorized_per_hour,
+            "first_rating_recall_prior": round(first_rating_recall_prior, 6),
             "memorized_average": round(memorized_average),
+            "no_review_memorized_average": (
+                round(no_review_memorized_average)
+                if no_review_memorized_average is not None
+                else None
+            ),
+            "review_memory_gain_average": (
+                round(review_memory_gain_average)
+                if review_memory_gain_average is not None
+                else None
+            ),
+            "review_memory_gain_per_minute": review_memory_gain_per_minute,
+            "learning_time_average": (
+                round(learning_time_average, 2)
+                if learning_time_average is not None
+                else None
+            ),
+            "review_time_average": (
+                round(review_time_average, 2)
+                if review_time_average is not None
+                else None
+            ),
             "reviews_average": round(reviews_average, 2),
             "time_average": round(time_average, 2),
             "total_reviews": stats.total_reviews,

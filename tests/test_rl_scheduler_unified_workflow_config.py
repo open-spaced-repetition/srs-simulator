@@ -608,6 +608,87 @@ class UnifiedWorkflowConfigTests(unittest.TestCase):
             )
         )
         self.assertIn("--hide-labels", command)
+        self.assertIn("--memory-field", command)
+        memory_field_index = command.index("--memory-field")
+        self.assertEqual(command[memory_field_index + 1], "memorized_average")
+        self.assertIn("--time-field", command)
+        time_field_index = command.index("--time-field")
+        self.assertEqual(command[time_field_index + 1], "time_average")
+
+    def test_analyze_scheduler_comparison_uses_selected_pareto_axes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp) / "pareto"
+            log_dir.mkdir()
+            (log_dir / "simulation_results_retention_sweep_user_1.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6",
+                            "user_id": 1,
+                            "desired_retention": 0.5,
+                            "memorized_average": 100.0,
+                            "review_memory_gain_average": 300.0,
+                            "time_average": 10.0,
+                            "review_time_average": 4.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 10.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                        {
+                            "environment": "fsrs6",
+                            "scheduler": "fsrs6_adr",
+                            "user_id": 1,
+                            "desired_retention": None,
+                            "fsrs6_adr_policy": "policy/u1.json",
+                            "memorized_average": 200.0,
+                            "review_memory_gain_average": 250.0,
+                            "time_average": 10.0,
+                            "review_time_average": 6.0,
+                            "reviews_average": 10.0,
+                            "avg_accum_memorized_per_hour": 20.0,
+                            "engine": "batched",
+                            "short_term": False,
+                            "fuzz": False,
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            args = parse_analyze_args(
+                [
+                    "--log-dir",
+                    str(log_dir),
+                    "--env",
+                    "fsrs6",
+                    "--sched",
+                    "fsrs6,fsrs6_adr",
+                    "--comparisons",
+                    "fsrs6_adr:fsrs6",
+                    "--start-user",
+                    "1",
+                    "--end-user",
+                    "1",
+                    "--memory-field",
+                    "review_memory_gain_average",
+                    "--time-field",
+                    "review_time_average",
+                ]
+            )
+            summary = build_analysis_summary(args)
+
+        self.assertEqual(
+            summary["filters"]["memory_field"],
+            "review_memory_gain_average",
+        )
+        self.assertEqual(summary["filters"]["time_field"], "review_time_average")
+        max_memory_rows = summary["environments"]["fsrs6"]["max_memory_points"]
+        by_scheduler = {row["scheduler"]: row for row in max_memory_rows}
+        self.assertEqual(by_scheduler["fsrs6"]["avg_memorized"], 300.0)
+        self.assertEqual(by_scheduler["fsrs6_adr"]["avg_memorized"], 250.0)
 
     def test_native_scheduler_sweep_does_not_require_train_overfit_summary(
         self,

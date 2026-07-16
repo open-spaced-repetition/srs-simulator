@@ -259,6 +259,11 @@ def _axis_label(field: str) -> str:
     labels = {
         "time_average": "Minutes of studying per day (average)\n(lower=better)",
         "memorized_average": "Memorized cards (average, all days)\n(higher=better)",
+        "review_memory_gain_average": (
+            "Memory gain from reviews vs no-review baseline "
+            "(average, all days)\n(higher=better)"
+        ),
+        "review_time_average": "Minutes of reviews per day (average)\n(lower=better)",
         "avg_accum_memorized_per_hour": "Average accumulated memorized per hour",
         "memorized_per_minute": "Memorized per minute",
         "reviews_average": "Average reviews per day",

@@ -107,6 +107,8 @@ def simulate_multiuser(
     daily_phase_reviews = torch.zeros_like(daily_reviews)
     daily_phase_lapses = torch.zeros_like(daily_reviews)
     daily_cost = torch.zeros((user_count, days), dtype=env_dtype, device=torch_device)
+    daily_learning_cost = torch.zeros_like(daily_cost)
+    daily_review_cost = torch.zeros_like(daily_cost)
     daily_memorized = torch.zeros(
         (user_count, days), dtype=env_dtype, device=torch_device
     )
@@ -1033,6 +1035,8 @@ def simulate_multiuser(
             daily_new[:, day] = learned_today
             daily_lapses[:, day] = lapses_today
             daily_cost[:, day] = cost_today
+            daily_learning_cost[:, day] = learn_cost
+            daily_review_cost[:, day] = review_cost + short_cost
             daily_phase_reviews[:, day] = phase_reviews_today
             daily_phase_lapses[:, day] = phase_lapses_today
             total_reviews += reviews_today
@@ -1091,6 +1095,8 @@ def simulate_multiuser(
                     if daily_short_loops_by_user is not None
                     else None
                 ),
+                daily_learning_cost=daily_learning_cost[user].tolist(),
+                daily_review_cost=daily_review_cost[user].tolist(),
                 timing={
                     "long_reviews_s": time_long_reviews,
                     "short_reviews_s": time_short_reviews,
